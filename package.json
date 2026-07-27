@@ -1,6 +1,6 @@
 {
   "name": "aerio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A calm, modern desktop communications and productivity client.",
   "main": "dist-electron/main/main.js",
   "author": "Aerio",
@@ -18,15 +18,19 @@
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.6",
     "date-fns": "^4.1.0",
+    "google-auth-library": "^10.9.1",
     "lucide-react": "^0.468.0",
+    "postal-mime": "^2.7.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "sanitize-html": "^2.17.6",
     "sql.js": "^1.13.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.3",
     "@types/react-dom": "^19.0.2",
+    "@types/sanitize-html": "^2.16.1",
     "@types/sql.js": "^1.4.9",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^43.2.0",

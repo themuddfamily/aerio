@@ -1,14 +1,39 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, Tray } from 'electron'
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, shell, Tray } from 'electron'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
+import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import initSqlJs, { type Database } from 'sql.js'
 import { createDemoState } from '../src/demo-data'
 import type { AppState, Attachment } from '../src/types'
+import type {
+  ApplyMailActionInput,
+  GmailAccountSummary,
+  GmailDraftInput,
+  GmailLabel,
+  GmailThreadDetail,
+  MailPage,
+  MailQuery,
+  MailStorageStats,
+  PendingOperation,
+  SyncProgress
+} from '../src/gmail-types'
+import { OAuthVault } from './mail/oauth-vault'
+import { MailWorkerClient } from './mail/worker-client'
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'aerio-image', privileges: { secure: true, standard: true, supportFetchAPI: true, bypassCSP: false } }
+])
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let database: Database | null = null
 let databasePath = ''
+let oauthVault: OAuthVault | null = null
+let mailWorker: MailWorkerClient | null = null
+const approvedAttachmentPaths = new Set<string>()
 let quitting = false
 let lastBoundsWrite: NodeJS.Timeout | undefined
 
@@ -34,7 +59,19 @@ function persistDatabase() {
 }
 
 async function initializeDatabase() {
-  databasePath = join(app.getPath('userData'), 'aerio.sqlite')
+  const userData = app.getPath('userData')
+  const legacyPath = join(userData, 'aerio.sqlite')
+  databasePath = join(userData, 'aerio-demo.sqlite')
+  if (!existsSync(databasePath) && existsSync(legacyPath)) {
+    const legacy = new DatabaseSync(legacyPath, { readOnly: true })
+    const normalized = Boolean(legacy.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'`).get())
+    legacy.close()
+    if (!normalized) {
+      copyFileSync(legacyPath, databasePath)
+      const backup = `${legacyPath}.v0.1.bak`
+      if (!existsSync(backup)) copyFileSync(legacyPath, backup)
+    }
+  }
   const wasmBase = app.isPackaged
     ? join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'sql.js', 'dist')
     : join(app.getAppPath(), 'node_modules', 'sql.js', 'dist')
@@ -52,6 +89,88 @@ async function initializeDatabase() {
   `)
   const result = database.exec('SELECT payload FROM app_state WHERE id = 1')
   if (!result.length) saveState(createDemoState())
+}
+
+function requireMailWorker() {
+  if (!mailWorker) throw new Error('The Gmail engine is not ready')
+  return mailWorker
+}
+
+function requireVault() {
+  if (!oauthVault) throw new Error('Secure Gmail storage is not ready')
+  return oauthVault
+}
+
+function safeFilename(value: string) {
+  const cleaned = value.replaceAll(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/g, '').slice(0, 180)
+  return cleaned || 'attachment'
+}
+
+function validateDraft(input: GmailDraftInput) {
+  if (input.attachmentPaths.some((path) => !approvedAttachmentPaths.has(path))) {
+    throw new Error('A draft referenced a file that was not selected through Aerio')
+  }
+  return input
+}
+
+function isPrivateAddress(address: string) {
+  if (isIP(address) === 4) {
+    const [a, b] = address.split('.').map(Number)
+    return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224
+  }
+  if (isIP(address) === 6) {
+    const normalized = address.toLowerCase()
+    return normalized === '::1' || normalized === '::' || normalized.startsWith('fc') ||
+      normalized.startsWith('fd') || normalized.startsWith('fe8') || normalized.startsWith('fe9') ||
+      normalized.startsWith('fea') || normalized.startsWith('feb')
+  }
+  return true
+}
+
+async function initializeMail() {
+  const userData = app.getPath('userData')
+  oauthVault = new OAuthVault(join(userData, 'oauth-vault.dat'))
+  mailWorker = new MailWorkerClient(
+    join(__dirname, 'mail-worker.js'),
+    (accountId) => requireVault().accessToken(accountId),
+    (event) => mainWindow?.webContents.send('gmail:event', event)
+  )
+  await mailWorker.request({
+    type: 'initialize',
+    payload: {
+      databasePath: join(userData, 'aerio.sqlite'),
+      contentPath: join(userData, 'mail')
+    }
+  })
+}
+
+function registerRemoteImageProtocol() {
+  protocol.handle('aerio-image', async (request) => {
+    try {
+      const url = new URL(request.url)
+      if (url.hostname !== 'fetch') return new Response('Not found', { status: 404 })
+      const encoded = url.pathname.replace(/^\//, '')
+      const remote = Buffer.from(encoded, 'base64url').toString('utf8')
+      const target = new URL(remote)
+      if (target.protocol !== 'https:' && target.protocol !== 'http:') return new Response('Blocked', { status: 403 })
+      if (target.hostname === 'localhost' || target.hostname.endsWith('.localhost') || target.hostname.endsWith('.local')) {
+        return new Response('Blocked', { status: 403 })
+      }
+      const addresses = await lookup(target.hostname, { all: true })
+      if (!addresses.length || addresses.some((address) => isPrivateAddress(address.address))) {
+        return new Response('Blocked', { status: 403 })
+      }
+      return await net.fetch(target.toString(), {
+        headers: {
+          'User-Agent': 'Aerio mail image proxy',
+          Accept: 'image/avif,image/webp,image/png,image/jpeg,image/gif,image/*'
+        }
+      })
+    } catch {
+      return new Response('Invalid image URL', { status: 400 })
+    }
+  })
 }
 
 function loadState(): AppState {
@@ -127,9 +246,23 @@ function createWindow() {
     }
   })
 
-  mainWindow.on('ready-to-show', () => mainWindow?.show())
+  mainWindow.on('ready-to-show', () => {
+    mainWindow?.show()
+    const capturePath = process.env.AERIO_CAPTURE_PATH
+    if (capturePath) {
+      setTimeout(() => {
+        void mainWindow?.webContents.capturePage().then((image) => {
+          writeFileSync(capturePath, image.toPNG())
+          quitting = true
+          app.quit()
+        })
+      }, 1_500)
+    }
+  })
   mainWindow.on('resize', saveBounds)
   mainWindow.on('move', saveBounds)
+  mainWindow.on('show', () => void mailWorker?.request({ type: 'polling', payload: { intervalMs: 60_000 } }))
+  mainWindow.on('hide', () => void mailWorker?.request({ type: 'polling', payload: { intervalMs: 5 * 60_000 } }))
   mainWindow.on('maximize', () => mainWindow?.webContents.send('window:maximized-state', true))
   mainWindow.on('unmaximize', () => mainWindow?.webContents.send('window:maximized-state', false))
   mainWindow.on('close', (event) => {
@@ -139,11 +272,21 @@ function createWindow() {
       mainWindow?.hide()
     }
   })
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const current = mainWindow?.webContents.getURL()
+    if (url === current) return
+    event.preventDefault()
+    if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url)
+  })
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
-    void mainWindow.loadFile(join(__dirname, '../../dist/index.html'))
+    void mainWindow.loadFile(join(__dirname, '../../dist/index.html'), process.env.AERIO_CAPTURE_PATH ? { query: { workspace: 'gmail' } } : undefined)
   }
 }
 
@@ -176,13 +319,16 @@ function registerIpc() {
       ? await dialog.showOpenDialog(mainWindow, options)
       : await dialog.showOpenDialog(options)
     if (result.canceled) return []
-    return result.filePaths.map((path) => ({
-      id: crypto.randomUUID(),
-      name: basename(path),
-      size: 0,
-      path,
-      mime: extname(path).slice(1)
-    }))
+    return result.filePaths.map((path) => {
+      approvedAttachmentPaths.add(path)
+      return {
+        id: crypto.randomUUID(),
+        name: basename(path),
+        size: statSync(path).size,
+        path,
+        mime: extname(path).slice(1)
+      }
+    })
   })
   ipcMain.handle('notification:show', (_event, input: { title: string; body: string }) => {
     if (Notification.isSupported()) new Notification({ title: input.title.slice(0, 80), body: input.body.slice(0, 240), icon: iconPath() }).show()
@@ -194,12 +340,87 @@ function registerIpc() {
   })
   ipcMain.handle('window:close', () => mainWindow?.close())
   ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false)
+
+  ipcMain.handle('gmail:credentials:status', () => requireVault().status())
+  ipcMain.handle('gmail:credentials:import', async () => {
+    const options: Electron.OpenDialogOptions = {
+      title: 'Import Google Desktop OAuth credentials',
+      filters: [{ name: 'Google OAuth JSON', extensions: ['json'] }],
+      properties: ['openFile']
+    }
+    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
+    if (result.canceled || !result.filePaths[0]) return requireVault().status()
+    return requireVault().importConfig(result.filePaths[0])
+  })
+  ipcMain.handle('gmail:accounts:list', () => requireMailWorker().request<GmailAccountSummary[]>({ type: 'accounts:list' }))
+  ipcMain.handle('gmail:accounts:connect', async () => {
+    const authorized = await requireVault().authorize()
+    const colors = ['#1d7a62', '#3b6fd8', '#8a5dc7', '#c2673d', '#b04d73', '#5d7589']
+    const account: GmailAccountSummary = {
+      id: authorized.accountId,
+      email: authorized.email,
+      displayName: authorized.email.split('@')[0],
+      color: colors[Number.parseInt(authorized.accountId.slice(0, 2), 16) % colors.length],
+      status: 'connecting',
+      archived: false
+    }
+    await requireMailWorker().request({ type: 'accounts:upsert', payload: account })
+    await requireMailWorker().request({ type: 'sync:start', payload: { accountId: account.id } })
+    return account
+  })
+  ipcMain.handle('gmail:accounts:disconnect', async (_event, accountId: string, mode: 'archive' | 'delete') => {
+    await requireVault().remove(accountId)
+    await requireMailWorker().request({ type: 'accounts:disconnect', payload: { accountId, mode } })
+  })
+  ipcMain.handle('gmail:labels:list', (_event, accountIds?: string[]) =>
+    requireMailWorker().request<GmailLabel[]>({ type: 'labels:list', payload: { accountIds } }))
+  ipcMain.handle('gmail:mail:list', (_event, query: MailQuery) =>
+    requireMailWorker().request<MailPage>({ type: 'mail:list', payload: query }))
+  ipcMain.handle('gmail:mail:thread', (_event, accountId: string, threadId: string, allowRemoteImages?: boolean) =>
+    requireMailWorker().request<GmailThreadDetail>({ type: 'mail:thread', payload: { accountId, threadId, allowRemoteImages } }))
+  ipcMain.handle('gmail:mail:action', (_event, input: ApplyMailActionInput) =>
+    requireMailWorker().request<PendingOperation>({ type: 'mail:action', payload: input }))
+  ipcMain.handle('gmail:mail:undo', (_event, operationId: string) =>
+    requireMailWorker().request<boolean>({ type: 'mail:undo', payload: { operationId } }))
+  ipcMain.handle('gmail:drafts:save', (_event, input: GmailDraftInput) =>
+    requireMailWorker().request({ type: 'drafts:save', payload: validateDraft(input) }))
+  ipcMain.handle('gmail:drafts:send', (_event, input: GmailDraftInput) =>
+    requireMailWorker().request({ type: 'drafts:send', payload: validateDraft(input) }))
+  ipcMain.handle('gmail:sync:start', (_event, accountId?: string) =>
+    requireMailWorker().request({ type: 'sync:start', payload: { accountId } }))
+  ipcMain.handle('gmail:sync:pause', (_event, accountId: string) =>
+    requireMailWorker().request({ type: 'sync:pause', payload: { accountId } }))
+  ipcMain.handle('gmail:sync:resume', (_event, accountId: string) =>
+    requireMailWorker().request({ type: 'sync:resume', payload: { accountId } }))
+  ipcMain.handle('gmail:sync:progress', () =>
+    requireMailWorker().request<SyncProgress[]>({ type: 'sync:progress' }))
+  ipcMain.handle('gmail:storage', () =>
+    requireMailWorker().request<MailStorageStats>({ type: 'storage:stats' }))
+  ipcMain.handle('gmail:network', (_event, online: boolean) =>
+    requireMailWorker().request({ type: 'network', payload: { online } }))
+  ipcMain.handle('gmail:attachment:open', async (_event, accountId: string, messageId: string, attachmentId: string, filename: string) => {
+    const directory = join(tmpdir(), 'aerio-attachments')
+    mkdirSync(directory, { recursive: true })
+    const targetPath = join(directory, `${crypto.randomUUID()}-${safeFilename(filename)}`)
+    await requireMailWorker().request({ type: 'attachment:extract', payload: { accountId, messageId, attachmentId, targetPath } })
+    const error = await shell.openPath(targetPath)
+    return error ? { error } : {}
+  })
+  ipcMain.handle('gmail:attachment:save', async (_event, accountId: string, messageId: string, attachmentId: string, filename: string) => {
+    const options: Electron.SaveDialogOptions = { title: 'Save attachment', defaultPath: safeFilename(filename) }
+    const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return {}
+    await requireMailWorker().request({ type: 'attachment:extract', payload: { accountId, messageId, attachmentId, targetPath: result.filePath } })
+    return { savedPath: result.filePath }
+  })
 }
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
   await initializeDatabase()
+  await initializeMail()
   registerIpc()
+  registerRemoteImageProtocol()
   createWindow()
   createTray()
 
@@ -211,6 +432,7 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   quitting = true
+  void mailWorker?.close()
 })
 
 app.on('window-all-closed', () => {

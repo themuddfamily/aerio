@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AerioDesktopApi, AppState } from '../src/types'
+import type { ApplyMailActionInput, GmailDraftInput, GmailWorkerEvent, MailQuery } from '../src/gmail-types'
 
 const api: AerioDesktopApi = {
   loadState: () => ipcRenderer.invoke('state:load'),
@@ -22,7 +23,50 @@ const api: AerioDesktopApi = {
     const listener = () => callback()
     ipcRenderer.on('command:compose', listener)
     return () => ipcRenderer.removeListener('command:compose', listener)
+  },
+  gmail: {
+    credentials: {
+      status: () => ipcRenderer.invoke('gmail:credentials:status'),
+      import: () => ipcRenderer.invoke('gmail:credentials:import')
+    },
+    accounts: {
+      list: () => ipcRenderer.invoke('gmail:accounts:list'),
+      connect: () => ipcRenderer.invoke('gmail:accounts:connect'),
+      disconnect: (accountId, mode) => ipcRenderer.invoke('gmail:accounts:disconnect', accountId, mode)
+    },
+    mail: {
+      labels: (accountIds) => ipcRenderer.invoke('gmail:labels:list', accountIds),
+      list: (query: MailQuery) => ipcRenderer.invoke('gmail:mail:list', query),
+      thread: (accountId, threadId, allowRemoteImages) => ipcRenderer.invoke('gmail:mail:thread', accountId, threadId, allowRemoteImages),
+      action: (input: ApplyMailActionInput) => ipcRenderer.invoke('gmail:mail:action', input),
+      undo: (operationId) => ipcRenderer.invoke('gmail:mail:undo', operationId)
+    },
+    drafts: {
+      save: (input: GmailDraftInput) => ipcRenderer.invoke('gmail:drafts:save', input),
+      send: (input: GmailDraftInput) => ipcRenderer.invoke('gmail:drafts:send', input)
+    },
+    sync: {
+      start: (accountId) => ipcRenderer.invoke('gmail:sync:start', accountId),
+      pause: (accountId) => ipcRenderer.invoke('gmail:sync:pause', accountId),
+      resume: (accountId) => ipcRenderer.invoke('gmail:sync:resume', accountId),
+      progress: () => ipcRenderer.invoke('gmail:sync:progress')
+    },
+    attachments: {
+      open: (accountId, messageId, attachmentId, filename) => ipcRenderer.invoke('gmail:attachment:open', accountId, messageId, attachmentId, filename),
+      save: (accountId, messageId, attachmentId, filename) => ipcRenderer.invoke('gmail:attachment:save', accountId, messageId, attachmentId, filename)
+    },
+    storage: () => ipcRenderer.invoke('gmail:storage'),
+    onEvent: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, value: GmailWorkerEvent) => callback(value)
+      ipcRenderer.on('gmail:event', listener)
+      return () => ipcRenderer.removeListener('gmail:event', listener)
+    }
   }
 }
 
 contextBridge.exposeInMainWorld('aerio', api)
+
+const reportConnectivity = () => void ipcRenderer.invoke('gmail:network', navigator.onLine)
+window.addEventListener('online', reportConnectivity)
+window.addEventListener('offline', reportConnectivity)
+queueMicrotask(reportConnectivity)

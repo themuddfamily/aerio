@@ -12,6 +12,7 @@ import ContactsView from './views/ContactsView'
 import TasksView from './views/TasksView'
 import NotesView from './views/NotesView'
 import ChatView from './views/ChatView'
+import GmailView from './views/GmailView'
 import type { AppState, Message, ModuleId } from './types'
 import { unreadCount } from './lib/domain'
 
@@ -38,6 +39,8 @@ export default function App() {
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [toast, setToast] = useState('')
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved')
+  const [mailMode, setMailMode] = useState<'gmail' | 'demo'>(() =>
+    new URLSearchParams(window.location.search).get('workspace') === 'gmail' ? 'gmail' : 'demo')
   const hydrated = useRef(false)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -53,6 +56,11 @@ export default function App() {
       setActiveModule(loaded.settings.startModule)
       queueMicrotask(() => { hydrated.current = true })
     }).catch(() => showToast('Aerio could not open its local data'))
+    void window.aerio.gmail.accounts.list().then((accounts) => {
+      if (accounts.length) setMailMode('gmail')
+    }).catch(() => {
+      // The separate demo workspace remains usable if Gmail cannot initialize.
+    })
   }, [showToast])
 
   useEffect(() => {
@@ -151,14 +159,18 @@ export default function App() {
               <span>Search {modules.find((item) => item.id === activeModule)?.label.toLowerCase()} or run a command</span>
               <kbd>Ctrl K</kbd>
             </button>
-            <span className="local-badge"><WifiOff size={14} /> Demo data · local only</span>
+            <button className={`local-badge mode-switch ${mailMode === 'gmail' ? 'gmail' : ''}`} onClick={() => { setMailMode((mode) => mode === 'gmail' ? 'demo' : 'gmail'); setActiveModule('mail') }}>
+              {mailMode === 'gmail' ? <Mail size={14} /> : <WifiOff size={14} />}
+              {mailMode === 'gmail' ? 'Real Gmail' : 'Demo workspace'}
+            </button>
             <span className={`save-indicator ${saveStatus}`}>{saveStatus === 'saved' ? 'All changes saved' : 'Saving…'}</span>
             <button className="theme-quick" title="Toggle theme" onClick={() => setState({ ...state, settings: { ...state.settings, theme: state.settings.theme === 'dark' ? 'light' : 'dark' } })}>
               {state.settings.theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
             </button>
           </header>
           <div className="module-content">
-            {activeModule === 'mail' && <MailView state={state} query={query} onChange={setState} onCompose={(replyTo) => setCompose({ replyTo })} onNavigate={navigate} onToast={showToast} />}
+            {activeModule === 'mail' && mailMode === 'gmail' && <GmailView onToast={showToast} />}
+            {activeModule === 'mail' && mailMode === 'demo' && <MailView state={state} query={query} onChange={setState} onCompose={(replyTo) => setCompose({ replyTo })} onNavigate={navigate} onToast={showToast} />}
             {activeModule === 'calendar' && <CalendarView state={state} query={query} onChange={setState} onToast={showToast} />}
             {activeModule === 'contacts' && <ContactsView state={state} query={query} onChange={setState} onCompose={(replyTo, initialTo) => setCompose({ replyTo, initialTo })} onToast={showToast} />}
             {activeModule === 'tasks' && <TasksView state={state} query={query} onChange={setState} onToast={showToast} />}
@@ -168,7 +180,7 @@ export default function App() {
         </main>
       </div>
 
-      {compose && <ComposeModal state={state} replyTo={compose.replyTo} initialTo={compose.initialTo} onChange={setState} onClose={() => setCompose(null)} onToast={showToast} />}
+      {compose && (activeModule !== 'mail' || mailMode === 'demo') && <ComposeModal state={state} replyTo={compose.replyTo} initialTo={compose.initialTo} onChange={setState} onClose={() => setCompose(null)} onToast={showToast} />}
       {settingsOpen && <SettingsModal state={state} onChange={setState} onClose={() => setSettingsOpen(false)} onReset={async () => {
         const next = await window.aerio.resetState()
         hydrated.current = false

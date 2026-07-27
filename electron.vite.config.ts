@@ -7,7 +7,15 @@ export default defineConfig({
     build: {
       outDir: 'dist-electron/main',
       lib: {
-        entry: 'electron/main.ts'
+        entry: {
+          main: 'electron/main.ts',
+          'mail-worker': 'electron/mail-worker.ts'
+        }
+      },
+      rollupOptions: {
+        output: {
+          entryFileNames: '[name].js'
+        }
       }
     }
   },
