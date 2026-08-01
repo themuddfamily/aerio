@@ -417,9 +417,15 @@ try {
     await editDraft.getByRole('heading', { name: 'Edit draft' }).waitFor()
     assert.equal(await editDraft.getByPlaceholder('name@example.com').inputValue(), 'reader@aerio.local')
     const composeBody = editDraft.locator('.compose-rich-body')
+    const originalBodyHtml = await composeBody.evaluate((editor) => editor.innerHTML)
     await composeBody.fill('')
     await composeBody.pressSequentially('Aerio compose order')
     assert.equal(await composeBody.innerText(), 'Aerio compose order')
+    await composeBody.evaluate((editor, originalHtml) => {
+      editor.innerHTML = originalHtml
+      editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }))
+    }, originalBodyHtml)
+    assert.equal(await composeBody.evaluate((editor) => editor.innerHTML), originalBodyHtml)
     await editDraft.getByRole('button', { name: 'Close' }).click()
     await editDraft.waitFor({ state: 'hidden' })
     await page.locator('.real-mail .context-sidebar .sidebar-item').filter({ hasText: 'Inbox' }).first().click()
