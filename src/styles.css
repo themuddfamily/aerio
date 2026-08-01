@@ -1724,6 +1724,14 @@ kbd {
   flex: 1;
 }
 
+.modal-header > .modal-header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 12px;
+}
+
 .modal-header h2 {
   margin: 0;
   font-size: 17px;
@@ -1966,6 +1974,31 @@ kbd {
 
 .signature-section textarea {
   min-height: 70px;
+}
+
+.modal-popout-host {
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.modal-popout-backdrop {
+  inset: 0;
+  padding: 0;
+  background: var(--surface);
+  backdrop-filter: none;
+}
+
+.modal.modal-popped-out {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.modal.modal-popped-out > :not(.modal-header) {
+  min-height: 0;
 }
 
 .settings-content .update-progress {

@@ -1,7 +1,7 @@
-import { ArrowLeft, Check, ChevronRight, LoaderCircle, Mail, ShieldCheck, X } from 'lucide-react'
+import { ArrowLeft, Check, ChevronRight, LoaderCircle, Mail, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { GmailCredentialStatus, ImapAccountInput, MailProviderId, MailProviderPreset } from '../gmail-types'
-import { useDialogFocus } from '../lib/dialog-focus'
+import { ModalShell } from './Modal'
 import ProviderLogo from './ProviderLogo'
 
 interface Props {
@@ -31,7 +31,6 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
   const [microsoft, setMicrosoft] = useState(emptyStatus)
   const [microsoftClientId, setMicrosoftClientId] = useState('')
   const [busy, setBusy] = useState(false)
-  const dialogRef = useDialogFocus<HTMLElement>(onClose, true, !busy)
   const preset = useMemo(() => presets.find((item) => item.id === selected), [presets, selected])
   const [imap, setImap] = useState<ImapAccountInput>({
     provider: 'imap', email: '', displayName: '', username: '', password: '',
@@ -100,16 +99,21 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
   const update = <K extends keyof ImapAccountInput>(key: K, value: ImapAccountInput[K]) => setImap((current) => ({ ...current, [key]: value }))
 
   return (
-    <div className="modal-backdrop mail-account-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section ref={dialogRef} className="modal mail-account-setup" role="dialog" aria-modal="true" aria-label="Add mail account" tabIndex={-1}>
-        <header className="modal-header">
-          <div className="setup-heading">
+    <ModalShell
+      title="Add mail account"
+      className="mail-account-setup"
+      backdropClassName="mail-account-backdrop"
+      closeEnabled={!busy}
+      popoutSize={{ width: 820, height: 720 }}
+      onClose={onClose}
+      heading={
+        <div className="setup-heading">
             {selected && <button className="icon-button" onClick={() => setSelected(undefined)} aria-label="Back to providers"><ArrowLeft size={18} /></button>}
             <span className={`setup-mark ${preset ? 'provider-brand-mark' : ''}`}>{preset ? <ProviderLogo provider={preset.id} size={22} /> : <Mail size={20} />}</span>
             <div><h2>{preset ? providerPresentation[preset.id].action : 'Connect an email account'}</h2><p>{preset?.description ?? 'Choose your provider to bring mail, calendar, and contacts into Aerio.'}</p></div>
-          </div>
-          <button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button>
-        </header>
+        </div>
+      }
+    >
 
         {!preset && <div className="provider-chooser">
           <div className="provider-featured-grid">
@@ -168,7 +172,6 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
           {preset.auth === 'bridge' && <p className="setup-note">Keep Proton Mail Bridge running. Use the IMAP/SMTP username and password shown inside Bridge, not your Proton account password.</p>}
           <footer className="setup-actions"><button type="submit" className="button primary" disabled={busy}>{busy && <LoaderCircle className="spin" size={15} />}{providerPresentation[preset.id].action}</button></footer>
         </form>}
-      </section>
-    </div>
+    </ModalShell>
   )
 }

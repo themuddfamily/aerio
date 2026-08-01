@@ -10,7 +10,7 @@ const focusableSelector = [
   '[tabindex]:not([tabindex="-1"])'
 ].join(',')
 
-export function useDialogFocus<T extends HTMLElement>(onClose: () => void, active = true, closeEnabled = true): RefObject<T | null> {
+export function useDialogFocus<T extends HTMLElement>(onClose: () => void, active = true, closeEnabled = true, ownerDocument?: Document): RefObject<T | null> {
   const dialogRef = useRef<T>(null)
   const onCloseRef = useRef(onClose)
   const closeEnabledRef = useRef(closeEnabled)
@@ -20,19 +20,21 @@ export function useDialogFocus<T extends HTMLElement>(onClose: () => void, activ
 
   useEffect(() => {
     if (!active) return
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
-    const animationFrame = requestAnimationFrame(() => {
+    const targetDocument = ownerDocument ?? document
+    const targetWindow = targetDocument.defaultView ?? window
+    const previousFocus = targetDocument.activeElement instanceof targetWindow.HTMLElement ? targetDocument.activeElement as HTMLElement : undefined
+    const animationFrame = targetWindow.requestAnimationFrame(() => {
       const dialog = dialogRef.current
-      if (!dialog || dialog.contains(document.activeElement)) return
+      if (!dialog || dialog.contains(targetDocument.activeElement)) return
       dialog.querySelector<HTMLElement>('[autofocus]')?.focus()
-      if (!dialog.contains(document.activeElement)) dialog.querySelector<HTMLElement>(focusableSelector)?.focus()
-      if (!dialog.contains(document.activeElement)) dialog.focus()
+      if (!dialog.contains(targetDocument.activeElement)) dialog.querySelector<HTMLElement>(focusableSelector)?.focus()
+      if (!dialog.contains(targetDocument.activeElement)) dialog.focus()
     })
 
     const onKeyDown = (event: KeyboardEvent) => {
       const dialog = dialogRef.current
       if (!dialog) return
-      if (event.target instanceof Element && event.target.closest('[role="menu"]')) return
+      if (event.target instanceof targetWindow.Element && event.target.closest('[role="menu"]')) return
       if (event.key === 'Escape' && closeEnabledRef.current) {
         event.preventDefault()
         event.stopPropagation()
@@ -49,22 +51,22 @@ export function useDialogFocus<T extends HTMLElement>(onClose: () => void, activ
       }
       const first = focusable[0]
       const last = focusable.at(-1)!
-      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+      if (event.shiftKey && (targetDocument.activeElement === first || !dialog.contains(targetDocument.activeElement))) {
         event.preventDefault()
         last.focus()
-      } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+      } else if (!event.shiftKey && (targetDocument.activeElement === last || !dialog.contains(targetDocument.activeElement))) {
         event.preventDefault()
         first.focus()
       }
     }
 
-    document.addEventListener('keydown', onKeyDown, true)
+    targetDocument.addEventListener('keydown', onKeyDown, true)
     return () => {
-      cancelAnimationFrame(animationFrame)
-      document.removeEventListener('keydown', onKeyDown, true)
+      targetWindow.cancelAnimationFrame(animationFrame)
+      targetDocument.removeEventListener('keydown', onKeyDown, true)
       if (previousFocus?.isConnected) queueMicrotask(() => previousFocus.focus())
     }
-  }, [active])
+  }, [active, ownerDocument])
 
   return dialogRef
 }

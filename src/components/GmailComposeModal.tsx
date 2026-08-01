@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { GmailAccountSummary, GmailDraftInput, GmailDraftRecord, GmailThreadDetail, MailRecipientSuggestion } from '../gmail-types'
 import { formatFileSize } from '../lib/domain'
 import { copyText, useContextMenu } from './ContextMenu'
-import { useDialogFocus } from '../lib/dialog-focus'
+import { ModalShell } from './Modal'
 
 interface GmailComposeModalProps {
   accounts: GmailAccountSummary[]
@@ -144,8 +144,6 @@ export default function GmailComposeModal({ accounts, draft, replyTo, forward, o
     if (hasChanges && hasContent && fingerprint !== lastSaved.current) await saveNow(input)
     onClose()
   }
-  const dialogRef = useDialogFocus<HTMLElement>(() => void closeComposer(), true, status !== 'sending' && status !== 'closing')
-
   const chooseAttachments = async () => {
     try {
       const selected = await window.aerio.chooseAttachments()
@@ -181,13 +179,14 @@ export default function GmailComposeModal({ accounts, draft, replyTo, forward, o
   }
 
   const format = (command: string, value?: string) => {
-    editorRef.current?.focus()
-    document.execCommand(command, false, value)
+    const editor = editorRef.current
+    editor?.focus()
+    editor?.ownerDocument.execCommand(command, false, value)
     updateEditor()
   }
 
   const addLink = () => {
-    const value = window.prompt('Link address (https:// or mailto:)')?.trim()
+    const value = editorRef.current?.ownerDocument.defaultView?.prompt('Link address (https:// or mailto:)')?.trim()
     if (!value) return
     if (!/^(https?:|mailto:)/i.test(value)) {
       onToast('Use an https://, http://, or mailto: link')
@@ -237,14 +236,18 @@ export default function GmailComposeModal({ accounts, draft, replyTo, forward, o
       : status === 'sending' ? 'Sending…'
         : status === 'closing' ? 'Saving before closing…'
           : status === 'failed' ? draft?.error ?? 'Draft not saved — retry available' : 'Real mail'
+  const composeTitle = draft ? 'Edit draft' : forward ? 'Forward' : replyTo ? 'Reply' : 'New message'
 
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) void closeComposer() }}>
-      <section ref={dialogRef} className="modal gmail-compose" role="dialog" aria-modal="true" aria-label="Compose mail message" tabIndex={-1}>
-        <header className="modal-header">
-          <div><h2>{draft ? 'Edit draft' : forward ? 'Forward' : replyTo ? 'Reply' : 'New message'}</h2><p>{statusText}</p></div>
-          <button className="icon-button" onClick={() => void closeComposer()} aria-label="Close" title="Save draft and close"><X size={18} /></button>
-        </header>
+    <ModalShell
+      title={composeTitle}
+      subtitle={statusText}
+      className="gmail-compose"
+      closeEnabled={status !== 'sending' && status !== 'closing'}
+      closeTitle="Save draft and close"
+      popoutSize={{ width: 800, height: 820 }}
+      onClose={() => void closeComposer()}
+    >
         <div className="compose">
           <div className="compose-row"><label>From</label><select value={accountId} disabled={Boolean(draft)} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((account) => <option value={account.id} key={account.id}>{account.displayName} · {account.email}</option>)}</select></div>
           <div className="compose-row"><label>To</label><input autoFocus value={to} onFocus={() => setRecipientField('to')} onChange={(event) => setTo(event.target.value)} placeholder="name@example.com" /></div>
@@ -271,7 +274,7 @@ export default function GmailComposeModal({ accounts, draft, replyTo, forward, o
             onFocus={() => setRecipientField(undefined)}
             onPaste={(event) => {
               event.preventDefault()
-              document.execCommand('insertText', false, event.clipboardData.getData('text/plain'))
+              event.currentTarget.ownerDocument.execCommand('insertText', false, event.clipboardData.getData('text/plain'))
               updateEditor()
             }}
           />
@@ -287,7 +290,6 @@ export default function GmailComposeModal({ accounts, draft, replyTo, forward, o
           <span className="spacer" />
           <button className="button primary" disabled={status === 'sending' || status === 'closing'} onClick={() => void send()}><Send size={16} /> {status === 'sending' ? 'Sending…' : 'Send'}</button>
         </footer>
-      </section>
-    </div>
+    </ModalShell>
   )
 }

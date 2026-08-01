@@ -381,9 +381,31 @@ function iconPath() {
 function configureRendererWindow(window: BrowserWindow) {
   window.on('maximize', () => window.webContents.send('window:maximized-state', true))
   window.on('unmaximize', () => window.webContents.send('window:maximized-state', false))
-  window.webContents.setWindowOpenHandler(({ url }) => {
+  window.webContents.setWindowOpenHandler(({ url, frameName }) => {
+    if (url === 'about:blank' && frameName.startsWith('aerio-modal-')) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          minWidth: 420,
+          minHeight: 420,
+          frame: true,
+          autoHideMenuBar: true,
+          title: 'Aerio',
+          backgroundColor: '#f4f5f7',
+          icon: iconPath(),
+          webPreferences: {
+            sandbox: true,
+            contextIsolation: true,
+            nodeIntegration: false
+          }
+        }
+      }
+    }
     if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url)
     return { action: 'deny' }
+  })
+  window.webContents.on('did-create-window', (child, details) => {
+    if (details.frameName.startsWith('aerio-modal-')) configureRendererWindow(child)
   })
   window.webContents.on('will-navigate', (event, url) => {
     if (url === window.webContents.getURL()) return
