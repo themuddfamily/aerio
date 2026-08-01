@@ -1,7 +1,8 @@
-import { ArrowLeft, Check, KeyRound, LoaderCircle, Mail, Server, ShieldCheck, X } from 'lucide-react'
+import { ArrowLeft, Check, ChevronRight, LoaderCircle, Mail, ShieldCheck, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { GmailCredentialStatus, ImapAccountInput, MailProviderId, MailProviderPreset } from '../gmail-types'
 import { useDialogFocus } from '../lib/dialog-focus'
+import ProviderLogo from './ProviderLogo'
 
 interface Props {
   onClose(): void
@@ -10,6 +11,18 @@ interface Props {
 }
 
 const emptyStatus: GmailCredentialStatus = { configured: false }
+
+const providerPresentation: Record<MailProviderId, { action: string; detail: string }> = {
+  gmail: { action: 'Continue with Google', detail: 'Gmail, Calendar and Contacts' },
+  microsoft: { action: 'Continue with Microsoft', detail: 'Outlook.com, Hotmail and Microsoft 365' },
+  icloud: { action: 'Continue with iCloud', detail: 'Use an Apple app-specific password' },
+  yahoo: { action: 'Continue with Yahoo', detail: 'Yahoo Mail and AOL accounts' },
+  fastmail: { action: 'Continue with Fastmail', detail: 'Use a Fastmail app password' },
+  'proton-bridge': { action: 'Continue with Proton Mail', detail: 'Requires Proton Mail Bridge' },
+  imap: { action: 'Set up another provider', detail: 'Connect with IMAP and SMTP' }
+}
+
+const featuredProviders = new Set<MailProviderId>(['gmail', 'microsoft'])
 
 export default function MailAccountSetupModal({ onClose, onConnected, onToast }: Props) {
   const [presets, setPresets] = useState<MailProviderPreset[]>([])
@@ -92,17 +105,35 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
         <header className="modal-header">
           <div className="setup-heading">
             {selected && <button className="icon-button" onClick={() => setSelected(undefined)} aria-label="Back to providers"><ArrowLeft size={18} /></button>}
-            <span className="setup-mark"><Mail size={20} /></span>
-            <div><h2>{preset ? preset.name : 'Add a mail account'}</h2><p>{preset?.description ?? 'Choose your provider. Aerio keeps tokens and passwords in Windows secure storage.'}</p></div>
+            <span className={`setup-mark ${preset ? 'provider-brand-mark' : ''}`}>{preset ? <ProviderLogo provider={preset.id} size={22} /> : <Mail size={20} />}</span>
+            <div><h2>{preset ? providerPresentation[preset.id].action : 'Connect an email account'}</h2><p>{preset?.description ?? 'Choose your provider to bring mail, calendar, and contacts into Aerio.'}</p></div>
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button>
         </header>
 
-        {!preset && <div className="provider-grid">
-          {presets.map((provider) => <button key={provider.id} onClick={() => choose(provider)}>
-            <span>{provider.auth.includes('oauth') ? <ShieldCheck size={21} /> : provider.auth === 'bridge' ? <Server size={21} /> : <KeyRound size={21} />}</span>
-            <strong>{provider.name}</strong><small>{provider.description}</small>
-          </button>)}
+        {!preset && <div className="provider-chooser">
+          <div className="provider-featured-grid">
+            {presets.filter((provider) => featuredProviders.has(provider.id)).map((provider) => {
+              const presentation = providerPresentation[provider.id]
+              return <button className={`provider-choice featured provider-${provider.id}`} key={provider.id} aria-label={`${presentation.action}. ${provider.name}. ${presentation.detail}`} onClick={() => choose(provider)}>
+                <span className="provider-logo-frame"><ProviderLogo provider={provider.id} size={25} /></span>
+                <span className="provider-choice-copy"><strong>{presentation.action}</strong><small>{presentation.detail}</small></span>
+                <ChevronRight size={18} aria-hidden="true" />
+              </button>
+            })}
+          </div>
+          <div className="provider-section-label"><span>Other email providers</span></div>
+          <div className="provider-secondary-grid">
+            {presets.filter((provider) => !featuredProviders.has(provider.id)).map((provider) => {
+              const presentation = providerPresentation[provider.id]
+              return <button className={`provider-choice compact provider-${provider.id}`} key={provider.id} aria-label={`${presentation.action}. ${provider.name}. ${presentation.detail}`} onClick={() => choose(provider)}>
+                <span className="provider-logo-frame"><ProviderLogo provider={provider.id} size={21} /></span>
+                <span className="provider-choice-copy"><strong>{presentation.action}</strong><small>{presentation.detail}</small></span>
+                <ChevronRight size={15} aria-hidden="true" />
+              </button>
+            })}
+          </div>
+          <p className="provider-security-note"><ShieldCheck size={15} /> Secure sign-in opens in your browser. App passwords and tokens are encrypted with Windows secure storage.</p>
         </div>}
 
         {preset?.id === 'gmail' && <div className="provider-setup-body">
@@ -116,7 +147,7 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
             </div>
             {google.source !== 'built-in' && <button className="button ghost" onClick={() => void importGoogle()}>{google.configured ? 'Replace JSON' : 'Import JSON'}</button>}
           </div>
-          <div className="setup-step"><span>2</span><div><strong>Sign in with Google</strong><p>Your browser asks for Gmail access. Aerio receives a revocable OAuth token.</p></div><button className="button primary" disabled={!google.configured || busy} onClick={() => void finish(() => window.aerio.mail.accounts.connect(), 'Google account connected — sync has started')}>{busy && <LoaderCircle className="spin" size={15} />}Connect Gmail</button></div>
+          <div className="setup-step"><span>2</span><div><strong>Sign in with Google</strong><p>Your browser asks for Gmail access. Aerio receives a revocable OAuth token.</p></div><button className="button brand-auth-action" disabled={!google.configured || busy} onClick={() => void finish(() => window.aerio.mail.accounts.connect(), 'Google account connected — sync has started')}><ProviderLogo provider="gmail" size={16} />{busy && <LoaderCircle className="spin" size={15} />}Continue with Google</button></div>
           <p className="setup-note">Aerio uses a desktop OAuth registration and a local PKCE callback. Your Google password is never shared with Aerio.</p>
         </div>}
 
@@ -125,7 +156,7 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
             ? <div className="setup-step complete"><span><Check size={17} /></span><div><strong>Aerio Microsoft registration</strong><p>Included in this Aerio build{microsoft.clientIdHint ? ` (${microsoft.clientIdHint})` : ''}. No application ID is required.</p></div></div>
             : <label className="field"><span>Microsoft Application (client) ID</span><input value={microsoftClientId} onChange={(event) => setMicrosoftClientId(event.target.value)} placeholder={microsoft.clientIdHint ?? 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'} /></label>}
           <p className="setup-note">{microsoft.source === 'built-in' ? 'Sign in with a personal Outlook or Microsoft 365 account. Aerio requests mail access plus read-only Calendar and Contacts access through Microsoft Graph.' : 'Register Aerio as a public desktop client in Microsoft Entra and allow the localhost redirect.'}</p>
-          <footer className="setup-actions"><button className="button primary" disabled={busy || (!microsoft.configured && !microsoftClientId.trim())} onClick={() => void connectMicrosoft()}>{busy && <LoaderCircle className="spin" size={15} />}Connect Microsoft</button></footer>
+          <footer className="setup-actions"><button className="button brand-auth-action" disabled={busy || (!microsoft.configured && !microsoftClientId.trim())} onClick={() => void connectMicrosoft()}><ProviderLogo provider="microsoft" size={15} />{busy && <LoaderCircle className="spin" size={15} />}Continue with Microsoft</button></footer>
         </div>}
 
         {preset && preset.id !== 'gmail' && preset.id !== 'microsoft' && <form className="provider-setup-body imap-form" onSubmit={(event) => { event.preventDefault(); void finish(() => window.aerio.mail.accounts.connectImap(imap), `${preset.name} account connected — sync has started`) }}>
@@ -135,7 +166,7 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
           <div className="server-fields"><strong>Outgoing mail (SMTP)</strong><label className="field grow"><span>Server</span><input required value={imap.smtpHost} onChange={(event) => update('smtpHost', event.target.value)} /></label><label className="field port"><span>Port</span><input type="number" required value={imap.smtpPort} onChange={(event) => update('smtpPort', Number(event.target.value))} /></label><label className="field security"><span>Security</span><select value={imap.smtpSecurity} onChange={(event) => update('smtpSecurity', event.target.value as 'tls' | 'starttls')}><option value="tls">TLS</option><option value="starttls">STARTTLS</option></select></label></div>
           {preset.auth === 'app-password' && <p className="setup-note">Use an app-specific password from your provider’s security settings. Your normal account password may be rejected.</p>}
           {preset.auth === 'bridge' && <p className="setup-note">Keep Proton Mail Bridge running. Use the IMAP/SMTP username and password shown inside Bridge, not your Proton account password.</p>}
-          <footer className="setup-actions"><button type="submit" className="button primary" disabled={busy}>{busy && <LoaderCircle className="spin" size={15} />}Test and connect</button></footer>
+          <footer className="setup-actions"><button type="submit" className="button primary" disabled={busy}>{busy && <LoaderCircle className="spin" size={15} />}{providerPresentation[preset.id].action}</button></footer>
         </form>}
       </section>
     </div>
