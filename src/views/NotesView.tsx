@@ -1,5 +1,5 @@
 import {
-  Archive, FileText, Folder, Grid2X2, List, MoreHorizontal, Pin, Plus, Search, Tag, Trash2
+  Archive, FileText, Folder, Grid2X2, List, Pin, Plus, Search, Tag, Trash2
 } from 'lucide-react'
 import { formatDistanceToNow, parseISO } from 'date-fns'
 import { useMemo, useState } from 'react'
@@ -17,13 +17,15 @@ export default function NotesView({ state, query, onChange, onToast }: NotesView
   const [folder, setFolder] = useState('All notes')
   const [selectedId, setSelectedId] = useState(state.notes[0]?.id ?? '')
   const [grid, setGrid] = useState(false)
+  const [tagFilter, setTagFilter] = useState<string>()
   const folders = ['All notes', 'Pinned', ...Array.from(new Set(state.notes.map((note) => note.folder))), 'Archive']
   const notes = useMemo(() => state.notes
     .filter((note) => folder === 'All notes' ? !note.archived : folder === 'Pinned' ? note.pinned && !note.archived : folder === 'Archive' ? note.archived : note.folder === folder && !note.archived)
+    .filter((note) => !tagFilter || note.tags.includes(tagFilter))
     .filter((note) => !query || `${note.title} ${note.content} ${note.tags.join(' ')}`.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt.localeCompare(a.updatedAt)),
-  [folder, query, state.notes])
-  const selected = state.notes.find((note) => note.id === selectedId) ?? notes[0]
+  [folder, query, state.notes, tagFilter])
+  const selected = notes.find((note) => note.id === selectedId) ?? notes[0]
 
   const update = (updates: Partial<Note>) => {
     if (!selected) return
@@ -46,7 +48,7 @@ export default function NotesView({ state, query, onChange, onToast }: NotesView
         <div className="sidebar-group">
           <span className="sidebar-label">Library</span>
           {folders.map((item) => (
-            <button key={item} className={`sidebar-item ${folder === item ? 'active' : ''}`} onClick={() => setFolder(item)}>
+            <button key={item} className={`sidebar-item ${folder === item && !tagFilter ? 'active' : ''}`} onClick={() => { setFolder(item); setTagFilter(undefined) }}>
               {item === 'Pinned' ? <Pin size={17} /> : item === 'Archive' ? <Archive size={17} /> : item === 'All notes' ? <FileText size={17} /> : <Folder size={17} />}
               <span>{item}</span><em>{item === 'All notes' ? state.notes.filter((note) => !note.archived).length : item === 'Pinned' ? state.notes.filter((note) => note.pinned && !note.archived).length : item === 'Archive' ? state.notes.filter((note) => note.archived).length : state.notes.filter((note) => note.folder === item && !note.archived).length}</em>
             </button>
@@ -54,13 +56,13 @@ export default function NotesView({ state, query, onChange, onToast }: NotesView
         </div>
         <div className="sidebar-group">
           <span className="sidebar-label">Tags</span>
-          {Array.from(new Set(state.notes.flatMap((note) => note.tags))).slice(0, 6).map((tag) => <button className="sidebar-item" key={tag}><Tag size={15} /><span>{tag}</span></button>)}
+          {Array.from(new Set(state.notes.flatMap((note) => note.tags))).slice(0, 6).map((tag) => <button className={`sidebar-item ${tagFilter === tag ? 'active' : ''}`} key={tag} onClick={() => { setTagFilter((current) => current === tag ? undefined : tag); setFolder('All notes') }}><Tag size={15} /><span>{tag}</span></button>)}
         </div>
       </aside>
       <section className="notes-list-panel">
         <header className="panel-heading">
-          <div><h1>{folder}</h1><p>{notes.length} notes</p></div>
-          <div className="segmented icon-segmented"><button className={!grid ? 'active' : ''} onClick={() => setGrid(false)}><List size={15} /></button><button className={grid ? 'active' : ''} onClick={() => setGrid(true)}><Grid2X2 size={15} /></button></div>
+          <div><h1>{tagFilter ? `#${tagFilter}` : folder}</h1><p>{notes.length} notes</p></div>
+          <div className="segmented icon-segmented"><button aria-label="List view" className={!grid ? 'active' : ''} onClick={() => setGrid(false)}><List size={15} /></button><button aria-label="Grid view" className={grid ? 'active' : ''} onClick={() => setGrid(true)}><Grid2X2 size={15} /></button></div>
         </header>
         <div className={grid ? 'notes-grid' : 'notes-list'}>
           {notes.map((note) => (
@@ -84,13 +86,12 @@ export default function NotesView({ state, query, onChange, onToast }: NotesView
               <span className="save-state">Saved locally</span>
               <span className="spacer" />
               <button className={`icon-button ${selected.pinned ? 'active' : ''}`} title="Pin note" onClick={() => update({ pinned: !selected.pinned })}><Pin size={17} fill={selected.pinned ? 'currentColor' : 'none'} /></button>
-              <button className="icon-button" title="Archive" onClick={() => { update({ archived: true }); onToast('Note archived') }}><Archive size={17} /></button>
+              <button className="icon-button" title="Archive" onClick={() => { update({ archived: true }); setSelectedId(''); onToast('Note archived') }}><Archive size={17} /></button>
               <button className="icon-button danger" title="Delete" onClick={() => {
                 onChange({ ...state, notes: state.notes.filter((note) => note.id !== selected.id) })
                 setSelectedId('')
                 onToast('Note deleted')
               }}><Trash2 size={17} /></button>
-              <button className="icon-button"><MoreHorizontal size={17} /></button>
             </header>
             <div className="note-paper">
               <input className="note-title-input" value={selected.title} onChange={(event) => update({ title: event.target.value })} />

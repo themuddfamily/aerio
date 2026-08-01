@@ -1,4 +1,4 @@
-import type { PropsWithChildren } from 'react'
+import { useEffect, type PropsWithChildren } from 'react'
 import { X } from 'lucide-react'
 
 interface ModalProps extends PropsWithChildren {
@@ -9,6 +9,12 @@ interface ModalProps extends PropsWithChildren {
 }
 
 export default function Modal({ title, subtitle, width = 'medium', onClose, children }: ModalProps) {
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [onClose])
+
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.currentTarget === event.target) onClose()

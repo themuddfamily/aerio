@@ -11,10 +11,12 @@ interface ContactsViewProps {
   query: string
   onChange(next: AppState): void
   onCompose(replyTo?: Message, contactEmail?: string): void
+  onChat(contact: Contact): void
+  onOpenMessage(messageId: string): void
   onToast(message: string): void
 }
 
-export default function ContactsView({ state, query, onChange, onCompose, onToast }: ContactsViewProps) {
+export default function ContactsView({ state, query, onChange, onCompose, onChat, onOpenMessage, onToast }: ContactsViewProps) {
   const [group, setGroup] = useState('All contacts')
   const [selectedId, setSelectedId] = useState(state.contacts[0]?.id ?? '')
   const [editing, setEditing] = useState<Contact | 'new' | null>(null)
@@ -24,7 +26,7 @@ export default function ContactsView({ state, query, onChange, onCompose, onToas
     .filter((contact) => !query || `${contact.name} ${contact.email} ${contact.company ?? ''}`.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name)),
   [group, query, state.contacts])
-  const selected = state.contacts.find((contact) => contact.id === selectedId) ?? contacts[0]
+  const selected = contacts.find((contact) => contact.id === selectedId) ?? contacts[0]
   const related = selected ? state.messages.filter((message) => message.fromEmail === selected.email || message.to.includes(selected.email)).slice(0, 4) : []
 
   return (
@@ -65,12 +67,12 @@ export default function ContactsView({ state, query, onChange, onCompose, onToas
               <span className="avatar hero-avatar" style={{ background: selected.color }}>{selected.name.split(' ').map((value) => value[0]).join('')}</span>
               <div><h1>{selected.name}</h1><p>{selected.title}{selected.company && ` at ${selected.company}`}</p></div>
               <span className="spacer" />
-              <button className={`icon-button ${selected.favorite ? 'active' : ''}`} onClick={() => onChange({ ...state, contacts: state.contacts.map((contact) => contact.id === selected.id ? { ...contact, favorite: !contact.favorite } : contact) })}><Star size={18} fill={selected.favorite ? 'currentColor' : 'none'} /></button>
-              <button className="icon-button" onClick={() => setEditing(selected)}><Edit3 size={18} /></button>
+              <button className={`icon-button ${selected.favorite ? 'active' : ''}`} aria-label={selected.favorite ? 'Remove from favourites' : 'Add to favourites'} title={selected.favorite ? 'Remove from favourites' : 'Add to favourites'} onClick={() => onChange({ ...state, contacts: state.contacts.map((contact) => contact.id === selected.id ? { ...contact, favorite: !contact.favorite } : contact) })}><Star size={18} fill={selected.favorite ? 'currentColor' : 'none'} /></button>
+              <button className="icon-button" aria-label="Edit contact" title="Edit contact" onClick={() => setEditing(selected)}><Edit3 size={18} /></button>
             </header>
             <div className="contact-actions">
               <button onClick={() => onCompose(undefined, selected.email)}><span><Mail size={19} /></span>Email</button>
-              <button onClick={() => onToast(`Starting a demo chat with ${selected.name}`)}><span><MessageCircle size={19} /></span>Chat</button>
+              <button onClick={() => onChat(selected)}><span><MessageCircle size={19} /></span>Chat</button>
               <button onClick={() => onToast(selected.phone ? `Call ${selected.phone}` : 'No phone number saved')}><span><Phone size={19} /></span>Call</button>
             </div>
             <div className="contact-detail-grid">
@@ -91,7 +93,7 @@ export default function ContactsView({ state, query, onChange, onCompose, onToas
             <section className="related-section">
               <h3>Recent conversations</h3>
               {related.map((message) => (
-                <button key={message.id} className="related-message">
+                <button key={message.id} className="related-message" onClick={() => onOpenMessage(message.id)}>
                   <span className="related-icon"><Mail size={16} /></span>
                   <span><strong>{message.subject}</strong><small>{message.preview}</small></span>
                   <time>{new Date(message.date).toLocaleDateString()}</time>
@@ -147,7 +149,7 @@ function ContactEditor({ contact, onClose, onSave, onDelete }: { contact?: Conta
         <footer className="modal-footer">
           {onDelete && <button className="button danger-subtle" onClick={onDelete}><Trash2 size={16} /> Delete</button>}
           <span className="spacer" /><button className="button ghost" onClick={onClose}>Cancel</button>
-          <button className="button primary" onClick={() => name.trim() && email.trim() && onSave({
+          <button className="button primary" disabled={!name.trim() || !/^\S+@\S+\.\S+$/.test(email.trim())} title={email.trim() && !/^\S+@\S+\.\S+$/.test(email.trim()) ? 'Enter a valid email address' : undefined} onClick={() => onSave({
             id: contact?.id ?? uid('contact'), name: name.trim(), email: email.trim(), phone, company, title, group, notes,
             favorite: contact?.favorite ?? false, color: contact?.color ?? ['#6659e8', '#4d9f86', '#e18a65', '#d26791'][Math.floor(Math.random() * 4)]
           })}>Save contact</button>

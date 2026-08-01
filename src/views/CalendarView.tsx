@@ -88,8 +88,8 @@ export default function CalendarView({ state, query, onChange, onToast }: Calend
         <header className="module-header">
           <div className="calendar-title-actions">
             <button className="button ghost small" onClick={() => setCursor(new Date())}>Today</button>
-            <button className="icon-button" onClick={() => move(-1)}><ChevronLeft size={18} /></button>
-            <button className="icon-button" onClick={() => move(1)}><ChevronRight size={18} /></button>
+            <button className="icon-button" aria-label="Previous period" title="Previous period" onClick={() => move(-1)}><ChevronLeft size={18} /></button>
+            <button className="icon-button" aria-label="Next period" title="Next period" onClick={() => move(1)}><ChevronRight size={18} /></button>
             <h1>{title}</h1>
           </div>
           <div className="segmented">
@@ -209,7 +209,7 @@ function Agenda({ events, onSelect }: { events: CalendarEvent[]; onSelect(event:
 }
 
 function EventEditor({ event, date, state, onClose, onSave, onDelete }: { event?: CalendarEvent; date: Date; state: AppState; onClose(): void; onSave(event: CalendarEvent): void; onDelete?(): void }) {
-  const initialStart = event ? parseISO(event.start) : date
+  const initialStart = event ? parseISO(event.start) : new Date(date)
   if (!event) initialStart.setHours(initialStart.getHours() || 10, 0, 0, 0)
   const initialEnd = event ? parseISO(event.end) : new Date(initialStart.getTime() + 60 * 60 * 1000)
   const [title, setTitle] = useState(event?.title ?? '')
@@ -221,6 +221,9 @@ function EventEditor({ event, date, state, onClose, onSave, onDelete }: { event?
   const [attendees, setAttendees] = useState(event?.attendees.join(', ') ?? '')
   const [recurrence, setRecurrence] = useState<CalendarEvent['recurrence']>(event?.recurrence ?? 'none')
   const color = state.accounts.find((account) => account.id === calendarId)?.color ?? '#6659e8'
+  const startTime = Date.parse(start)
+  const endTime = Date.parse(end)
+  const canSave = Boolean(title.trim()) && Number.isFinite(startTime) && Number.isFinite(endTime) && endTime > startTime
 
   return (
     <Modal title={event ? 'Edit event' : 'New event'} subtitle="Keep time intentional." onClose={onClose}>
@@ -241,7 +244,7 @@ function EventEditor({ event, date, state, onClose, onSave, onDelete }: { event?
           {onDelete && <button className="button danger-subtle" onClick={onDelete}>Delete</button>}
           <span className="spacer" />
           <button className="button ghost" onClick={onClose}>Cancel</button>
-          <button className="button primary" onClick={() => title.trim() && onSave({
+          <button className="button primary" disabled={!canSave} title={!canSave ? 'Add a title and choose an end time after the start' : undefined} onClick={() => onSave({
             id: event?.id ?? uid('event'), calendarId, title: title.trim(),
             start: new Date(start).toISOString(), end: new Date(end).toISOString(), location, description, color,
             attendees: attendees.split(',').map((value) => value.trim()).filter(Boolean), reminderMinutes: event?.reminderMinutes ?? 15, recurrence

@@ -20,6 +20,7 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
   const [showCompleted, setShowCompleted] = useState(true)
   const [editing, setEditing] = useState<Task | 'new' | null>(null)
   const lists = ['Today', 'This week', 'Someday']
+  const completedPercent = state.tasks.length ? Math.round(state.tasks.filter((task) => task.completed).length / state.tasks.length * 100) : 0
   const tasks = useMemo(() => state.tasks
     .filter((task) => list === 'All tasks' || task.listId === list)
     .filter((task) => showCompleted || !task.completed)
@@ -56,8 +57,8 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
           ))}
         </div>
         <div className="task-progress-card">
-          <div className="progress-ring" style={{ '--progress': `${Math.round(state.tasks.filter((task) => task.completed).length / state.tasks.length * 100)}%` } as React.CSSProperties}>
-            <span>{Math.round(state.tasks.filter((task) => task.completed).length / state.tasks.length * 100)}%</span>
+          <div className="progress-ring" style={{ '--progress': `${completedPercent}%` } as React.CSSProperties}>
+            <span>{completedPercent}%</span>
           </div>
           <div><strong>Nice rhythm</strong><p>{state.tasks.filter((task) => task.completed).length} of {state.tasks.length} tasks complete</p></div>
         </div>
@@ -77,7 +78,7 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
             return (
               <div className={`task-row ${task.completed ? 'completed' : ''}`} key={task.id} draggable onDragStart={(event) => event.dataTransfer.setData('text/task', task.id)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => moveTask(event.dataTransfer.getData('text/task'), task.id)}>
                 <GripVertical className="drag-handle" size={16} />
-                <button className={`task-check ${task.completed ? 'checked' : ''}`} onClick={() => toggleTask(task.id)}>{task.completed && <Check size={15} />}</button>
+                <button className={`task-check ${task.completed ? 'checked' : ''}`} aria-label={task.completed ? `Reopen ${task.title}` : `Complete ${task.title}`} onClick={() => toggleTask(task.id)}>{task.completed && <Check size={15} />}</button>
                 <button className="task-main" onClick={() => setEditing(task)}>
                   <span><strong>{task.title}</strong>{task.notes && <small>{task.notes}</small>}</span>
                   <span className="task-meta">
@@ -137,7 +138,7 @@ function TaskEditor({ task, defaultList, onClose, onSave, onDelete }: { task?: T
         <label className="field-label">Notes<textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></label>
         <div className="subtask-editor">
           <span className="field-label">Subtasks</span>
-          {subtasks.map((subtask) => <label key={subtask.id}><input type="checkbox" checked={subtask.completed} onChange={() => setSubtasks((items) => items.map((item) => item.id === subtask.id ? { ...item, completed: !item.completed } : item))} /><span>{subtask.title}</span><button onClick={() => setSubtasks((items) => items.filter((item) => item.id !== subtask.id))}><Trash2 size={14} /></button></label>)}
+          {subtasks.map((subtask) => <label key={subtask.id}><input type="checkbox" checked={subtask.completed} onChange={() => setSubtasks((items) => items.map((item) => item.id === subtask.id ? { ...item, completed: !item.completed } : item))} /><span>{subtask.title}</span><button aria-label={`Remove ${subtask.title}`} onClick={() => setSubtasks((items) => items.filter((item) => item.id !== subtask.id))}><Trash2 size={14} /></button></label>)}
           <div><input value={newSubtask} onChange={(e) => setNewSubtask(e.target.value)} placeholder="Add a subtask" onKeyDown={(e) => {
             if (e.key === 'Enter' && newSubtask.trim()) {
               setSubtasks((items) => [...items, { id: uid('subtask'), title: newSubtask.trim(), completed: false }])
@@ -148,7 +149,7 @@ function TaskEditor({ task, defaultList, onClose, onSave, onDelete }: { task?: T
         <footer className="modal-footer">
           {onDelete && <button className="button danger-subtle" onClick={onDelete}><Trash2 size={16} /> Delete</button>}
           <span className="spacer" /><button className="button ghost" onClick={onClose}>Cancel</button>
-          <button className="button primary" onClick={() => title.trim() && onSave({
+          <button className="button primary" disabled={!title.trim()} onClick={() => onSave({
             id: task?.id ?? uid('task'), listId, title: title.trim(), notes,
             due: due ? new Date(due).toISOString() : undefined, priority, completed: task?.completed ?? false, subtasks, recurrence
           })}>Save task</button>

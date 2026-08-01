@@ -1,9 +1,9 @@
 import {
   Archive, AtSign, CheckCircle2, ChevronDown, Clock3, FileText, Flag, Inbox,
-  Mail, MailOpen, MoreHorizontal, Paperclip, Plus, RefreshCw, Reply, ReplyAll,
+  Mail, MailOpen, Paperclip, Plus, RefreshCw, Reply, ReplyAll,
   Search, Send, Star, Tag, Trash2, Undo2
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { format, isToday, isYesterday } from 'date-fns'
 import { formatFileSize, messageMatches, uid, updateMessage } from '../lib/domain'
 import type { AppState, Message, ModuleId } from '../types'
@@ -11,8 +11,9 @@ import type { AppState, Message, ModuleId } from '../types'
 interface MailViewProps {
   state: AppState
   query: string
+  requestedMessageId?: string
   onChange(next: AppState): void
-  onCompose(replyTo?: Message): void
+  onCompose(replyTo?: Message, replyAll?: boolean): void
   onNavigate(module: ModuleId): void
   onToast(message: string): void
 }
@@ -24,11 +25,13 @@ const shortDate = (date: string) => {
   return format(value, 'd MMM')
 }
 
-export default function MailView({ state, query, onChange, onCompose, onNavigate, onToast }: MailViewProps) {
+export default function MailView({ state, query, requestedMessageId, onChange, onCompose, onNavigate, onToast }: MailViewProps) {
   const [folder, setFolder] = useState('all')
   const [filter, setFilter] = useState<'all' | 'unread' | 'starred' | 'flagged'>('all')
   const [selectedId, setSelectedId] = useState(() => state.messages.find((message) => !message.trashed && !message.draft && !message.sent)?.id ?? '')
   const [sortNewest, setSortNewest] = useState(true)
+  const [collapsedAccounts, setCollapsedAccounts] = useState<Set<string>>(() => new Set())
+  const handledMessageRequest = useRef<string | undefined>(undefined)
 
   const messages = useMemo(() => state.messages
     .filter((message) => {
@@ -44,7 +47,20 @@ export default function MailView({ state, query, onChange, onCompose, onNavigate
     .sort((a, b) => (sortNewest ? -1 : 1) * (new Date(a.date).getTime() - new Date(b.date).getTime())),
   [filter, folder, query, sortNewest, state.folders, state.messages])
 
-  const selected = state.messages.find((message) => message.id === selectedId) ?? messages[0]
+  const selected = messages.find((message) => message.id === selectedId) ?? messages[0]
+
+  useEffect(() => {
+    if (!requestedMessageId || handledMessageRequest.current === requestedMessageId) return
+    const message = state.messages.find((item) => item.id === requestedMessageId)
+    if (!message) return
+    handledMessageRequest.current = requestedMessageId
+    setSelectedId(message.id)
+    if (message.trashed) setFolder(`${message.accountId}-trash`)
+    else if (message.archived) setFolder(`${message.accountId}-archive`)
+    else if (message.draft) setFolder(`${message.accountId}-drafts`)
+    else if (message.sent) setFolder(`${message.accountId}-sent`)
+    else setFolder(message.folderId || 'all')
+  }, [requestedMessageId, state.messages])
   const selectMessage = (message: Message) => {
     setSelectedId(message.id)
     if (message.unread) onChange(updateMessage(state, message.id, { unread: false }))
@@ -108,11 +124,16 @@ export default function MailView({ state, query, onChange, onCompose, onNavigate
         </div>
         {state.accounts.map((account) => (
           <div className="sidebar-group" key={account.id}>
-            <button className="account-heading">
+            <button className="account-heading" aria-expanded={!collapsedAccounts.has(account.id)} onClick={() => setCollapsedAccounts((current) => {
+              const next = new Set(current)
+              if (next.has(account.id)) next.delete(account.id)
+              else next.add(account.id)
+              return next
+            })}>
               <span className="account-dot" style={{ background: account.color }} />
               <span>{account.name}</span><ChevronDown size={14} />
             </button>
-            {state.folders.filter((item) => item.accountId === account.id).map((item) => {
+            {!collapsedAccounts.has(account.id) && state.folders.filter((item) => item.accountId === account.id).map((item) => {
               const Icon = item.system === 'inbox' ? Inbox : item.system === 'sent' ? Send : item.system === 'drafts' ? FileText : item.system === 'trash' ? Trash2 : item.system === 'archive' ? Archive : Tag
               const count = state.messages.filter((message) => message.folderId === item.id && message.unread).length
               return folderButton(item.id, <Icon size={16} />, item.name, count)
@@ -168,7 +189,6 @@ export default function MailView({ state, query, onChange, onCompose, onNavigate
               <button className={`icon-button ${selected.starred ? 'active' : ''}`} title="Star" onClick={() => apply({ starred: !selected.starred })}><Star size={18} fill={selected.starred ? 'currentColor' : 'none'} /></button>
               <button className={`icon-button ${selected.flagged ? 'active danger' : ''}`} title="Flag" onClick={() => apply({ flagged: !selected.flagged })}><Flag size={18} fill={selected.flagged ? 'currentColor' : 'none'} /></button>
               <span className="spacer" />
-              <button className="icon-button" title="More"><MoreHorizontal size={19} /></button>
             </div>
             <article className="message-reader">
               <header>
@@ -186,7 +206,7 @@ export default function MailView({ state, query, onChange, onCompose, onNavigate
                 <div className="reader-attachments">
                   <h3>{selected.attachments.length} attachment{selected.attachments.length > 1 ? 's' : ''}</h3>
                   {selected.attachments.map((attachment) => (
-                    <button className="attachment-card" key={attachment.id}>
+                    <button className="attachment-card" key={attachment.id} title="Demo attachment" onClick={() => onToast(`${attachment.name} is sample metadata; no local file is attached`)}>
                       <span className="file-icon">{attachment.name.split('.').pop()?.toUpperCase()}</span>
                       <span><strong>{attachment.name}</strong><small>{formatFileSize(attachment.size)}</small></span>
                     </button>
@@ -195,7 +215,7 @@ export default function MailView({ state, query, onChange, onCompose, onNavigate
               )}
               <div className="quick-actions">
                 <button className="button ghost" onClick={() => onCompose(selected)}><Reply size={16} /> Reply</button>
-                <button className="button ghost" onClick={() => onCompose(selected)}><ReplyAll size={16} /> Reply all</button>
+                <button className="button ghost" onClick={() => onCompose(selected, true)}><ReplyAll size={16} /> Reply all</button>
                 <button className="button ghost" onClick={addTask}><CheckCircle2 size={16} /> Add task</button>
                 <button className="button ghost" onClick={addEvent}><Clock3 size={16} /> Add event</button>
               </div>

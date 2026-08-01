@@ -13,8 +13,8 @@ import TasksView from './views/TasksView'
 import NotesView from './views/NotesView'
 import ChatView from './views/ChatView'
 import GmailView from './views/GmailView'
-import type { AppState, Message, ModuleId } from './types'
-import { unreadCount } from './lib/domain'
+import type { AppState, Contact, Message, ModuleId } from './types'
+import { unreadCount, uid } from './lib/domain'
 
 const modules: { id: ModuleId; label: string; icon: typeof Mail; shortcut: string }[] = [
   { id: 'mail', label: 'Mail', icon: Mail, shortcut: '1' },
@@ -28,6 +28,7 @@ const modules: { id: ModuleId; label: string; icon: typeof Mail; shortcut: strin
 interface ComposeState {
   replyTo?: Message
   initialTo?: string
+  replyAll?: boolean
 }
 
 export default function App() {
@@ -41,6 +42,10 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved')
   const [mailMode, setMailMode] = useState<'gmail' | 'demo'>(() =>
     new URLSearchParams(window.location.search).get('workspace') === 'gmail' ? 'gmail' : 'demo')
+  const [realComposeRequest, setRealComposeRequest] = useState(0)
+  const [requestedDemoMessageId, setRequestedDemoMessageId] = useState<string>()
+  const [requestedConversationId, setRequestedConversationId] = useState<string>()
+  const [commandIndex, setCommandIndex] = useState(0)
   const hydrated = useRef(false)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -74,9 +79,26 @@ export default function App() {
 
   useEffect(() => {
     if (!state) return
-    document.documentElement.dataset.theme = state.settings.theme
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const applyTheme = () => {
+      document.documentElement.dataset.theme = state.settings.theme === 'system'
+        ? media.matches ? 'dark' : 'light'
+        : state.settings.theme
+    }
+    applyTheme()
     document.documentElement.dataset.density = state.settings.density
+    media.addEventListener('change', applyTheme)
+    return () => media.removeEventListener('change', applyTheme)
   }, [state])
+
+  const startCompose = useCallback((input: ComposeState = {}) => {
+    if (mailMode === 'gmail') {
+      setActiveModule('mail')
+      setRealComposeRequest((value) => value + 1)
+    } else {
+      setCompose(input)
+    }
+  }, [mailMode])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -87,7 +109,7 @@ export default function App() {
       }
       if (modifier && event.key.toLowerCase() === 'n') {
         event.preventDefault()
-        setCompose({})
+        startCompose()
       }
       if (modifier && ['1', '2', '3', '4', '5', '6'].includes(event.key)) {
         event.preventDefault()
@@ -96,21 +118,29 @@ export default function App() {
       if (event.key === 'Escape') {
         setCommandsOpen(false)
         setCompose(null)
+        setSettingsOpen(false)
       }
     }
     window.addEventListener('keydown', onKeyDown)
-    const unsubscribe = window.aerio.onComposeCommand(() => setCompose({}))
+    const unsubscribe = window.aerio.onComposeCommand(() => startCompose())
     return () => {
       window.removeEventListener('keydown', onKeyDown)
       unsubscribe()
     }
-  }, [])
+  }, [startCompose])
 
-  const commandItems = useMemo(() => [
-    { label: 'Compose a new message', detail: 'Ctrl N', icon: Plus, action: () => setCompose({}) },
-    ...modules.map((item) => ({ label: `Open ${item.label}`, detail: `Ctrl ${item.shortcut}`, icon: item.icon, action: () => setActiveModule(item.id) })),
-    { label: 'Open settings', detail: '', icon: Settings, action: () => setSettingsOpen(true) }
-  ].filter((item) => !query || item.label.toLowerCase().includes(query.toLowerCase())), [query])
+  const commandItems = useMemo(() => {
+    const quick = [
+      { label: 'Compose a new message', detail: 'Ctrl N', icon: Plus, action: () => startCompose(), preserveQuery: false },
+      ...modules.map((item) => ({ label: `Open ${item.label}`, detail: `Ctrl ${item.shortcut}`, icon: item.icon, action: () => setActiveModule(item.id), preserveQuery: false })),
+      { label: 'Open settings', detail: '', icon: Settings, action: () => setSettingsOpen(true), preserveQuery: false }
+    ].filter((item) => !query || item.label.toLowerCase().includes(query.toLowerCase()))
+    return query.trim()
+      ? [{ label: `Search ${modules.find((item) => item.id === activeModule)?.label ?? 'Aerio'} for “${query.trim()}”`, detail: 'Enter', icon: Search, action: () => undefined, preserveQuery: true }, ...quick]
+      : quick
+  }, [activeModule, query, startCompose])
+
+  useEffect(() => setCommandIndex(0), [commandsOpen, query])
 
   if (!state) {
     return (
@@ -126,6 +156,25 @@ export default function App() {
   const navigate = (module: ModuleId) => {
     setActiveModule(module)
     setQuery('')
+  }
+
+  const openContactChat = (contact: Contact) => {
+    const existing = state.conversations.find((conversation) => conversation.name === contact.name)
+    const conversationId = existing?.id ?? uid('conversation')
+    if (!existing) {
+      setState({
+        ...state,
+        conversations: [{ id: conversationId, name: contact.name, participants: [contact.name], color: contact.color, online: false, unread: 0, messages: [] }, ...state.conversations]
+      })
+    }
+    setRequestedConversationId(conversationId)
+    setActiveModule('chat')
+  }
+
+  const openDemoMessage = (messageId: string) => {
+    setRequestedDemoMessageId(messageId)
+    setMailMode('demo')
+    setActiveModule('mail')
   }
 
   return (
@@ -149,7 +198,7 @@ export default function App() {
             <button aria-label="What’s new" title="What’s new" onClick={() => showToast('Welcome to the first Aerio preview')}><Sparkles size={20} /></button>
             <button aria-label="Help" title="Keyboard shortcuts: Ctrl K" onClick={() => setCommandsOpen(true)}><HelpCircle size={20} /></button>
             <button aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}><Settings size={20} /></button>
-            <button className="profile-button" aria-label="Profile"><span>AA</span><i /></button>
+            <button className="profile-button" aria-label="Profile and settings" title="Profile and settings" onClick={() => setSettingsOpen(true)}><span>AA</span><i /></button>
           </div>
         </nav>
         <main className="app-main">
@@ -169,35 +218,49 @@ export default function App() {
             </button>
           </header>
           <div className="module-content">
-            {activeModule === 'mail' && mailMode === 'gmail' && <GmailView onToast={showToast} />}
-            {activeModule === 'mail' && mailMode === 'demo' && <MailView state={state} query={query} onChange={setState} onCompose={(replyTo) => setCompose({ replyTo })} onNavigate={navigate} onToast={showToast} />}
+            {activeModule === 'mail' && mailMode === 'gmail' && <GmailView onToast={showToast} composeRequest={realComposeRequest} />}
+            {activeModule === 'mail' && mailMode === 'demo' && <MailView state={state} query={query} requestedMessageId={requestedDemoMessageId} onChange={setState} onCompose={(replyTo, replyAll) => setCompose({ replyTo, replyAll })} onNavigate={navigate} onToast={showToast} />}
             {activeModule === 'calendar' && <CalendarView state={state} query={query} onChange={setState} onToast={showToast} />}
-            {activeModule === 'contacts' && <ContactsView state={state} query={query} onChange={setState} onCompose={(replyTo, initialTo) => setCompose({ replyTo, initialTo })} onToast={showToast} />}
+            {activeModule === 'contacts' && <ContactsView state={state} query={query} onChange={setState} onCompose={(replyTo, initialTo) => setCompose({ replyTo, initialTo })} onChat={openContactChat} onOpenMessage={openDemoMessage} onToast={showToast} />}
             {activeModule === 'tasks' && <TasksView state={state} query={query} onChange={setState} onToast={showToast} />}
             {activeModule === 'notes' && <NotesView state={state} query={query} onChange={setState} onToast={showToast} />}
-            {activeModule === 'chat' && <ChatView state={state} query={query} onChange={setState} onToast={showToast} />}
+            {activeModule === 'chat' && <ChatView state={state} query={query} requestedConversationId={requestedConversationId} onChange={setState} onToast={showToast} />}
           </div>
         </main>
       </div>
 
-      {compose && (activeModule !== 'mail' || mailMode === 'demo') && <ComposeModal state={state} replyTo={compose.replyTo} initialTo={compose.initialTo} onChange={setState} onClose={() => setCompose(null)} onToast={showToast} />}
+      {compose && mailMode === 'demo' && <ComposeModal state={state} replyTo={compose.replyTo} replyAll={compose.replyAll} initialTo={compose.initialTo} onChange={setState} onClose={() => setCompose(null)} onToast={showToast} />}
       {settingsOpen && <SettingsModal state={state} onChange={setState} onClose={() => setSettingsOpen(false)} onReset={async () => {
-        const next = await window.aerio.resetState()
-        hydrated.current = false
-        setState(next)
-        setActiveModule(next.settings.startModule)
-        setSettingsOpen(false)
-        showToast('Demo data restored')
-        queueMicrotask(() => { hydrated.current = true })
+        try {
+          const next = await window.aerio.resetState()
+          hydrated.current = false
+          setState(next)
+          setActiveModule(next.settings.startModule)
+          setSettingsOpen(false)
+          showToast('Demo data restored')
+          queueMicrotask(() => { hydrated.current = true })
+        } catch (error) {
+          showToast(error instanceof Error ? error.message : 'Demo data could not be reset')
+        }
       }} />}
       {commandsOpen && (
         <div className="command-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) setCommandsOpen(false) }}>
           <section className="command-palette" role="dialog" aria-label="Command palette">
-            <header><Search size={19} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Aerio…" /><button onClick={() => { setQuery(''); setCommandsOpen(false) }}><X size={17} /></button></header>
+            <header><Search size={19} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
+              if (event.key === 'ArrowDown') { event.preventDefault(); setCommandIndex((value) => Math.min(value + 1, commandItems.length - 1)) }
+              if (event.key === 'ArrowUp') { event.preventDefault(); setCommandIndex((value) => Math.max(value - 1, 0)) }
+              if (event.key === 'Enter' && commandItems[commandIndex]) {
+                event.preventDefault()
+                const item = commandItems[commandIndex]
+                item.action()
+                setCommandsOpen(false)
+                if (!item.preserveQuery) setQuery('')
+              }
+            }} placeholder="Search Aerio…" /><button aria-label="Close search" onClick={() => { setQuery(''); setCommandsOpen(false) }}><X size={17} /></button></header>
             <span className="command-section-label">Quick actions</span>
             <div>
-              {commandItems.map(({ label, detail, icon: Icon, action }) => (
-                <button key={label} onClick={() => { action(); setCommandsOpen(false); setQuery('') }}><span><Icon size={17} /></span><strong>{label}</strong><em>{detail}</em><ChevronRight size={15} /></button>
+              {commandItems.map(({ label, detail, icon: Icon, action, preserveQuery }, index) => (
+                <button className={index === commandIndex ? 'active' : ''} key={label} onMouseEnter={() => setCommandIndex(index)} onClick={() => { action(); setCommandsOpen(false); if (!preserveQuery) setQuery('') }}><span><Icon size={17} /></span><strong>{label}</strong><em>{detail}</em><ChevronRight size={15} /></button>
               ))}
             </div>
             <footer><span><Command size={13} /> Navigate with arrow keys</span><span>Enter to select</span><span>Esc to close</span></footer>

@@ -35,6 +35,12 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
     }).catch((error) => onToast(error instanceof Error ? error.message : 'Account setup could not start'))
   }, [onToast])
 
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose() }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [busy, onClose])
+
   const choose = (value: MailProviderPreset) => {
     setSelected(value.id)
     if (value.id !== 'gmail' && value.id !== 'microsoft') {

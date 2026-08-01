@@ -1,15 +1,17 @@
 import {
-  BellOff, File, Info, MessageCircle, MoreHorizontal, Paperclip, Phone, Plus, Search,
+  BellOff, File, Info, MessageCircle, Paperclip, Phone, Plus, Search,
   Send, Smile, Users, Video
 } from 'lucide-react'
 import { format, isToday, parseISO } from 'date-fns'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { uid } from '../lib/domain'
-import type { AppState, Conversation } from '../types'
+import type { AppState, Contact, Conversation } from '../types'
+import Modal from '../components/Modal'
 
 interface ChatViewProps {
   state: AppState
   query: string
+  requestedConversationId?: string
   onChange(next: AppState): void
   onToast(message: string): void
 }
@@ -21,12 +23,26 @@ const autoReplies = [
   'Great, I’ve added it to my list.'
 ]
 
-export default function ChatView({ state, query, onChange, onToast }: ChatViewProps) {
+export default function ChatView({ state, query, requestedConversationId, onChange, onToast }: ChatViewProps) {
   const [selectedId, setSelectedId] = useState(state.conversations[0]?.id ?? '')
   const [message, setMessage] = useState('')
   const [showInfo, setShowInfo] = useState(true)
+  const [newChatOpen, setNewChatOpen] = useState(false)
+  const [emojiOpen, setEmojiOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [conversationSearch, setConversationSearch] = useState('')
+  const [muted, setMuted] = useState<Set<string>>(() => new Set())
+  const handledConversationRequest = useRef<string | undefined>(undefined)
   const conversations = useMemo(() => state.conversations.filter((conversation) => !query || `${conversation.name} ${conversation.messages.map((item) => item.text).join(' ')}`.toLowerCase().includes(query.toLowerCase())), [query, state.conversations])
-  const selected = state.conversations.find((conversation) => conversation.id === selectedId) ?? conversations[0]
+  const selected = conversations.find((conversation) => conversation.id === selectedId)
+  const visibleMessages = selected?.messages.filter((item) => !conversationSearch || `${item.text} ${item.attachment?.name ?? ''}`.toLowerCase().includes(conversationSearch.toLowerCase())) ?? []
+
+  useEffect(() => {
+    if (requestedConversationId && handledConversationRequest.current !== requestedConversationId && state.conversations.some((conversation) => conversation.id === requestedConversationId)) {
+      handledConversationRequest.current = requestedConversationId
+      setSelectedId(requestedConversationId)
+    }
+  }, [requestedConversationId, state.conversations])
 
   const select = (conversation: Conversation) => {
     setSelectedId(conversation.id)
@@ -62,22 +78,37 @@ export default function ChatView({ state, query, onChange, onToast }: ChatViewPr
 
   const attach = async () => {
     if (!selected) return
-    const [attachment] = await window.aerio.chooseAttachments()
-    if (!attachment) return
-    onChange({
-      ...state,
-      conversations: state.conversations.map((conversation) => conversation.id === selected.id ? {
-        ...conversation,
-        messages: [...conversation.messages, { id: uid('chat-message'), sender: 'me', text: attachment.name, time: new Date().toISOString(), attachment }]
-      } : conversation)
-    })
-    onToast('Attachment added to conversation')
+    try {
+      const [attachment] = await window.aerio.chooseAttachments()
+      if (!attachment) return
+      onChange({
+        ...state,
+        conversations: state.conversations.map((conversation) => conversation.id === selected.id ? {
+          ...conversation,
+          messages: [...conversation.messages, { id: uid('chat-message'), sender: 'me', text: attachment.name, time: new Date().toISOString(), attachment }]
+        } : conversation)
+      })
+      onToast('Attachment added to conversation')
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Attachment could not be added')
+    }
+  }
+
+  const startChat = (contact: Contact) => {
+    const existing = state.conversations.find((conversation) => conversation.name === contact.name)
+    if (existing) setSelectedId(existing.id)
+    else {
+      const conversation: Conversation = { id: uid('conversation'), name: contact.name, participants: [contact.name], color: contact.color, online: false, unread: 0, messages: [] }
+      onChange({ ...state, conversations: [conversation, ...state.conversations] })
+      setSelectedId(conversation.id)
+    }
+    setNewChatOpen(false)
   }
 
   return (
     <div className="workspace chat-workspace">
       <aside className="context-sidebar chat-sidebar">
-        <button className="compose-button" onClick={() => onToast('New chat uses your saved contacts')}><Plus size={18} /> New conversation</button>
+        <button className="compose-button" onClick={() => setNewChatOpen(true)}><Plus size={18} /> New conversation</button>
         <div className="sidebar-group">
           <span className="sidebar-label">Conversations</span>
           {conversations.map((conversation) => {
@@ -103,13 +134,14 @@ export default function ChatView({ state, query, onChange, onToast }: ChatViewPr
               <button className="icon-button" title="Video call" onClick={() => onToast('Video is not connected in demo mode')}><Video size={18} /></button>
               <button className={`icon-button ${showInfo ? 'active' : ''}`} title="Conversation details" onClick={() => setShowInfo((value) => !value)}><Info size={18} /></button>
             </header>
+            {searchOpen && <div className="chat-search-row"><Search size={15} /><input autoFocus value={conversationSearch} onChange={(event) => setConversationSearch(event.target.value)} placeholder={`Search ${selected.name}`} /><button className="text-button" onClick={() => { setConversationSearch(''); setSearchOpen(false) }}>Done</button></div>}
             <div className="chat-messages">
               <div className="conversation-intro">
                 <span className="avatar hero-avatar" style={{ background: selected.color }}>{selected.name.split(' ').map((part) => part[0]).slice(0, 2).join('')}</span>
                 <h2>{selected.name}</h2>
                 <p>This is the beginning of your Aerio conversation.</p>
               </div>
-              {selected.messages.map((item) => (
+              {visibleMessages.map((item) => (
                 <div className={`chat-bubble-row ${item.sender === 'me' ? 'mine' : ''}`} key={item.id}>
                   {item.sender === 'them' && <span className="avatar small-avatar" style={{ background: selected.color }}>{selected.name[0]}</span>}
                   <div className="chat-bubble">
@@ -121,10 +153,10 @@ export default function ChatView({ state, query, onChange, onToast }: ChatViewPr
               ))}
             </div>
             <footer className="chat-composer">
-              <button className="icon-button" onClick={() => void attach()}><Paperclip size={19} /></button>
+              <button className="icon-button" aria-label="Attach file" title="Attach file" onClick={() => void attach()}><Paperclip size={19} /></button>
               <input value={message} onChange={(event) => setMessage(event.target.value)} placeholder={`Message ${selected.name}`} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) send() }} />
-              <button className="icon-button"><Smile size={19} /></button>
-              <button className="send-circle" onClick={send}><Send size={17} /></button>
+              <span className="emoji-control"><button className={`icon-button ${emojiOpen ? 'active' : ''}`} aria-label="Choose emoji" onClick={() => setEmojiOpen((value) => !value)}><Smile size={19} /></button>{emojiOpen && <span className="emoji-picker">{['👍', '❤️', '😊', '🎉', '😂', '🙏'].map((emoji) => <button key={emoji} onClick={() => { setMessage((value) => `${value}${emoji}`); setEmojiOpen(false) }}>{emoji}</button>)}</span>}</span>
+              <button className="send-circle" aria-label="Send message" title="Send message" onClick={send}><Send size={17} /></button>
             </footer>
           </>
         ) : <div className="empty-state grow"><MessageCircle size={32} /><h3>Select a conversation</h3></div>}
@@ -135,14 +167,17 @@ export default function ChatView({ state, query, onChange, onToast }: ChatViewPr
           <h2>{selected.name}</h2>
           <p>{selected.online ? 'Active now' : 'Away'}</p>
           <div className="contact-actions compact">
-            <button><span><Search size={18} /></span>Search</button>
-            <button><span><BellOff size={18} /></span>Mute</button>
-            <button><span><MoreHorizontal size={18} /></span>More</button>
+            <button className={searchOpen ? 'active' : ''} onClick={() => setSearchOpen((value) => !value)}><span><Search size={18} /></span>Search</button>
+            <button className={muted.has(selected.id) ? 'active' : ''} onClick={() => {
+              setMuted((current) => { const next = new Set(current); if (next.has(selected.id)) next.delete(selected.id); else next.add(selected.id); return next })
+              onToast(muted.has(selected.id) ? 'Conversation unmuted' : 'Conversation muted')
+            }}><span><BellOff size={18} /></span>{muted.has(selected.id) ? 'Unmute' : 'Mute'}</button>
           </div>
           <section><h3><Users size={16} /> People</h3>{selected.participants.map((person) => <div className="info-person" key={person}><span className="avatar small-avatar" style={{ background: selected.color }}>{person[0]}</span><strong>{person}</strong></div>)}</section>
-          <section><h3><File size={16} /> Shared files</h3><p className="muted-copy">Files shared here stay on this computer.</p></section>
+          <section><h3><File size={16} /> Shared files</h3>{selected.messages.flatMap((item) => item.attachment ? [item.attachment] : []).map((attachment) => <p className="muted-copy" key={attachment.id}>{attachment.name}</p>)}{!selected.messages.some((item) => item.attachment) && <p className="muted-copy">No files shared yet.</p>}</section>
         </aside>
       )}
+      {newChatOpen && <Modal title="New conversation" subtitle="Choose one of your saved contacts." onClose={() => setNewChatOpen(false)}><div className="contact-picker">{state.contacts.map((contact) => <button key={contact.id} onClick={() => startChat(contact)}><span className="avatar" style={{ background: contact.color }}>{contact.name.split(' ').map((part) => part[0]).slice(0, 2).join('')}</span><span><strong>{contact.name}</strong><small>{contact.email}</small></span></button>)}</div></Modal>}
     </div>
   )
 }

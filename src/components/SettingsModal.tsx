@@ -69,7 +69,7 @@ export default function SettingsModal({ state, onChange, onReset, onClose }: Set
           <div className="settings-content">
             <h3>Local demo data</h3>
             <p>Aerio keeps this release entirely on your computer in a local SQLite database.</p>
-            <button className="button danger-subtle" onClick={() => void onReset()}><RotateCcw size={16} /> Reset demo data</button>
+            <button className="button danger-subtle" onClick={() => { if (window.confirm('Reset all demo mail, calendar, contacts, tasks, notes, chats, and settings? Real mail is not affected.')) void onReset() }}><RotateCcw size={16} /> Reset demo data</button>
           </div>
         </section>
         <section className="settings-section signature-section">

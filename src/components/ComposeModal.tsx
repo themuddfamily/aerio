@@ -1,4 +1,4 @@
-import { Clock3, Paperclip, Send, Trash2, X } from 'lucide-react'
+import { Clock3, FileText, Paperclip, Send, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { uid, formatFileSize } from '../lib/domain'
 import type { AppState, Attachment, Message } from '../types'
@@ -7,18 +7,26 @@ import Modal from './Modal'
 interface ComposeModalProps {
   state: AppState
   replyTo?: Message
+  replyAll?: boolean
   initialTo?: string
   onChange(next: AppState): void
   onClose(): void
   onToast(message: string): void
 }
 
-export default function ComposeModal({ state, replyTo, initialTo, onChange, onClose, onToast }: ComposeModalProps) {
+const escapeHtml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;')
+
+export default function ComposeModal({ state, replyTo, replyAll, initialTo, onChange, onClose, onToast }: ComposeModalProps) {
   const defaultAccount = replyTo?.accountId ?? state.accounts[0].id
   const [accountId, setAccountId] = useState(defaultAccount)
-  const [to, setTo] = useState(replyTo ? replyTo.fromEmail : initialTo ?? '')
-  const [ccVisible, setCcVisible] = useState(false)
-  const [cc, setCc] = useState('')
+  const ownEmail = state.accounts.find((item) => item.id === defaultAccount)?.email
+  const replyRecipients = replyTo && replyAll
+    ? Array.from(new Set([replyTo.fromEmail, ...replyTo.to].filter((email) => email !== ownEmail)))
+    : replyTo ? [replyTo.fromEmail] : []
+  const replyCc = replyTo && replyAll ? Array.from(new Set((replyTo.cc ?? []).filter((email) => email !== ownEmail && !replyRecipients.includes(email)))) : []
+  const [to, setTo] = useState(replyTo ? replyRecipients.join(', ') : initialTo ?? '')
+  const [ccVisible, setCcVisible] = useState(Boolean(replyCc.length))
+  const [cc, setCc] = useState(replyCc.join(', '))
   const [subject, setSubject] = useState(replyTo ? `Re: ${replyTo.subject.replace(/^Re:\s*/i, '')}` : '')
   const [body, setBody] = useState(replyTo ? `\n\n\nOn ${new Date(replyTo.date).toLocaleDateString()}, ${replyTo.from} wrote:\n${replyTo.preview}` : '')
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -39,7 +47,7 @@ export default function ComposeModal({ state, replyTo, initialTo, onChange, onCl
       cc: cc.split(',').map((value) => value.trim()).filter(Boolean),
       subject: subject.trim() || '(No subject)',
       preview: body.trim().slice(0, 110) || 'Empty message',
-      body: body.split('\n').map((line) => `<p>${line || '<br/>'}</p>`).join(''),
+      body: body.split('\n').map((line) => `<p>${line ? escapeHtml(line) : '<br/>'}</p>`).join(''),
       date: timestamp,
       unread: false,
       starred: false,
@@ -62,6 +70,10 @@ export default function ComposeModal({ state, replyTo, initialTo, onChange, onCl
       onToast('Add at least one recipient')
       return
     }
+    if (scheduledFor && new Date(scheduledFor).getTime() <= Date.now()) {
+      onToast('Choose a future delivery time')
+      return
+    }
     onChange({ ...state, messages: [buildMessage(false), ...state.messages] })
     const scheduled = Boolean(scheduledFor)
     onToast(scheduled ? `Message scheduled for ${new Date(scheduledFor).toLocaleString()}` : 'Message sent')
@@ -70,8 +82,12 @@ export default function ComposeModal({ state, replyTo, initialTo, onChange, onCl
   }
 
   const chooseFiles = async () => {
-    const chosen = await window.aerio.chooseAttachments()
-    setAttachments((current) => [...current, ...chosen])
+    try {
+      const chosen = await window.aerio.chooseAttachments()
+      setAttachments((current) => [...current, ...chosen])
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Attachments could not be selected')
+    }
   }
 
   return (
@@ -119,7 +135,7 @@ export default function ComposeModal({ state, replyTo, initialTo, onChange, onCl
             <input type="datetime-local" value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} />
           </label>
           <span className="spacer" />
-          <button className="button ghost" onClick={saveDraft}><Trash2 size={16} /> Save draft</button>
+          <button className="button ghost" onClick={saveDraft}><FileText size={16} /> Save draft</button>
           <button className="button primary" onClick={send}><Send size={16} /> {scheduledFor ? 'Schedule' : 'Send'}</button>
         </footer>
       </div>

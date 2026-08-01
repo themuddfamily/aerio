@@ -83,6 +83,8 @@ Useful commands:
 ```powershell
 npm run typecheck
 npm test
+npm run audit:buttons
+npm run test:desktop
 npm run build
 npm run package:win
 ```
@@ -98,14 +100,14 @@ The app uses Electron 43, React 19, TypeScript, Vite, and two local SQLite paths
 - A dedicated Node worker owns the normalized mail database, Gmail/Graph/IMAP synchronization, SMTP delivery, MIME parsing, full-text search, queued mutations, and drafts.
 - The original `sql.js` store remains isolated to the demo workspace.
 
-Automated coverage includes database migration and backup, normalized mail behavior, provider preset validation, Microsoft delta pagination, optimistic Undo, archive/delete semantics, HTML sanitization, mocked Gmail API behavior, the existing demo domain tests, and pagination over a synthetic 100,000-thread mailbox.
+Automated coverage includes database migration and backup, normalized mail behavior, provider preset validation, Microsoft delta pagination, optimistic Undo, archive/delete semantics, HTML sanitization, mocked Gmail API behavior, the existing demo domain tests, and pagination over a synthetic 100,000-thread mailbox. A static button-contract audit and a Playwright-driven Electron interaction audit cover the desktop controls, module actions, account onboarding, and native window controls.
 
 ## Keyboard shortcuts
 
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl+K` | Search and command palette |
-| `Ctrl+N` | New message in the demo workspace |
+| `Ctrl+N` | New message, or account setup when real mail has no account |
 | `Ctrl+1`…`Ctrl+6` | Switch between modules |
 | `Esc` | Close the active overlay |
 
