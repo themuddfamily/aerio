@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_MICROSOFT_CLIENT_ID, parseDesktopOAuthConfig, parseOAuthEnvironment } from './oauth-config'
+import {
+  DEFAULT_GOOGLE_CLIENT_ID,
+  DEFAULT_MICROSOFT_CLIENT_ID,
+  parseDesktopOAuthConfig,
+  parseOAuthEnvironment
+} from './oauth-config'
 
 describe('parseDesktopOAuthConfig', () => {
   it('accepts Google Desktop app credentials', () => {
@@ -52,5 +57,15 @@ describe('parseDesktopOAuthConfig', () => {
   it('keeps Aerio’s default Microsoft registration valid', () => {
     expect(parseOAuthEnvironment({ microsoftClientId: DEFAULT_MICROSOFT_CLIENT_ID }))
       .toEqual({ googleConfig: undefined, microsoftClientId: DEFAULT_MICROSOFT_CLIENT_ID })
+  })
+
+  it('keeps Aerio’s default Google registration valid', () => {
+    expect(parseOAuthEnvironment({
+      googleClientId: DEFAULT_GOOGLE_CLIENT_ID,
+      googleClientSecret: 'desktop-secret'
+    }).googleConfig).toEqual({
+      clientId: DEFAULT_GOOGLE_CLIENT_ID,
+      clientSecret: 'desktop-secret'
+    })
   })
 })

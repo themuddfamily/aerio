@@ -29,12 +29,12 @@ Open the real-mail workspace and choose **Add mail account**. The setup screen e
 
 ### Gmail
 
-Aerio uses a Google Desktop OAuth client compiled into the Electron main process. It never proxies your mail through an Aerio server. Development builds read the registration from a git-ignored `.env.local`; official builds receive the same values from GitHub Actions secrets. If a custom build has no embedded registration, the account screen retains a JSON-import fallback for developers.
+Aerio includes its public Google Desktop client ID and compiles its client secret into the Electron main process. It never proxies your mail through an Aerio server. Development builds read the secret from a git-ignored `.env.local`; official builds receive it from a GitHub Actions secret. If a custom build has no complete registration, the account screen retains a JSON-import fallback for developers.
 
 1. Open the [Google Cloud Console](https://console.cloud.google.com/), create or select a project, and enable the **Gmail API**, **Google Calendar API**, and **People API**.
 2. Configure the OAuth consent screen. For durable personal use, publish it as **In production** and add only the Google accounts you intend to use if Google requests test users. Refresh tokens issued while the app is in **Testing** normally expire after seven days.
 3. Create **OAuth client ID → Desktop app** credentials and download the JSON file.
-4. Put its `client_id` and `client_secret` into `.env.local` as `MAIN_VITE_GOOGLE_CLIENT_ID` and `MAIN_VITE_GOOGLE_CLIENT_SECRET`, then rebuild Aerio.
+4. Put its `client_secret` into `.env.local` as `MAIN_VITE_GOOGLE_CLIENT_SECRET`, then rebuild Aerio. The matching public client ID is already Aerio's default; `MAIN_VITE_GOOGLE_CLIENT_ID` can override it for a different registration.
 5. Switch to **Connected workspace**, choose Gmail, and select **Connect Gmail**. Your normal browser completes Google sign-in and returns to Aerio through a temporary `127.0.0.1` callback.
 
 Aerio requests Gmail modify access plus read-only Calendar and Contacts access. It does not request permanent-delete, Calendar-write, or Contacts-write access. Existing accounts connected by an older Aerio build must use **Account settings → Reconnect** once to approve the added read-only scopes.

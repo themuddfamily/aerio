@@ -31,7 +31,7 @@ import type {
   SyncProgress
 } from '../src/gmail-types'
 import { OAuthVault } from './mail/oauth-vault'
-import { DEFAULT_MICROSOFT_CLIENT_ID, parseOAuthEnvironment } from './mail/oauth-config'
+import { DEFAULT_GOOGLE_CLIENT_ID, DEFAULT_MICROSOFT_CLIENT_ID, parseOAuthEnvironment } from './mail/oauth-config'
 import { ImapSmtpClient } from './mail/imap-client'
 import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
 import { MailWorkerClient } from './mail/worker-client'
@@ -42,9 +42,12 @@ import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
 
+const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
-  googleClientId: import.meta.env.MAIN_VITE_GOOGLE_CLIENT_ID,
-  googleClientSecret: import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET,
+  googleClientId: builtInGoogleClientSecret
+    ? import.meta.env.MAIN_VITE_GOOGLE_CLIENT_ID || DEFAULT_GOOGLE_CLIENT_ID
+    : undefined,
+  googleClientSecret: builtInGoogleClientSecret,
   microsoftClientId: import.meta.env.MAIN_VITE_MICROSOFT_CLIENT_ID || DEFAULT_MICROSOFT_CLIENT_ID
 })
 

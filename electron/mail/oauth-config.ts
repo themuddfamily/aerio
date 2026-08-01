@@ -8,6 +8,9 @@ export interface BuiltInOAuthClients {
   microsoftClientId?: string
 }
 
+// Google desktop application IDs are public identifiers embedded in native clients.
+export const DEFAULT_GOOGLE_CLIENT_ID = '409593140252-du36j5ojpe8q2tfpvb46nprmgdfuck5k.apps.googleusercontent.com'
+
 // Microsoft desktop applications are public clients; their application ID is not a secret.
 export const DEFAULT_MICROSOFT_CLIENT_ID = '4369b922-aba6-4a2c-acef-2e1c51b8f372'
 
