@@ -1557,9 +1557,28 @@ kbd {
 
 .provider-security-note svg { flex: 0 0 auto; color: var(--success); }
 
-.microsoft-provider-logo { display: grid; grid-template-columns: 1fr 1fr; flex: 0 0 auto; }
-.microsoft-provider-logo i { display: block; }
-.fastmail-provider-logo { display: block; object-fit: contain; }
+.provider-logo-art {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  aspect-ratio: 1 / 1;
+}
+
+.provider-logo-art > svg,
+.provider-logo-art > img,
+.provider-logo-art > span {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
+}
+
+.microsoft-provider-logo { display: grid !important; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8%; }
+.microsoft-provider-logo i { min-width: 0; min-height: 0; display: block; }
+.fastmail-provider-logo { object-fit: contain; }
 
 .brand-auth-action {
   border-color: #d5d9df;
