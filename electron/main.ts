@@ -269,7 +269,25 @@ async function initializeMail() {
     }
   })
   const accounts = await mailWorker.request<GmailAccountSummary[]>({ type: 'accounts:list' })
-  for (const account of accounts) accountProviders.set(account.id, account.provider)
+  for (const account of accounts) {
+    accountProviders.set(account.id, account.provider)
+    if (account.status !== 'needs-auth' || account.archived || !account.syncEnabled) continue
+    void (async () => {
+      try {
+        await requireMailWorker().request({ type: 'accounts:verify', payload: { accountId: account.id } })
+        await requireMailWorker().request({ type: 'sync:start', payload: { accountId: account.id } })
+        diagnostic({ level: 'info', component: 'mail-worker', event: 'authentication-recovered', accountId: account.id })
+      } catch (error) {
+        diagnostic({
+          level: 'error',
+          component: 'mail-worker',
+          event: 'authentication-recovery-failed',
+          accountId: account.id,
+          message: error instanceof Error ? error.message : String(error)
+        })
+      }
+    })()
+  }
 }
 
 const accountColors = ['#1d7a62', '#3b6fd8', '#8a5dc7', '#c2673d', '#b04d73', '#5d7589']
