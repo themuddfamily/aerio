@@ -59,7 +59,8 @@ export class OAuthVault {
         imapAccounts: parsed.imapAccounts ?? {}
       }
     } catch {
-      this.data = { googleTokens: {}, microsoftTokens: {}, imapAccounts: {} }
+      // Keep any credentials already held in memory. This also prevents a
+      // transient read failure from replacing a valid vault with an empty one.
     }
   }
 
@@ -195,7 +196,11 @@ export class OAuthVault {
   async accessToken(accountId: string) {
     const cached = this.accessCache.get(accountId)
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token
-    const credentials = this.data.googleTokens[accountId]
+    let credentials = this.data.googleTokens[accountId]
+    if (!credentials) {
+      this.load()
+      credentials = this.data.googleTokens[accountId]
+    }
     if (!credentials) throw new Error('This account needs to be connected again')
     const oauth = this.oauth()
     oauth.setCredentials(credentials)
@@ -300,7 +305,11 @@ export class OAuthVault {
     const cached = this.accessCache.get(accountId)
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token
     const clientId = this.microsoftClientId()
-    const current = this.data.microsoftTokens[accountId]
+    let current = this.data.microsoftTokens[accountId]
+    if (!current) {
+      this.load()
+      current = this.data.microsoftTokens[accountId]
+    }
     if (!clientId || !current) throw new Error('This Microsoft account needs to be connected again')
     const response = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -321,7 +330,11 @@ export class OAuthVault {
   }
 
   imapCredential(accountId: string) {
-    const config = this.data.imapAccounts[accountId]
+    let config = this.data.imapAccounts[accountId]
+    if (!config) {
+      this.load()
+      config = this.data.imapAccounts[accountId]
+    }
     if (!config) throw new Error('This mail account needs to be connected again')
     return config
   }

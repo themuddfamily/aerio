@@ -219,6 +219,13 @@ function progress(accountId: string, phase?: SyncProgress['phase'], message?: st
   return value
 }
 
+function isAuthenticationError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return (error instanceof GmailApiError && (error.status === 401 || error.status === 403)) ||
+    (error instanceof MicrosoftGraphError && (error.status === 401 || error.status === 403)) ||
+    /invalid_grant|connect(ed)? again|unauthori[sz]ed|authentication failed|invalid credentials|login failed/i.test(message)
+}
+
 async function assertCanSync(accountId: string) {
   while (paused.has(accountId) || !online) {
     const reason = paused.has(accountId) ? 'user' : 'offline'
@@ -279,14 +286,13 @@ async function downloadInventory(accountId: string) {
         return { id, error: error instanceof Error ? error : new Error(String(error)) }
       }
     }))
+    const authenticationFailure = results.find((result) => result.error && isAuthenticationError(result.error))?.error
+    if (authenticationFailure) throw authenticationFailure
     for (const result of results) {
       if (result.error) database.markSyncItem(accountId, result.id, 'failed', result.error.message)
     }
-    const value = database.getSyncProgress(accountId)[0]
-    if (value) {
-      emit({ type: 'sync-progress', payload: value })
-      if (value.completed % 20 < 2) emit({ type: 'mail-changed', payload: { accountId } })
-    }
+    const value = progress(accountId, 'downloading', 'Downloading messages for offline use')
+    if (value.completed % 20 < 2) emit({ type: 'mail-changed', payload: { accountId } })
   }
   const failed = database.syncFailureCount(accountId)
   if (failed) throw new Error(`${failed.toLocaleString()} message${failed === 1 ? '' : 's'} could not be downloaded after repeated attempts`)
@@ -555,9 +561,7 @@ async function syncAccount(accountId: string, forceFull = false) {
       emit({ type: 'accounts-changed', payload: database.listAccounts() })
       return
     }
-    const auth = (error instanceof GmailApiError && (error.status === 401 || error.status === 403)) ||
-      (error instanceof MicrosoftGraphError && (error.status === 401 || error.status === 403)) ||
-      /invalid_grant|connect(ed)? again|unauthori[sz]ed|authentication failed|invalid credentials|login failed/i.test(message)
+    const auth = isAuthenticationError(error)
     database.setAccountStatus(accountId, auth ? 'needs-auth' : 'error', message)
     progress(accountId, 'error', message)
     emit({ type: 'accounts-changed', payload: database.listAccounts() })

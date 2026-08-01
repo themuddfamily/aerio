@@ -51,6 +51,10 @@ const builtInOAuthClients = parseOAuthEnvironment({
   microsoftClientId: import.meta.env.MAIN_VITE_MICROSOFT_CLIENT_ID || DEFAULT_MICROSOFT_CLIENT_ID
 })
 
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+
+if (!hasSingleInstanceLock) app.quit()
+
 protocol.registerSchemesAsPrivileged([
   { scheme: 'aerio-image', privileges: { secure: true, standard: true, supportFetchAPI: true, bypassCSP: false } }
 ])
@@ -69,6 +73,7 @@ let lastBoundsWrite: NodeJS.Timeout | undefined
 let diagnostics: DiagnosticLogger | null = null
 let updates: UpdateManager | null = null
 let productivityStore: ProductivityStore | null = null
+let readyToOpenWindows = false
 
 function diagnostic(record: Omit<DiagnosticRecord, 'timestamp'>) {
   diagnostics?.log(record)
@@ -478,6 +483,7 @@ function openMainWindow(compose = false) {
     if (compose) window.webContents.once('did-finish-load', () => window.webContents.send('command:compose'))
     return
   }
+  if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
   if (compose) mainWindow.webContents.send('command:compose')
@@ -803,7 +809,11 @@ function registerIpc() {
   })
 }
 
-app.whenReady().then(async () => {
+if (hasSingleInstanceLock) app.on('second-instance', () => {
+  if (readyToOpenWindows) openMainWindow()
+})
+
+if (hasSingleInstanceLock) app.whenReady().then(async () => {
   diagnostics = new DiagnosticLogger(join(app.getPath('userData'), 'logs', 'aerio.jsonl'))
   diagnostic({ level: 'info', component: 'app', event: 'startup', details: { version: app.getVersion(), packaged: app.isPackaged } })
   Menu.setApplicationMenu(null)
@@ -812,6 +822,7 @@ app.whenReady().then(async () => {
   productivityStore = new ProductivityStore(join(app.getPath('userData'), 'productivity.sqlite'))
   registerIpc()
   registerRemoteImageProtocol()
+  readyToOpenWindows = true
   createWindow()
   createTray()
   updates = new UpdateManager(
