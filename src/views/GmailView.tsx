@@ -314,6 +314,18 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
 
   const openSummary = (item: MailThreadSummary) => setSelectedKey(`${item.accountId}:${item.id}`)
 
+  function selectAccount(nextAccountId: string) {
+    setAccountId(nextAccountId)
+    setLabelId(undefined)
+  }
+
+  function toggleLabel(label: GmailLabel) {
+    const selected = accountId === label.accountId && labelId === label.id
+    setAccountId(label.accountId)
+    setLabelId(selected ? undefined : label.id)
+    setFolder('all')
+  }
+
   const openMessageWindow = (item: MailThreadSummary) => {
     void window.aerio.window.openMessage({ source: 'gmail', accountId: item.accountId, threadId: item.id, title: item.subject })
       .catch((error) => onToast(error instanceof Error ? error.message : 'The message window could not be opened'))
@@ -412,7 +424,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
   const showAccountMenu = (event: React.MouseEvent, account?: GmailAccountSummary) => {
     const progress = account ? sync.find((item) => item.accountId === account.id) : undefined
     showContextMenu(event, [
-      { label: account ? `Open ${account.email}` : 'Open all accounts', icon: Mail, action: () => setAccountId(account?.id ?? 'all') },
+      { label: account ? `Open ${account.email}` : 'Open all accounts', icon: Mail, action: () => selectAccount(account?.id ?? 'all') },
       { label: 'New message', icon: Plus, disabled: account?.archived, action: () => setCompose({}) },
       { label: 'Check for mail', icon: RefreshCw, separatorBefore: true, disabled: account?.archived, action: () => startSync(account?.id) },
       ...(account && progress ? [{ label: progress.phase === 'paused' ? 'Resume sync' : 'Pause sync', icon: progress.phase === 'paused' ? Play : Pause, action: () => toggleSync(account, progress.phase === 'paused') }] satisfies ContextMenuItem[] : []),
@@ -471,15 +483,15 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
         </div>
         <div className="sidebar-group">
           <span className="sidebar-label">Accounts</span>
-          <button className={`sidebar-item ${accountId === 'all' ? 'active' : ''}`} onClick={() => setAccountId('all')} onContextMenu={(event) => showAccountMenu(event)}><span className="account-dot multi" /><span>All accounts</span></button>
-          {accounts.map((account) => <button className={`sidebar-item gmail-account-row ${accountId === account.id ? 'active' : ''}`} key={account.id} onClick={() => setAccountId(account.id)} onContextMenu={(event) => showAccountMenu(event, account)} title={`${account.email} · ${account.provider}${account.archived ? ' · offline archive' : ''}`}><span className="account-dot" style={{ background: account.color }} /><span>{account.email}{account.archived ? ' · archive' : ''}<small className="provider-name">{account.provider}</small></span><i className={`account-state ${account.status}`} /></button>)}
+          <button className={`sidebar-item ${accountId === 'all' ? 'active' : ''}`} onClick={() => selectAccount('all')} onContextMenu={(event) => showAccountMenu(event)}><span className="account-dot multi" /><span>All accounts</span></button>
+          {accounts.map((account) => <button className={`sidebar-item gmail-account-row ${accountId === account.id ? 'active' : ''}`} key={account.id} onClick={() => selectAccount(account.id)} onContextMenu={(event) => showAccountMenu(event, account)} title={`${account.email} · ${account.provider}${account.archived ? ' · offline archive' : ''}`}><span className="account-dot" style={{ background: account.color }} /><span>{account.email}{account.archived ? ' · archive' : ''}<small className="provider-name">{account.provider}</small></span><i className={`account-state ${account.status}`} /></button>)}
           <button className="sidebar-item" onClick={addAccount}><UserPlus size={16} /><span>Add mail account</span></button>
         </div>
-          {visibleLabels.length > 0 && <div className="sidebar-group"><span className="sidebar-label">Labels</span>{visibleLabels.map((label) => <button className={`sidebar-item ${labelId === label.id && accountId === label.accountId ? 'active' : ''}`} key={`${label.accountId}:${label.id}`} onClick={() => { setAccountId(label.accountId); setLabelId(label.id); setFolder('all') }} onContextMenu={(event) => showContextMenu(event, [
-            { label: `Open ${label.name}`, icon: Tag, action: () => { setAccountId(label.accountId); setLabelId(label.id); setFolder('all') } },
+          {visibleLabels.length > 0 && <div className="sidebar-group"><span className="sidebar-label">Labels</span>{visibleLabels.map((label) => { const selected = labelId === label.id && accountId === label.accountId; return <button className={`sidebar-item ${selected ? 'active' : ''}`} aria-pressed={selected} key={`${label.accountId}:${label.id}`} onClick={() => toggleLabel(label)} onContextMenu={(event) => showContextMenu(event, [
+            { label: selected ? `Clear ${label.name} filter` : `Open ${label.name}`, icon: Tag, action: () => toggleLabel(label) },
             { label: 'New message', icon: Plus, separatorBefore: true, disabled: !accounts.some((account) => account.id === label.accountId && !account.archived), action: () => setCompose({}) },
             { label: 'Check account for mail', icon: RefreshCw, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => startSync(label.accountId) }
-          ], label.name)}><Tag size={15} /><span>{label.name}</span></button>)}</div>}
+          ], label.name)}><Tag size={15} /><span>{label.name}</span></button> })}</div>}
         <div className="gmail-sidebar-footer">
           <button onClick={() => void showStorage()}><Download size={14} /> Offline storage</button>
           {accounts.filter((account) => !account.archived).map((account) => <button key={account.id} title={`Settings for ${account.email}`} onClick={() => setSettingsAccount(account)} onContextMenu={(event) => showAccountMenu(event, account)}><Settings2 size={14} /> {account.email.split('@')[0]}</button>)}
