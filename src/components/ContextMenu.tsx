@@ -133,6 +133,8 @@ function ContextMenuPopup({ menu, onClose }: { menu: OpenMenu; onClose(restoreFo
   }, [active])
 
   useEffect(() => {
+    let scrollDismissalArmed = false
+    const armScrollDismissal = window.setTimeout(() => { scrollDismissalArmed = true }, 150)
     const dismiss = (event: PointerEvent) => {
       if (menuRef.current?.contains(event.target as Node)) return
       if (event.button === 2) { onClose(); return }
@@ -141,15 +143,17 @@ function ContextMenuPopup({ menu, onClose }: { menu: OpenMenu; onClose(restoreFo
       onClose()
     }
     const close = () => onClose()
+    const closeAfterInitialPositioning = () => { if (scrollDismissalArmed) onClose() }
     document.addEventListener('pointerdown', dismiss, true)
     window.addEventListener('blur', close)
     window.addEventListener('resize', close)
-    window.addEventListener('scroll', close, true)
+    window.addEventListener('scroll', closeAfterInitialPositioning, true)
     return () => {
+      window.clearTimeout(armScrollDismissal)
       document.removeEventListener('pointerdown', dismiss, true)
       window.removeEventListener('blur', close)
       window.removeEventListener('resize', close)
-      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('scroll', closeAfterInitialPositioning, true)
     }
   }, [onClose])
 
