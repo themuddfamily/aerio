@@ -1,5 +1,5 @@
 import { Bold, Copy, Italic, Link, List, Paperclip, Save, Send, Trash2, Underline, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { GmailAccountSummary, GmailDraftInput, GmailDraftRecord, GmailThreadDetail, MailRecipientSuggestion } from '../gmail-types'
 import { formatFileSize } from '../lib/domain'
 import { copyText, useContextMenu } from './ContextMenu'
@@ -57,6 +57,7 @@ export default function GmailComposeModal({ accounts, draft, replyTo, forward, o
   const [recipientField, setRecipientField] = useState<'to' | 'cc' | 'bcc'>()
   const [recipientSuggestions, setRecipientSuggestions] = useState<MailRecipientSuggestion[]>([])
   const editorRef = useRef<HTMLDivElement>(null)
+  const editorHtmlRef = useRef(initialHtml)
   const firstRender = useRef(true)
   const lastSaved = useRef('')
   const stagedForwardAttachments = useRef(false)
@@ -171,10 +172,16 @@ export default function GmailComposeModal({ accounts, draft, replyTo, forward, o
     setRecipientSuggestions([])
   }
 
+  const bindEditor = useCallback((editor: HTMLDivElement | null) => {
+    editorRef.current = editor
+    if (editor) editor.innerHTML = editorHtmlRef.current
+  }, [])
+
   const updateEditor = () => {
     const editor = editorRef.current
     if (!editor) return
-    setHtml(editor.innerHTML)
+    editorHtmlRef.current = editor.innerHTML
+    setHtml(editorHtmlRef.current)
     setText(editor.innerText.replaceAll('\u00a0', ' '))
   }
 
@@ -263,13 +270,13 @@ export default function GmailComposeModal({ accounts, draft, replyTo, forward, o
             <button className="icon-button" title="Add link" onMouseDown={(event) => event.preventDefault()} onClick={addLink}><Link size={15} /></button>
           </div>
           <div
-            ref={editorRef}
+            ref={bindEditor}
             className="compose-body compose-rich-body"
             contentEditable
+            suppressContentEditableWarning
             role="textbox"
             aria-multiline="true"
             data-placeholder="Write your message…"
-            dangerouslySetInnerHTML={{ __html: html }}
             onInput={updateEditor}
             onFocus={() => setRecipientField(undefined)}
             onPaste={(event) => {
