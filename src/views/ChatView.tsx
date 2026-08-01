@@ -26,7 +26,7 @@ const autoReplies = [
 export default function ChatView({ state, query, requestedConversationId, onChange, onToast }: ChatViewProps) {
   const [selectedId, setSelectedId] = useState(state.conversations[0]?.id ?? '')
   const [message, setMessage] = useState('')
-  const [showInfo, setShowInfo] = useState(true)
+  const [showInfo, setShowInfo] = useState(() => window.innerWidth > 1180)
   const [newChatOpen, setNewChatOpen] = useState(false)
   const [emojiOpen, setEmojiOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -167,7 +167,7 @@ export default function ChatView({ state, query, requestedConversationId, onChan
           <h2>{selected.name}</h2>
           <p>{selected.online ? 'Active now' : 'Away'}</p>
           <div className="contact-actions compact">
-            <button className={searchOpen ? 'active' : ''} onClick={() => setSearchOpen((value) => !value)}><span><Search size={18} /></span>Search</button>
+            <button className={searchOpen ? 'active' : ''} onClick={() => { setSearchOpen((value) => !value); setShowInfo(false) }}><span><Search size={18} /></span>Search</button>
             <button className={muted.has(selected.id) ? 'active' : ''} onClick={() => {
               setMuted((current) => { const next = new Set(current); if (next.has(selected.id)) next.delete(selected.id); else next.add(selected.id); return next })
               onToast(muted.has(selected.id) ? 'Conversation unmuted' : 'Conversation muted')

@@ -107,9 +107,19 @@ try {
   })
 
   await step('chat new conversation, emoji, send, search, and mute controls work', async () => {
+    const chatWindow = await application.browserWindow(page)
+    await chatWindow.evaluate((window) => window.setSize(1080, 760))
+    await page.waitForFunction(() => window.innerWidth <= 1180)
+    const details = page.getByRole('button', { name: 'Conversation details' })
+    const infoPanel = page.locator('.chat-info-panel')
     await page.getByRole('button', { name: 'New conversation' }).click()
     await dialog('New conversation').getByRole('button', { name: /Elliot Reed/ }).click()
     await page.locator('.chat-header').getByText('Elliot Reed', { exact: true }).waitFor()
+    if (await infoPanel.isVisible()) {
+      await details.click()
+      await infoPanel.waitFor({ state: 'hidden' })
+    }
+    if (await page.locator('.toast').isVisible()) await page.locator('.toast').waitFor({ state: 'hidden' })
     await page.getByRole('button', { name: 'Choose emoji' }).click()
     await page.getByRole('button', { name: '🎉' }).click()
     const composer = page.locator('.chat-composer input')
@@ -118,13 +128,18 @@ try {
     await assertAccessibleButtons()
     await page.locator('.chat-composer').getByRole('button', { name: 'Send message' }).click()
     await page.getByRole('paragraph').filter({ hasText: 'Hello from the audit' }).waitFor()
-    await page.locator('.chat-info-panel').getByRole('button', { name: 'Search' }).click()
+    await details.click()
+    await infoPanel.waitFor()
+    await infoPanel.getByRole('button', { name: 'Search' }).click()
+    await infoPanel.waitFor({ state: 'hidden' })
     await page.getByPlaceholder(/Search Elliot Reed/).fill('Hello')
     await page.getByRole('button', { name: 'Done' }).click()
-    const mute = page.locator('.chat-info-panel').getByRole('button', { name: 'Mute' })
+    await details.click()
+    await infoPanel.waitFor()
+    const mute = infoPanel.getByRole('button', { name: 'Mute' })
     await mute.click()
     await page.getByText('Conversation muted').waitFor()
-    await page.locator('.chat-info-panel').getByRole('button', { name: 'Unmute' }).click()
+    await infoPanel.getByRole('button', { name: 'Unmute' }).click()
   })
 
   await step('task editor blocks empty saves and creates a task', async () => {

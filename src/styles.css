@@ -2593,6 +2593,8 @@ kbd {
   background: var(--surface);
 }
 
+.chat-workspace { position: relative; }
+
 .chat-header {
   height: 63px;
   flex: 0 0 63px;
@@ -2819,7 +2821,14 @@ kbd {
   .context-sidebar { width: 190px; flex-basis: 190px; }
   .chat-sidebar { width: 235px; flex-basis: 235px; }
   .mail-list-panel { width: 310px; flex-basis: 310px; }
-  .chat-info-panel { display: none; }
-  .local-badge { display: none; }
+  .chat-info-panel {
+    position: absolute;
+    z-index: 8;
+    top: 63px;
+    right: 0;
+    bottom: 0;
+    display: block;
+    box-shadow: var(--shadow-lg);
+  }
   .task-meta em:nth-child(n+2) { display: none; }
 }
