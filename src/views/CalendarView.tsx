@@ -89,7 +89,10 @@ export default function CalendarView({
     if (providerBacked) {
       if (!onSaveProviderEvent) throw new Error('Provider event creation is unavailable')
       await onSaveProviderEvent(duplicate, false)
-    } else onChange({ ...state, events: [duplicate, ...state.events] })
+    } else {
+      onChange({ ...state, events: [duplicate, ...state.events] })
+      setEditing(duplicate)
+    }
     onToast('Event duplicated')
   }
 
