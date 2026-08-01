@@ -532,6 +532,11 @@ kbd {
   border-radius: 50%;
 }
 
+.sidebar-item .account-dot {
+  min-width: 8px;
+  flex: 0 0 8px;
+}
+
 .panel-heading, .module-header {
   height: 72px;
   flex: 0 0 72px;

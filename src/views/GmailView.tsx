@@ -179,10 +179,10 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
     else setAccountSetup(true)
   }, [accounts, composeRequest])
 
-  async function applyAction(action: MailActionKind, targetAccount = selected?.accountId, threadIds = selected ? [selected.id] : [], showUndo = true) {
+  async function applyAction(action: MailActionKind, targetAccount = selected?.accountId, threadIds = selected ? [selected.id] : [], showUndo = true, labelId?: string) {
     if (!targetAccount || !threadIds.length) return
     try {
-      const operation = await window.aerio.mail.mail.action({ accountId: targetAccount, threadIds, action })
+      const operation = await window.aerio.mail.mail.action({ accountId: targetAccount, threadIds, action, labelId })
       if (showUndo) setPending([operation])
       await loadPage()
     } catch (error) {
@@ -348,6 +348,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
     const account = accounts.find((candidate) => candidate.id === item.accountId)
     const readOnly = Boolean(account?.archived)
     const inInbox = item.labelIds.includes('INBOX')
+    const inSpam = item.labelIds.includes('SPAM')
     return [
       { label: 'Open conversation', icon: MailOpen, action: () => openSummary(item) },
       { label: 'Open in new window', icon: ExternalLink, action: () => openMessageWindow(item) },
@@ -356,7 +357,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
       { label: item.unread ? 'Mark as read' : 'Mark as unread', icon: item.unread ? MailOpen : Mail, separatorBefore: true, disabled: readOnly, action: () => applyAction(item.unread ? 'read' : 'unread', item.accountId, [item.id]) },
       { label: item.starred ? 'Remove star' : 'Add star', icon: Star, checked: item.starred, disabled: readOnly, action: () => applyAction(item.starred ? 'unstar' : 'star', item.accountId, [item.id]) },
       { label: item.important ? 'Mark as not important' : 'Mark as important', icon: Tag, checked: item.important, disabled: readOnly, action: () => applyAction(item.important ? 'unimportant' : 'important', item.accountId, [item.id]) },
-      { label: inInbox ? 'Archive' : 'Move to inbox', icon: inInbox ? Archive : Inbox, separatorBefore: true, disabled: readOnly, action: () => applyAction(inInbox ? 'archive' : 'unarchive', item.accountId, [item.id]) },
+      ...(!item.trashed ? [{ label: inInbox ? 'Archive' : 'Move to inbox', icon: inInbox ? Archive : Inbox, separatorBefore: true, disabled: readOnly, action: () => applyAction(inInbox ? 'archive' : inSpam ? 'move' : 'unarchive', item.accountId, [item.id], true, inSpam ? 'INBOX' : undefined) }] satisfies ContextMenuItem[] : []),
       { label: 'Move to…', icon: FolderInput, disabled: readOnly, action: () => { setCheckedKeys(new Set([`${item.accountId}:${item.id}`])); setOrganizeMode('move') } },
       { label: 'Manage labels…', icon: Tags, disabled: readOnly || accounts.find((account) => account.id === item.accountId)?.provider !== 'gmail', action: () => { setCheckedKeys(new Set([`${item.accountId}:${item.id}`])); setOrganizeMode('label') } },
       { label: item.trashed ? 'Restore from Trash' : 'Move to Trash', icon: Trash2, danger: !item.trashed, disabled: readOnly, action: () => applyAction(item.trashed ? 'untrash' : 'trash', item.accountId, [item.id]) },
@@ -553,8 +554,8 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
         {selected && thread ? <>
           <div className="reader-toolbar">
             <button className="icon-button" disabled={selectedAccount?.archived} title={selected.unread ? 'Mark read' : 'Mark unread'} onClick={() => void applyAction(selected.unread ? 'read' : 'unread')}>{selected.unread ? <MailOpen size={18} /> : <Mail size={18} />}</button>
-            <button className="icon-button" disabled={selectedAccount?.archived} title="Archive" onClick={() => void applyAction('archive')}><Archive size={18} /></button>
-            <button className="icon-button" disabled={selectedAccount?.archived} title="Move to Trash" onClick={() => void applyAction('trash')}><Trash2 size={18} /></button>
+            <button className="icon-button" disabled={selectedAccount?.archived || selected.trashed} title={selected.labelIds.includes('INBOX') ? 'Archive' : 'Move to inbox'} onClick={() => void applyAction(selected.labelIds.includes('INBOX') ? 'archive' : selected.labelIds.includes('SPAM') ? 'move' : 'unarchive', undefined, undefined, true, selected.labelIds.includes('SPAM') ? 'INBOX' : undefined)}>{selected.labelIds.includes('INBOX') ? <Archive size={18} /> : <Inbox size={18} />}</button>
+            <button className="icon-button" disabled={selectedAccount?.archived} title={selected.trashed ? 'Restore from Trash' : 'Move to Trash'} onClick={() => void applyAction(selected.trashed ? 'untrash' : 'trash')}>{selected.trashed ? <Undo2 size={18} /> : <Trash2 size={18} />}</button>
             <span className="toolbar-divider" />
             <button className={`icon-button ${selected.starred ? 'active' : ''}`} disabled={selectedAccount?.archived} title="Star" onClick={() => void applyAction(selected.starred ? 'unstar' : 'star')}><Star size={18} fill={selected.starred ? 'currentColor' : 'none'} /></button>
             <span className="spacer" />
