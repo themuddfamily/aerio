@@ -14,6 +14,7 @@ function setup() {
   const database = new MailDatabase(path, join(directory, 'mail'))
   database.upsertAccount({
     id: 'account-1',
+    provider: 'gmail',
     email: 'person@example.com',
     displayName: 'Person',
     color: '#6558e8',

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AerioDesktopApi, AppState } from '../src/types'
-import type { ApplyMailActionInput, GmailDraftInput, GmailWorkerEvent, MailQuery } from '../src/gmail-types'
+import type { ApplyMailActionInput, GmailDraftInput, GmailWorkerEvent, ImapAccountInput, MailQuery } from '../src/gmail-types'
 
 const api: AerioDesktopApi = {
   loadState: () => ipcRenderer.invoke('state:load'),
@@ -24,14 +24,19 @@ const api: AerioDesktopApi = {
     ipcRenderer.on('command:compose', listener)
     return () => ipcRenderer.removeListener('command:compose', listener)
   },
-  gmail: {
+  mail: {
     credentials: {
       status: () => ipcRenderer.invoke('gmail:credentials:status'),
-      import: () => ipcRenderer.invoke('gmail:credentials:import')
+      import: () => ipcRenderer.invoke('gmail:credentials:import'),
+      microsoftStatus: () => ipcRenderer.invoke('mail:credentials:microsoft-status'),
+      configureMicrosoft: (clientId) => ipcRenderer.invoke('mail:credentials:microsoft-configure', clientId)
     },
+    presets: () => ipcRenderer.invoke('mail:providers:presets'),
     accounts: {
       list: () => ipcRenderer.invoke('gmail:accounts:list'),
       connect: () => ipcRenderer.invoke('gmail:accounts:connect'),
+      connectMicrosoft: () => ipcRenderer.invoke('mail:accounts:connect-microsoft'),
+      connectImap: (input: ImapAccountInput) => ipcRenderer.invoke('mail:accounts:connect-imap', input),
       disconnect: (accountId, mode) => ipcRenderer.invoke('gmail:accounts:disconnect', accountId, mode)
     },
     mail: {

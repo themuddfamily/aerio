@@ -56,10 +56,10 @@ export default function App() {
       setActiveModule(loaded.settings.startModule)
       queueMicrotask(() => { hydrated.current = true })
     }).catch(() => showToast('Aerio could not open its local data'))
-    void window.aerio.gmail.accounts.list().then((accounts) => {
+    void window.aerio.mail.accounts.list().then((accounts) => {
       if (accounts.length) setMailMode('gmail')
     }).catch(() => {
-      // The separate demo workspace remains usable if Gmail cannot initialize.
+      // The separate demo workspace remains usable if the mail engine cannot initialize.
     })
   }, [showToast])
 
@@ -161,7 +161,7 @@ export default function App() {
             </button>
             <button className={`local-badge mode-switch ${mailMode === 'gmail' ? 'gmail' : ''}`} onClick={() => { setMailMode((mode) => mode === 'gmail' ? 'demo' : 'gmail'); setActiveModule('mail') }}>
               {mailMode === 'gmail' ? <Mail size={14} /> : <WifiOff size={14} />}
-              {mailMode === 'gmail' ? 'Real Gmail' : 'Demo workspace'}
+              {mailMode === 'gmail' ? 'Real mail' : 'Demo workspace'}
             </button>
             <span className={`save-indicator ${saveStatus}`}>{saveStatus === 'saved' ? 'All changes saved' : 'Saving…'}</span>
             <button className="theme-quick" title="Toggle theme" onClick={() => setState({ ...state, settings: { ...state.settings, theme: state.settings.theme === 'dark' ? 'light' : 'dark' } })}>

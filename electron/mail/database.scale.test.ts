@@ -11,6 +11,7 @@ it('paginates a synthetic 100,000-conversation mailbox without scanning it in Ja
   const database = new MailDatabase(path, join(directory, 'mail'))
   database.upsertAccount({
     id: 'scale',
+    provider: 'gmail',
     email: 'scale@example.com',
     displayName: 'Scale',
     color: '#6558e8',

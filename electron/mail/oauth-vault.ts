@@ -3,18 +3,27 @@ import { createServer } from 'node:http'
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { OAuth2Client, CodeChallengeMethod, type Credentials } from 'google-auth-library'
 import { safeStorage, shell } from 'electron'
-import type { GmailCredentialStatus } from '../../src/gmail-types'
+import type { GmailCredentialStatus, ImapAccountInput, MailProviderId } from '../../src/gmail-types'
 import { parseDesktopOAuthConfig, type DesktopOAuthConfig } from './oauth-config'
 
 interface StoredOAuthData {
-  config?: DesktopOAuthConfig
-  tokens: Record<string, Credentials>
+  googleConfig?: DesktopOAuthConfig
+  googleTokens: Record<string, Credentials>
+  microsoftConfig?: { clientId: string }
+  microsoftTokens: Record<string, MicrosoftTokenSet>
+  imapAccounts: Record<string, ImapAccountInput>
+}
+
+interface MicrosoftTokenSet {
+  accessToken: string
+  refreshToken: string
+  expiresAt: number
 }
 
 const SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
 
 export class OAuthVault {
-  private data: StoredOAuthData = { tokens: {} }
+  private data: StoredOAuthData = { googleTokens: {}, microsoftTokens: {}, imapAccounts: {} }
   private accessCache = new Map<string, { token: string; expiresAt: number }>()
 
   constructor(private readonly path: string) {
@@ -23,7 +32,7 @@ export class OAuthVault {
 
   private ensureEncryption() {
     if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error('Windows secure storage is unavailable. Aerio will not save Gmail tokens without OS encryption.')
+      throw new Error('Windows secure storage is unavailable. Aerio will not save mail credentials without OS encryption.')
     }
   }
 
@@ -31,10 +40,16 @@ export class OAuthVault {
     try {
       this.ensureEncryption()
       const encrypted = Buffer.from(readFileSync(this.path, 'utf8'), 'base64')
-      this.data = JSON.parse(safeStorage.decryptString(encrypted)) as StoredOAuthData
-      this.data.tokens ??= {}
+      const parsed = JSON.parse(safeStorage.decryptString(encrypted)) as StoredOAuthData & { config?: DesktopOAuthConfig; tokens?: Record<string, Credentials> }
+      this.data = {
+        googleConfig: parsed.googleConfig ?? parsed.config,
+        googleTokens: parsed.googleTokens ?? parsed.tokens ?? {},
+        microsoftConfig: parsed.microsoftConfig,
+        microsoftTokens: parsed.microsoftTokens ?? {},
+        imapAccounts: parsed.imapAccounts ?? {}
+      }
     } catch {
-      this.data = { tokens: {} }
+      this.data = { googleTokens: {}, microsoftTokens: {}, imapAccounts: {} }
     }
   }
 
@@ -47,7 +62,7 @@ export class OAuthVault {
   }
 
   status(): GmailCredentialStatus {
-    const clientId = this.data.config?.clientId
+    const clientId = this.data.googleConfig?.clientId
     return {
       configured: Boolean(clientId),
       clientIdHint: clientId ? `${clientId.slice(0, 10)}…${clientId.slice(-12)}` : undefined
@@ -55,14 +70,14 @@ export class OAuthVault {
   }
 
   importConfig(path: string) {
-    this.data.config = parseDesktopOAuthConfig(JSON.parse(readFileSync(path, 'utf8')))
+    this.data.googleConfig = parseDesktopOAuthConfig(JSON.parse(readFileSync(path, 'utf8')))
     this.save()
     return this.status()
   }
 
   private config() {
-    if (!this.data.config) throw new Error('Import Google Desktop OAuth credentials first')
-    return this.data.config
+    if (!this.data.googleConfig) throw new Error('Import Google Desktop OAuth credentials first')
+    return this.data.googleConfig
   }
 
   private oauth(redirectUri?: string) {
@@ -151,7 +166,7 @@ export class OAuthVault {
       if (!profileResponse.ok) throw new Error(`Could not read the Gmail profile (${profileResponse.status})`)
       const profile = await profileResponse.json() as { emailAddress: string }
       const accountId = createHash('sha256').update(profile.emailAddress.toLowerCase()).digest('hex').slice(0, 24)
-      this.data.tokens[accountId] = { ...result.tokens, ...exchangingClient.credentials }
+      this.data.googleTokens[accountId] = { ...result.tokens, ...exchangingClient.credentials }
       this.save()
       return { accountId, email: profile.emailAddress }
     } finally {
@@ -162,13 +177,13 @@ export class OAuthVault {
   async accessToken(accountId: string) {
     const cached = this.accessCache.get(accountId)
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token
-    const credentials = this.data.tokens[accountId]
+    const credentials = this.data.googleTokens[accountId]
     if (!credentials) throw new Error('This account needs to be connected again')
     const oauth = this.oauth()
     oauth.setCredentials(credentials)
     const result = await oauth.getAccessToken()
     if (!result.token) throw new Error('Google did not provide an access token')
-    this.data.tokens[accountId] = { ...credentials, ...oauth.credentials }
+    this.data.googleTokens[accountId] = { ...credentials, ...oauth.credentials }
     this.save()
     this.accessCache.set(accountId, {
       token: result.token,
@@ -177,8 +192,121 @@ export class OAuthVault {
     return result.token
   }
 
+  microsoftStatus(): GmailCredentialStatus {
+    const clientId = this.data.microsoftConfig?.clientId
+    return { configured: Boolean(clientId), clientIdHint: clientId ? `${clientId.slice(0, 8)}…${clientId.slice(-4)}` : undefined }
+  }
+
+  configureMicrosoft(clientId: string) {
+    const value = clientId.trim()
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) throw new Error('Enter the Application (client) ID from Microsoft Entra')
+    this.data.microsoftConfig = { clientId: value }
+    this.save()
+    return this.microsoftStatus()
+  }
+
+  async authorizeMicrosoft() {
+    const clientId = this.data.microsoftConfig?.clientId
+    if (!clientId) throw new Error('Configure the Microsoft Entra application client ID first')
+    const verifier = randomBytes(64).toString('base64url')
+    const challenge = createHash('sha256').update(verifier).digest('base64url')
+    const state = randomBytes(32).toString('base64url')
+    const callback = await new Promise<{ redirectUri: string; code: Promise<string>; close: () => void }>((resolve, reject) => {
+      let settle: ((code: string) => void) | undefined
+      let fail: ((error: Error) => void) | undefined
+      const code = new Promise<string>((resolveCode, rejectCode) => { settle = resolveCode; fail = rejectCode })
+      const server = createServer((request, response) => {
+        const url = new URL(request.url ?? '/', 'http://localhost')
+        if (url.searchParams.get('state') !== state) {
+          response.writeHead(400).end('Invalid OAuth state. You can close this tab.')
+          fail?.(new Error('Microsoft returned an invalid OAuth state'))
+          return
+        }
+        const returnedCode = url.searchParams.get('code')
+        const oauthError = url.searchParams.get('error_description') ?? url.searchParams.get('error')
+        if (!returnedCode || oauthError) {
+          response.writeHead(400).end('Aerio was not authorized. You can close this tab.')
+          fail?.(new Error(oauthError ?? 'Microsoft did not return an authorization code'))
+          return
+        }
+        response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+          .end('<!doctype html><title>Aerio connected</title><style>body{font:16px system-ui;margin:4rem}h1{color:#176b55}</style><h1>Microsoft account connected</h1><p>You can close this tab and return to Aerio.</p>')
+        settle?.(returnedCode)
+      })
+      const timeout = setTimeout(() => { server.close(); fail?.(new Error('Microsoft sign-in timed out after five minutes')) }, 5 * 60_000)
+      server.on('error', reject)
+      server.listen(0, 'localhost', () => {
+        const address = server.address()
+        if (!address || typeof address === 'string') return reject(new Error('Could not start the local Microsoft sign-in callback'))
+        resolve({ redirectUri: `http://localhost:${address.port}`, code, close: () => { clearTimeout(timeout); server.close() } })
+      })
+    })
+    const scopes = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send']
+    const authorization = new URL('https://login.microsoftonline.com/common/oauth2/v2.0/authorize')
+    authorization.search = new URLSearchParams({ client_id: clientId, response_type: 'code', redirect_uri: callback.redirectUri, response_mode: 'query', scope: scopes.join(' '), state, code_challenge: challenge, code_challenge_method: 'S256', prompt: 'select_account' }).toString()
+    await shell.openExternal(authorization.toString())
+    try {
+      const code = await callback.code
+      const tokenResponse = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ client_id: clientId, grant_type: 'authorization_code', code, redirect_uri: callback.redirectUri, code_verifier: verifier, scope: scopes.join(' ') })
+      })
+      const token = await tokenResponse.json() as { access_token?: string; refresh_token?: string; expires_in?: number; error_description?: string }
+      if (!tokenResponse.ok || !token.access_token || !token.refresh_token) throw new Error(token.error_description ?? 'Microsoft did not return renewable credentials')
+      const profileResponse = await fetch('https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName', { headers: { Authorization: `Bearer ${token.access_token}` } })
+      const profile = await profileResponse.json() as { id?: string; displayName?: string; mail?: string; userPrincipalName?: string; error?: { message?: string } }
+      if (!profileResponse.ok || !profile.id) throw new Error(profile.error?.message ?? 'Could not read the Microsoft profile')
+      const email = profile.mail ?? profile.userPrincipalName
+      if (!email) throw new Error('The Microsoft account does not expose a mailbox address')
+      const accountId = createHash('sha256').update(`microsoft:${profile.id}`).digest('hex').slice(0, 24)
+      this.data.microsoftTokens[accountId] = { accessToken: token.access_token, refreshToken: token.refresh_token, expiresAt: Date.now() + Number(token.expires_in ?? 3600) * 1_000 }
+      this.accessCache.set(accountId, { token: token.access_token, expiresAt: this.data.microsoftTokens[accountId].expiresAt })
+      this.save()
+      return { accountId, email, displayName: profile.displayName ?? email.split('@')[0] }
+    } finally {
+      callback.close()
+    }
+  }
+
+  async microsoftAccessToken(accountId: string) {
+    const cached = this.accessCache.get(accountId)
+    if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token
+    const clientId = this.data.microsoftConfig?.clientId
+    const current = this.data.microsoftTokens[accountId]
+    if (!clientId || !current) throw new Error('This Microsoft account needs to be connected again')
+    const response = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: clientId, grant_type: 'refresh_token', refresh_token: current.refreshToken, scope: 'openid profile offline_access User.Read Mail.ReadWrite Mail.Send' })
+    })
+    const token = await response.json() as { access_token?: string; refresh_token?: string; expires_in?: number; error_description?: string }
+    if (!response.ok || !token.access_token) throw new Error(token.error_description ?? 'Microsoft token refresh failed')
+    const next = { accessToken: token.access_token, refreshToken: token.refresh_token ?? current.refreshToken, expiresAt: Date.now() + Number(token.expires_in ?? 3600) * 1_000 }
+    this.data.microsoftTokens[accountId] = next
+    this.accessCache.set(accountId, { token: next.accessToken, expiresAt: next.expiresAt })
+    this.save()
+    return next.accessToken
+  }
+
+  storeImap(accountId: string, input: ImapAccountInput) {
+    this.data.imapAccounts[accountId] = input
+    this.save()
+  }
+
+  imapCredential(accountId: string) {
+    const config = this.data.imapAccounts[accountId]
+    if (!config) throw new Error('This mail account needs to be connected again')
+    return config
+  }
+
+  async credential(accountId: string, provider: MailProviderId) {
+    if (provider === 'gmail') return { type: 'oauth' as const, accessToken: await this.accessToken(accountId) }
+    if (provider === 'microsoft') return { type: 'oauth' as const, accessToken: await this.microsoftAccessToken(accountId) }
+    return { type: 'imap' as const, config: this.imapCredential(accountId) }
+  }
+
   async remove(accountId: string) {
-    const credentials = this.data.tokens[accountId]
+    const credentials = this.data.googleTokens[accountId]
     if (credentials) {
       try {
         const oauth = this.oauth()
@@ -188,7 +316,9 @@ export class OAuthVault {
         // Local removal still succeeds if Google is unreachable.
       }
     }
-    delete this.data.tokens[accountId]
+    delete this.data.googleTokens[accountId]
+    delete this.data.microsoftTokens[accountId]
+    delete this.data.imapAccounts[accountId]
     this.accessCache.delete(accountId)
     this.save()
   }

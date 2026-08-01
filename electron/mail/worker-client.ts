@@ -5,10 +5,11 @@ import type {
   MailWorkerResult,
   WorkerEventMessage,
   WorkerResponse,
-  WorkerTokenRequest
+  WorkerCredentialRequest,
+  AccountCredential
 } from '../mail-protocol'
 
-type WorkerMessage = WorkerResponse | WorkerEventMessage | WorkerTokenRequest
+type WorkerMessage = WorkerResponse | WorkerEventMessage | WorkerCredentialRequest
 
 export class MailWorkerClient {
   private readonly worker: Worker
@@ -16,7 +17,7 @@ export class MailWorkerClient {
 
   constructor(
     workerPath: string,
-    private readonly tokenProvider: (accountId: string) => Promise<string>,
+    private readonly credentialProvider: (accountId: string) => Promise<AccountCredential>,
     private readonly eventHandler: (event: GmailWorkerEvent) => void
   ) {
     this.worker = new Worker(workerPath)
@@ -38,12 +39,12 @@ export class MailWorkerClient {
       this.eventHandler(message.event)
       return
     }
-    if (message.kind === 'token-request') {
+    if (message.kind === 'credential-request') {
       try {
-        const token = await this.tokenProvider(message.accountId)
-        this.worker.postMessage({ kind: 'token-response', id: message.id, token })
+        const credential = await this.credentialProvider(message.accountId)
+        this.worker.postMessage({ kind: 'credential-response', id: message.id, credential })
       } catch (error) {
-        this.worker.postMessage({ kind: 'token-response', id: message.id, error: error instanceof Error ? error.message : String(error) })
+        this.worker.postMessage({ kind: 'credential-response', id: message.id, error: error instanceof Error ? error.message : String(error) })
       }
       return
     }

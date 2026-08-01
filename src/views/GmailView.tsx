@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import GmailComposeModal from '../components/GmailComposeModal'
+import MailAccountSetupModal from '../components/MailAccountSetupModal'
 import type {
   GmailAccountSummary,
   GmailCredentialStatus,
@@ -54,11 +55,12 @@ export default function GmailView({ onToast }: GmailViewProps) {
   const [compose, setCompose] = useState<{ reply?: GmailThreadDetail }>()
   const [pending, setPending] = useState<PendingOperation>()
   const [remoteImages, setRemoteImages] = useState(false)
+  const [accountSetup, setAccountSetup] = useState(false)
   const selected = page.items.find((item) => `${item.accountId}:${item.id}` === selectedKey)
   const selectedAccount = accounts.find((item) => item.id === selected?.accountId)
 
   const refreshAccounts = useCallback(async () => {
-    const next = await window.aerio.gmail.accounts.list()
+    const next = await window.aerio.mail.accounts.list()
     setAccounts(next)
     return next
   }, [])
@@ -70,7 +72,7 @@ export default function GmailView({ onToast }: GmailViewProps) {
     }
     setLoading(true)
     try {
-      const next = await window.aerio.gmail.mail.list({
+      const next = await window.aerio.mail.mail.list({
         folder,
         accountIds: accountId === 'all' ? undefined : [accountId],
         labelId,
@@ -91,24 +93,24 @@ export default function GmailView({ onToast }: GmailViewProps) {
 
   useEffect(() => {
     void Promise.all([
-      window.aerio.gmail.credentials.status(),
-      window.aerio.gmail.accounts.list(),
-      window.aerio.gmail.sync.progress()
+      window.aerio.mail.credentials.status(),
+      window.aerio.mail.accounts.list(),
+      window.aerio.mail.sync.progress()
     ]).then(([credentialStatus, accountList, progress]) => {
       const visible = accountList
       setCredentials(credentialStatus)
       setAccounts(visible)
       setSync(progress)
-      return window.aerio.gmail.mail.labels(visible.map((item) => item.id))
+      return window.aerio.mail.mail.labels(visible.map((item) => item.id))
     }).then(setLabels).catch((error) => onToast(error instanceof Error ? error.message : 'Gmail could not start')).finally(() => setLoading(false))
   }, [onToast])
 
   useEffect(() => {
-    const unsubscribe = window.aerio.gmail.onEvent((event) => {
+    const unsubscribe = window.aerio.mail.onEvent((event) => {
       if (event.type === 'accounts-changed') setAccounts(event.payload)
       if (event.type === 'sync-progress') setSync((items) => [...items.filter((item) => item.accountId !== event.payload.accountId), event.payload])
       if (event.type === 'mail-changed') void loadPage()
-      if (event.type === 'operation' && event.payload.status === 'failed') onToast(event.payload.error ?? 'Gmail rejected the change')
+      if (event.type === 'operation' && event.payload.status === 'failed') onToast(event.payload.error ?? 'The mail provider rejected the change')
       if (event.type === 'operation' && event.payload.id === pending?.id && event.payload.status === 'succeeded') setPending(undefined)
       if (event.type === 'connectivity' && !event.payload.online) onToast('Offline — changes will be sent when you reconnect')
     })
@@ -133,7 +135,7 @@ export default function GmailView({ onToast }: GmailViewProps) {
       return
     }
     setRemoteImages(false)
-    void window.aerio.gmail.mail.thread(selected.accountId, selected.id).then(setThread).catch((error) => onToast(error instanceof Error ? error.message : 'Conversation could not be opened'))
+    void window.aerio.mail.mail.thread(selected.accountId, selected.id).then(setThread).catch((error) => onToast(error instanceof Error ? error.message : 'Conversation could not be opened'))
     if (selected.unread) void applyAction('read', selected.accountId, [selected.id], false)
     // The action helper is intentionally excluded: selecting a row is the trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -141,7 +143,7 @@ export default function GmailView({ onToast }: GmailViewProps) {
 
   const importCredentials = async () => {
     try {
-      setCredentials(await window.aerio.gmail.credentials.import())
+      setCredentials(await window.aerio.mail.credentials.import())
     } catch (error) {
       onToast(error instanceof Error ? error.message : 'Credentials could not be imported')
     }
@@ -150,7 +152,7 @@ export default function GmailView({ onToast }: GmailViewProps) {
   const connect = async () => {
     setConnecting(true)
     try {
-      await window.aerio.gmail.accounts.connect()
+      await window.aerio.mail.accounts.connect()
       await refreshAccounts()
       onToast('Google account connected — offline sync has started')
     } catch (error) {
@@ -163,7 +165,7 @@ export default function GmailView({ onToast }: GmailViewProps) {
   async function applyAction(action: MailActionKind, targetAccount = selected?.accountId, threadIds = selected ? [selected.id] : [], showUndo = true) {
     if (!targetAccount || !threadIds.length) return
     try {
-      const operation = await window.aerio.gmail.mail.action({ accountId: targetAccount, threadIds, action })
+      const operation = await window.aerio.mail.mail.action({ accountId: targetAccount, threadIds, action })
       if (showUndo) setPending(operation)
       await loadPage()
     } catch (error) {
@@ -173,7 +175,7 @@ export default function GmailView({ onToast }: GmailViewProps) {
 
   const undo = async () => {
     if (!pending) return
-    const restored = await window.aerio.gmail.mail.undo(pending.id)
+    const restored = await window.aerio.mail.mail.undo(pending.id)
     if (restored) {
       onToast('Change undone')
       setPending(undefined)
@@ -184,30 +186,31 @@ export default function GmailView({ onToast }: GmailViewProps) {
   const loadRemoteImages = async () => {
     if (!selected) return
     setRemoteImages(true)
-    setThread(await window.aerio.gmail.mail.thread(selected.accountId, selected.id, true))
+    setThread(await window.aerio.mail.mail.thread(selected.accountId, selected.id, true))
   }
 
   const addAccount = async () => {
-    if (!credentials.configured) {
-      onToast('Import your Google Desktop OAuth credentials first')
-      return
-    }
-    await connect()
+    setAccountSetup(true)
+  }
+
+  const accountConnected = async () => {
+    const next = await refreshAccounts()
+    setLabels(await window.aerio.mail.mail.labels(next.map((account) => account.id)))
   }
 
   const disconnect = async (account: GmailAccountSummary) => {
     const keep = window.confirm(`Disconnect ${account.email}?\n\nOK keeps its downloaded mail as a read-only archive. Cancel lets you choose whether to delete it.`)
     if (keep) {
-      await window.aerio.gmail.accounts.disconnect(account.id, 'archive')
-    } else if (window.confirm(`Delete all downloaded mail for ${account.email}? Gmail itself will not be changed.`)) {
-      await window.aerio.gmail.accounts.disconnect(account.id, 'delete')
+      await window.aerio.mail.accounts.disconnect(account.id, 'archive')
+    } else if (window.confirm(`Delete all downloaded mail for ${account.email}? The provider mailbox itself will not be changed.`)) {
+      await window.aerio.mail.accounts.disconnect(account.id, 'delete')
     } else return
     await refreshAccounts()
     onToast('Account disconnected')
   }
 
   const showStorage = async () => {
-    const stats = await window.aerio.gmail.storage()
+    const stats = await window.aerio.mail.storage()
     onToast(`${formatFileSize(stats.totalBytes)} stored offline · ${formatFileSize(stats.freeBytes)} free`)
   }
 
@@ -216,16 +219,13 @@ export default function GmailView({ onToast }: GmailViewProps) {
       <div className="gmail-onboarding">
         <section>
           <span className="gmail-mark"><Mail size={28} /></span>
-          <p className="eyebrow">Aerio Gmail alpha</p>
-          <h1>Your real inbox, stored locally.</h1>
-          <p>Aerio downloads your Gmail messages and attachments for offline use. OAuth tokens are protected by Windows secure storage, and remote images stay blocked until you choose to load them.</p>
-          <ol>
-            <li className={credentials.configured ? 'done' : ''}><strong>Import Google Desktop OAuth JSON</strong><span>Create a Desktop app credential in Google Cloud, then select the downloaded JSON file.</span><button className="button ghost" onClick={() => void importCredentials()}>{credentials.configured ? 'Replace credentials' : 'Import JSON'}</button></li>
-            <li className={accounts.length ? 'done' : ''}><strong>Connect a Google account</strong><span>Your browser handles sign-in. Aerio requests Gmail modify access and never sees your password.</span><button className="button primary" disabled={!credentials.configured || connecting} onClick={() => void connect()}>{connecting ? <LoaderCircle className="spin" size={16} /> : <UserPlus size={16} />}{connecting ? 'Waiting for Google…' : 'Connect Gmail'}</button></li>
-            <li><strong>Let the first sync run</strong><span>A 100,000-message mailbox can take seven hours or more because Aerio stays within Gmail’s per-user quota. You can pause and resume at any time.</span></li>
-          </ol>
-          <small>Use an OAuth consent screen set to “In production” for personal use; Google Testing-mode refresh tokens expire after seven days.</small>
+          <p className="eyebrow">Aerio mail</p>
+          <h1>Your inboxes, together and available offline.</h1>
+          <p>Connect Gmail, Outlook, iCloud, Yahoo, Fastmail, Proton Bridge, or another IMAP/SMTP provider. Aerio protects credentials with Windows secure storage and blocks remote images until you load them.</p>
+          <button className="button primary onboarding-connect" onClick={() => setAccountSetup(true)}><UserPlus size={16} /> Add your first account</button>
+          <small>OAuth providers open sign-in in your browser. iCloud, Yahoo, and Fastmail use provider-issued app passwords.</small>
         </section>
+        {accountSetup && <MailAccountSetupModal onClose={() => setAccountSetup(false)} onConnected={accountConnected} onToast={onToast} />}
       </div>
     )
   }
@@ -239,7 +239,7 @@ export default function GmailView({ onToast }: GmailViewProps) {
   return (
     <div className="workspace mail-workspace real-mail">
       <aside className="context-sidebar">
-        <button className="compose-button" disabled={!accounts.some((account) => !account.archived)} onClick={() => setCompose({})}><Plus size={18} /> New Gmail message</button>
+        <button className="compose-button" disabled={!accounts.some((account) => !account.archived)} onClick={() => setCompose({})}><Plus size={18} /> New message</button>
         <div className="sidebar-group">
           <span className="sidebar-label">Mailboxes</span>
           {folderButton('inbox', <Inbox size={17} />)}
@@ -255,8 +255,8 @@ export default function GmailView({ onToast }: GmailViewProps) {
         <div className="sidebar-group">
           <span className="sidebar-label">Accounts</span>
           <button className={`sidebar-item ${accountId === 'all' ? 'active' : ''}`} onClick={() => setAccountId('all')}><span className="account-dot multi" /><span>All accounts</span></button>
-          {accounts.map((account) => <button className={`sidebar-item gmail-account-row ${accountId === account.id ? 'active' : ''}`} key={account.id} onClick={() => setAccountId(account.id)} title={`${account.email}${account.archived ? ' · offline archive' : ''}`}><span className="account-dot" style={{ background: account.color }} /><span>{account.email}{account.archived ? ' · archive' : ''}</span><i className={`account-state ${account.status}`} /></button>)}
-          <button className="sidebar-item" onClick={() => void addAccount()}><UserPlus size={16} /><span>Add Google account</span></button>
+          {accounts.map((account) => <button className={`sidebar-item gmail-account-row ${accountId === account.id ? 'active' : ''}`} key={account.id} onClick={() => setAccountId(account.id)} title={`${account.email} · ${account.provider}${account.archived ? ' · offline archive' : ''}`}><span className="account-dot" style={{ background: account.color }} /><span>{account.email}{account.archived ? ' · archive' : ''}<small className="provider-name">{account.provider}</small></span><i className={`account-state ${account.status}`} /></button>)}
+          <button className="sidebar-item" onClick={() => void addAccount()}><UserPlus size={16} /><span>Add mail account</span></button>
         </div>
           {visibleLabels.length > 0 && <div className="sidebar-group"><span className="sidebar-label">Labels</span>{visibleLabels.map((label) => <button className={`sidebar-item ${labelId === label.id && accountId === label.accountId ? 'active' : ''}`} key={`${label.accountId}:${label.id}`} onClick={() => { setAccountId(label.accountId); setLabelId(label.id); setFolder('all') }}><Tag size={15} /><span>{label.name}</span></button>)}</div>}
         <div className="gmail-sidebar-footer">
@@ -268,13 +268,13 @@ export default function GmailView({ onToast }: GmailViewProps) {
       <section className="mail-list-panel">
         <header className="panel-heading">
           <div><h1>{labels.find((label) => label.id === labelId && label.accountId === accountId)?.name ?? folderNames[folder]}</h1><p>{page.total.toLocaleString()} conversations</p></div>
-          <button className="icon-button" title="Check for mail" onClick={() => void window.aerio.gmail.sync.start(accountId === 'all' ? undefined : accountId)}><RefreshCw size={17} /></button>
+          <button className="icon-button" title="Check for mail" onClick={() => void window.aerio.mail.sync.start(accountId === 'all' ? undefined : accountId)}><RefreshCw size={17} /></button>
         </header>
         <div className="gmail-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search offline mail…" /><span>FTS</span></div>
         {activeProgress.map((item) => {
           const account = accounts.find((entry) => entry.id === item.accountId)
           const percent = item.total ? Math.round(item.completed / item.total * 100) : 0
-          return <div className="sync-strip" key={item.accountId}><span><strong>{account?.email ?? 'Gmail'}</strong><small>{item.message ?? item.phase} · {item.completed.toLocaleString()}/{item.total.toLocaleString()}</small></span><progress max={Math.max(item.total, 1)} value={item.completed} /><button className="icon-button" onClick={() => void (item.phase === 'paused' ? window.aerio.gmail.sync.resume(item.accountId) : window.aerio.gmail.sync.pause(item.accountId))}>{item.phase === 'paused' ? <Play size={14} /> : <Pause size={14} />}</button><em>{percent}%</em></div>
+          return <div className="sync-strip" key={item.accountId}><span><strong>{account?.email ?? 'Mail'}</strong><small>{item.message ?? item.phase} · {item.completed.toLocaleString()}/{item.total.toLocaleString()}</small></span><progress max={Math.max(item.total, 1)} value={item.completed} /><button className="icon-button" onClick={() => void (item.phase === 'paused' ? window.aerio.mail.sync.resume(item.accountId) : window.aerio.mail.sync.pause(item.accountId))}>{item.phase === 'paused' ? <Play size={14} /> : <Pause size={14} />}</button><em>{percent}%</em></div>
         })}
         <div className="message-list">
           {page.items.map((item) => (
@@ -312,15 +312,16 @@ export default function GmailView({ onToast }: GmailViewProps) {
             {thread.messages.map((message) => <section className="gmail-message" key={message.id}>
               <header className="sender-card"><span className="avatar large">{(message.fromName || message.fromEmail).split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase()}</span><span><strong>{message.fromName || message.fromEmail}</strong><small>{message.fromEmail} · {new Date(message.date).toLocaleString()}</small></span><span className="spacer" />{!selectedAccount?.archived && <button className="button ghost small" onClick={() => setCompose({ reply: thread })}><Reply size={15} /> Reply</button>}</header>
               {message.sanitizedHtml ? <div className="message-body gmail-html" dangerouslySetInnerHTML={{ __html: message.sanitizedHtml }} /> : <div className="message-body gmail-text">{message.text}</div>}
-              {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{formatFileSize(attachment.size)}</small></span><button className="icon-button" title="Open" onClick={() => void window.aerio.gmail.attachments.open(message.accountId, message.id, attachment.id, attachment.filename)}><Download size={16} /></button><button className="button ghost small" onClick={() => void window.aerio.gmail.attachments.save(message.accountId, message.id, attachment.id, attachment.filename)}>Save as</button></div>)}</div>}
+              {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{formatFileSize(attachment.size)}</small></span><button className="icon-button" title="Open" onClick={() => void window.aerio.mail.attachments.open(message.accountId, message.id, attachment.id, attachment.filename)}><Download size={16} /></button><button className="button ghost small" onClick={() => void window.aerio.mail.attachments.save(message.accountId, message.id, attachment.id, attachment.filename)}>Save as</button></div>)}</div>}
             </section>)}
             {!selectedAccount?.archived && <div className="quick-actions"><button className="button ghost" onClick={() => setCompose({ reply: thread })}><Reply size={16} /> Reply</button></div>}
           </article>
         </> : <div className="empty-state grow">{accounts.some((item) => item.status === 'syncing') ? <><LoaderCircle className="spin" size={34} /><h3>Downloading your mailbox</h3><p>Conversations appear here as soon as they are available.</p></> : <><Inbox size={34} /><h3>Select a conversation</h3><p>Choose a conversation to read it here.</p></>}</div>}
       </section>
 
-      {pending && <div className="undo-toast"><span>Change queued for Gmail</span><button onClick={() => void undo()}><Undo2 size={15} /> Undo</button><button onClick={() => setPending(undefined)}>Dismiss</button></div>}
+      {pending && <div className="undo-toast"><span>Mail change queued</span><button onClick={() => void undo()}><Undo2 size={15} /> Undo</button><button onClick={() => setPending(undefined)}>Dismiss</button></div>}
       {compose && <GmailComposeModal accounts={accounts.filter((account) => !account.archived)} replyTo={compose.reply} onClose={() => setCompose(undefined)} onSent={() => void loadPage()} onToast={onToast} />}
+      {accountSetup && <MailAccountSetupModal onClose={() => setAccountSetup(false)} onConnected={accountConnected} onToast={onToast} />}
     </div>
   )
 }

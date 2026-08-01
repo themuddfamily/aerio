@@ -1041,7 +1041,7 @@ kbd {
   border-top: 1px solid var(--line);
 }
 
-/* Real Gmail workspace */
+/* Real mail workspace */
 .real-mail .context-sidebar {
   position: relative;
   display: flex;
@@ -1365,6 +1365,125 @@ kbd {
 .gmail-onboarding li span { grid-column: 1; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .gmail-onboarding li .button { grid-column: 2; grid-row: 1 / span 2; }
 .gmail-onboarding > section > small { display: block; color: var(--muted); font-size: 9.5px; line-height: 1.5; }
+
+.onboarding-connect { margin: 0 0 16px; }
+
+.provider-name {
+  display: block;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 7.5px;
+  font-weight: 650;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.mail-account-setup {
+  width: min(780px, 94vw);
+  min-height: 430px;
+}
+
+.setup-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.setup-heading > div:last-child { min-width: 0; }
+.setup-heading p { max-width: 560px; line-height: 1.35; }
+
+.setup-mark {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: white;
+  background: linear-gradient(145deg, var(--accent), #438f78);
+}
+
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.provider-grid > button {
+  min-height: 92px;
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  grid-template-rows: auto 1fr;
+  gap: 4px 11px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  text-align: left;
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.provider-grid > button:hover { border-color: var(--accent); background: var(--accent-soft); }
+.provider-grid > button > span { grid-row: 1 / span 2; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; color: var(--accent-text); background: var(--surface); }
+.provider-grid strong { font-size: 12px; }
+.provider-grid small { color: var(--muted); font-size: 9.5px; line-height: 1.4; }
+
+.provider-setup-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px;
+  overflow-y: auto;
+}
+
+.setup-step {
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  align-items: center;
+  gap: 11px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-2);
+}
+
+.setup-step > span {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.setup-step.complete > span { color: white; background: var(--success); }
+.setup-step strong { font-size: 11px; }
+.setup-step p, .setup-note { margin: 4px 0 0; color: var(--muted); font-size: 9.5px; line-height: 1.45; }
+
+.field { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 9.5px; font-weight: 650; }
+.field input, .field select { width: 100%; height: 37px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; color: var(--text); background: var(--surface-2); font-size: 11px; }
+.field input:focus, .field select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.server-fields { display: flex; align-items: end; gap: 8px; padding: 11px; border: 1px solid var(--line); border-radius: 10px; }
+.server-fields > strong { width: 90px; align-self: center; color: var(--text-soft); font-size: 9.5px; line-height: 1.3; }
+.server-fields .grow { flex: 1; }
+.server-fields .port { width: 76px; }
+.server-fields .security { width: 100px; }
+.setup-actions { display: flex; justify-content: flex-end; padding-top: 4px; }
+
+@media (max-width: 700px) {
+  .provider-grid, .field-grid { grid-template-columns: 1fr; }
+  .server-fields { flex-wrap: wrap; }
+  .server-fields > strong { width: 100%; }
+  .setup-step { grid-template-columns: 30px 1fr; }
+  .setup-step .button { grid-column: 2; justify-self: start; }
+}
 
 .gmail-compose {
   width: min(760px, 94vw);

@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, shell, Tray } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -14,6 +15,7 @@ import type {
   GmailDraftInput,
   GmailLabel,
   GmailThreadDetail,
+  ImapAccountInput,
   MailPage,
   MailQuery,
   MailStorageStats,
@@ -21,6 +23,8 @@ import type {
   SyncProgress
 } from '../src/gmail-types'
 import { OAuthVault } from './mail/oauth-vault'
+import { ImapSmtpClient } from './mail/imap-client'
+import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
 import { MailWorkerClient } from './mail/worker-client'
 
 protocol.registerSchemesAsPrivileged([
@@ -33,6 +37,7 @@ let database: Database | null = null
 let databasePath = ''
 let oauthVault: OAuthVault | null = null
 let mailWorker: MailWorkerClient | null = null
+const accountProviders = new Map<string, GmailAccountSummary['provider']>()
 const approvedAttachmentPaths = new Set<string>()
 let quitting = false
 let lastBoundsWrite: NodeJS.Timeout | undefined
@@ -92,12 +97,12 @@ async function initializeDatabase() {
 }
 
 function requireMailWorker() {
-  if (!mailWorker) throw new Error('The Gmail engine is not ready')
+  if (!mailWorker) throw new Error('The mail engine is not ready')
   return mailWorker
 }
 
 function requireVault() {
-  if (!oauthVault) throw new Error('Secure Gmail storage is not ready')
+  if (!oauthVault) throw new Error('Secure mail storage is not ready')
   return oauthVault
 }
 
@@ -133,7 +138,7 @@ async function initializeMail() {
   oauthVault = new OAuthVault(join(userData, 'oauth-vault.dat'))
   mailWorker = new MailWorkerClient(
     join(__dirname, 'mail-worker.js'),
-    (accountId) => requireVault().accessToken(accountId),
+    (accountId) => requireVault().credential(accountId, accountProviders.get(accountId) ?? 'gmail'),
     (event) => mainWindow?.webContents.send('gmail:event', event)
   )
   await mailWorker.request({
@@ -143,6 +148,13 @@ async function initializeMail() {
       contentPath: join(userData, 'mail')
     }
   })
+  const accounts = await mailWorker.request<GmailAccountSummary[]>({ type: 'accounts:list' })
+  for (const account of accounts) accountProviders.set(account.id, account.provider)
+}
+
+const accountColors = ['#1d7a62', '#3b6fd8', '#8a5dc7', '#c2673d', '#b04d73', '#5d7589']
+function accountColor(accountId: string) {
+  return accountColors[Number.parseInt(accountId.slice(0, 2), 16) % accountColors.length]
 }
 
 function registerRemoteImageProtocol() {
@@ -342,6 +354,9 @@ function registerIpc() {
   ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false)
 
   ipcMain.handle('gmail:credentials:status', () => requireVault().status())
+  ipcMain.handle('mail:credentials:microsoft-status', () => requireVault().microsoftStatus())
+  ipcMain.handle('mail:credentials:microsoft-configure', (_event, clientId: string) => requireVault().configureMicrosoft(clientId))
+  ipcMain.handle('mail:providers:presets', () => PROVIDER_PRESETS)
   ipcMain.handle('gmail:credentials:import', async () => {
     const options: Electron.OpenDialogOptions = {
       title: 'Import Google Desktop OAuth credentials',
@@ -355,22 +370,80 @@ function registerIpc() {
   ipcMain.handle('gmail:accounts:list', () => requireMailWorker().request<GmailAccountSummary[]>({ type: 'accounts:list' }))
   ipcMain.handle('gmail:accounts:connect', async () => {
     const authorized = await requireVault().authorize()
-    const colors = ['#1d7a62', '#3b6fd8', '#8a5dc7', '#c2673d', '#b04d73', '#5d7589']
     const account: GmailAccountSummary = {
       id: authorized.accountId,
+      provider: 'gmail',
       email: authorized.email,
       displayName: authorized.email.split('@')[0],
-      color: colors[Number.parseInt(authorized.accountId.slice(0, 2), 16) % colors.length],
+      color: accountColor(authorized.accountId),
       status: 'connecting',
       archived: false
     }
-    await requireMailWorker().request({ type: 'accounts:upsert', payload: account })
-    await requireMailWorker().request({ type: 'sync:start', payload: { accountId: account.id } })
-    return account
+    accountProviders.set(account.id, account.provider)
+    try {
+      await requireMailWorker().request({ type: 'accounts:upsert', payload: account })
+      await requireMailWorker().request({ type: 'sync:start', payload: { accountId: account.id } })
+      return account
+    } catch (error) {
+      accountProviders.delete(account.id)
+      await requireVault().remove(account.id)
+      throw error
+    }
+  })
+  ipcMain.handle('mail:accounts:connect-microsoft', async () => {
+    const authorized = await requireVault().authorizeMicrosoft()
+    const account: GmailAccountSummary = {
+      id: authorized.accountId,
+      provider: 'microsoft',
+      email: authorized.email,
+      displayName: authorized.displayName,
+      color: accountColor(authorized.accountId),
+      status: 'connecting',
+      archived: false
+    }
+    accountProviders.set(account.id, account.provider)
+    try {
+      await requireMailWorker().request({ type: 'accounts:upsert', payload: account })
+      await requireMailWorker().request({ type: 'accounts:verify', payload: { accountId: account.id } })
+      await requireMailWorker().request({ type: 'sync:start', payload: { accountId: account.id } })
+      return account
+    } catch (error) {
+      accountProviders.delete(account.id)
+      await requireVault().remove(account.id)
+      await requireMailWorker().request({ type: 'accounts:disconnect', payload: { accountId: account.id, mode: 'delete' } })
+      throw error
+    }
+  })
+  ipcMain.handle('mail:accounts:connect-imap', async (_event, rawInput: ImapAccountInput) => {
+    const input = validateImapAccount(rawInput)
+    await new ImapSmtpClient(input).verify()
+    const accountId = createHash('sha256').update(`${input.provider}:${input.email}:${input.username}:${input.imapHost}`).digest('hex').slice(0, 24)
+    const account: GmailAccountSummary = {
+      id: accountId,
+      provider: input.provider,
+      email: input.email,
+      displayName: input.displayName?.trim() || input.email.split('@')[0],
+      color: accountColor(accountId),
+      status: 'connecting',
+      archived: false
+    }
+    requireVault().storeImap(accountId, input)
+    accountProviders.set(account.id, account.provider)
+    try {
+      await requireMailWorker().request({ type: 'accounts:upsert', payload: account })
+      await requireMailWorker().request({ type: 'sync:start', payload: { accountId } })
+      return account
+    } catch (error) {
+      accountProviders.delete(account.id)
+      await requireVault().remove(account.id)
+      await requireMailWorker().request({ type: 'accounts:disconnect', payload: { accountId, mode: 'delete' } })
+      throw error
+    }
   })
   ipcMain.handle('gmail:accounts:disconnect', async (_event, accountId: string, mode: 'archive' | 'delete') => {
     await requireVault().remove(accountId)
     await requireMailWorker().request({ type: 'accounts:disconnect', payload: { accountId, mode } })
+    accountProviders.delete(accountId)
   })
   ipcMain.handle('gmail:labels:list', (_event, accountIds?: string[]) =>
     requireMailWorker().request<GmailLabel[]>({ type: 'labels:list', payload: { accountIds } }))

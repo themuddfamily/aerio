@@ -46,7 +46,7 @@ export default function GmailComposeModal({ accounts, replyTo, onClose, onSent, 
     if (!accountId || (!to && !subject && !text && !attachments.length)) return
     setStatus('saving')
     const timer = setTimeout(() => {
-      void window.aerio.gmail.drafts.save(input).then((result) => {
+      void window.aerio.mail.drafts.save(input).then((result) => {
         setDraftId(result.id)
         setStatus(result.status === 'failed' ? 'failed' : 'saved')
       }).catch(() => setStatus('failed'))
@@ -68,7 +68,7 @@ export default function GmailComposeModal({ accounts, replyTo, onClose, onSent, 
       return
     }
     setStatus('sending')
-    const result = await window.aerio.gmail.drafts.send(input)
+    const result = await window.aerio.mail.drafts.send(input)
     if (result.status === 'sent') {
       onToast('Message sent')
       onSent()
@@ -84,9 +84,9 @@ export default function GmailComposeModal({ accounts, replyTo, onClose, onSent, 
 
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose() }}>
-      <section className="modal gmail-compose" role="dialog" aria-label="Compose Gmail message">
+      <section className="modal gmail-compose" role="dialog" aria-label="Compose mail message">
         <header className="modal-header">
-          <div><h2>{replyTo ? 'Reply' : 'New Gmail message'}</h2><p>{status === 'saving' ? 'Saving to Gmail…' : status === 'saved' ? 'Draft saved' : status === 'failed' ? 'Draft not saved' : 'Real Gmail'}</p></div>
+          <div><h2>{replyTo ? 'Reply' : 'New message'}</h2><p>{status === 'saving' ? 'Saving draft…' : status === 'saved' ? 'Draft saved' : status === 'failed' ? 'Draft not saved' : 'Real mail'}</p></div>
           <button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button>
         </header>
         <div className="compose">

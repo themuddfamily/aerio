@@ -169,5 +169,5 @@ export interface AerioDesktopApi {
   window: WindowControls
   onWindowState(callback: (maximized: boolean) => void): () => void
   onComposeCommand(callback: () => void): () => void
-  gmail: import('./gmail-types').GmailDesktopApi
+  mail: import('./gmail-types').MailDesktopApi
 }

@@ -1,6 +1,37 @@
 export type GmailAccountStatus = 'connecting' | 'syncing' | 'ready' | 'paused' | 'needs-auth' | 'archived' | 'error'
 export type GmailSyncPhase = 'idle' | 'inventory' | 'downloading' | 'catch-up' | 'incremental' | 'paused' | 'complete' | 'error'
 export type MailActionKind = 'archive' | 'unarchive' | 'read' | 'unread' | 'star' | 'unstar' | 'important' | 'unimportant' | 'trash' | 'untrash' | 'label' | 'unlabel'
+export type MailProviderId = 'gmail' | 'microsoft' | 'icloud' | 'yahoo' | 'fastmail' | 'imap' | 'proton-bridge'
+
+export interface ImapAccountInput {
+  provider: Exclude<MailProviderId, 'gmail' | 'microsoft'>
+  email: string
+  displayName?: string
+  username: string
+  password: string
+  imapHost: string
+  imapPort: number
+  imapSecurity: 'tls' | 'starttls'
+  smtpHost: string
+  smtpPort: number
+  smtpSecurity: 'tls' | 'starttls'
+  allowInvalidCertificates?: boolean
+}
+
+export interface MailProviderPreset {
+  id: MailProviderId
+  name: string
+  description: string
+  auth: 'google-oauth' | 'microsoft-oauth' | 'app-password' | 'password' | 'bridge'
+  imapHost?: string
+  imapPort?: number
+  imapSecurity?: 'tls' | 'starttls'
+  smtpHost?: string
+  smtpPort?: number
+  smtpSecurity?: 'tls' | 'starttls'
+  usernameHint?: string
+  passwordHint?: string
+}
 
 export interface GmailCredentialStatus {
   configured: boolean
@@ -9,6 +40,7 @@ export interface GmailCredentialStatus {
 
 export interface GmailAccountSummary {
   id: string
+  provider: MailProviderId
   email: string
   displayName: string
   avatarUrl?: string
@@ -155,10 +187,15 @@ export interface GmailDesktopApi {
   credentials: {
     status(): Promise<GmailCredentialStatus>
     import(): Promise<GmailCredentialStatus>
+    microsoftStatus(): Promise<GmailCredentialStatus>
+    configureMicrosoft(clientId: string): Promise<GmailCredentialStatus>
   }
+  presets(): Promise<MailProviderPreset[]>
   accounts: {
     list(): Promise<GmailAccountSummary[]>
     connect(): Promise<GmailAccountSummary>
+    connectMicrosoft(): Promise<GmailAccountSummary>
+    connectImap(input: ImapAccountInput): Promise<GmailAccountSummary>
     disconnect(accountId: string, mode: 'archive' | 'delete'): Promise<void>
   }
   mail: {
@@ -185,6 +222,17 @@ export interface GmailDesktopApi {
   storage(): Promise<MailStorageStats>
   onEvent(callback: (event: GmailWorkerEvent) => void): () => void
 }
+
+export type MailDesktopApi = GmailDesktopApi
+export type MailAccountSummary = GmailAccountSummary
+export type MailCredentialStatus = GmailCredentialStatus
+export type MailAttachment = GmailAttachment
+export type MailMessageDetail = GmailMessageDetail
+export type MailThreadDetail = GmailThreadDetail
+export type MailLabel = GmailLabel
+export type MailDraftInput = GmailDraftInput
+export type MailDraftResult = GmailDraftResult
+export type MailWorkerEvent = GmailWorkerEvent
 
 export type GmailWorkerEvent =
   | { type: 'sync-progress'; payload: SyncProgress }

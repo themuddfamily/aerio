@@ -5,6 +5,7 @@ import type {
   GmailLabel,
   GmailThreadDetail,
   GmailWorkerEvent,
+  ImapAccountInput,
   MailPage,
   MailQuery,
   MailStorageStats,
@@ -16,6 +17,7 @@ export type MailWorkerCommand =
   | { type: 'initialize'; payload: { databasePath: string; contentPath: string } }
   | { type: 'accounts:list' }
   | { type: 'accounts:upsert'; payload: GmailAccountSummary }
+  | { type: 'accounts:verify'; payload: { accountId: string } }
   | { type: 'accounts:disconnect'; payload: { accountId: string; mode: 'archive' | 'delete' } }
   | { type: 'labels:list'; payload: { accountIds?: string[] } }
   | { type: 'mail:list'; payload: MailQuery }
@@ -60,16 +62,20 @@ export interface WorkerResponse {
   error?: { code: string; message: string }
 }
 
-export interface WorkerTokenRequest {
-  kind: 'token-request'
+export type AccountCredential =
+  | { type: 'oauth'; accessToken: string }
+  | { type: 'imap'; config: ImapAccountInput }
+
+export interface WorkerCredentialRequest {
+  kind: 'credential-request'
   id: string
   accountId: string
 }
 
-export interface WorkerTokenResponse {
-  kind: 'token-response'
+export interface WorkerCredentialResponse {
+  kind: 'credential-response'
   id: string
-  token?: string
+  credential?: AccountCredential
   error?: string
 }
 

@@ -37,6 +37,8 @@ export interface ParsedMailMessage {
   labelIds: string[]
   sizeEstimate: number
   rawPath: string
+  remoteFolderId?: string
+  remoteUid?: string
   attachments: GmailAttachment[]
 }
 
@@ -102,6 +104,7 @@ export class MailDatabase {
 
       CREATE TABLE IF NOT EXISTS gmail_accounts (
         id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL DEFAULT 'gmail',
         email TEXT NOT NULL UNIQUE,
         display_name TEXT NOT NULL,
         avatar_url TEXT,
@@ -165,6 +168,8 @@ export class MailDatabase {
         label_ids_json TEXT NOT NULL DEFAULT '[]',
         size_estimate INTEGER NOT NULL DEFAULT 0,
         raw_path TEXT NOT NULL,
+        remote_folder_id TEXT,
+        remote_uid TEXT,
         PRIMARY KEY (account_id, id),
         FOREIGN KEY (account_id, thread_id) REFERENCES gmail_threads(account_id, id) ON DELETE CASCADE
       );
@@ -189,6 +194,8 @@ export class MailDatabase {
         status TEXT NOT NULL DEFAULT 'pending',
         attempts INTEGER NOT NULL DEFAULT 0,
         error TEXT,
+        remote_folder_id TEXT,
+        remote_uid TEXT,
         PRIMARY KEY (account_id, message_id)
       );
       CREATE INDEX IF NOT EXISTS gmail_sync_pending ON gmail_sync_items(account_id, status, message_id);
@@ -204,7 +211,8 @@ export class MailDatabase {
         page_token TEXT,
         initial_history_id TEXT,
         paused_reason TEXT,
-        message TEXT
+        message TEXT,
+        provider_state_json TEXT NOT NULL DEFAULT '{}'
       );
 
       CREATE TABLE IF NOT EXISTS gmail_operations (
@@ -258,12 +266,22 @@ export class MailDatabase {
     const messageColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_messages)').all() as { name: string }[]).map((column) => column.name))
     if (!messageColumns.has('header_message_id')) this.db.exec('ALTER TABLE gmail_messages ADD COLUMN header_message_id TEXT')
     if (!messageColumns.has('references_json')) this.db.exec(`ALTER TABLE gmail_messages ADD COLUMN references_json TEXT NOT NULL DEFAULT '[]'`)
-    this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(2, ?)').run(nowIso())
+    if (!messageColumns.has('remote_folder_id')) this.db.exec('ALTER TABLE gmail_messages ADD COLUMN remote_folder_id TEXT')
+    if (!messageColumns.has('remote_uid')) this.db.exec('ALTER TABLE gmail_messages ADD COLUMN remote_uid TEXT')
+    const accountColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_accounts)').all() as { name: string }[]).map((column) => column.name))
+    if (!accountColumns.has('provider')) this.db.exec(`ALTER TABLE gmail_accounts ADD COLUMN provider TEXT NOT NULL DEFAULT 'gmail'`)
+    const inventoryColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_sync_items)').all() as { name: string }[]).map((column) => column.name))
+    if (!inventoryColumns.has('remote_folder_id')) this.db.exec('ALTER TABLE gmail_sync_items ADD COLUMN remote_folder_id TEXT')
+    if (!inventoryColumns.has('remote_uid')) this.db.exec('ALTER TABLE gmail_sync_items ADD COLUMN remote_uid TEXT')
+    const syncColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_sync_state)').all() as { name: string }[]).map((column) => column.name))
+    if (!syncColumns.has('provider_state_json')) this.db.exec(`ALTER TABLE gmail_sync_state ADD COLUMN provider_state_json TEXT NOT NULL DEFAULT '{}'`)
+    this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(3, ?)').run(nowIso())
   }
 
   listAccounts(): GmailAccountSummary[] {
     return (this.stmt('SELECT * FROM gmail_accounts ORDER BY archived, created_at').all() as DatabaseRow[]).map((row) => ({
       id: String(row.id),
+      provider: String(row.provider ?? 'gmail') as GmailAccountSummary['provider'],
       email: String(row.email),
       displayName: String(row.display_name),
       avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined,
@@ -278,12 +296,16 @@ export class MailDatabase {
   upsertAccount(account: GmailAccountSummary) {
     const timestamp = nowIso()
     this.stmt(`
-      INSERT INTO gmail_accounts(id,email,display_name,avatar_url,color,status,archived,last_sync_at,error,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(id) DO UPDATE SET email=excluded.email,display_name=excluded.display_name,avatar_url=excluded.avatar_url,
+      INSERT INTO gmail_accounts(id,provider,email,display_name,avatar_url,color,status,archived,last_sync_at,error,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET provider=excluded.provider,email=excluded.email,display_name=excluded.display_name,avatar_url=excluded.avatar_url,
         color=excluded.color,status=excluded.status,archived=excluded.archived,error=excluded.error,updated_at=excluded.updated_at
-    `).run(account.id, account.email, account.displayName, account.avatarUrl ?? null, account.color, account.status, account.archived ? 1 : 0, account.lastSyncAt ?? null, account.error ?? null, timestamp, timestamp)
+    `).run(account.id, account.provider, account.email, account.displayName, account.avatarUrl ?? null, account.color, account.status, account.archived ? 1 : 0, account.lastSyncAt ?? null, account.error ?? null, timestamp, timestamp)
     this.stmt(`INSERT OR IGNORE INTO gmail_sync_state(account_id,phase,updated_at) VALUES(?,'idle',?)`).run(account.id, timestamp)
+  }
+
+  getAccount(accountId: string) {
+    return this.listAccounts().find((account) => account.id === accountId)
   }
 
   setAccountStatus(accountId: string, status: GmailAccountSummary['status'], error?: string) {
@@ -385,10 +407,21 @@ export class MailDatabase {
     return this.stmt('SELECT * FROM gmail_sync_state WHERE account_id=?').get(accountId) as DatabaseRow | undefined
   }
 
-  addInventory(accountId: string, items: { id: string; threadId: string }[]) {
+  getProviderState<T>(accountId: string, fallback: T): T {
+    const row = this.getSyncCheckpoint(accountId)
+    return json<T>(row?.provider_state_json ? String(row.provider_state_json) : undefined, fallback)
+  }
+
+  setProviderState(accountId: string, state: unknown) {
+    this.stmt('UPDATE gmail_sync_state SET provider_state_json=?,updated_at=? WHERE account_id=?')
+      .run(JSON.stringify(state), nowIso(), accountId)
+  }
+
+  addInventory(accountId: string, items: { id: string; threadId: string; remoteFolderId?: string; remoteUid?: string }[]) {
     this.transaction(() => {
-      const insert = this.stmt(`INSERT OR IGNORE INTO gmail_sync_items(account_id,message_id,thread_id,status) VALUES(?,?,?,'pending')`)
-      for (const item of items) insert.run(accountId, item.id, item.threadId)
+      const insert = this.stmt(`INSERT INTO gmail_sync_items(account_id,message_id,thread_id,status,remote_folder_id,remote_uid) VALUES(?,?,?,'pending',?,?)
+        ON CONFLICT(account_id,message_id) DO UPDATE SET remote_folder_id=excluded.remote_folder_id,remote_uid=excluded.remote_uid`)
+      for (const item of items) insert.run(accountId, item.id, item.threadId, item.remoteFolderId ?? null, item.remoteUid ?? null)
       const total = Number((this.stmt('SELECT COUNT(*) count FROM gmail_sync_items WHERE account_id=?').get(accountId) as DatabaseRow).count)
       this.stmt('UPDATE gmail_sync_state SET total=?,updated_at=? WHERE account_id=?').run(total, nowIso(), accountId)
     })
@@ -414,8 +447,8 @@ export class MailDatabase {
   }
 
   pendingMessageIds(accountId: string, limit: number) {
-    return (this.stmt(`SELECT message_id,thread_id FROM gmail_sync_items WHERE account_id=? AND (status='pending' OR (status='failed' AND attempts<5)) ORDER BY rowid LIMIT ?`).all(accountId, limit) as DatabaseRow[])
-      .map((row) => ({ id: String(row.message_id), threadId: String(row.thread_id) }))
+    return (this.stmt(`SELECT message_id,thread_id,remote_folder_id,remote_uid FROM gmail_sync_items WHERE account_id=? AND (status='pending' OR (status='failed' AND attempts<5)) ORDER BY rowid LIMIT ?`).all(accountId, limit) as DatabaseRow[])
+      .map((row) => ({ id: String(row.message_id), threadId: String(row.thread_id), remoteFolderId: row.remote_folder_id ? String(row.remote_folder_id) : undefined, remoteUid: row.remote_uid ? String(row.remote_uid) : undefined }))
   }
 
   markSyncItem(accountId: string, messageId: string, status: 'complete' | 'pending' | 'failed', error?: string) {
@@ -448,18 +481,19 @@ export class MailDatabase {
         JSON.stringify(message.labelIds), message.id
       )
       this.stmt(`
-        INSERT INTO gmail_messages(account_id,id,thread_id,history_id,internal_date,from_name,from_email,to_json,cc_json,subject,header_message_id,references_json,snippet,body_text,body_html,label_ids_json,size_estimate,raw_path)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO gmail_messages(account_id,id,thread_id,history_id,internal_date,from_name,from_email,to_json,cc_json,subject,header_message_id,references_json,snippet,body_text,body_html,label_ids_json,size_estimate,raw_path,remote_folder_id,remote_uid)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(account_id,id) DO UPDATE SET history_id=excluded.history_id,internal_date=excluded.internal_date,
           from_name=excluded.from_name,from_email=excluded.from_email,to_json=excluded.to_json,cc_json=excluded.cc_json,
           subject=excluded.subject,header_message_id=excluded.header_message_id,references_json=excluded.references_json,
           snippet=excluded.snippet,body_text=excluded.body_text,body_html=excluded.body_html,
-          label_ids_json=excluded.label_ids_json,size_estimate=excluded.size_estimate,raw_path=excluded.raw_path
+          label_ids_json=excluded.label_ids_json,size_estimate=excluded.size_estimate,raw_path=excluded.raw_path,
+          remote_folder_id=excluded.remote_folder_id,remote_uid=excluded.remote_uid
       `).run(
         message.accountId, message.id, message.threadId, message.historyId, message.internalDate,
         message.fromName, message.fromEmail, JSON.stringify(message.to), JSON.stringify(message.cc), message.subject,
         message.messageIdHeader ?? null, JSON.stringify(message.references), message.snippet, message.text, message.html,
-        JSON.stringify(message.labelIds), message.sizeEstimate, message.rawPath
+        JSON.stringify(message.labelIds), message.sizeEstimate, message.rawPath, message.remoteFolderId ?? null, message.remoteUid ?? null
       )
       this.stmt('DELETE FROM gmail_attachments WHERE account_id=? AND message_id=?').run(message.accountId, message.id)
       const insertAttachment = this.stmt('INSERT INTO gmail_attachments(account_id,message_id,id,filename,mime_type,size,content_id) VALUES(?,?,?,?,?,?,?)')
@@ -477,6 +511,35 @@ export class MailDatabase {
     })
   }
 
+  hasMessage(accountId: string, messageId: string) {
+    return Boolean(this.stmt('SELECT 1 found FROM gmail_messages WHERE account_id=? AND id=?').get(accountId, messageId))
+  }
+
+  remoteMessagesForThreads(accountId: string, threadIds: string[]) {
+    if (!threadIds.length) return []
+    const rows = this.db.prepare(`SELECT id,thread_id,remote_folder_id,remote_uid,label_ids_json FROM gmail_messages WHERE account_id=? AND thread_id IN (${threadIds.map(() => '?').join(',')})`).all(accountId, ...threadIds) as DatabaseRow[]
+    return rows.map((row) => ({
+      id: String(row.id),
+      threadId: String(row.thread_id),
+      remoteFolderId: row.remote_folder_id ? String(row.remote_folder_id) : undefined,
+      remoteUid: row.remote_uid ? String(row.remote_uid) : undefined,
+      labelIds: json<string[]>(String(row.label_ids_json), [])
+    }))
+  }
+
+  reconcileRemoteFolder(accountId: string, remoteFolderId: string, currentIds: Set<string>) {
+    const rows = this.stmt('SELECT id FROM gmail_messages WHERE account_id=? AND remote_folder_id=?').all(accountId, remoteFolderId) as DatabaseRow[]
+    let removed = 0
+    for (const row of rows) {
+      const id = String(row.id)
+      if (currentIds.has(id)) continue
+      this.deleteMessage(accountId, id)
+      this.stmt('DELETE FROM gmail_sync_items WHERE account_id=? AND message_id=?').run(accountId, id)
+      removed += 1
+    }
+    return removed
+  }
+
   updateMessageLabels(accountId: string, messageId: string, labelIds: string[], historyId: string) {
     const row = this.stmt('SELECT thread_id FROM gmail_messages WHERE account_id=? AND id=?').get(accountId, messageId) as DatabaseRow | undefined
     if (!row) return
@@ -489,6 +552,7 @@ export class MailDatabase {
     if (!row) return
     this.transaction(() => {
       this.stmt('DELETE FROM gmail_fts WHERE account_id=? AND message_id=?').run(accountId, messageId)
+      this.stmt('DELETE FROM gmail_sync_items WHERE account_id=? AND message_id=?').run(accountId, messageId)
       this.stmt('DELETE FROM gmail_messages WHERE account_id=? AND id=?').run(accountId, messageId)
     })
     try { rmSync(String(row.raw_path), { force: true }) } catch { /* Best effort. */ }
@@ -532,7 +596,7 @@ export class MailDatabase {
     if (folder === 'important') where.push('t.important=1 AND t.trashed=0')
     if (folder === 'sent') where.push('t.sent=1 AND t.trashed=0')
     if (folder === 'drafts') where.push('t.draft=1 AND t.trashed=0')
-    if (folder === 'archive') where.push('t.inbox=0 AND t.trashed=0 AND t.sent=0 AND t.draft=0')
+    if (folder === 'archive') where.push(`t.inbox=0 AND t.trashed=0 AND t.sent=0 AND t.draft=0 AND NOT EXISTS(SELECT 1 FROM json_each(t.label_ids_json) WHERE value='SPAM')`)
     if (folder === 'spam') where.push(`EXISTS(SELECT 1 FROM json_each(t.label_ids_json) WHERE value='SPAM')`)
     if (folder === 'trash') where.push('t.trashed=1')
     if (folder === 'all') where.push(`t.trashed=0 AND NOT EXISTS(SELECT 1 FROM json_each(t.label_ids_json) WHERE value='SPAM')`)
