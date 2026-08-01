@@ -13,7 +13,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "audit:buttons": "node scripts/audit-buttons.mjs",
-    "test:desktop": "npm run build && npm run audit:buttons && node scripts/desktop-button-audit.mjs",
+    "audit:context-menus": "node scripts/audit-context-menus.mjs",
+    "test:context-menus": "npm run audit:context-menus && node scripts/desktop-context-menu-audit.mjs",
+    "test:desktop": "npm run build && npm run audit:buttons && node scripts/desktop-button-audit.mjs && npm run test:context-menus",
     "icons": "node scripts/generate-icons.mjs",
     "package:win": "npm run icons && npm run build && electron-builder --win nsis portable --publish never"
   },

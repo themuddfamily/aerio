@@ -1,13 +1,16 @@
-import { Clock3, FileText, Paperclip, Send, X } from 'lucide-react'
+import { Clock3, Copy, FileText, Paperclip, Send, Trash2, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { uid, formatFileSize } from '../lib/domain'
 import type { AppState, Attachment, Message } from '../types'
 import Modal from './Modal'
+import { copyText, useContextMenu } from './ContextMenu'
 
 interface ComposeModalProps {
   state: AppState
   replyTo?: Message
   replyAll?: boolean
+  forward?: boolean
+  draft?: Message
   initialTo?: string
   onChange(next: AppState): void
   onClose(): void
@@ -15,30 +18,34 @@ interface ComposeModalProps {
 }
 
 const escapeHtml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;')
+const bodyText = (html: string) => new DOMParser().parseFromString(html.replaceAll('</p>', '</p>\n').replaceAll('<br/>', '\n'), 'text/html').body.textContent?.trim() ?? ''
 
-export default function ComposeModal({ state, replyTo, replyAll, initialTo, onChange, onClose, onToast }: ComposeModalProps) {
-  const defaultAccount = replyTo?.accountId ?? state.accounts[0].id
+export default function ComposeModal({ state, replyTo, replyAll, forward, draft, initialTo, onChange, onClose, onToast }: ComposeModalProps) {
+  const { showContextMenu } = useContextMenu()
+  const defaultAccount = draft?.accountId ?? replyTo?.accountId ?? state.accounts[0].id
   const [accountId, setAccountId] = useState(defaultAccount)
   const ownEmail = state.accounts.find((item) => item.id === defaultAccount)?.email
   const replyRecipients = replyTo && replyAll
     ? Array.from(new Set([replyTo.fromEmail, ...replyTo.to].filter((email) => email !== ownEmail)))
     : replyTo ? [replyTo.fromEmail] : []
   const replyCc = replyTo && replyAll ? Array.from(new Set((replyTo.cc ?? []).filter((email) => email !== ownEmail && !replyRecipients.includes(email)))) : []
-  const [to, setTo] = useState(replyTo ? replyRecipients.join(', ') : initialTo ?? '')
-  const [ccVisible, setCcVisible] = useState(Boolean(replyCc.length))
-  const [cc, setCc] = useState(replyCc.join(', '))
-  const [subject, setSubject] = useState(replyTo ? `Re: ${replyTo.subject.replace(/^Re:\s*/i, '')}` : '')
-  const [body, setBody] = useState(replyTo ? `\n\n\nOn ${new Date(replyTo.date).toLocaleDateString()}, ${replyTo.from} wrote:\n${replyTo.preview}` : '')
-  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [to, setTo] = useState(draft ? draft.to.join(', ') : replyTo && !forward ? replyRecipients.join(', ') : initialTo ?? '')
+  const [ccVisible, setCcVisible] = useState(Boolean(draft?.cc?.length) || (!forward && Boolean(replyCc.length)))
+  const [cc, setCc] = useState(draft ? (draft.cc ?? []).join(', ') : forward ? '' : replyCc.join(', '))
+  const [subject, setSubject] = useState(draft?.subject ?? (replyTo ? forward ? `Fwd: ${replyTo.subject.replace(/^Fwd:\s*/i, '')}` : `Re: ${replyTo.subject.replace(/^Re:\s*/i, '')}` : ''))
+  const [body, setBody] = useState(draft ? bodyText(draft.body) : replyTo ? forward
+    ? `\n\n---------- Forwarded message ----------\nFrom: ${replyTo.from} <${replyTo.fromEmail}>\nDate: ${new Date(replyTo.date).toLocaleString()}\nSubject: ${replyTo.subject}\n\n${replyTo.preview}`
+    : `\n\n\nOn ${new Date(replyTo.date).toLocaleDateString()}, ${replyTo.from} wrote:\n${replyTo.preview}` : '')
+  const [attachments, setAttachments] = useState<Attachment[]>(draft?.attachments ?? (forward ? replyTo?.attachments ?? [] : []))
   const [scheduledFor, setScheduledFor] = useState('')
   const account = useMemo(() => state.accounts.find((item) => item.id === accountId) ?? state.accounts[0], [accountId, state.accounts])
 
-  const buildMessage = (draft: boolean): Message => {
-    const folder = state.folders.find((item) => item.accountId === accountId && item.system === (draft ? 'drafts' : 'sent'))
+  const buildMessage = (isDraft: boolean): Message => {
+    const folder = state.folders.find((item) => item.accountId === accountId && item.system === (isDraft ? 'drafts' : 'sent'))
     const timestamp = scheduledFor ? new Date(scheduledFor).toISOString() : new Date().toISOString()
     return {
-      id: uid('message'),
-      threadId: replyTo?.threadId ?? uid('thread'),
+      id: draft?.id ?? uid('message'),
+      threadId: draft?.threadId ?? (replyTo && !forward ? replyTo.threadId : uid('thread')),
       accountId,
       folderId: folder?.id ?? '',
       from: account.name,
@@ -54,13 +61,13 @@ export default function ComposeModal({ state, replyTo, replyAll, initialTo, onCh
       flagged: false,
       labels: scheduledFor ? ['Scheduled'] : [],
       attachments,
-      draft,
-      sent: !draft
+      draft: isDraft,
+      sent: !isDraft
     }
   }
 
   const saveDraft = () => {
-    onChange({ ...state, messages: [buildMessage(true), ...state.messages] })
+    onChange({ ...state, messages: [buildMessage(true), ...state.messages.filter((message) => message.id !== draft?.id)] })
     onToast('Draft saved')
     onClose()
   }
@@ -74,7 +81,7 @@ export default function ComposeModal({ state, replyTo, replyAll, initialTo, onCh
       onToast('Choose a future delivery time')
       return
     }
-    onChange({ ...state, messages: [buildMessage(false), ...state.messages] })
+    onChange({ ...state, messages: [buildMessage(false), ...state.messages.filter((message) => message.id !== draft?.id)] })
     const scheduled = Boolean(scheduledFor)
     onToast(scheduled ? `Message scheduled for ${new Date(scheduledFor).toLocaleString()}` : 'Message sent')
     if (!scheduled && state.settings.notifications) void window.aerio.notify('Message sent', `Your message to ${to} is on its way.`)
@@ -91,7 +98,7 @@ export default function ComposeModal({ state, replyTo, replyAll, initialTo, onCh
   }
 
   return (
-    <Modal title={replyTo ? 'Reply' : 'New message'} subtitle={`From ${account.email}`} width="large" onClose={onClose}>
+    <Modal title={draft ? 'Edit draft' : forward ? 'Forward' : replyTo ? 'Reply' : 'New message'} subtitle={`From ${account.email}`} width="large" onClose={onClose}>
       <div className="compose">
         <div className="compose-row">
           <label>From</label>
@@ -119,7 +126,10 @@ export default function ComposeModal({ state, replyTo, replyAll, initialTo, onCh
         {attachments.length > 0 && (
           <div className="attachment-strip">
             {attachments.map((attachment) => (
-              <div className="attachment-chip" key={attachment.id}>
+              <div className="attachment-chip" key={attachment.id} onContextMenu={(event) => showContextMenu(event, [
+                { label: 'Copy filename', icon: Copy, action: () => copyText(attachment.name) },
+                { label: 'Remove attachment', icon: Trash2, separatorBefore: true, danger: true, action: () => setAttachments((items) => items.filter((item) => item.id !== attachment.id)) }
+              ], attachment.name)}>
                 <Paperclip size={14} />
                 <span>{attachment.name}</span>
                 <small>{formatFileSize(attachment.size)}</small>

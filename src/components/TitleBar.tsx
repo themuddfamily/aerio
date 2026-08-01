@@ -1,7 +1,9 @@
 import { Minus, Square, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useContextMenu } from './ContextMenu'
 
 export default function TitleBar() {
+  const { showContextMenu } = useContextMenu()
   const [maximized, setMaximized] = useState(false)
 
   useEffect(() => {
@@ -10,7 +12,11 @@ export default function TitleBar() {
   }, [])
 
   return (
-    <div className="titlebar">
+    <div className="titlebar" onContextMenu={(event) => showContextMenu(event, [
+      { label: 'Minimize', icon: Minus, action: () => window.aerio.window.minimize() },
+      { label: maximized ? 'Restore' : 'Maximize', icon: Square, action: () => window.aerio.window.maximize() },
+      { label: 'Close', icon: X, separatorBefore: true, danger: true, action: () => window.aerio.window.close() }
+    ], 'Window')}>
       <div className="titlebar-drag">
         <div className="brand-lockup">
           <span className="brand-mark">A</span>

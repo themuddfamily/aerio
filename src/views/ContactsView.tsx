@@ -1,10 +1,11 @@
 import {
-  Building2, Edit3, Mail, MapPin, MessageCircle, Phone, Plus, Search, Star, Trash2, Users
+  Building2, Copy, Edit3, Mail, MapPin, MessageCircle, Phone, Plus, Search, Star, Trash2, Users
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import Modal from '../components/Modal'
 import { uid } from '../lib/domain'
 import type { AppState, Contact, Message } from '../types'
+import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 
 interface ContactsViewProps {
   state: AppState
@@ -17,6 +18,7 @@ interface ContactsViewProps {
 }
 
 export default function ContactsView({ state, query, onChange, onCompose, onChat, onOpenMessage, onToast }: ContactsViewProps) {
+  const { showContextMenu } = useContextMenu()
   const [group, setGroup] = useState('All contacts')
   const [selectedId, setSelectedId] = useState(state.contacts[0]?.id ?? '')
   const [editing, setEditing] = useState<Contact | 'new' | null>(null)
@@ -29,6 +31,37 @@ export default function ContactsView({ state, query, onChange, onCompose, onChat
   const selected = contacts.find((contact) => contact.id === selectedId) ?? contacts[0]
   const related = selected ? state.messages.filter((message) => message.fromEmail === selected.email || message.to.includes(selected.email)).slice(0, 4) : []
 
+  const toggleFavourite = (contact: Contact) => onChange({
+    ...state,
+    contacts: state.contacts.map((item) => item.id === contact.id ? { ...item, favorite: !item.favorite } : item)
+  })
+
+  const deleteContact = (contact: Contact) => {
+    if (!window.confirm(`Delete ${contact.name} from your contacts?`)) return
+    onChange({ ...state, contacts: state.contacts.filter((item) => item.id !== contact.id) })
+    if (selectedId === contact.id) setSelectedId('')
+    onToast('Contact deleted')
+  }
+
+  const contactMenu = (contact: Contact): ContextMenuItem[] => [
+    { label: 'Email', icon: Mail, action: () => onCompose(undefined, contact.email) },
+    { label: 'Start chat', icon: MessageCircle, action: () => onChat(contact) },
+    { label: 'Edit contact', icon: Edit3, separatorBefore: true, action: () => setEditing(contact) },
+    { label: contact.favorite ? 'Remove from favourites' : 'Add to favourites', icon: Star, checked: contact.favorite, action: () => toggleFavourite(contact) },
+    { label: 'Copy email address', icon: Copy, separatorBefore: true, action: () => copyText(contact.email) },
+    ...(contact.phone ? [{ label: 'Copy phone number', icon: Phone, action: () => copyText(contact.phone!) }] satisfies ContextMenuItem[] : []),
+    { label: 'Delete contact', icon: Trash2, separatorBefore: true, danger: true, action: () => deleteContact(contact) }
+  ]
+
+  const showContactMenu = (event: React.MouseEvent, contact: Contact) => showContextMenu(event, contactMenu(contact), contact.name)
+
+  const showRelatedMenu = (event: React.MouseEvent, message: Message) => showContextMenu(event, [
+    { label: 'Open message', icon: Mail, action: () => onOpenMessage(message.id) },
+    { label: 'Reply', icon: MessageCircle, action: () => onCompose(message) },
+    { label: 'Copy subject', icon: Copy, separatorBefore: true, action: () => copyText(message.subject) },
+    { label: 'Copy sender address', icon: Copy, action: () => copyText(message.fromEmail) }
+  ], message.subject)
+
   return (
     <div className="workspace">
       <aside className="context-sidebar">
@@ -36,7 +69,10 @@ export default function ContactsView({ state, query, onChange, onCompose, onChat
         <div className="sidebar-group">
           <span className="sidebar-label">Contacts</span>
           {groups.map((item) => (
-            <button className={`sidebar-item ${group === item ? 'active' : ''}`} onClick={() => setGroup(item)} key={item}>
+            <button className={`sidebar-item ${group === item ? 'active' : ''}`} onClick={() => setGroup(item)} onContextMenu={(event) => showContextMenu(event, [
+              { label: `Open ${item}`, icon: Users, action: () => setGroup(item) },
+              { label: 'New contact', icon: Plus, separatorBefore: true, action: () => setEditing('new') }
+            ], item)} key={item}>
               {item === 'Favourites' ? <Star size={17} /> : <Users size={17} />}<span>{item}</span>
               <em>{item === 'All contacts' ? state.contacts.length : item === 'Favourites' ? state.contacts.filter((contact) => contact.favorite).length : state.contacts.filter((contact) => contact.group === item).length}</em>
             </button>
@@ -50,9 +86,12 @@ export default function ContactsView({ state, query, onChange, onCompose, onChat
       <section className="contact-list-panel">
         <header className="panel-heading"><div><h1>{group}</h1><p>{contacts.length} people</p></div></header>
         <div className="inline-search"><Search size={16} /><span>{query || 'Search from the top bar'}</span></div>
-        <div className="contact-list">
+        <div className="contact-list" onContextMenu={(event) => showContextMenu(event, [
+          { label: 'New contact', icon: Plus, action: () => setEditing('new') },
+          { label: `Show ${group}`, icon: Users, action: () => setGroup(group) }
+        ], 'Contacts')}>
           {contacts.map((contact) => (
-            <button key={contact.id} className={`contact-row ${selected?.id === contact.id ? 'selected' : ''}`} onClick={() => setSelectedId(contact.id)}>
+            <button key={contact.id} className={`contact-row ${selected?.id === contact.id ? 'selected' : ''}`} onClick={() => setSelectedId(contact.id)} onContextMenu={(event) => showContactMenu(event, contact)}>
               <span className="avatar large" style={{ background: contact.color }}>{contact.name.split(' ').map((value) => value[0]).join('')}</span>
               <span><strong>{contact.name}</strong><small>{contact.title ?? contact.group}{contact.company ? ` · ${contact.company}` : ''}</small></span>
               {contact.favorite && <Star className="favourite" size={14} fill="currentColor" />}
@@ -63,11 +102,11 @@ export default function ContactsView({ state, query, onChange, onCompose, onChat
       <section className="contact-detail-panel">
         {selected ? (
           <>
-            <header className="contact-hero">
+            <header className="contact-hero" onContextMenu={(event) => showContactMenu(event, selected)}>
               <span className="avatar hero-avatar" style={{ background: selected.color }}>{selected.name.split(' ').map((value) => value[0]).join('')}</span>
               <div><h1>{selected.name}</h1><p>{selected.title}{selected.company && ` at ${selected.company}`}</p></div>
               <span className="spacer" />
-              <button className={`icon-button ${selected.favorite ? 'active' : ''}`} aria-label={selected.favorite ? 'Remove from favourites' : 'Add to favourites'} title={selected.favorite ? 'Remove from favourites' : 'Add to favourites'} onClick={() => onChange({ ...state, contacts: state.contacts.map((contact) => contact.id === selected.id ? { ...contact, favorite: !contact.favorite } : contact) })}><Star size={18} fill={selected.favorite ? 'currentColor' : 'none'} /></button>
+              <button className={`icon-button ${selected.favorite ? 'active' : ''}`} aria-label={selected.favorite ? 'Remove from favourites' : 'Add to favourites'} title={selected.favorite ? 'Remove from favourites' : 'Add to favourites'} onClick={() => toggleFavourite(selected)}><Star size={18} fill={selected.favorite ? 'currentColor' : 'none'} /></button>
               <button className="icon-button" aria-label="Edit contact" title="Edit contact" onClick={() => setEditing(selected)}><Edit3 size={18} /></button>
             </header>
             <div className="contact-actions">
@@ -79,13 +118,25 @@ export default function ContactsView({ state, query, onChange, onCompose, onChat
               <section className="detail-card">
                 <h3>Details</h3>
                 <dl>
-                  <div><dt><Mail size={15} /> Email</dt><dd>{selected.email}</dd></div>
-                  <div><dt><Phone size={15} /> Phone</dt><dd>{selected.phone ?? 'Not added'}</dd></div>
-                  <div><dt><Building2 size={15} /> Company</dt><dd>{selected.company ?? 'Not added'}</dd></div>
-                  <div><dt><MapPin size={15} /> Group</dt><dd>{selected.group}</dd></div>
+                  <div onContextMenu={(event) => showContextMenu(event, [
+                    { label: 'Email contact', icon: Mail, action: () => onCompose(undefined, selected.email) },
+                    { label: 'Copy email address', icon: Copy, action: () => copyText(selected.email) }
+                  ], 'Email')}><dt><Mail size={15} /> Email</dt><dd>{selected.email}</dd></div>
+                  <div onContextMenu={(event) => showContextMenu(event, [
+                    { label: selected.phone ? `Call ${selected.name}` : 'No phone number saved', icon: Phone, disabled: !selected.phone, action: () => onToast(`Call ${selected.phone}`) },
+                    { label: 'Copy phone number', icon: Copy, disabled: !selected.phone, action: () => copyText(selected.phone!) }
+                  ], 'Phone')}><dt><Phone size={15} /> Phone</dt><dd>{selected.phone ?? 'Not added'}</dd></div>
+                  <div onContextMenu={(event) => showContextMenu(event, [{ label: 'Copy company', icon: Copy, disabled: !selected.company, action: () => copyText(selected.company!) }], 'Company')}><dt><Building2 size={15} /> Company</dt><dd>{selected.company ?? 'Not added'}</dd></div>
+                  <div onContextMenu={(event) => showContextMenu(event, [{ label: 'Copy group', icon: Copy, action: () => copyText(selected.group) }], 'Group')}><dt><MapPin size={15} /> Group</dt><dd>{selected.group}</dd></div>
                 </dl>
               </section>
-              <section className="detail-card">
+              <section className="detail-card" onContextMenu={(event) => {
+                if (window.getSelection()?.toString()) return
+                showContextMenu(event, [
+                  { label: 'Edit contact notes', icon: Edit3, action: () => setEditing(selected) },
+                  { label: 'Copy notes', icon: Copy, disabled: !selected.notes, action: () => copyText(selected.notes!) }
+                ], 'Contact notes')
+              }}>
                 <h3>Notes</h3>
                 <p>{selected.notes || 'No notes yet. Edit this contact to add some useful context.'}</p>
               </section>
@@ -93,7 +144,7 @@ export default function ContactsView({ state, query, onChange, onCompose, onChat
             <section className="related-section">
               <h3>Recent conversations</h3>
               {related.map((message) => (
-                <button key={message.id} className="related-message" onClick={() => onOpenMessage(message.id)}>
+                <button key={message.id} className="related-message" onClick={() => onOpenMessage(message.id)} onContextMenu={(event) => showRelatedMenu(event, message)}>
                   <span className="related-icon"><Mail size={16} /></span>
                   <span><strong>{message.subject}</strong><small>{message.preview}</small></span>
                   <time>{new Date(message.date).toLocaleDateString()}</time>

@@ -1,12 +1,13 @@
 import {
-  BellOff, File, Info, MessageCircle, Paperclip, Phone, Plus, Search,
-  Send, Smile, Users, Video
+  BellOff, Copy, File, Info, MessageCircle, Paperclip, Phone, Plus, Search,
+  Send, Smile, Trash2, Users, Video
 } from 'lucide-react'
 import { format, isToday, parseISO } from 'date-fns'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { uid } from '../lib/domain'
-import type { AppState, Contact, Conversation } from '../types'
+import type { AppState, ChatMessage, Contact, Conversation } from '../types'
 import Modal from '../components/Modal'
+import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 
 interface ChatViewProps {
   state: AppState
@@ -24,6 +25,7 @@ const autoReplies = [
 ]
 
 export default function ChatView({ state, query, requestedConversationId, onChange, onToast }: ChatViewProps) {
+  const { showContextMenu } = useContextMenu()
   const [selectedId, setSelectedId] = useState(state.conversations[0]?.id ?? '')
   const [message, setMessage] = useState('')
   const [showInfo, setShowInfo] = useState(() => window.innerWidth > 1180)
@@ -105,16 +107,78 @@ export default function ChatView({ state, query, requestedConversationId, onChan
     setNewChatOpen(false)
   }
 
+  const toggleMute = (conversation: Conversation) => {
+    const wasMuted = muted.has(conversation.id)
+    setMuted((current) => {
+      const next = new Set(current)
+      if (next.has(conversation.id)) next.delete(conversation.id)
+      else next.add(conversation.id)
+      return next
+    })
+    onToast(wasMuted ? 'Conversation unmuted' : 'Conversation muted')
+  }
+
+  const deleteConversation = (conversation: Conversation) => {
+    if (!window.confirm(`Delete the local conversation with ${conversation.name}?`)) return
+    onChange({ ...state, conversations: state.conversations.filter((item) => item.id !== conversation.id) })
+    if (selectedId === conversation.id) setSelectedId('')
+    onToast('Conversation deleted')
+  }
+
+  const conversationMenu = (conversation: Conversation): ContextMenuItem[] => [
+    { label: 'Open conversation', icon: MessageCircle, action: () => select(conversation) },
+    { label: conversation.unread ? 'Mark as read' : 'Mark as unread', icon: MessageCircle, separatorBefore: true, action: () => onChange({
+      ...state,
+      conversations: state.conversations.map((item) => item.id === conversation.id ? { ...item, unread: conversation.unread ? 0 : 1 } : item)
+    }) },
+    { label: muted.has(conversation.id) ? 'Unmute conversation' : 'Mute conversation', icon: BellOff, checked: muted.has(conversation.id), action: () => toggleMute(conversation) },
+    { label: 'Search conversation', icon: Search, action: () => { select(conversation); setSearchOpen(true); setShowInfo(false) } },
+    { label: 'Copy contact name', icon: Copy, separatorBefore: true, action: () => copyText(conversation.name) },
+    { label: 'Delete conversation', icon: Trash2, separatorBefore: true, danger: true, action: () => deleteConversation(conversation) }
+  ]
+
+  const changeMessage = (conversation: Conversation, message: ChatMessage, updates: Partial<ChatMessage>) => onChange({
+    ...state,
+    conversations: state.conversations.map((item) => item.id === conversation.id ? {
+      ...item,
+      messages: item.messages.map((entry) => entry.id === message.id ? { ...entry, ...updates } : entry)
+    } : item)
+  })
+
+  const messageMenu = (conversation: Conversation, chatMessage: ChatMessage): ContextMenuItem[] => [
+    { label: 'Copy message', icon: Copy, action: () => copyText(chatMessage.text) },
+    ...(chatMessage.attachment ? [{ label: 'Copy attachment filename', icon: File, action: () => copyText(chatMessage.attachment!.name) }] satisfies ContextMenuItem[] : []),
+    ...['👍', '❤️', '😂', '🎉'].map((reaction, index) => ({
+      label: `${reaction} React`, separatorBefore: index === 0, checked: chatMessage.reaction === reaction,
+      action: () => changeMessage(conversation, chatMessage, { reaction: chatMessage.reaction === reaction ? undefined : reaction })
+    })),
+    ...(chatMessage.sender === 'me' ? [{
+      label: 'Delete message', icon: Trash2, separatorBefore: true, danger: true,
+      action: () => {
+        onChange({ ...state, conversations: state.conversations.map((item) => item.id === conversation.id ? { ...item, messages: item.messages.filter((entry) => entry.id !== chatMessage.id) } : item) })
+        onToast('Message deleted')
+      }
+    }] satisfies ContextMenuItem[] : [])
+  ]
+
+  const showMessageMenu = (event: React.MouseEvent, conversation: Conversation, chatMessage: ChatMessage) => {
+    if (window.getSelection()?.toString()) return
+    showContextMenu(event, messageMenu(conversation, chatMessage), 'Chat message')
+  }
+
   return (
     <div className="workspace chat-workspace">
       <aside className="context-sidebar chat-sidebar">
         <button className="compose-button" onClick={() => setNewChatOpen(true)}><Plus size={18} /> New conversation</button>
-        <div className="sidebar-group">
+        <div className="sidebar-group" onContextMenu={(event) => showContextMenu(event, [
+          { label: 'New conversation', icon: Plus, action: () => setNewChatOpen(true) },
+          { label: 'Mark all conversations as read', icon: MessageCircle, disabled: !state.conversations.some((conversation) => conversation.unread), action: () => onChange({ ...state, conversations: state.conversations.map((conversation) => ({ ...conversation, unread: 0 })) }) }
+        ], 'Conversations')}>
           <span className="sidebar-label">Conversations</span>
           {conversations.map((conversation) => {
             const last = conversation.messages.at(-1)
             return (
-              <button key={conversation.id} className={`chat-list-item ${selected?.id === conversation.id ? 'active' : ''}`} onClick={() => select(conversation)}>
+              <button key={conversation.id} className={`chat-list-item ${selected?.id === conversation.id ? 'active' : ''}`} onClick={() => select(conversation)} onContextMenu={(event) => showContextMenu(event, conversationMenu(conversation), conversation.name)}>
                 <span className="avatar large" style={{ background: conversation.color }}>{conversation.name.split(' ').map((part) => part[0]).slice(0, 2).join('')}<i className={conversation.online ? 'online' : ''} /></span>
                 <span><strong>{conversation.name}</strong><small>{last?.text}</small></span>
                 <span className="chat-meta"><time>{last && (isToday(parseISO(last.time)) ? format(parseISO(last.time), 'HH:mm') : format(parseISO(last.time), 'EEE'))}</time>{conversation.unread > 0 && <em>{conversation.unread}</em>}</span>
@@ -126,7 +190,7 @@ export default function ChatView({ state, query, requestedConversationId, onChan
       <section className="chat-panel">
         {selected ? (
           <>
-            <header className="chat-header">
+            <header className="chat-header" onContextMenu={(event) => showContextMenu(event, conversationMenu(selected), selected.name)}>
               <span className="avatar large" style={{ background: selected.color }}>{selected.name.split(' ').map((part) => part[0]).slice(0, 2).join('')}</span>
               <span><strong>{selected.name}</strong><small>{selected.online ? 'Online now' : 'Last seen recently'}</small></span>
               <span className="spacer" />
@@ -142,7 +206,7 @@ export default function ChatView({ state, query, requestedConversationId, onChan
                 <p>This is the beginning of your Aerio conversation.</p>
               </div>
               {visibleMessages.map((item) => (
-                <div className={`chat-bubble-row ${item.sender === 'me' ? 'mine' : ''}`} key={item.id}>
+                <div className={`chat-bubble-row ${item.sender === 'me' ? 'mine' : ''}`} key={item.id} onContextMenu={(event) => showMessageMenu(event, selected, item)}>
                   {item.sender === 'them' && <span className="avatar small-avatar" style={{ background: selected.color }}>{selected.name[0]}</span>}
                   <div className="chat-bubble">
                     {item.attachment && <span className="chat-file"><File size={18} /><strong>{item.attachment.name}</strong></span>}
@@ -168,13 +232,10 @@ export default function ChatView({ state, query, requestedConversationId, onChan
           <p>{selected.online ? 'Active now' : 'Away'}</p>
           <div className="contact-actions compact">
             <button className={searchOpen ? 'active' : ''} onClick={() => { setSearchOpen((value) => !value); setShowInfo(false) }}><span><Search size={18} /></span>Search</button>
-            <button className={muted.has(selected.id) ? 'active' : ''} onClick={() => {
-              setMuted((current) => { const next = new Set(current); if (next.has(selected.id)) next.delete(selected.id); else next.add(selected.id); return next })
-              onToast(muted.has(selected.id) ? 'Conversation unmuted' : 'Conversation muted')
-            }}><span><BellOff size={18} /></span>{muted.has(selected.id) ? 'Unmute' : 'Mute'}</button>
+            <button className={muted.has(selected.id) ? 'active' : ''} onClick={() => toggleMute(selected)}><span><BellOff size={18} /></span>{muted.has(selected.id) ? 'Unmute' : 'Mute'}</button>
           </div>
-          <section><h3><Users size={16} /> People</h3>{selected.participants.map((person) => <div className="info-person" key={person}><span className="avatar small-avatar" style={{ background: selected.color }}>{person[0]}</span><strong>{person}</strong></div>)}</section>
-          <section><h3><File size={16} /> Shared files</h3>{selected.messages.flatMap((item) => item.attachment ? [item.attachment] : []).map((attachment) => <p className="muted-copy" key={attachment.id}>{attachment.name}</p>)}{!selected.messages.some((item) => item.attachment) && <p className="muted-copy">No files shared yet.</p>}</section>
+          <section><h3><Users size={16} /> People</h3>{selected.participants.map((person) => <div className="info-person" key={person} onContextMenu={(event) => showContextMenu(event, [{ label: 'Copy participant name', icon: Copy, action: () => copyText(person) }], person)}><span className="avatar small-avatar" style={{ background: selected.color }}>{person[0]}</span><strong>{person}</strong></div>)}</section>
+          <section><h3><File size={16} /> Shared files</h3>{selected.messages.flatMap((item) => item.attachment ? [item.attachment] : []).map((attachment) => <p className="muted-copy" key={attachment.id} onContextMenu={(event) => showContextMenu(event, [{ label: 'Copy filename', icon: Copy, action: () => copyText(attachment.name) }], attachment.name)}>{attachment.name}</p>)}{!selected.messages.some((item) => item.attachment) && <p className="muted-copy">No files shared yet.</p>}</section>
         </aside>
       )}
       {newChatOpen && <Modal title="New conversation" subtitle="Choose one of your saved contacts." onClose={() => setNewChatOpen(false)}><div className="contact-picker">{state.contacts.map((contact) => <button key={contact.id} onClick={() => startChat(contact)}><span className="avatar" style={{ background: contact.color }}>{contact.name.split(' ').map((part) => part[0]).slice(0, 2).join('')}</span><span><strong>{contact.name}</strong><small>{contact.email}</small></span></button>)}</div></Modal>}

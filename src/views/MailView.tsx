@@ -1,11 +1,12 @@
 import {
   Archive, AtSign, CheckCircle2, ChevronDown, Clock3, FileText, Flag, Inbox,
-  Mail, MailOpen, Paperclip, Plus, RefreshCw, Reply, ReplyAll,
+  Copy, Forward, Mail, MailOpen, Paperclip, Plus, RefreshCw, Reply, ReplyAll,
   Search, Send, Star, Tag, Trash2, Undo2
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { format, isToday, isYesterday } from 'date-fns'
 import { formatFileSize, messageMatches, uid, updateMessage } from '../lib/domain'
+import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import type { AppState, Message, ModuleId } from '../types'
 
 interface MailViewProps {
@@ -13,7 +14,7 @@ interface MailViewProps {
   query: string
   requestedMessageId?: string
   onChange(next: AppState): void
-  onCompose(replyTo?: Message, replyAll?: boolean): void
+  onCompose(replyTo?: Message, replyAll?: boolean, forward?: boolean, draft?: Message): void
   onNavigate(module: ModuleId): void
   onToast(message: string): void
 }
@@ -26,6 +27,7 @@ const shortDate = (date: string) => {
 }
 
 export default function MailView({ state, query, requestedMessageId, onChange, onCompose, onNavigate, onToast }: MailViewProps) {
+  const { showContextMenu } = useContextMenu()
   const [folder, setFolder] = useState('all')
   const [filter, setFilter] = useState<'all' | 'unread' | 'starred' | 'flagged'>('all')
   const [selectedId, setSelectedId] = useState(() => state.messages.find((message) => !message.trashed && !message.draft && !message.sent)?.id ?? '')
@@ -48,6 +50,68 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
   [filter, folder, query, sortNewest, state.folders, state.messages])
 
   const selected = messages.find((message) => message.id === selectedId) ?? messages[0]
+
+  const belongsToFolder = (message: Message, id: string) => {
+    if (id === 'all') return !message.trashed && !message.draft && !message.sent && !message.archived
+    if (id === 'starred') return message.starred && !message.trashed
+    const item = state.folders.find((candidate) => candidate.id === id)
+    if (item?.system === 'trash') return Boolean(message.trashed)
+    if (item?.system === 'archive') return Boolean(message.archived) && !message.trashed
+    return message.folderId === id && !message.trashed
+  }
+
+  const changeMessage = (message: Message, updates: Partial<Message>, toast?: string) => {
+    onChange(updateMessage(state, message.id, updates))
+    if (toast) onToast(toast)
+  }
+
+  const messageMenuItems = (message: Message): ContextMenuItem[] => {
+    const inboxId = state.folders.find((item) => item.accountId === message.accountId && item.system === 'inbox')?.id ?? `${message.accountId}-inbox`
+    if (message.draft) return [
+      { label: 'Edit draft', icon: FileText, action: () => onCompose(undefined, false, false, message) },
+      { label: 'Duplicate draft', icon: Copy, separatorBefore: true, action: () => {
+        const duplicate = { ...message, id: uid('message'), threadId: uid('thread'), subject: `${message.subject} (copy)`, date: new Date().toISOString() }
+        onChange({ ...state, messages: [duplicate, ...state.messages] })
+        onToast('Draft duplicated')
+      } },
+      { label: 'Copy subject', icon: Copy, action: () => copyText(message.subject) },
+      { label: 'Move to Trash', icon: Trash2, separatorBefore: true, danger: true, action: () => changeMessage(message, { draft: false, trashed: true, folderId: `${message.accountId}-trash` }, 'Draft moved to Trash') }
+    ]
+    return [
+      { label: 'Open message', icon: MailOpen, action: () => selectMessage(message) },
+      { label: 'Reply', icon: Reply, separatorBefore: true, action: () => onCompose(message) },
+      { label: 'Reply all', icon: ReplyAll, action: () => onCompose(message, true) },
+      { label: 'Forward', icon: Forward, action: () => onCompose(message, false, true) },
+      { label: message.unread ? 'Mark as read' : 'Mark as unread', icon: message.unread ? MailOpen : Mail, separatorBefore: true, action: () => changeMessage(message, { unread: !message.unread }) },
+      { label: message.starred ? 'Remove star' : 'Add star', icon: Star, checked: message.starred, action: () => changeMessage(message, { starred: !message.starred }) },
+      { label: message.flagged ? 'Remove flag' : 'Flag message', icon: Flag, checked: message.flagged, action: () => changeMessage(message, { flagged: !message.flagged }) },
+      message.archived || message.trashed
+        ? { label: 'Move to inbox', icon: Inbox, separatorBefore: true, action: () => changeMessage(message, { archived: false, trashed: false, folderId: inboxId }, 'Message moved to Inbox') }
+        : { label: 'Archive', icon: Archive, separatorBefore: true, action: () => changeMessage(message, { archived: true, folderId: `${message.accountId}-archive` }, 'Message archived') },
+      ...(!message.trashed ? [{ label: 'Move to Trash', icon: Trash2, danger: true, action: () => changeMessage(message, { trashed: true, folderId: `${message.accountId}-trash` }, 'Message moved to Trash') }] satisfies ContextMenuItem[] : []),
+      { label: 'Add to Tasks', icon: CheckCircle2, separatorBefore: true, action: () => addTask(message) },
+      { label: 'Add to Calendar', icon: Clock3, action: () => addEvent(message) },
+      { label: 'Copy subject', icon: Copy, separatorBefore: true, action: () => copyText(message.subject) },
+      { label: 'Copy sender address', icon: AtSign, action: () => copyText(message.fromEmail) }
+    ]
+  }
+
+  const showMessageMenu = (event: React.MouseEvent, message: Message) => {
+    if (window.getSelection()?.toString() || (event.target instanceof Element && event.target.closest('a[href], img[src]'))) return
+    showContextMenu(event, messageMenuItems(message), message.subject)
+  }
+
+  const showFolderMenu = (event: React.MouseEvent, id: string, label: string) => {
+    const unread = state.messages.filter((message) => belongsToFolder(message, id) && message.unread).length
+    showContextMenu(event, [
+      { label: `Open ${label}`, icon: Inbox, action: () => setFolder(id) },
+      { label: 'New message', icon: Plus, separatorBefore: true, action: () => onCompose() },
+      { label: `Mark all as read${unread ? ` (${unread})` : ''}`, icon: MailOpen, disabled: unread === 0, action: () => {
+        onChange({ ...state, messages: state.messages.map((message) => belongsToFolder(message, id) ? { ...message, unread: false } : message) })
+        onToast(`${label} marked as read`)
+      } }
+    ], label)
+  }
 
   useEffect(() => {
     if (!requestedMessageId || handledMessageRequest.current === requestedMessageId) return
@@ -72,13 +136,13 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
     if (toast) onToast(toast)
   }
 
-  const addTask = () => {
-    if (!selected) return
+  const addTask = (message = selected) => {
+    if (!message) return
     onChange({
       ...state,
       tasks: [{
-        id: uid('task'), listId: 'Today', title: `Reply: ${selected.subject}`,
-        notes: `Created from ${selected.from}’s message.`, priority: 'normal', completed: false,
+        id: uid('task'), listId: 'Today', title: `Reply: ${message.subject}`,
+        notes: `Created from ${message.from}’s message.`, priority: 'normal', completed: false,
         subtasks: [], recurrence: 'none'
       }, ...state.tasks]
     })
@@ -86,8 +150,8 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
     onNavigate('tasks')
   }
 
-  const addEvent = () => {
-    if (!selected) return
+  const addEvent = (message = selected) => {
+    if (!message) return
     const start = new Date()
     start.setDate(start.getDate() + 1)
     start.setHours(10, 0, 0, 0)
@@ -96,17 +160,39 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
     onChange({
       ...state,
       events: [{
-        id: uid('event'), calendarId: selected.accountId, title: selected.subject,
-        start: start.toISOString(), end: end.toISOString(), description: `Created from ${selected.from}’s message.`,
-        color: '#6659e8', attendees: [selected.fromEmail], reminderMinutes: 15, recurrence: 'none'
+        id: uid('event'), calendarId: message.accountId, title: message.subject,
+        start: start.toISOString(), end: end.toISOString(), description: `Created from ${message.from}’s message.`,
+        color: '#6659e8', attendees: [message.fromEmail], reminderMinutes: 15, recurrence: 'none'
       }, ...state.events]
     })
     onToast('Event created for tomorrow at 10:00')
     onNavigate('calendar')
   }
 
+  const toggleAccount = (accountId: string) => setCollapsedAccounts((current) => {
+    const next = new Set(current)
+    if (next.has(accountId)) next.delete(accountId)
+    else next.add(accountId)
+    return next
+  })
+
+  const showAccountMenu = (event: React.MouseEvent, account: AppState['accounts'][number]) => {
+    const inbox = state.folders.find((item) => item.accountId === account.id && item.system === 'inbox')
+    const unread = state.messages.filter((message) => message.accountId === account.id && message.unread).length
+    showContextMenu(event, [
+      { label: `Open ${account.name} Inbox`, icon: Inbox, action: () => setFolder(inbox?.id ?? 'all') },
+      { label: 'New message', icon: Plus, action: () => onCompose() },
+      { label: collapsedAccounts.has(account.id) ? 'Expand folders' : 'Collapse folders', icon: ChevronDown, separatorBefore: true, action: () => toggleAccount(account.id) },
+      { label: `Mark account as read${unread ? ` (${unread})` : ''}`, icon: MailOpen, disabled: unread === 0, action: () => {
+        onChange({ ...state, messages: state.messages.map((message) => message.accountId === account.id ? { ...message, unread: false } : message) })
+        onToast(`${account.name} marked as read`)
+      } },
+      { label: 'Copy email address', icon: Copy, separatorBefore: true, action: () => copyText(account.email) }
+    ], account.name)
+  }
+
   const folderButton = (id: string, icon: React.ReactNode, label: string, count?: number) => (
-    <button className={`sidebar-item ${folder === id ? 'active' : ''}`} onClick={() => setFolder(id)}>
+    <button className={`sidebar-item ${folder === id ? 'active' : ''}`} onClick={() => setFolder(id)} onContextMenu={(event) => showFolderMenu(event, id, label)}>
       {icon}<span>{label}</span>{count ? <em>{count}</em> : null}
     </button>
   )
@@ -124,12 +210,7 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
         </div>
         {state.accounts.map((account) => (
           <div className="sidebar-group" key={account.id}>
-            <button className="account-heading" aria-expanded={!collapsedAccounts.has(account.id)} onClick={() => setCollapsedAccounts((current) => {
-              const next = new Set(current)
-              if (next.has(account.id)) next.delete(account.id)
-              else next.add(account.id)
-              return next
-            })}>
+            <button className="account-heading" aria-expanded={!collapsedAccounts.has(account.id)} onClick={() => toggleAccount(account.id)} onContextMenu={(event) => showAccountMenu(event, account)}>
               <span className="account-dot" style={{ background: account.color }} />
               <span>{account.name}</span><ChevronDown size={14} />
             </button>
@@ -155,9 +236,13 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
           </div>
           <button className="text-button" onClick={() => setSortNewest((value) => !value)}>{sortNewest ? 'Newest' : 'Oldest'} <ChevronDown size={13} /></button>
         </div>
-        <div className="message-list" role="list">
+        <div className="message-list" role="list" onContextMenu={(event) => showContextMenu(event, [
+          { label: 'New message', icon: Plus, action: () => onCompose() },
+          { label: 'Mark visible messages as read', icon: MailOpen, separatorBefore: true, disabled: !messages.some((message) => message.unread), action: () => onChange({ ...state, messages: state.messages.map((message) => messages.some((visible) => visible.id === message.id) ? { ...message, unread: false } : message) }) },
+          { label: sortNewest ? 'Sort oldest first' : 'Sort newest first', icon: ChevronDown, action: () => setSortNewest((value) => !value) }
+        ], 'Message list')}>
           {messages.map((message) => (
-            <button key={message.id} className={`message-row ${selected?.id === message.id ? 'selected' : ''} ${message.unread ? 'unread' : ''}`} onClick={() => selectMessage(message)}>
+            <button key={message.id} className={`message-row ${selected?.id === message.id ? 'selected' : ''} ${message.unread ? 'unread' : ''}`} onClick={() => selectMessage(message)} onContextMenu={(event) => showMessageMenu(event, message)}>
               <span className="avatar" style={{ background: state.contacts.find((contact) => contact.email === message.fromEmail)?.color ?? '#8892a6' }}>{message.from.split(' ').map((part) => part[0]).slice(0, 2).join('')}</span>
               <span className="message-copy">
                 <span className="message-meta"><strong>{message.from}</strong><time>{shortDate(message.date)}</time></span>
@@ -190,7 +275,7 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
               <button className={`icon-button ${selected.flagged ? 'active danger' : ''}`} title="Flag" onClick={() => apply({ flagged: !selected.flagged })}><Flag size={18} fill={selected.flagged ? 'currentColor' : 'none'} /></button>
               <span className="spacer" />
             </div>
-            <article className="message-reader">
+            <article className="message-reader" onContextMenu={(event) => showMessageMenu(event, selected)}>
               <header>
                 <div className="reader-labels">{selected.labels.map((label) => <span key={label}>{label}</span>)}</div>
                 <h2>{selected.subject}</h2>
@@ -206,7 +291,10 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
                 <div className="reader-attachments">
                   <h3>{selected.attachments.length} attachment{selected.attachments.length > 1 ? 's' : ''}</h3>
                   {selected.attachments.map((attachment) => (
-                    <button className="attachment-card" key={attachment.id} title="Demo attachment" onClick={() => onToast(`${attachment.name} is sample metadata; no local file is attached`)}>
+                    <button className="attachment-card" key={attachment.id} title="Demo attachment" onClick={() => onToast(`${attachment.name} is sample metadata; no local file is attached`)} onContextMenu={(event) => showContextMenu(event, [
+                      { label: 'Show attachment details', icon: Paperclip, action: () => onToast(`${attachment.name} · ${formatFileSize(attachment.size)}`) },
+                      { label: 'Copy filename', icon: Copy, action: () => copyText(attachment.name) }
+                    ], attachment.name)}>
                       <span className="file-icon">{attachment.name.split('.').pop()?.toUpperCase()}</span>
                       <span><strong>{attachment.name}</strong><small>{formatFileSize(attachment.size)}</small></span>
                     </button>
@@ -216,8 +304,8 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
               <div className="quick-actions">
                 <button className="button ghost" onClick={() => onCompose(selected)}><Reply size={16} /> Reply</button>
                 <button className="button ghost" onClick={() => onCompose(selected, true)}><ReplyAll size={16} /> Reply all</button>
-                <button className="button ghost" onClick={addTask}><CheckCircle2 size={16} /> Add task</button>
-                <button className="button ghost" onClick={addEvent}><Clock3 size={16} /> Add event</button>
+                <button className="button ghost" onClick={() => addTask()}><CheckCircle2 size={16} /> Add task</button>
+                <button className="button ghost" onClick={() => addEvent()}><Clock3 size={16} /> Add event</button>
               </div>
             </article>
           </>

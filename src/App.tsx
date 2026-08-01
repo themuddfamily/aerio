@@ -15,6 +15,7 @@ import ChatView from './views/ChatView'
 import GmailView from './views/GmailView'
 import type { AppState, Contact, Message, ModuleId } from './types'
 import { unreadCount, uid } from './lib/domain'
+import { useContextMenu } from './components/ContextMenu'
 
 const modules: { id: ModuleId; label: string; icon: typeof Mail; shortcut: string }[] = [
   { id: 'mail', label: 'Mail', icon: Mail, shortcut: '1' },
@@ -29,9 +30,12 @@ interface ComposeState {
   replyTo?: Message
   initialTo?: string
   replyAll?: boolean
+  forward?: boolean
+  draft?: Message
 }
 
 export default function App() {
+  const { showContextMenu } = useContextMenu()
   const [state, setState] = useState<AppState | null>(null)
   const [activeModule, setActiveModule] = useState<ModuleId>('mail')
   const [query, setQuery] = useState('')
@@ -177,16 +181,29 @@ export default function App() {
     setActiveModule('mail')
   }
 
+  const showModuleMenu = (event: React.MouseEvent, module: typeof modules[number]) => showContextMenu(event, [
+    { label: `Open ${module.label}`, icon: module.icon, action: () => navigate(module.id) },
+    ...(module.id === 'mail' ? [{ label: 'New message', icon: Plus, separatorBefore: true, action: () => startCompose() }] : []),
+    { label: `Search ${module.label}`, icon: Search, separatorBefore: module.id !== 'mail', action: () => { navigate(module.id); setCommandsOpen(true) } },
+    { label: 'Open on startup', icon: Sparkles, separatorBefore: true, checked: state.settings.startModule === module.id, action: () => setState({ ...state, settings: { ...state.settings, startModule: module.id } }) }
+  ], module.label)
+
+  const setWorkspace = (mode: 'demo' | 'gmail') => {
+    setMailMode(mode)
+    setActiveModule('mail')
+  }
+
   return (
     <div className="app">
       <TitleBar />
       <div className="app-frame">
         <nav className="module-rail" aria-label="Aerio modules">
           <div className="rail-modules">
-            {modules.map(({ id, label, icon: Icon }) => {
+            {modules.map((module) => {
+              const { id, label, icon: Icon } = module
               const badge = unreadCount(state, id)
               return (
-                <button key={id} className={activeModule === id ? 'active' : ''} aria-label={label} title={`${label} · Ctrl ${modules.find((item) => item.id === id)?.shortcut}`} onClick={() => navigate(id)}>
+                <button key={id} className={activeModule === id ? 'active' : ''} aria-label={label} title={`${label} · Ctrl ${modules.find((item) => item.id === id)?.shortcut}`} onClick={() => navigate(id)} onContextMenu={(event) => showModuleMenu(event, module)}>
                   <Icon size={21} strokeWidth={1.9} />
                   {badge > 0 && <em>{badge > 9 ? '9+' : badge}</em>}
                   <span>{label}</span>
@@ -197,29 +214,40 @@ export default function App() {
           <div className="rail-bottom">
             <button aria-label="What’s new" title="What’s new" onClick={() => showToast('Welcome to the first Aerio preview')}><Sparkles size={20} /></button>
             <button aria-label="Help" title="Keyboard shortcuts: Ctrl K" onClick={() => setCommandsOpen(true)}><HelpCircle size={20} /></button>
-            <button aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}><Settings size={20} /></button>
-            <button className="profile-button" aria-label="Profile and settings" title="Profile and settings" onClick={() => setSettingsOpen(true)}><span>AA</span><i /></button>
+            <button aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)} onContextMenu={(event) => showContextMenu(event, [{ label: 'Open settings', icon: Settings, action: () => setSettingsOpen(true) }], 'Settings')}><Settings size={20} /></button>
+            <button className="profile-button" aria-label="Profile and settings" title="Profile and settings" onClick={() => setSettingsOpen(true)} onContextMenu={(event) => showContextMenu(event, [{ label: 'Open profile and settings', icon: Settings, action: () => setSettingsOpen(true) }], 'Profile')}><span>AA</span><i /></button>
           </div>
         </nav>
         <main className="app-main">
           <header className="global-bar">
-            <button className="command-search" onClick={() => setCommandsOpen(true)}>
+            <button className="command-search" onClick={() => setCommandsOpen(true)} onContextMenu={(event) => showContextMenu(event, [
+              { label: 'Search and commands', icon: Search, action: () => setCommandsOpen(true) },
+              { label: 'Clear search', icon: X, disabled: !query, action: () => setQuery('') }
+            ], 'Search')}>
               <Search size={16} />
               <span>Search {modules.find((item) => item.id === activeModule)?.label.toLowerCase()} or run a command</span>
               <kbd>Ctrl K</kbd>
             </button>
-            <button className={`local-badge mode-switch ${mailMode === 'gmail' ? 'gmail' : ''}`} onClick={() => { setMailMode((mode) => mode === 'gmail' ? 'demo' : 'gmail'); setActiveModule('mail') }}>
+            <button className={`local-badge mode-switch ${mailMode === 'gmail' ? 'gmail' : ''}`} onClick={() => setWorkspace(mailMode === 'gmail' ? 'demo' : 'gmail')} onContextMenu={(event) => showContextMenu(event, [
+              { label: 'Demo workspace', icon: WifiOff, checked: mailMode === 'demo', action: () => setWorkspace('demo') },
+              { label: 'Real mail', icon: Mail, checked: mailMode === 'gmail', action: () => setWorkspace('gmail') },
+              { label: 'New message', icon: Plus, separatorBefore: true, action: () => startCompose() }
+            ], 'Mail workspace')}>
               {mailMode === 'gmail' ? <Mail size={14} /> : <WifiOff size={14} />}
               {mailMode === 'gmail' ? 'Real mail' : 'Demo workspace'}
             </button>
             <span className={`save-indicator ${saveStatus}`}>{saveStatus === 'saved' ? 'All changes saved' : 'Saving…'}</span>
-            <button className="theme-quick" title="Toggle theme" onClick={() => setState({ ...state, settings: { ...state.settings, theme: state.settings.theme === 'dark' ? 'light' : 'dark' } })}>
+            <button className="theme-quick" title="Toggle theme" onClick={() => setState({ ...state, settings: { ...state.settings, theme: state.settings.theme === 'dark' ? 'light' : 'dark' } })} onContextMenu={(event) => showContextMenu(event, [
+              { label: 'System theme', icon: Settings, checked: state.settings.theme === 'system', action: () => setState({ ...state, settings: { ...state.settings, theme: 'system' } }) },
+              { label: 'Light theme', icon: Sun, checked: state.settings.theme === 'light', action: () => setState({ ...state, settings: { ...state.settings, theme: 'light' } }) },
+              { label: 'Dark theme', icon: Moon, checked: state.settings.theme === 'dark', action: () => setState({ ...state, settings: { ...state.settings, theme: 'dark' } }) }
+            ], 'Theme')}>
               {state.settings.theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
             </button>
           </header>
           <div className="module-content">
             {activeModule === 'mail' && mailMode === 'gmail' && <GmailView onToast={showToast} composeRequest={realComposeRequest} />}
-            {activeModule === 'mail' && mailMode === 'demo' && <MailView state={state} query={query} requestedMessageId={requestedDemoMessageId} onChange={setState} onCompose={(replyTo, replyAll) => setCompose({ replyTo, replyAll })} onNavigate={navigate} onToast={showToast} />}
+            {activeModule === 'mail' && mailMode === 'demo' && <MailView state={state} query={query} requestedMessageId={requestedDemoMessageId} onChange={setState} onCompose={(replyTo, replyAll, forward, draft) => setCompose({ replyTo, replyAll, forward, draft })} onNavigate={navigate} onToast={showToast} />}
             {activeModule === 'calendar' && <CalendarView state={state} query={query} onChange={setState} onToast={showToast} />}
             {activeModule === 'contacts' && <ContactsView state={state} query={query} onChange={setState} onCompose={(replyTo, initialTo) => setCompose({ replyTo, initialTo })} onChat={openContactChat} onOpenMessage={openDemoMessage} onToast={showToast} />}
             {activeModule === 'tasks' && <TasksView state={state} query={query} onChange={setState} onToast={showToast} />}
@@ -229,7 +257,7 @@ export default function App() {
         </main>
       </div>
 
-      {compose && mailMode === 'demo' && <ComposeModal state={state} replyTo={compose.replyTo} replyAll={compose.replyAll} initialTo={compose.initialTo} onChange={setState} onClose={() => setCompose(null)} onToast={showToast} />}
+      {compose && mailMode === 'demo' && <ComposeModal state={state} replyTo={compose.replyTo} replyAll={compose.replyAll} forward={compose.forward} draft={compose.draft} initialTo={compose.initialTo} onChange={setState} onClose={() => setCompose(null)} onToast={showToast} />}
       {settingsOpen && <SettingsModal state={state} onChange={setState} onClose={() => setSettingsOpen(false)} onReset={async () => {
         try {
           const next = await window.aerio.resetState()

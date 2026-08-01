@@ -1,5 +1,6 @@
 import {
-  CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, MapPin, Plus, Repeat2, Users
+  CalendarDays, CalendarPlus2, Check, ChevronLeft, ChevronRight, Clock3, Copy, Eye, EyeOff,
+  MapPin, Pencil, Plus, Repeat2, Trash2, Users
 } from 'lucide-react'
 import {
   addDays, addMonths, addWeeks, eachDayOfInterval, endOfMonth, endOfWeek, format,
@@ -9,6 +10,7 @@ import { useMemo, useState } from 'react'
 import { uid } from '../lib/domain'
 import type { AppState, CalendarEvent } from '../types'
 import Modal from '../components/Modal'
+import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 
 type CalendarMode = 'month' | 'week' | 'day' | 'agenda'
 
@@ -22,11 +24,13 @@ interface CalendarViewProps {
 const eventOnDay = (event: CalendarEvent, date: Date) => isSameDay(parseISO(event.start), date)
 
 export default function CalendarView({ state, query, onChange, onToast }: CalendarViewProps) {
+  const { showContextMenu } = useContextMenu()
   const [mode, setMode] = useState<CalendarMode>('month')
   const [cursor, setCursor] = useState(new Date())
   const [activeCalendars, setActiveCalendars] = useState(() => new Set(state.accounts.map((account) => account.id)))
   const [editing, setEditing] = useState<CalendarEvent | 'new' | null>(null)
   const [newDate, setNewDate] = useState<Date>(new Date())
+  const [newCalendarId, setNewCalendarId] = useState<string>()
 
   const filtered = useMemo(() => state.events
     .filter((event) => activeCalendars.has(event.calendarId))
@@ -40,9 +44,53 @@ export default function CalendarView({ state, query, onChange, onToast }: Calend
     else setCursor((date) => direction > 0 ? addDays(date, 1) : subDays(date, 1))
   }
 
-  const createOn = (date: Date) => {
+  const createOn = (date: Date, calendarId?: string) => {
     setNewDate(date)
+    setNewCalendarId(calendarId)
     setEditing('new')
+  }
+
+  const deleteEvent = (event: CalendarEvent) => {
+    onChange({ ...state, events: state.events.filter((item) => item.id !== event.id) })
+    onToast('Event deleted')
+  }
+
+  const duplicateEvent = (event: CalendarEvent) => {
+    const duplicate = { ...event, id: uid('event'), title: `${event.title} (copy)` }
+    onChange({ ...state, events: [duplicate, ...state.events] })
+    setEditing(duplicate)
+    onToast('Event duplicated')
+  }
+
+  const eventMenu = (event: CalendarEvent): ContextMenuItem[] => [
+    { label: 'Open event', icon: Pencil, action: () => setEditing(event) },
+    { label: 'Duplicate event', icon: Copy, separatorBefore: true, action: () => duplicateEvent(event) },
+    { label: 'Copy event details', icon: Copy, action: () => copyText(`${event.title}\n${format(parseISO(event.start), 'PPpp')} – ${format(parseISO(event.end), 'PPpp')}${event.location ? `\n${event.location}` : ''}`) },
+    { label: 'Delete event', icon: Trash2, separatorBefore: true, danger: true, action: () => deleteEvent(event) }
+  ]
+
+  const showEventMenu = (contextEvent: React.MouseEvent, event: CalendarEvent) => showContextMenu(contextEvent, eventMenu(event), event.title)
+
+  const showDateMenu = (contextEvent: React.MouseEvent, date: Date) => showContextMenu(contextEvent, [
+    { label: 'New event', icon: CalendarPlus2, action: () => createOn(date) },
+    { label: 'Open day view', icon: CalendarDays, action: () => { setCursor(date); setMode('day') } },
+    { label: 'Copy date', icon: Copy, separatorBefore: true, action: () => copyText(format(date, 'PPPP')) }
+  ], format(date, 'PPPP'))
+
+  const showCalendarMenu = (event: React.MouseEvent, account: AppState['accounts'][number]) => {
+    const active = activeCalendars.has(account.id)
+    showContextMenu(event, [
+      { label: active ? 'Hide calendar' : 'Show calendar', icon: active ? EyeOff : Eye, checked: active, action: () => setActiveCalendars((current) => {
+        const next = new Set(current)
+        if (next.has(account.id)) next.delete(account.id)
+        else next.add(account.id)
+        return next
+      }) },
+      { label: 'Show only this calendar', icon: Eye, action: () => setActiveCalendars(new Set([account.id])) },
+      { label: 'Show all calendars', icon: CalendarDays, action: () => setActiveCalendars(new Set(state.accounts.map((item) => item.id))) },
+      { label: `New event in ${account.name}`, icon: CalendarPlus2, separatorBefore: true, action: () => createOn(new Date(), account.id) },
+      { label: 'Copy calendar address', icon: Copy, separatorBefore: true, action: () => copyText(account.email) }
+    ], account.name)
   }
 
   const title = mode === 'month'
@@ -55,11 +103,11 @@ export default function CalendarView({ state, query, onChange, onToast }: Calend
     <div className="workspace">
       <aside className="context-sidebar calendar-sidebar">
         <button className="compose-button" onClick={() => createOn(new Date())}><Plus size={18} /> New event</button>
-        <MiniCalendar cursor={cursor} selected={cursor} onSelect={setCursor} />
+        <MiniCalendar cursor={cursor} selected={cursor} onSelect={setCursor} onContextDate={showDateMenu} />
         <div className="sidebar-group">
           <span className="sidebar-label">My calendars</span>
           {state.accounts.map((account) => (
-            <button className="calendar-toggle" key={account.id} onClick={() => {
+            <button className="calendar-toggle" key={account.id} onContextMenu={(event) => showCalendarMenu(event, account)} onClick={() => {
               setActiveCalendars((current) => {
                 const next = new Set(current)
                 if (next.has(account.id)) next.delete(account.id)
@@ -77,7 +125,7 @@ export default function CalendarView({ state, query, onChange, onToast }: Calend
         <div className="up-next-card">
           <span className="eyebrow">Up next</span>
           {filtered.filter((event) => new Date(event.end) >= new Date()).slice(0, 2).map((event) => (
-            <button key={event.id} onClick={() => setEditing(event)}>
+            <button key={event.id} onClick={() => setEditing(event)} onContextMenu={(contextEvent) => showEventMenu(contextEvent, event)}>
               <span className="event-dot" style={{ background: event.color }} />
               <span><strong>{event.title}</strong><small>{format(parseISO(event.start), 'EEE · HH:mm')}</small></span>
             </button>
@@ -98,15 +146,16 @@ export default function CalendarView({ state, query, onChange, onToast }: Calend
             ))}
           </div>
         </header>
-        {mode === 'month' && <MonthGrid cursor={cursor} events={filtered} onSelectEvent={setEditing} onCreate={createOn} />}
-        {mode === 'week' && <TimeGrid dates={eachDayOfInterval({ start: startOfWeek(cursor, { weekStartsOn: 1 }), end: endOfWeek(cursor, { weekStartsOn: 1 }) })} events={filtered} onSelectEvent={setEditing} onCreate={createOn} />}
-        {mode === 'day' && <TimeGrid dates={[cursor]} events={filtered} onSelectEvent={setEditing} onCreate={createOn} />}
-        {mode === 'agenda' && <Agenda events={filtered} onSelect={setEditing} />}
+        {mode === 'month' && <MonthGrid cursor={cursor} events={filtered} onSelectEvent={setEditing} onCreate={createOn} onContextEvent={showEventMenu} onContextDate={showDateMenu} />}
+        {mode === 'week' && <TimeGrid dates={eachDayOfInterval({ start: startOfWeek(cursor, { weekStartsOn: 1 }), end: endOfWeek(cursor, { weekStartsOn: 1 }) })} events={filtered} onSelectEvent={setEditing} onCreate={createOn} onContextEvent={showEventMenu} onContextDate={showDateMenu} />}
+        {mode === 'day' && <TimeGrid dates={[cursor]} events={filtered} onSelectEvent={setEditing} onCreate={createOn} onContextEvent={showEventMenu} onContextDate={showDateMenu} />}
+        {mode === 'agenda' && <Agenda events={filtered} onSelect={setEditing} onContextEvent={showEventMenu} />}
       </section>
       {editing && (
         <EventEditor
           event={editing === 'new' ? undefined : editing}
           date={newDate}
+          defaultCalendarId={newCalendarId}
           state={state}
           onClose={() => setEditing(null)}
           onSave={(event) => {
@@ -126,7 +175,7 @@ export default function CalendarView({ state, query, onChange, onToast }: Calend
   )
 }
 
-function MiniCalendar({ cursor, selected, onSelect }: { cursor: Date; selected: Date; onSelect(date: Date): void }) {
+function MiniCalendar({ cursor, selected, onSelect, onContextDate }: { cursor: Date; selected: Date; onSelect(date: Date): void; onContextDate(event: React.MouseEvent, date: Date): void }) {
   const start = startOfWeek(startOfMonth(cursor), { weekStartsOn: 1 })
   const days = eachDayOfInterval({ start, end: endOfWeek(endOfMonth(cursor), { weekStartsOn: 1 }) })
   return (
@@ -135,14 +184,14 @@ function MiniCalendar({ cursor, selected, onSelect }: { cursor: Date; selected: 
       <div className="mini-weekdays">{['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div>
       <div className="mini-days">
         {days.map((day) => (
-          <button key={day.toISOString()} className={`${!isSameMonth(day, cursor) ? 'muted' : ''} ${isSameDay(day, selected) ? 'selected' : ''} ${isSameDay(day, new Date()) ? 'today' : ''}`} onClick={() => onSelect(day)}>{format(day, 'd')}</button>
+          <button key={day.toISOString()} className={`${!isSameMonth(day, cursor) ? 'muted' : ''} ${isSameDay(day, selected) ? 'selected' : ''} ${isSameDay(day, new Date()) ? 'today' : ''}`} onClick={() => onSelect(day)} onContextMenu={(event) => onContextDate(event, day)}>{format(day, 'd')}</button>
         ))}
       </div>
     </div>
   )
 }
 
-function MonthGrid({ cursor, events, onSelectEvent, onCreate }: { cursor: Date; events: CalendarEvent[]; onSelectEvent(event: CalendarEvent): void; onCreate(date: Date): void }) {
+function MonthGrid({ cursor, events, onSelectEvent, onCreate, onContextEvent, onContextDate }: { cursor: Date; events: CalendarEvent[]; onSelectEvent(event: CalendarEvent): void; onCreate(date: Date): void; onContextEvent(contextEvent: React.MouseEvent, event: CalendarEvent): void; onContextDate(event: React.MouseEvent, date: Date): void }) {
   const start = startOfWeek(startOfMonth(cursor), { weekStartsOn: 1 })
   const days = eachDayOfInterval({ start, end: endOfWeek(endOfMonth(cursor), { weekStartsOn: 1 }) })
   return (
@@ -151,10 +200,10 @@ function MonthGrid({ cursor, events, onSelectEvent, onCreate }: { cursor: Date; 
       {days.map((day) => {
         const dayEvents = events.filter((event) => eventOnDay(event, day))
         return (
-          <div className={`month-day ${!isSameMonth(day, cursor) ? 'outside' : ''}`} key={day.toISOString()} onDoubleClick={() => onCreate(day)}>
-            <button className={`day-number ${isSameDay(day, new Date()) ? 'today' : ''}`} onClick={() => onCreate(day)}>{format(day, 'd')}</button>
+          <div className={`month-day ${!isSameMonth(day, cursor) ? 'outside' : ''}`} key={day.toISOString()} onDoubleClick={() => onCreate(day)} onContextMenu={(event) => onContextDate(event, day)}>
+            <button className={`day-number ${isSameDay(day, new Date()) ? 'today' : ''}`} onClick={() => onCreate(day)} onContextMenu={(event) => onContextDate(event, day)}>{format(day, 'd')}</button>
             {dayEvents.slice(0, 3).map((event) => (
-              <button className="calendar-event" key={event.id} style={{ '--event-color': event.color } as React.CSSProperties} onClick={() => onSelectEvent(event)}>
+              <button className="calendar-event" key={event.id} style={{ '--event-color': event.color } as React.CSSProperties} onClick={() => onSelectEvent(event)} onContextMenu={(contextEvent) => onContextEvent(contextEvent, event)}>
                 <span>{format(parseISO(event.start), 'HH:mm')}</span>{event.title}
               </button>
             ))}
@@ -166,7 +215,7 @@ function MonthGrid({ cursor, events, onSelectEvent, onCreate }: { cursor: Date; 
   )
 }
 
-function TimeGrid({ dates, events, onSelectEvent, onCreate }: { dates: Date[]; events: CalendarEvent[]; onSelectEvent(event: CalendarEvent): void; onCreate(date: Date): void }) {
+function TimeGrid({ dates, events, onSelectEvent, onCreate, onContextEvent, onContextDate }: { dates: Date[]; events: CalendarEvent[]; onSelectEvent(event: CalendarEvent): void; onCreate(date: Date): void; onContextEvent(contextEvent: React.MouseEvent, event: CalendarEvent): void; onContextDate(event: React.MouseEvent, date: Date): void }) {
   const hours = Array.from({ length: 13 }, (_, index) => index + 7)
   return (
     <div className="time-grid-wrap">
@@ -180,8 +229,9 @@ function TimeGrid({ dates, events, onSelectEvent, onCreate }: { dates: Date[]; e
             <time>{`${hour.toString().padStart(2, '0')}:00`}</time>
             {dates.map((date) => {
               const slotEvents = events.filter((event) => eventOnDay(event, date) && parseISO(event.start).getHours() === hour)
-              return <div className="time-slot" key={date.toISOString()} onDoubleClick={() => { const next = new Date(date); next.setHours(hour); onCreate(next) }}>
-                {slotEvents.map((event) => <button key={event.id} className="time-event" style={{ '--event-color': event.color } as React.CSSProperties} onClick={() => onSelectEvent(event)}><strong>{event.title}</strong><span>{format(parseISO(event.start), 'HH:mm')} – {format(parseISO(event.end), 'HH:mm')}</span></button>)}
+              const slotDate = new Date(date); slotDate.setHours(hour)
+              return <div className="time-slot" key={date.toISOString()} onDoubleClick={() => onCreate(slotDate)} onContextMenu={(event) => onContextDate(event, slotDate)}>
+                {slotEvents.map((event) => <button key={event.id} className="time-event" style={{ '--event-color': event.color } as React.CSSProperties} onClick={() => onSelectEvent(event)} onContextMenu={(contextEvent) => onContextEvent(contextEvent, event)}><strong>{event.title}</strong><span>{format(parseISO(event.start), 'HH:mm')} – {format(parseISO(event.end), 'HH:mm')}</span></button>)}
               </div>
             })}
           </div>
@@ -191,12 +241,12 @@ function TimeGrid({ dates, events, onSelectEvent, onCreate }: { dates: Date[]; e
   )
 }
 
-function Agenda({ events, onSelect }: { events: CalendarEvent[]; onSelect(event: CalendarEvent): void }) {
+function Agenda({ events, onSelect, onContextEvent }: { events: CalendarEvent[]; onSelect(event: CalendarEvent): void; onContextEvent(contextEvent: React.MouseEvent, event: CalendarEvent): void }) {
   const future = events.filter((event) => new Date(event.end) >= subDays(new Date(), 1))
   return (
     <div className="agenda-list">
       {future.map((event) => (
-        <button className="agenda-row" key={event.id} onClick={() => onSelect(event)}>
+        <button className="agenda-row" key={event.id} onClick={() => onSelect(event)} onContextMenu={(contextEvent) => onContextEvent(contextEvent, event)}>
           <div className="agenda-date"><strong>{format(parseISO(event.start), 'd')}</strong><span>{format(parseISO(event.start), 'MMM')}</span></div>
           <span className="event-line" style={{ background: event.color }} />
           <div><h3>{event.title}</h3><p><Clock3 size={14} /> {format(parseISO(event.start), 'HH:mm')} – {format(parseISO(event.end), 'HH:mm')} {event.location && <><MapPin size={14} /> {event.location}</>}</p></div>
@@ -208,14 +258,14 @@ function Agenda({ events, onSelect }: { events: CalendarEvent[]; onSelect(event:
   )
 }
 
-function EventEditor({ event, date, state, onClose, onSave, onDelete }: { event?: CalendarEvent; date: Date; state: AppState; onClose(): void; onSave(event: CalendarEvent): void; onDelete?(): void }) {
+function EventEditor({ event, date, defaultCalendarId, state, onClose, onSave, onDelete }: { event?: CalendarEvent; date: Date; defaultCalendarId?: string; state: AppState; onClose(): void; onSave(event: CalendarEvent): void; onDelete?(): void }) {
   const initialStart = event ? parseISO(event.start) : new Date(date)
   if (!event) initialStart.setHours(initialStart.getHours() || 10, 0, 0, 0)
   const initialEnd = event ? parseISO(event.end) : new Date(initialStart.getTime() + 60 * 60 * 1000)
   const [title, setTitle] = useState(event?.title ?? '')
   const [start, setStart] = useState(format(initialStart, "yyyy-MM-dd'T'HH:mm"))
   const [end, setEnd] = useState(format(initialEnd, "yyyy-MM-dd'T'HH:mm"))
-  const [calendarId, setCalendarId] = useState(event?.calendarId ?? state.accounts[0].id)
+  const [calendarId, setCalendarId] = useState(event?.calendarId ?? defaultCalendarId ?? state.accounts[0].id)
   const [location, setLocation] = useState(event?.location ?? '')
   const [description, setDescription] = useState(event?.description ?? '')
   const [attendees, setAttendees] = useState(event?.attendees.join(', ') ?? '')

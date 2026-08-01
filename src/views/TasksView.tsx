@@ -1,12 +1,13 @@
 import {
-  CalendarClock, Check, CheckCircle2, ChevronDown, Circle, GripVertical, ListTodo, Plus,
-  Repeat2, Search, Trash2
+  CalendarClock, Check, CheckCircle2, ChevronDown, Circle, Copy, Edit3, GripVertical, ListTodo,
+  Plus, Repeat2, Search, Trash2
 } from 'lucide-react'
 import { format, isBefore, isToday, parseISO } from 'date-fns'
 import { useMemo, useState } from 'react'
 import Modal from '../components/Modal'
 import { uid } from '../lib/domain'
 import type { AppState, Task } from '../types'
+import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 
 interface TasksViewProps {
   state: AppState
@@ -16,6 +17,7 @@ interface TasksViewProps {
 }
 
 export default function TasksView({ state, query, onChange, onToast }: TasksViewProps) {
+  const { showContextMenu } = useContextMenu()
   const [list, setList] = useState('Today')
   const [showCompleted, setShowCompleted] = useState(true)
   const [editing, setEditing] = useState<Task | 'new' | null>(null)
@@ -30,6 +32,50 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
 
   const toggleTask = (id: string) => {
     onChange({ ...state, tasks: state.tasks.map((task) => task.id === id ? { ...task, completed: !task.completed } : task) })
+  }
+
+  const changeTask = (task: Task, updates: Partial<Task>) => onChange({
+    ...state,
+    tasks: state.tasks.map((item) => item.id === task.id ? { ...item, ...updates } : item)
+  })
+
+  const duplicateTask = (task: Task) => {
+    const duplicate = { ...task, id: uid('task'), title: `${task.title} (copy)`, completed: false, subtasks: task.subtasks.map((item) => ({ ...item, id: uid('subtask') })) }
+    onChange({ ...state, tasks: [duplicate, ...state.tasks] })
+    onToast('Task duplicated')
+  }
+
+  const deleteTask = (task: Task) => {
+    if (!window.confirm(`Delete “${task.title}”?`)) return
+    onChange({ ...state, tasks: state.tasks.filter((item) => item.id !== task.id) })
+    onToast('Task deleted')
+  }
+
+  const taskMenu = (task: Task): ContextMenuItem[] => [
+    { label: 'Edit task', icon: Edit3, action: () => setEditing(task) },
+    { label: task.completed ? 'Reopen task' : 'Complete task', icon: CheckCircle2, checked: task.completed, action: () => changeTask(task, { completed: !task.completed }) },
+    ...(['high', 'normal', 'low'] as Task['priority'][]).map((priority, index) => ({
+      label: `${priority[0].toUpperCase()}${priority.slice(1)} priority`, icon: Circle,
+      separatorBefore: index === 0, checked: task.priority === priority, action: () => changeTask(task, { priority })
+    })),
+    ...(['Today', 'This week', 'Someday'] as const).map((target, index) => ({
+      label: `Move to ${target}`, icon: ListTodo, separatorBefore: index === 0, checked: task.listId === target, action: () => changeTask(task, { listId: target })
+    })),
+    { label: 'Duplicate task', icon: Copy, separatorBefore: true, action: () => duplicateTask(task) },
+    { label: 'Copy task title', icon: Copy, action: () => copyText(task.title) },
+    { label: 'Delete task', icon: Trash2, separatorBefore: true, danger: true, action: () => deleteTask(task) }
+  ]
+
+  const showListMenu = (event: React.MouseEvent, target: string) => {
+    const open = state.tasks.filter((task) => (target === 'All tasks' || task.listId === target) && !task.completed).length
+    showContextMenu(event, [
+      { label: `Open ${target}`, icon: ListTodo, action: () => setList(target) },
+      { label: `New task in ${target === 'All tasks' ? 'Today' : target}`, icon: Plus, separatorBefore: true, action: () => { setList(target === 'All tasks' ? 'Today' : target); setEditing('new') } },
+      { label: `Complete all open tasks${open ? ` (${open})` : ''}`, icon: CheckCircle2, disabled: open === 0, action: () => {
+        onChange({ ...state, tasks: state.tasks.map((task) => target === 'All tasks' || task.listId === target ? { ...task, completed: true } : task) })
+        onToast(`${target} completed`)
+      } }
+    ], target)
   }
 
   const moveTask = (dragId: string, targetId: string) => {
@@ -48,9 +94,9 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
         <button className="compose-button" onClick={() => setEditing('new')}><Plus size={18} /> New task</button>
         <div className="sidebar-group">
           <span className="sidebar-label">Smart lists</span>
-          <button className={`sidebar-item ${list === 'All tasks' ? 'active' : ''}`} onClick={() => setList('All tasks')}><ListTodo size={17} /><span>All tasks</span><em>{state.tasks.filter((task) => !task.completed).length}</em></button>
+          <button className={`sidebar-item ${list === 'All tasks' ? 'active' : ''}`} onClick={() => setList('All tasks')} onContextMenu={(event) => showListMenu(event, 'All tasks')}><ListTodo size={17} /><span>All tasks</span><em>{state.tasks.filter((task) => !task.completed).length}</em></button>
           {lists.map((item) => (
-            <button className={`sidebar-item ${list === item ? 'active' : ''}`} key={item} onClick={() => setList(item)}>
+            <button className={`sidebar-item ${list === item ? 'active' : ''}`} key={item} onClick={() => setList(item)} onContextMenu={(event) => showListMenu(event, item)}>
               {item === 'Today' ? <CalendarClock size={17} /> : item === 'This week' ? <CheckCircle2 size={17} /> : <Circle size={17} />}
               <span>{item}</span><em>{state.tasks.filter((task) => task.listId === item && !task.completed).length}</em>
             </button>
@@ -72,11 +118,11 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
           <div><span>{format(new Date(), 'EEEE')}</span><strong>{format(new Date(), 'd')}</strong></div>
           <p><strong>{format(new Date(), 'MMMM yyyy')}</strong><span>Make a little space for what matters.</span></p>
         </div>
-        <div className="task-list">
+        <div className="task-list" onContextMenu={(event) => showListMenu(event, list)}>
           {tasks.map((task) => {
             const overdue = task.due && isBefore(parseISO(task.due), new Date()) && !isToday(parseISO(task.due)) && !task.completed
             return (
-              <div className={`task-row ${task.completed ? 'completed' : ''}`} key={task.id} draggable onDragStart={(event) => event.dataTransfer.setData('text/task', task.id)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => moveTask(event.dataTransfer.getData('text/task'), task.id)}>
+              <div className={`task-row ${task.completed ? 'completed' : ''}`} key={task.id} draggable onContextMenu={(event) => showContextMenu(event, taskMenu(task), task.title)} onDragStart={(event) => event.dataTransfer.setData('text/task', task.id)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => moveTask(event.dataTransfer.getData('text/task'), task.id)}>
                 <GripVertical className="drag-handle" size={16} />
                 <button className={`task-check ${task.completed ? 'checked' : ''}`} aria-label={task.completed ? `Reopen ${task.title}` : `Complete ${task.title}`} onClick={() => toggleTask(task.id)}>{task.completed && <Check size={15} />}</button>
                 <button className="task-main" onClick={() => setEditing(task)}>

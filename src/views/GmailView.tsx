@@ -1,5 +1,5 @@
 import {
-  Archive, ChevronDown, Download, FileText, Image, Inbox, LoaderCircle, Mail, MailOpen,
+  Archive, AtSign, Copy, Download, FileText, Forward, Image, Inbox, LoaderCircle, Mail, MailOpen,
   Paperclip, Pause, Play, Plus, RefreshCw, Reply, Search, Send, Settings2,
   Star, Tag, Trash2, Undo2, UserPlus, WifiOff
 } from 'lucide-react'
@@ -8,15 +8,19 @@ import GmailComposeModal from '../components/GmailComposeModal'
 import MailAccountSetupModal from '../components/MailAccountSetupModal'
 import type {
   GmailAccountSummary,
+  GmailAttachment,
   GmailLabel,
+  GmailMessageDetail,
   GmailThreadDetail,
   MailActionKind,
   MailPage,
   MailQuery,
+  MailThreadSummary,
   PendingOperation,
   SyncProgress
 } from '../gmail-types'
 import { formatFileSize } from '../lib/domain'
+import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 
 interface GmailViewProps {
   onToast(message: string): void
@@ -38,6 +42,7 @@ function shortDate(date: string) {
 }
 
 export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProps) {
+  const { showContextMenu } = useContextMenu()
   const [accounts, setAccounts] = useState<GmailAccountSummary[]>([])
   const [labels, setLabels] = useState<GmailLabel[]>([])
   const [page, setPage] = useState<MailPage>(emptyPage)
@@ -50,7 +55,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
   const [thread, setThread] = useState<GmailThreadDetail>()
   const [sync, setSync] = useState<SyncProgress[]>([])
   const [loading, setLoading] = useState(true)
-  const [compose, setCompose] = useState<{ reply?: GmailThreadDetail }>()
+  const [compose, setCompose] = useState<{ reply?: GmailThreadDetail; forward?: boolean }>()
   const [pending, setPending] = useState<PendingOperation>()
   const [remoteImages, setRemoteImages] = useState(false)
   const [accountSetup, setAccountSetup] = useState(false)
@@ -221,6 +226,107 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
     }
   }
 
+  const startSync = async (targetAccount?: string) => {
+    try {
+      await window.aerio.mail.sync.start(targetAccount)
+      onToast('Checking for mail')
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Sync could not start')
+    }
+  }
+
+  const markVisibleRead = async () => {
+    const groups = new Map<string, string[]>()
+    for (const item of page.items.filter((entry) => entry.unread)) groups.set(item.accountId, [...(groups.get(item.accountId) ?? []), item.id])
+    for (const [targetAccount, ids] of groups) await applyAction('read', targetAccount, ids, false)
+    if (groups.size) onToast('Visible conversations marked as read')
+  }
+
+  const openSummary = (item: MailThreadSummary) => setSelectedKey(`${item.accountId}:${item.id}`)
+
+  const composeFromSummary = async (item: MailThreadSummary, forward = false) => {
+    try {
+      const detail = selected?.id === item.id && thread ? thread : await window.aerio.mail.mail.thread(item.accountId, item.id)
+      setCompose({ reply: detail, forward })
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Conversation could not be opened')
+    }
+  }
+
+  const summaryMenu = (item: MailThreadSummary): ContextMenuItem[] => {
+    const account = accounts.find((candidate) => candidate.id === item.accountId)
+    const readOnly = Boolean(account?.archived)
+    const inInbox = item.labelIds.includes('INBOX')
+    return [
+      { label: 'Open conversation', icon: MailOpen, action: () => openSummary(item) },
+      { label: 'Reply', icon: Reply, separatorBefore: true, disabled: readOnly || item.draft, action: () => composeFromSummary(item) },
+      { label: 'Forward', icon: Forward, disabled: readOnly, action: () => composeFromSummary(item, true) },
+      { label: item.unread ? 'Mark as read' : 'Mark as unread', icon: item.unread ? MailOpen : Mail, separatorBefore: true, disabled: readOnly, action: () => applyAction(item.unread ? 'read' : 'unread', item.accountId, [item.id]) },
+      { label: item.starred ? 'Remove star' : 'Add star', icon: Star, checked: item.starred, disabled: readOnly, action: () => applyAction(item.starred ? 'unstar' : 'star', item.accountId, [item.id]) },
+      { label: item.important ? 'Mark as not important' : 'Mark as important', icon: Tag, checked: item.important, disabled: readOnly, action: () => applyAction(item.important ? 'unimportant' : 'important', item.accountId, [item.id]) },
+      { label: inInbox ? 'Archive' : 'Move to inbox', icon: inInbox ? Archive : Inbox, separatorBefore: true, disabled: readOnly, action: () => applyAction(inInbox ? 'archive' : 'unarchive', item.accountId, [item.id]) },
+      { label: item.trashed ? 'Restore from Trash' : 'Move to Trash', icon: Trash2, danger: !item.trashed, disabled: readOnly, action: () => applyAction(item.trashed ? 'untrash' : 'trash', item.accountId, [item.id]) },
+      { label: 'Copy subject', icon: Copy, separatorBefore: true, action: () => copyText(item.subject) },
+      { label: 'Copy participants', icon: AtSign, action: () => copyText(item.participants.join(', ')) }
+    ]
+  }
+
+  const showSummaryMenu = (event: React.MouseEvent, item: MailThreadSummary) => {
+    if (window.getSelection()?.toString() || (event.target instanceof Element && event.target.closest('a[href], img[src]'))) return
+    showContextMenu(event, summaryMenu(item), item.subject)
+  }
+
+  const openAttachment = async (message: GmailMessageDetail, attachment: GmailAttachment) => {
+    try {
+      const result = await window.aerio.mail.attachments.open(message.accountId, message.id, attachment.id, attachment.filename)
+      if (result.error) onToast(result.error)
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Attachment could not be opened')
+    }
+  }
+
+  const saveAttachment = async (message: GmailMessageDetail, attachment: GmailAttachment) => {
+    try {
+      const result = await window.aerio.mail.attachments.save(message.accountId, message.id, attachment.id, attachment.filename)
+      if (result.error) onToast(result.error)
+      else if (result.savedPath) onToast(`Saved ${attachment.filename}`)
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Attachment could not be saved')
+    }
+  }
+
+  const showAttachmentMenu = (event: React.MouseEvent, message: GmailMessageDetail, attachment: GmailAttachment) => showContextMenu(event, [
+    { label: 'Open attachment', icon: Download, action: () => openAttachment(message, attachment) },
+    { label: 'Save as…', icon: Download, action: () => saveAttachment(message, attachment) },
+    { label: 'Copy filename', icon: Copy, separatorBefore: true, action: () => copyText(attachment.filename) }
+  ], attachment.filename)
+
+  const showProviderMessageMenu = (event: React.MouseEvent, message: GmailMessageDetail) => {
+    if (window.getSelection()?.toString() || (event.target instanceof Element && event.target.closest('a[href], img[src]'))) return
+    const index = thread?.messages.findIndex((item) => item.id === message.id) ?? -1
+    const replyThread = thread && index >= 0 ? { ...thread, messages: thread.messages.slice(0, index + 1) } : thread
+    showContextMenu(event, [
+      { label: 'Reply', icon: Reply, disabled: selectedAccount?.archived || !replyThread, action: () => setCompose({ reply: replyThread }) },
+      { label: 'Forward', icon: Forward, disabled: selectedAccount?.archived || !replyThread, action: () => setCompose({ reply: replyThread, forward: true }) },
+      { label: 'Copy sender name', icon: Copy, separatorBefore: true, action: () => copyText(message.fromName || message.fromEmail) },
+      { label: 'Copy sender address', icon: AtSign, action: () => copyText(message.fromEmail) },
+      { label: 'Copy message text', icon: Copy, action: () => copyText(message.text) }
+    ], message.subject)
+  }
+
+  const showAccountMenu = (event: React.MouseEvent, account?: GmailAccountSummary) => {
+    const progress = account ? sync.find((item) => item.accountId === account.id) : undefined
+    showContextMenu(event, [
+      { label: account ? `Open ${account.email}` : 'Open all accounts', icon: Mail, action: () => setAccountId(account?.id ?? 'all') },
+      { label: 'New message', icon: Plus, disabled: account?.archived, action: () => setCompose({}) },
+      { label: 'Check for mail', icon: RefreshCw, separatorBefore: true, disabled: account?.archived, action: () => startSync(account?.id) },
+      ...(account && progress ? [{ label: progress.phase === 'paused' ? 'Resume sync' : 'Pause sync', icon: progress.phase === 'paused' ? Play : Pause, action: () => toggleSync(account, progress.phase === 'paused') }] satisfies ContextMenuItem[] : []),
+      { label: 'Offline storage', icon: Download, action: showStorage },
+      ...(account ? [{ label: 'Copy email address', icon: Copy, separatorBefore: true, action: () => copyText(account.email) }] satisfies ContextMenuItem[] : []),
+      ...(account && !account.archived ? [{ label: 'Disconnect account…', icon: Settings2, separatorBefore: true, danger: true, action: () => disconnect(account) }] satisfies ContextMenuItem[] : [])
+    ], account?.email ?? 'All accounts')
+  }
+
   if (!loading && accounts.length === 0) {
     return (
       <div className="gmail-onboarding">
@@ -239,8 +345,16 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
 
   const activeProgress = sync.filter((item) => item.phase !== 'complete' && item.phase !== 'idle')
   const visibleLabels = labels.filter((label) => label.type === 'user' && (accountId === 'all' || label.accountId === accountId)).slice(0, 12)
+  const syncUnavailable = accountId === 'all'
+    ? !accounts.some((account) => !account.archived)
+    : Boolean(accounts.find((account) => account.id === accountId)?.archived)
+  const showFolderMenu = (event: React.MouseEvent, value: typeof folder) => showContextMenu(event, [
+    { label: `Open ${folderNames[value]}`, icon: Mail, action: () => { setLabelId(undefined); setFolder(value) } },
+    { label: 'New message', icon: Plus, separatorBefore: true, disabled: !accounts.some((account) => !account.archived), action: () => setCompose({}) },
+    { label: 'Check for mail', icon: RefreshCw, disabled: syncUnavailable, action: () => startSync(accountId === 'all' ? undefined : accountId) }
+  ], folderNames[value])
   const folderButton = (value: typeof folder, icon: React.ReactNode) => (
-    <button className={`sidebar-item ${folder === value && !labelId ? 'active' : ''}`} onClick={() => { setLabelId(undefined); setFolder(value) }}>{icon}<span>{folderNames[value]}</span></button>
+    <button className={`sidebar-item ${folder === value && !labelId ? 'active' : ''}`} onClick={() => { setLabelId(undefined); setFolder(value) }} onContextMenu={(event) => showFolderMenu(event, value)}>{icon}<span>{folderNames[value]}</span></button>
   )
 
   return (
@@ -261,31 +375,43 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
         </div>
         <div className="sidebar-group">
           <span className="sidebar-label">Accounts</span>
-          <button className={`sidebar-item ${accountId === 'all' ? 'active' : ''}`} onClick={() => setAccountId('all')}><span className="account-dot multi" /><span>All accounts</span></button>
-          {accounts.map((account) => <button className={`sidebar-item gmail-account-row ${accountId === account.id ? 'active' : ''}`} key={account.id} onClick={() => setAccountId(account.id)} title={`${account.email} · ${account.provider}${account.archived ? ' · offline archive' : ''}`}><span className="account-dot" style={{ background: account.color }} /><span>{account.email}{account.archived ? ' · archive' : ''}<small className="provider-name">{account.provider}</small></span><i className={`account-state ${account.status}`} /></button>)}
+          <button className={`sidebar-item ${accountId === 'all' ? 'active' : ''}`} onClick={() => setAccountId('all')} onContextMenu={(event) => showAccountMenu(event)}><span className="account-dot multi" /><span>All accounts</span></button>
+          {accounts.map((account) => <button className={`sidebar-item gmail-account-row ${accountId === account.id ? 'active' : ''}`} key={account.id} onClick={() => setAccountId(account.id)} onContextMenu={(event) => showAccountMenu(event, account)} title={`${account.email} · ${account.provider}${account.archived ? ' · offline archive' : ''}`}><span className="account-dot" style={{ background: account.color }} /><span>{account.email}{account.archived ? ' · archive' : ''}<small className="provider-name">{account.provider}</small></span><i className={`account-state ${account.status}`} /></button>)}
           <button className="sidebar-item" onClick={addAccount}><UserPlus size={16} /><span>Add mail account</span></button>
         </div>
-          {visibleLabels.length > 0 && <div className="sidebar-group"><span className="sidebar-label">Labels</span>{visibleLabels.map((label) => <button className={`sidebar-item ${labelId === label.id && accountId === label.accountId ? 'active' : ''}`} key={`${label.accountId}:${label.id}`} onClick={() => { setAccountId(label.accountId); setLabelId(label.id); setFolder('all') }}><Tag size={15} /><span>{label.name}</span></button>)}</div>}
+          {visibleLabels.length > 0 && <div className="sidebar-group"><span className="sidebar-label">Labels</span>{visibleLabels.map((label) => <button className={`sidebar-item ${labelId === label.id && accountId === label.accountId ? 'active' : ''}`} key={`${label.accountId}:${label.id}`} onClick={() => { setAccountId(label.accountId); setLabelId(label.id); setFolder('all') }} onContextMenu={(event) => showContextMenu(event, [
+            { label: `Open ${label.name}`, icon: Tag, action: () => { setAccountId(label.accountId); setLabelId(label.id); setFolder('all') } },
+            { label: 'New message', icon: Plus, separatorBefore: true, disabled: !accounts.some((account) => account.id === label.accountId && !account.archived), action: () => setCompose({}) },
+            { label: 'Check account for mail', icon: RefreshCw, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => startSync(label.accountId) }
+          ], label.name)}><Tag size={15} /><span>{label.name}</span></button>)}</div>}
         <div className="gmail-sidebar-footer">
           <button onClick={() => void showStorage()}><Download size={14} /> Offline storage</button>
-          {accounts.filter((account) => !account.archived).map((account) => <button key={account.id} title={`Disconnect ${account.email}`} onClick={() => void disconnect(account)}><Settings2 size={14} /> {account.email.split('@')[0]}</button>)}
+          {accounts.filter((account) => !account.archived).map((account) => <button key={account.id} title={`Disconnect ${account.email}`} onClick={() => void disconnect(account)} onContextMenu={(event) => showAccountMenu(event, account)}><Settings2 size={14} /> {account.email.split('@')[0]}</button>)}
         </div>
       </aside>
 
       <section className="mail-list-panel">
         <header className="panel-heading">
           <div><h1>{labels.find((label) => label.id === labelId && label.accountId === accountId)?.name ?? folderNames[folder]}</h1><p>{page.total.toLocaleString()} conversations</p></div>
-          <button className="icon-button" title="Check for mail" onClick={() => void window.aerio.mail.sync.start(accountId === 'all' ? undefined : accountId).catch((error) => onToast(error instanceof Error ? error.message : 'Sync could not start'))}><RefreshCw size={17} /></button>
+          <button className="icon-button" title="Check for mail" onClick={() => void startSync(accountId === 'all' ? undefined : accountId)}><RefreshCw size={17} /></button>
         </header>
         <div className="gmail-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search offline mail…" /><span>FTS</span></div>
         {activeProgress.map((item) => {
           const account = accounts.find((entry) => entry.id === item.accountId)
           const percent = item.total ? Math.round(item.completed / item.total * 100) : 0
-          return <div className="sync-strip" key={item.accountId}><span><strong>{account?.email ?? 'Mail'}</strong><small>{item.message ?? item.phase} · {item.completed.toLocaleString()}/{item.total.toLocaleString()}</small></span><progress max={Math.max(item.total, 1)} value={item.completed} /><button className="icon-button" disabled={!account} aria-label={item.phase === 'paused' ? 'Resume sync' : 'Pause sync'} onClick={() => account && void toggleSync(account, item.phase === 'paused')}>{item.phase === 'paused' ? <Play size={14} /> : <Pause size={14} />}</button><em>{percent}%</em></div>
+          return <div className="sync-strip" key={item.accountId} onContextMenu={(event) => account && showContextMenu(event, [
+            { label: item.phase === 'paused' ? 'Resume sync' : 'Pause sync', icon: item.phase === 'paused' ? Play : Pause, action: () => toggleSync(account, item.phase === 'paused') },
+            { label: 'Check for mail now', icon: RefreshCw, action: () => startSync(account.id) },
+            { label: 'Offline storage', icon: Download, separatorBefore: true, action: showStorage }
+          ], `${account.email} sync`)}><span><strong>{account?.email ?? 'Mail'}</strong><small>{item.message ?? item.phase} · {item.completed.toLocaleString()}/{item.total.toLocaleString()}</small></span><progress max={Math.max(item.total, 1)} value={item.completed} /><button className="icon-button" disabled={!account} aria-label={item.phase === 'paused' ? 'Resume sync' : 'Pause sync'} onClick={() => account && void toggleSync(account, item.phase === 'paused')}>{item.phase === 'paused' ? <Play size={14} /> : <Pause size={14} />}</button><em>{percent}%</em></div>
         })}
-        <div className="message-list">
+        <div className="message-list" onContextMenu={(event) => showContextMenu(event, [
+          { label: 'New message', icon: Plus, disabled: !accounts.some((account) => !account.archived), action: () => setCompose({}) },
+          { label: 'Check for mail', icon: RefreshCw, separatorBefore: true, disabled: syncUnavailable, action: () => startSync(accountId === 'all' ? undefined : accountId) },
+          { label: 'Mark visible conversations as read', icon: MailOpen, disabled: !page.items.some((item) => item.unread), action: markVisibleRead }
+        ], 'Conversation list')}>
           {page.items.map((item) => (
-            <button key={`${item.accountId}:${item.id}`} className={`message-row ${selectedKey === `${item.accountId}:${item.id}` ? 'selected' : ''} ${item.unread ? 'unread' : ''}`} onClick={() => setSelectedKey(`${item.accountId}:${item.id}`)}>
+            <button key={`${item.accountId}:${item.id}`} className={`message-row ${selectedKey === `${item.accountId}:${item.id}` ? 'selected' : ''} ${item.unread ? 'unread' : ''}`} onClick={() => openSummary(item)} onContextMenu={(event) => showSummaryMenu(event, item)}>
               <span className="avatar" style={{ background: accounts.find((account) => account.id === item.accountId)?.color }}>{item.participants[0]?.split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || '?'}</span>
               <span className="message-copy">
                 <span className="message-meta"><strong>{item.participants.join(', ') || 'Unknown sender'}</strong><time>{shortDate(item.lastDate)}</time></span>
@@ -313,12 +439,12 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
             <span className="spacer" />
             {!remoteImages && <button className="button ghost small" onClick={() => void loadRemoteImages()}><Image size={15} /> Load remote images</button>}
           </div>
-          <article className="message-reader gmail-thread">
+          <article className="message-reader gmail-thread" onContextMenu={(event) => showSummaryMenu(event, selected)}>
             <header><div className="reader-labels">{selected.labelIds.filter((label) => !['INBOX', 'UNREAD'].includes(label)).slice(0, 5).map((label) => <span key={label}>{label}</span>)}</div><h2>{thread.subject}</h2></header>
-            {thread.messages.map((message) => <section className="gmail-message" key={message.id}>
+            {thread.messages.map((message) => <section className="gmail-message" key={message.id} onContextMenu={(event) => showProviderMessageMenu(event, message)}>
               <header className="sender-card"><span className="avatar large">{(message.fromName || message.fromEmail).split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase()}</span><span><strong>{message.fromName || message.fromEmail}</strong><small>{message.fromEmail} · {new Date(message.date).toLocaleString()}</small></span><span className="spacer" />{!selectedAccount?.archived && <button className="button ghost small" onClick={() => setCompose({ reply: thread })}><Reply size={15} /> Reply</button>}</header>
               {message.sanitizedHtml ? <div className="message-body gmail-html" dangerouslySetInnerHTML={{ __html: message.sanitizedHtml }} /> : <div className="message-body gmail-text">{message.text}</div>}
-              {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{formatFileSize(attachment.size)}</small></span><button className="icon-button" title="Open" onClick={() => void window.aerio.mail.attachments.open(message.accountId, message.id, attachment.id, attachment.filename).then((result) => { if (result.error) onToast(result.error) }).catch((error) => onToast(error instanceof Error ? error.message : 'Attachment could not be opened'))}><Download size={16} /></button><button className="button ghost small" onClick={() => void window.aerio.mail.attachments.save(message.accountId, message.id, attachment.id, attachment.filename).then((result) => { if (result.savedPath) onToast(`Saved ${attachment.filename}`) }).catch((error) => onToast(error instanceof Error ? error.message : 'Attachment could not be saved'))}>Save as</button></div>)}</div>}
+              {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} onContextMenu={(event) => showAttachmentMenu(event, message, attachment)}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{formatFileSize(attachment.size)}</small></span><button className="icon-button" title="Open" onClick={() => void openAttachment(message, attachment)}><Download size={16} /></button><button className="button ghost small" onClick={() => void saveAttachment(message, attachment)}>Save as</button></div>)}</div>}
             </section>)}
             {!selectedAccount?.archived && <div className="quick-actions"><button className="button ghost" onClick={() => setCompose({ reply: thread })}><Reply size={16} /> Reply</button></div>}
           </article>
@@ -326,7 +452,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
       </section>
 
       {pending && <div className="undo-toast"><span>Mail change queued</span><button onClick={() => void undo()}><Undo2 size={15} /> Undo</button><button onClick={() => setPending(undefined)}>Dismiss</button></div>}
-      {compose && <GmailComposeModal accounts={accounts.filter((account) => !account.archived)} replyTo={compose.reply} onClose={() => setCompose(undefined)} onSent={() => void loadPage()} onToast={onToast} />}
+      {compose && <GmailComposeModal accounts={accounts.filter((account) => !account.archived)} replyTo={compose.reply} forward={compose.forward} onClose={() => setCompose(undefined)} onSent={() => void loadPage()} onToast={onToast} />}
       {accountSetup && <MailAccountSetupModal onClose={() => setAccountSetup(false)} onConnected={accountConnected} onToast={onToast} />}
     </div>
   )

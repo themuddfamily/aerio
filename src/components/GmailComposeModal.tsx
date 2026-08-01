@@ -1,26 +1,29 @@
-import { Paperclip, Send, X } from 'lucide-react'
+import { Copy, Paperclip, Send, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { GmailAccountSummary, GmailDraftInput, GmailThreadDetail } from '../gmail-types'
 import { formatFileSize } from '../lib/domain'
+import { copyText, useContextMenu } from './ContextMenu'
 
 interface GmailComposeModalProps {
   accounts: GmailAccountSummary[]
   replyTo?: GmailThreadDetail
+  forward?: boolean
   onClose(): void
   onSent(): void
   onToast(message: string): void
 }
 
-export default function GmailComposeModal({ accounts, replyTo, onClose, onSent, onToast }: GmailComposeModalProps) {
+export default function GmailComposeModal({ accounts, replyTo, forward, onClose, onSent, onToast }: GmailComposeModalProps) {
+  const { showContextMenu } = useContextMenu()
   const replyMessage = replyTo?.messages.at(-1)
   const [accountId, setAccountId] = useState(replyTo?.accountId ?? accounts[0]?.id ?? '')
   const [draftId, setDraftId] = useState<string>()
-  const [to, setTo] = useState(replyMessage?.fromEmail ?? '')
+  const [to, setTo] = useState(forward ? '' : replyMessage?.fromEmail ?? '')
   const [cc, setCc] = useState('')
   const [bcc, setBcc] = useState('')
   const [bccVisible, setBccVisible] = useState(false)
-  const [subject, setSubject] = useState(replyTo ? (/^re:/i.test(replyTo.subject) ? replyTo.subject : `Re: ${replyTo.subject}`) : '')
-  const [text, setText] = useState('')
+  const [subject, setSubject] = useState(replyTo ? forward ? (/^fwd:/i.test(replyTo.subject) ? replyTo.subject : `Fwd: ${replyTo.subject}`) : (/^re:/i.test(replyTo.subject) ? replyTo.subject : `Re: ${replyTo.subject}`) : '')
+  const [text, setText] = useState(replyTo && forward && replyMessage ? `\n\n---------- Forwarded message ----------\nFrom: ${replyMessage.fromName || replyMessage.fromEmail} <${replyMessage.fromEmail}>\nDate: ${new Date(replyMessage.date).toLocaleString()}\nSubject: ${replyMessage.subject}\n\n${replyMessage.text}` : '')
   const [attachments, setAttachments] = useState<{ name: string; size: number; path: string }[]>([])
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'sending' | 'failed'>('idle')
   const firstRender = useRef(true)
@@ -34,16 +37,16 @@ export default function GmailComposeModal({ accounts, replyTo, onClose, onSent, 
   const input = useMemo<GmailDraftInput>(() => ({
     id: draftId,
     accountId,
-    threadId: replyTo?.id,
-    inReplyTo: replyMessage?.messageIdHeader,
-    references: [...(replyMessage?.references ?? []), ...(replyMessage?.messageIdHeader ? [replyMessage.messageIdHeader] : [])],
+    threadId: forward ? undefined : replyTo?.id,
+    inReplyTo: forward ? undefined : replyMessage?.messageIdHeader,
+    references: forward ? [] : [...(replyMessage?.references ?? []), ...(replyMessage?.messageIdHeader ? [replyMessage.messageIdHeader] : [])],
     to: to.split(',').map((item) => item.trim()).filter(Boolean),
     cc: cc.split(',').map((item) => item.trim()).filter(Boolean),
     bcc: bcc.split(',').map((item) => item.trim()).filter(Boolean),
     subject,
     text,
     attachmentPaths: attachments.map((item) => item.path)
-  }), [accountId, attachments, bcc, cc, draftId, replyMessage, replyTo?.id, subject, text, to])
+  }), [accountId, attachments, bcc, cc, draftId, forward, replyMessage, replyTo?.id, subject, text, to])
 
   useEffect(() => {
     if (firstRender.current) {
@@ -102,7 +105,7 @@ export default function GmailComposeModal({ accounts, replyTo, onClose, onSent, 
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose() }}>
       <section className="modal gmail-compose" role="dialog" aria-label="Compose mail message">
         <header className="modal-header">
-          <div><h2>{replyTo ? 'Reply' : 'New message'}</h2><p>{status === 'saving' ? 'Saving draft…' : status === 'saved' ? 'Draft saved' : status === 'failed' ? 'Draft not saved' : 'Real mail'}</p></div>
+          <div><h2>{forward ? 'Forward' : replyTo ? 'Reply' : 'New message'}</h2><p>{status === 'saving' ? 'Saving draft…' : status === 'saved' ? 'Draft saved' : status === 'failed' ? 'Draft not saved' : 'Real mail'}</p></div>
           <button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button>
         </header>
         <div className="compose">
@@ -112,7 +115,10 @@ export default function GmailComposeModal({ accounts, replyTo, onClose, onSent, 
           {bccVisible && <div className="compose-row"><label>Bcc</label><input value={bcc} onChange={(event) => setBcc(event.target.value)} /></div>}
           <div className="compose-row"><label>Subject</label><input value={subject} onChange={(event) => setSubject(event.target.value)} /></div>
           <textarea className="compose-body" value={text} onChange={(event) => setText(event.target.value)} placeholder="Write your message…" />
-          {attachments.length > 0 && <div className="gmail-compose-files">{attachments.map((file, index) => <span key={`${file.path}-${index}`}><Paperclip size={14} /><strong>{file.name}</strong><small>{formatFileSize(file.size)}</small><button aria-label={`Remove ${file.name}`} onClick={() => setAttachments((items) => items.filter((_, itemIndex) => index !== itemIndex))}><X size={13} /></button></span>)}</div>}
+          {attachments.length > 0 && <div className="gmail-compose-files">{attachments.map((file, index) => <span key={`${file.path}-${index}`} onContextMenu={(event) => showContextMenu(event, [
+            { label: 'Copy filename', icon: Copy, action: () => copyText(file.name) },
+            { label: 'Remove attachment', icon: Trash2, separatorBefore: true, danger: true, action: () => setAttachments((items) => items.filter((_, itemIndex) => index !== itemIndex)) }
+          ], file.name)}><Paperclip size={14} /><strong>{file.name}</strong><small>{formatFileSize(file.size)}</small><button aria-label={`Remove ${file.name}`} onClick={() => setAttachments((items) => items.filter((_, itemIndex) => index !== itemIndex))}><X size={13} /></button></span>)}</div>}
         </div>
         <footer className="compose-footer">
           <button className="icon-button" title="Attach files" onClick={() => void chooseAttachments()}><Paperclip size={18} /></button>
