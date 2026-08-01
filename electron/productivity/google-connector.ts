@@ -1,3 +1,4 @@
+import type { CalendarEvent } from '../../src/types'
 import type { ProviderProductivityData, SyncedCalendar, SyncedCalendarEvent, SyncedContact } from '../../src/productivity-types'
 import { retryingJson, type ProductivityConnector } from './connector'
 
@@ -28,6 +29,23 @@ interface GooglePerson {
 const recurrence = (rules?: string[]) => {
   const frequency = rules?.find((rule) => rule.startsWith('RRULE:'))?.match(/FREQ=(DAILY|WEEKLY|MONTHLY)/)?.[1]?.toLowerCase()
   return frequency === 'daily' || frequency === 'weekly' || frequency === 'monthly' ? frequency : 'none'
+}
+
+export const googleEventBody = (event: CalendarEvent) => {
+  const repeat = event.recurrence ?? 'none'
+  return {
+    summary: event.title,
+    description: event.description || undefined,
+    location: event.location || undefined,
+    start: { dateTime: event.start },
+    end: { dateTime: event.end },
+    attendees: event.attendees.map((email) => ({ email })),
+    reminders: {
+      useDefault: false,
+      overrides: [{ method: 'popup', minutes: event.reminderMinutes }]
+    },
+    recurrence: repeat === 'none' ? undefined : [`RRULE:FREQ=${repeat.toUpperCase()}`]
+  }
 }
 
 export function mapGoogleEvent(accountId: string, calendar: SyncedCalendar, event: GoogleEvent): SyncedCalendarEvent | undefined {
@@ -78,7 +96,11 @@ export function mapGoogleContact(accountId: string, person: GooglePerson): Synce
 export class GoogleProductivityConnector implements ProductivityConnector {
   readonly provider = 'gmail' as const
 
-  constructor(private readonly accountId: string, private readonly token: () => Promise<string>) {}
+  constructor(
+    private readonly accountId: string,
+    private readonly token: () => Promise<string>,
+    private readonly calendarWriteAuthorized = false
+  ) {}
 
   async sync(): Promise<ProviderProductivityData> {
     const calendarItems = await this.pages<GoogleCalendar>('https://www.googleapis.com/calendar/v3/users/me/calendarList', 'items')
@@ -90,7 +112,7 @@ export class GoogleProductivityConnector implements ProductivityConnector {
       name: calendar.summary?.trim() || 'Calendar',
       color: calendar.backgroundColor ?? '#6558e8',
       primary: Boolean(calendar.primary),
-      canWrite: false
+      canWrite: this.calendarWriteAuthorized && (calendar.accessRole === 'owner' || calendar.accessRole === 'writer')
     }))
     const from = new Date(); from.setUTCFullYear(from.getUTCFullYear() - 1)
     const to = new Date(); to.setUTCFullYear(to.getUTCFullYear() + 2)
@@ -106,6 +128,47 @@ export class GoogleProductivityConnector implements ProductivityConnector {
     const personFields = 'names,emailAddresses,phoneNumbers,organizations,biographies,memberships'
     const people = await this.pages<GooglePerson>(`https://people.googleapis.com/v1/people/me/connections?personFields=${personFields}&pageSize=1000`, 'connections')
     return { calendars, events, contacts: people.flatMap((person) => { const mapped = mapGoogleContact(this.accountId, person); return mapped ? [mapped] : [] }) }
+  }
+
+  async createEvent(calendar: SyncedCalendar, event: CalendarEvent) {
+    this.assertWritable(calendar)
+    const remote = await retryingJson<GoogleEvent>(this.provider, this.eventsUrl(calendar), this.token, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(googleEventBody(event))
+    })
+    return this.mapWrittenEvent(calendar, remote)
+  }
+
+  async updateEvent(calendar: SyncedCalendar, current: SyncedCalendarEvent, event: CalendarEvent) {
+    this.assertWritable(calendar)
+    const remote = await retryingJson<GoogleEvent>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(current.remoteId)}`, this.token, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(googleEventBody(event))
+    })
+    return this.mapWrittenEvent(calendar, remote)
+  }
+
+  async deleteEvent(calendar: SyncedCalendar, event: SyncedCalendarEvent) {
+    this.assertWritable(calendar)
+    await retryingJson<void>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(event.remoteId)}`, this.token, { method: 'DELETE' })
+  }
+
+  private eventsUrl(calendar: SyncedCalendar) {
+    return `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendar.remoteId)}/events`
+  }
+
+  private assertWritable(calendar: SyncedCalendar) {
+    if (calendar.accountId !== this.accountId || calendar.provider !== this.provider || !calendar.canWrite || !this.calendarWriteAuthorized) {
+      throw new Error('Reconnect this Google account once to enable Calendar editing')
+    }
+  }
+
+  private mapWrittenEvent(calendar: SyncedCalendar, remote: GoogleEvent) {
+    const mapped = mapGoogleEvent(this.accountId, calendar, remote)
+    if (!mapped) throw new Error('Google saved the event but did not return valid event details')
+    return mapped
   }
 
   private async pages<T>(initialUrl: string, field: 'items' | 'connections') {

@@ -1,6 +1,6 @@
 # Aerio
 
-Aerio is a calm, modern desktop communications client for Windows. The connected workspace supports multi-provider mail plus the first read-only Calendar and Contacts synchronization slice alongside the original local demo. The workspaces stay separate, so sample content never mixes with provider data.
+Aerio is a calm, modern desktop communications client for Windows. The connected workspace supports multi-provider mail, writable Google Calendar synchronization, and read-only Outlook Calendar and provider Contacts alongside the original local demo. The workspaces stay separate, so sample content never mixes with provider data.
 
 ## Real-mail alpha
 
@@ -19,9 +19,9 @@ Aerio is a calm, modern desktop communications client for Windows. The connected
 - Sanitized HTML; scripts and unsafe links are removed, and remote images are blocked by default
 - Dedicated message windows for demo and real mail; double-click a conversation to open or focus its window
 - Read-only local archive or complete local deletion when disconnecting an account
-- Read-only Google Calendar/Contacts and Outlook Calendar/Contacts synchronization, cached in a separate local database
+- Google Calendar synchronization with event creation, editing, and deletion; Google Contacts and Outlook Calendar/Contacts remain read-only and are cached in a separate local database
 
-Tasks, Notes, and Chat remain local/demo modules. Provider Calendar and Contacts data is only loaded after **Sync now** and cannot yet be edited from Aerio.
+Tasks, Notes, and Chat remain local/demo modules. Provider Calendar and Contacts data is loaded after **Sync now**. Google events can be created by double-clicking a day or time slot and edited from Aerio after granting the event scope once.
 
 ## Connect an account
 
@@ -37,7 +37,7 @@ Aerio includes its public Google Desktop client ID and compiles its client secre
 4. Put its `client_secret` into `.env.local` as `MAIN_VITE_GOOGLE_CLIENT_SECRET`, then rebuild Aerio. The matching public client ID is already Aerio's default; `MAIN_VITE_GOOGLE_CLIENT_ID` can override it for a different registration.
 5. Switch to **Connected workspace**, choose Gmail, and select **Connect Gmail**. Your normal browser completes Google sign-in and returns to Aerio through a temporary `127.0.0.1` callback.
 
-Aerio requests Gmail modify access plus read-only Calendar and Contacts access. It does not request permanent-delete, Calendar-write, or Contacts-write access. Existing accounts connected by an older Aerio build must use **Account settings → Reconnect** once to approve the added read-only scopes.
+Aerio requests Gmail modify access, read-only Calendar-list access, Google Calendar event read/write access, and read-only Contacts access. It does not request permission to create or share calendars, permanently delete Gmail messages, or edit Contacts. Existing accounts connected by an older Aerio build must choose **Enable event editing** in Calendar (or **Account settings → Reconnect**) once to approve the added event scope.
 
 The first download is quota-bound. A mailbox with 100,000 messages can take roughly seven hours or more, depending on message size, retries, and Google’s per-user quota. Progress is persistent; quitting, losing connectivity, or pausing does not discard completed work.
 
@@ -137,6 +137,6 @@ The longer-term provider boundaries and the reasoning behind local Tasks/Notes a
 - IMAP can store multiple physical copies of the same message, but Aerio presents them as one logical conversation and keeps every location available for folder actions.
 - Scheduled send remains demo-only and is not presented as a real Gmail capability.
 - Offline drafts are queued until connectivity returns, but conflict resolution with edits made simultaneously in another client is not yet implemented.
-- Connected Calendar and Contacts are currently read-only and refresh manually. The initial Calendar window covers one year in the past through two years in the future; incremental checkpoints and provider writes are next.
+- Google Calendar events are writable; Outlook Calendar and all provider Contacts remain read-only and refresh manually. The initial Calendar window covers one year in the past through two years in the future; incremental checkpoints and Outlook writes are next.
 - Google Keep and consumer Google Chat do not expose suitable general synchronization APIs. Aerio Notes remain local, and remote Chat requires a separately defined service strategy.
 - Windows is the tested packaging target; macOS and Linux packaging are not configured.

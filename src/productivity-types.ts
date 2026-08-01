@@ -58,6 +58,9 @@ export interface LocalModuleSnapshot {
 export interface ProductivityDesktopApi {
   snapshot(): Promise<ProductivitySnapshot>
   sync(accountId: string): Promise<ProductivitySnapshot>
+  createEvent(event: CalendarEvent): Promise<ProductivitySnapshot>
+  updateEvent(event: CalendarEvent): Promise<ProductivitySnapshot>
+  deleteEvent(eventId: string): Promise<ProductivitySnapshot>
   localSnapshot(): Promise<LocalModuleSnapshot>
   saveLocal(snapshot: LocalModuleSnapshot): Promise<void>
 }

@@ -45,6 +45,17 @@ describe('ProductivityStore', () => {
     store.close()
   })
 
+  it('updates the cache after provider event writes', () => {
+    const store = new ProductivityStore(':memory:')
+    store.replaceAccount('account', 'gmail', data)
+    const updated = { ...data.events[0], title: 'Updated planning' }
+    store.upsertEvent(updated)
+    expect(store.snapshot().events).toEqual([updated])
+    store.deleteEvent(updated.id)
+    expect(store.snapshot().events).toEqual([])
+    store.close()
+  })
+
   it('keeps production local Tasks and Notes outside provider snapshots', () => {
     const store = new ProductivityStore(':memory:')
     store.saveLocal({

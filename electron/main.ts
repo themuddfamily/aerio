@@ -8,7 +8,7 @@ import { basename, extname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import initSqlJs, { type Database } from 'sql.js'
 import { createDemoState } from '../src/demo-data'
-import type { AppState, Attachment, MessageWindowRequest } from '../src/types'
+import type { AppState, Attachment, CalendarEvent, MessageWindowRequest } from '../src/types'
 import type {
   ApplyMailActionInput,
   GmailAccountSummary,
@@ -199,7 +199,11 @@ async function syncProductivity(accountId: string): Promise<ProductivitySnapshot
   const store = requireProductivityStore()
   store.setSyncing(accountId)
   const connector = provider === 'gmail'
-    ? new GoogleProductivityConnector(accountId, () => requireVault().accessToken(accountId))
+    ? new GoogleProductivityConnector(
+      accountId,
+      () => requireVault().accessToken(accountId),
+      requireVault().hasGoogleCalendarWriteAccess(accountId)
+    )
     : new MicrosoftProductivityConnector(accountId, () => requireVault().microsoftAccessToken(accountId))
   try {
     const data = await connector.sync()
@@ -215,6 +219,72 @@ async function syncProductivity(accountId: string): Promise<ProductivitySnapshot
     diagnostic({ level: 'error', component: 'provider', event: 'productivity-sync-error', accountId, message, details: { provider } })
     throw new Error(message)
   }
+}
+
+function validCalendarEvent(value: unknown): value is CalendarEvent {
+  if (!value || typeof value !== 'object') return false
+  const event = value as Partial<CalendarEvent>
+  const validText = (text: unknown, max = 20_000) => typeof text === 'string' && text.length <= max
+  if (!validText(event.id, 500) || !event.id || !validText(event.calendarId, 500) || !event.calendarId || !validText(event.title, 500) || !event.title?.trim()) return false
+  if (!validText(event.start, 100) || !validText(event.end, 100)) return false
+  const start = Date.parse(event.start ?? '')
+  const end = Date.parse(event.end ?? '')
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return false
+  if (event.location !== undefined && !validText(event.location, 2_000)) return false
+  if (event.description !== undefined && !validText(event.description, 100_000)) return false
+  if (!validText(event.color, 100) || !Array.isArray(event.attendees) || event.attendees.length > 1_000 || !event.attendees.every((item) => validText(item, 500))) return false
+  if (!Number.isInteger(event.reminderMinutes) || Number(event.reminderMinutes) < 0 || Number(event.reminderMinutes) > 40_320) return false
+  return event.recurrence === undefined || event.recurrence === 'none' || event.recurrence === 'daily' || event.recurrence === 'weekly' || event.recurrence === 'monthly'
+}
+
+function googleCalendarConnector(accountId: string) {
+  return new GoogleProductivityConnector(
+    accountId,
+    () => requireVault().accessToken(accountId),
+    requireVault().hasGoogleCalendarWriteAccess(accountId)
+  )
+}
+
+async function createProductivityEvent(input: CalendarEvent) {
+  const store = requireProductivityStore()
+  const calendar = store.snapshot().calendars.find((item) => item.id === input.calendarId)
+  if (!calendar) throw new Error('That calendar is no longer available')
+  if (calendar.provider !== 'gmail') throw new Error('Event editing is currently available for Google Calendar accounts')
+  const saved = await googleCalendarConnector(calendar.accountId).createEvent(calendar, input)
+  store.upsertEvent(saved)
+  diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-created', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
+  return store.snapshot()
+}
+
+async function updateProductivityEvent(input: CalendarEvent) {
+  const store = requireProductivityStore()
+  const snapshot = store.snapshot()
+  const current = snapshot.events.find((item) => item.id === input.id)
+  if (!current) throw new Error('That event is no longer available')
+  if (current.readOnly) throw new Error('This event cannot be edited')
+  if (input.calendarId !== current.calendarId) throw new Error('Moving an existing event to another calendar is not supported yet')
+  const calendar = snapshot.calendars.find((item) => item.id === current.calendarId)
+  if (!calendar) throw new Error('That calendar is no longer available')
+  if (calendar.provider !== 'gmail') throw new Error('Event editing is currently available for Google Calendar accounts')
+  const saved = await googleCalendarConnector(calendar.accountId).updateEvent(calendar, current, input)
+  store.upsertEvent(saved)
+  diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-updated', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
+  return store.snapshot()
+}
+
+async function deleteProductivityEvent(eventId: string) {
+  const store = requireProductivityStore()
+  const snapshot = store.snapshot()
+  const current = snapshot.events.find((item) => item.id === eventId)
+  if (!current) throw new Error('That event is no longer available')
+  if (current.readOnly) throw new Error('This event cannot be deleted')
+  const calendar = snapshot.calendars.find((item) => item.id === current.calendarId)
+  if (!calendar) throw new Error('That calendar is no longer available')
+  if (calendar.provider !== 'gmail') throw new Error('Event editing is currently available for Google Calendar accounts')
+  await googleCalendarConnector(calendar.accountId).deleteEvent(calendar, current)
+  store.deleteEvent(current.id)
+  diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-deleted', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
+  return store.snapshot()
 }
 
 function isPrivateAddress(address: string) {
@@ -601,6 +671,18 @@ function registerIpc() {
   ipcMain.handle('productivity:sync', (_event, accountId: string) => {
     if (typeof accountId !== 'string' || !accountId || accountId.length > 200) throw new Error('Choose a valid account to synchronize')
     return syncProductivity(accountId)
+  })
+  ipcMain.handle('productivity:event-create', (_event, input: unknown) => {
+    if (!validCalendarEvent(input)) throw new Error('Enter valid event details')
+    return createProductivityEvent(input)
+  })
+  ipcMain.handle('productivity:event-update', (_event, input: unknown) => {
+    if (!validCalendarEvent(input)) throw new Error('Enter valid event details')
+    return updateProductivityEvent(input)
+  })
+  ipcMain.handle('productivity:event-delete', (_event, eventId: unknown) => {
+    if (typeof eventId !== 'string' || !eventId || eventId.length > 500) throw new Error('Choose a valid event')
+    return deleteProductivityEvent(eventId)
   })
   ipcMain.handle('app:update:status', () => updates?.status() ?? ({
     phase: 'unsupported',

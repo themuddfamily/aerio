@@ -125,7 +125,7 @@ try {
   await step('calendar editor validates and saves', async () => {
     await moduleButton('Calendar').click()
     await assertAccessibleButtons()
-    await page.getByRole('button', { name: 'New event' }).click()
+    await page.locator('.month-day').first().dispatchEvent('dblclick')
     const editor = dialog('New event')
     assert.equal(await editor.getByRole('button', { name: 'Save event' }).isDisabled(), true)
     await editor.getByPlaceholder('Add a title').fill('Interaction audit')

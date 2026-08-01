@@ -27,7 +27,7 @@ export async function retryingJson<T>(
       ...init.headers
     }
   })
-  if (response.ok) return await response.json() as T
+  if (response.ok) return response.status === 204 ? undefined as T : await response.json() as T
   if ((response.status === 429 || response.status >= 500) && attempt < 5) {
     const retryAfter = Number(response.headers.get('retry-after') ?? 0)
     const delay = retryAfter > 0 ? retryAfter * 1_000 : Math.min(32_000, (2 ** attempt) * 750 + Math.floor(Math.random() * 500))

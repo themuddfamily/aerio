@@ -19,15 +19,22 @@ interface CalendarViewProps {
   query: string
   onChange(next: AppState): void
   onToast(message: string): void
-  readOnly?: boolean
+  providerBacked?: boolean
+  writableCalendarIds?: ReadonlySet<string>
   onSync?(): Promise<void> | void
+  onEnableEditing?(): Promise<void> | void
+  onSaveProviderEvent?(event: CalendarEvent, exists: boolean): Promise<void>
+  onDeleteProviderEvent?(event: CalendarEvent): Promise<void>
   syncing?: boolean
   sourceMessage?: string
 }
 
 const eventOnDay = (event: CalendarEvent, date: Date) => isSameDay(parseISO(event.start), date)
 
-export default function CalendarView({ state, query, onChange, onToast, readOnly = false, onSync, syncing = false, sourceMessage }: CalendarViewProps) {
+export default function CalendarView({
+  state, query, onChange, onToast, providerBacked = false, writableCalendarIds = new Set(),
+  onSync, onEnableEditing, onSaveProviderEvent, onDeleteProviderEvent, syncing = false, sourceMessage
+}: CalendarViewProps) {
   const { showContextMenu } = useContextMenu()
   const [mode, setMode] = useState<CalendarMode>('month')
   const [cursor, setCursor] = useState(new Date())
@@ -36,6 +43,9 @@ export default function CalendarView({ state, query, onChange, onToast, readOnly
   const [newDate, setNewDate] = useState<Date>(new Date())
   const [newCalendarId, setNewCalendarId] = useState<string>()
   const calendarIds = state.accounts.map((account) => account.id).join('\n')
+  const hasWritableCalendar = !providerBacked || writableCalendarIds.size > 0
+  const canWriteCalendar = (calendarId: string) => !providerBacked || writableCalendarIds.has(calendarId)
+  const canEditEvent = (event: CalendarEvent) => canWriteCalendar(event.calendarId) && !('readOnly' in event && event.readOnly)
 
   useEffect(() => {
     setActiveCalendars((current) => new Set([...current, ...state.accounts.map((account) => account.id)]))
@@ -54,35 +64,54 @@ export default function CalendarView({ state, query, onChange, onToast, readOnly
   }
 
   const createOn = (date: Date, calendarId?: string) => {
-    if (readOnly) return
+    const targetCalendarId = calendarId && canWriteCalendar(calendarId)
+      ? calendarId
+      : state.accounts.find((account) => canWriteCalendar(account.id))?.id
+    if (!targetCalendarId) {
+      onToast('Enable Google Calendar editing once, then double-click again')
+      return
+    }
     setNewDate(date)
-    setNewCalendarId(calendarId)
+    setNewCalendarId(targetCalendarId)
     setEditing('new')
   }
 
-  const deleteEvent = (event: CalendarEvent) => {
-    onChange({ ...state, events: state.events.filter((item) => item.id !== event.id) })
+  const deleteEvent = async (event: CalendarEvent) => {
+    if (providerBacked) {
+      if (!onDeleteProviderEvent) throw new Error('Provider event deletion is unavailable')
+      await onDeleteProviderEvent(event)
+    } else onChange({ ...state, events: state.events.filter((item) => item.id !== event.id) })
     onToast('Event deleted')
   }
 
-  const duplicateEvent = (event: CalendarEvent) => {
+  const duplicateEvent = async (event: CalendarEvent) => {
     const duplicate = { ...event, id: uid('event'), title: `${event.title} (copy)` }
-    onChange({ ...state, events: [duplicate, ...state.events] })
-    setEditing(duplicate)
+    if (providerBacked) {
+      if (!onSaveProviderEvent) throw new Error('Provider event creation is unavailable')
+      await onSaveProviderEvent(duplicate, false)
+    } else onChange({ ...state, events: [duplicate, ...state.events] })
     onToast('Event duplicated')
   }
 
   const eventMenu = (event: CalendarEvent): ContextMenuItem[] => [
     { label: 'Open event', icon: Pencil, action: () => setEditing(event) },
-    ...(!readOnly ? [{ label: 'Duplicate event', icon: Copy, separatorBefore: true, action: () => duplicateEvent(event) }] satisfies ContextMenuItem[] : []),
+    ...(canEditEvent(event) ? [{ label: 'Duplicate event', icon: Copy, separatorBefore: true, action: async () => {
+      try { await duplicateEvent(event) }
+      catch (error) { onToast(error instanceof Error ? error.message : 'Event could not be duplicated') }
+    } }] satisfies ContextMenuItem[] : []),
     { label: 'Copy event details', icon: Copy, action: () => copyText(`${event.title}\n${format(parseISO(event.start), 'PPpp')} – ${format(parseISO(event.end), 'PPpp')}${event.location ? `\n${event.location}` : ''}`) },
-    ...(!readOnly ? [{ label: 'Delete event', icon: Trash2, separatorBefore: true, danger: true, action: () => deleteEvent(event) }] satisfies ContextMenuItem[] : [])
+    ...(canEditEvent(event) ? [{ label: 'Delete event', icon: Trash2, separatorBefore: true, danger: true, action: async () => {
+      try { await deleteEvent(event) }
+      catch (error) { onToast(error instanceof Error ? error.message : 'Event could not be deleted') }
+    } }] satisfies ContextMenuItem[] : [])
   ]
 
   const showEventMenu = (contextEvent: React.MouseEvent, event: CalendarEvent) => showContextMenu(contextEvent, eventMenu(event), event.title)
 
   const showDateMenu = (contextEvent: React.MouseEvent, date: Date) => showContextMenu(contextEvent, [
-    ...(!readOnly ? [{ label: 'New event', icon: CalendarPlus2, action: () => createOn(date) }] satisfies ContextMenuItem[] : []),
+    ...(hasWritableCalendar
+      ? [{ label: 'New event', icon: CalendarPlus2, action: () => createOn(date) }] satisfies ContextMenuItem[]
+      : [{ label: 'Enable event editing', icon: CalendarPlus2, action: () => onEnableEditing?.() }] satisfies ContextMenuItem[]),
     { label: 'Open day view', icon: CalendarDays, action: () => { setCursor(date); setMode('day') } },
     { label: 'Copy date', icon: Copy, separatorBefore: true, action: () => copyText(format(date, 'PPPP')) }
   ], format(date, 'PPPP'))
@@ -98,7 +127,7 @@ export default function CalendarView({ state, query, onChange, onToast, readOnly
       }) },
       { label: 'Show only this calendar', icon: Eye, action: () => setActiveCalendars(new Set([account.id])) },
       { label: 'Show all calendars', icon: CalendarDays, action: () => setActiveCalendars(new Set(state.accounts.map((item) => item.id))) },
-      ...(!readOnly ? [{ label: `New event in ${account.name}`, icon: CalendarPlus2, separatorBefore: true, action: () => createOn(new Date(), account.id) }] satisfies ContextMenuItem[] : []),
+      ...(canWriteCalendar(account.id) ? [{ label: `New event in ${account.name}`, icon: CalendarPlus2, separatorBefore: true, action: () => createOn(new Date(), account.id) }] satisfies ContextMenuItem[] : []),
       { label: 'Copy calendar address', icon: Copy, separatorBefore: true, action: () => copyText(account.email) }
     ], account.name)
   }
@@ -112,10 +141,19 @@ export default function CalendarView({ state, query, onChange, onToast, readOnly
   return (
     <div className="workspace">
       <aside className="context-sidebar calendar-sidebar">
-        {readOnly
-          ? <><button className="compose-button" disabled={syncing} onClick={() => void onSync?.()}><RefreshCw className={syncing ? 'spin' : undefined} size={18} /> {syncing ? 'Syncing…' : 'Sync now'}</button><p className="provider-source-note" aria-live="polite">{sourceMessage}</p></>
-          : <button className="compose-button" onClick={() => createOn(new Date())}><Plus size={18} /> New event</button>}
-        <MiniCalendar cursor={cursor} selected={cursor} onSelect={setCursor} onContextDate={showDateMenu} />
+        <button
+          className="compose-button"
+          disabled={syncing}
+          onClick={() => void (hasWritableCalendar ? createOn(new Date()) : onEnableEditing?.())}
+        >
+          {hasWritableCalendar ? <Plus size={18} /> : <CalendarPlus2 size={18} />}
+          {hasWritableCalendar ? 'New event' : 'Enable event editing'}
+        </button>
+        {providerBacked && <>
+          <button className="button ghost small provider-sync-button" disabled={syncing} onClick={() => void onSync?.()}><RefreshCw className={syncing ? 'spin' : undefined} size={14} /> {syncing ? 'Syncing…' : 'Sync now'}</button>
+          <p className="provider-source-note" aria-live="polite">{hasWritableCalendar ? sourceMessage : 'Reconnect Google once to grant Calendar editing. Existing events remain available.'}</p>
+        </>}
+        <MiniCalendar cursor={cursor} selected={cursor} onSelect={setCursor} onCreate={createOn} onContextDate={showDateMenu} />
         <div className="sidebar-group">
           <span className="sidebar-label">My calendars</span>
           {state.accounts.map((account) => (
@@ -169,18 +207,30 @@ export default function CalendarView({ state, query, onChange, onToast, readOnly
           date={newDate}
           defaultCalendarId={newCalendarId}
           state={state}
-          readOnly={readOnly}
+          readOnly={editing === 'new' ? false : !canEditEvent(editing)}
+          providerBacked={providerBacked}
+          writableCalendarIds={writableCalendarIds}
           onClose={() => setEditing(null)}
-          onSave={(event) => {
+          onSave={async (event) => {
             const exists = state.events.some((item) => item.id === event.id)
-            onChange({ ...state, events: exists ? state.events.map((item) => item.id === event.id ? event : item) : [event, ...state.events] })
-            onToast(exists ? 'Event updated' : 'Event created')
-            setEditing(null)
+            try {
+              if (providerBacked) {
+                if (!onSaveProviderEvent) throw new Error('Provider event saving is unavailable')
+                await onSaveProviderEvent(event, exists)
+              } else onChange({ ...state, events: exists ? state.events.map((item) => item.id === event.id ? event : item) : [event, ...state.events] })
+              onToast(exists ? 'Event updated' : 'Event created')
+              setEditing(null)
+            } catch (error) {
+              onToast(error instanceof Error ? error.message : 'Event could not be saved')
+            }
           }}
-          onDelete={readOnly || editing === 'new' ? undefined : () => {
-            onChange({ ...state, events: state.events.filter((event) => event.id !== editing.id) })
-            onToast('Event deleted')
-            setEditing(null)
+          onDelete={editing === 'new' || !canEditEvent(editing) ? undefined : async () => {
+            try {
+              await deleteEvent(editing)
+              setEditing(null)
+            } catch (error) {
+              onToast(error instanceof Error ? error.message : 'Event could not be deleted')
+            }
           }}
         />
       )}
@@ -188,7 +238,7 @@ export default function CalendarView({ state, query, onChange, onToast, readOnly
   )
 }
 
-function MiniCalendar({ cursor, selected, onSelect, onContextDate }: { cursor: Date; selected: Date; onSelect(date: Date): void; onContextDate(event: React.MouseEvent, date: Date): void }) {
+function MiniCalendar({ cursor, selected, onSelect, onCreate, onContextDate }: { cursor: Date; selected: Date; onSelect(date: Date): void; onCreate(date: Date): void; onContextDate(event: React.MouseEvent, date: Date): void }) {
   const start = startOfWeek(startOfMonth(cursor), { weekStartsOn: 1 })
   const days = eachDayOfInterval({ start, end: endOfWeek(endOfMonth(cursor), { weekStartsOn: 1 }) })
   return (
@@ -197,7 +247,7 @@ function MiniCalendar({ cursor, selected, onSelect, onContextDate }: { cursor: D
       <div className="mini-weekdays">{['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div>
       <div className="mini-days">
         {days.map((day) => (
-          <button key={day.toISOString()} className={`${!isSameMonth(day, cursor) ? 'muted' : ''} ${isSameDay(day, selected) ? 'selected' : ''} ${isSameDay(day, new Date()) ? 'today' : ''}`} onClick={() => onSelect(day)} onContextMenu={(event) => onContextDate(event, day)}>{format(day, 'd')}</button>
+          <button key={day.toISOString()} className={`${!isSameMonth(day, cursor) ? 'muted' : ''} ${isSameDay(day, selected) ? 'selected' : ''} ${isSameDay(day, new Date()) ? 'today' : ''}`} onClick={() => onSelect(day)} onDoubleClick={() => onCreate(day)} onContextMenu={(event) => onContextDate(event, day)}>{format(day, 'd')}</button>
         ))}
       </div>
     </div>
@@ -216,7 +266,7 @@ function MonthGrid({ cursor, events, onSelectEvent, onCreate, onContextEvent, on
           <div className={`month-day ${!isSameMonth(day, cursor) ? 'outside' : ''}`} key={day.toISOString()} onDoubleClick={() => onCreate(day)} onContextMenu={(event) => onContextDate(event, day)}>
             <button className={`day-number ${isSameDay(day, new Date()) ? 'today' : ''}`} onClick={() => onCreate(day)} onContextMenu={(event) => onContextDate(event, day)}>{format(day, 'd')}</button>
             {dayEvents.slice(0, 3).map((event) => (
-              <button className="calendar-event" key={event.id} style={{ '--event-color': event.color } as React.CSSProperties} onClick={() => onSelectEvent(event)} onContextMenu={(contextEvent) => onContextEvent(contextEvent, event)}>
+              <button className="calendar-event" key={event.id} style={{ '--event-color': event.color } as React.CSSProperties} onClick={() => onSelectEvent(event)} onDoubleClick={(doubleClickEvent) => doubleClickEvent.stopPropagation()} onContextMenu={(contextEvent) => onContextEvent(contextEvent, event)}>
                 <span>{format(parseISO(event.start), 'HH:mm')}</span>{event.title}
               </button>
             ))}
@@ -244,7 +294,7 @@ function TimeGrid({ dates, events, onSelectEvent, onCreate, onContextEvent, onCo
               const slotEvents = events.filter((event) => eventOnDay(event, date) && parseISO(event.start).getHours() === hour)
               const slotDate = new Date(date); slotDate.setHours(hour)
               return <div className="time-slot" key={date.toISOString()} onDoubleClick={() => onCreate(slotDate)} onContextMenu={(event) => onContextDate(event, slotDate)}>
-                {slotEvents.map((event) => <button key={event.id} className="time-event" style={{ '--event-color': event.color } as React.CSSProperties} onClick={() => onSelectEvent(event)} onContextMenu={(contextEvent) => onContextEvent(contextEvent, event)}><strong>{event.title}</strong><span>{format(parseISO(event.start), 'HH:mm')} – {format(parseISO(event.end), 'HH:mm')}</span></button>)}
+                {slotEvents.map((event) => <button key={event.id} className="time-event" style={{ '--event-color': event.color } as React.CSSProperties} onClick={() => onSelectEvent(event)} onDoubleClick={(doubleClickEvent) => doubleClickEvent.stopPropagation()} onContextMenu={(contextEvent) => onContextEvent(contextEvent, event)}><strong>{event.title}</strong><span>{format(parseISO(event.start), 'HH:mm')} – {format(parseISO(event.end), 'HH:mm')}</span></button>)}
               </div>
             })}
           </div>
@@ -271,7 +321,7 @@ function Agenda({ events, onSelect, onContextEvent }: { events: CalendarEvent[];
   )
 }
 
-function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, onClose, onSave, onDelete }: { event?: CalendarEvent; date: Date; defaultCalendarId?: string; state: AppState; readOnly?: boolean; onClose(): void; onSave(event: CalendarEvent): void; onDelete?(): void }) {
+function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, providerBacked = false, writableCalendarIds = new Set(), onClose, onSave, onDelete }: { event?: CalendarEvent; date: Date; defaultCalendarId?: string; state: AppState; readOnly?: boolean; providerBacked?: boolean; writableCalendarIds?: ReadonlySet<string>; onClose(): void; onSave(event: CalendarEvent): Promise<void> | void; onDelete?(): Promise<void> | void }) {
   const initialStart = event ? parseISO(event.start) : new Date(date)
   if (!event) initialStart.setHours(initialStart.getHours() || 10, 0, 0, 0)
   const initialEnd = event ? parseISO(event.end) : new Date(initialStart.getTime() + 60 * 60 * 1000)
@@ -283,13 +333,14 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
   const [description, setDescription] = useState(event?.description ?? '')
   const [attendees, setAttendees] = useState(event?.attendees.join(', ') ?? '')
   const [recurrence, setRecurrence] = useState<CalendarEvent['recurrence']>(event?.recurrence ?? 'none')
+  const [busy, setBusy] = useState<'save' | 'delete'>()
   const color = state.accounts.find((account) => account.id === calendarId)?.color ?? '#6659e8'
   const startTime = Date.parse(start)
   const endTime = Date.parse(end)
   const canSave = Boolean(title.trim()) && Number.isFinite(startTime) && Number.isFinite(endTime) && endTime > startTime
 
   return (
-    <Modal title={readOnly ? 'Event details' : event ? 'Edit event' : 'New event'} subtitle={readOnly ? 'Synchronized from your provider.' : 'Keep time intentional.'} onClose={onClose}>
+    <Modal title={readOnly ? 'Event details' : event ? 'Edit event' : 'New event'} subtitle={readOnly ? 'Synchronized from your provider.' : 'Keep time intentional.'} closeEnabled={!busy} onClose={onClose}>
       <div className="form-stack">
         <label className="field-label">Event title<input autoFocus value={title} disabled={readOnly} onChange={(e) => setTitle(e.target.value)} placeholder="Add a title" /></label>
         <div className="form-grid-2">
@@ -297,21 +348,25 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
           <label className="field-label">Ends<input type="datetime-local" value={end} disabled={readOnly} onChange={(e) => setEnd(e.target.value)} /></label>
         </div>
         <div className="form-grid-2">
-          <label className="field-label">Calendar<select value={calendarId} disabled={readOnly} onChange={(e) => setCalendarId(e.target.value)}>{state.accounts.map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
+          <label className="field-label">Calendar<select value={calendarId} disabled={readOnly || (providerBacked && Boolean(event))} onChange={(e) => setCalendarId(e.target.value)}>{state.accounts.filter((account) => !providerBacked || writableCalendarIds.has(account.id) || account.id === event?.calendarId).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
           <label className="field-label">Repeat<select value={recurrence} disabled={readOnly} onChange={(e) => setRecurrence(e.target.value as CalendarEvent['recurrence'])}><option value="none">Doesn’t repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>
         </div>
         <label className="field-label"><MapPin size={14} /> Location<input value={location} disabled={readOnly} onChange={(e) => setLocation(e.target.value)} placeholder="Add a place or video link" /></label>
         <label className="field-label"><Users size={14} /> Attendees<input value={attendees} disabled={readOnly} onChange={(e) => setAttendees(e.target.value)} placeholder="Separate email addresses with commas" /></label>
         <label className="field-label">Notes<textarea value={description} disabled={readOnly} onChange={(e) => setDescription(e.target.value)} /></label>
         <footer className="modal-footer">
-          {onDelete && <button className="button danger-subtle" onClick={onDelete}>Delete</button>}
+          {onDelete && <button className="button danger-subtle" disabled={Boolean(busy)} onClick={() => { setBusy('delete'); void Promise.resolve(onDelete()).finally(() => setBusy(undefined)) }}>{busy === 'delete' ? 'Deleting…' : 'Delete'}</button>}
           <span className="spacer" />
-          <button className="button ghost" onClick={onClose}>{readOnly ? 'Close' : 'Cancel'}</button>
-          {!readOnly && <button className="button primary" disabled={!canSave} title={!canSave ? 'Add a title and choose an end time after the start' : undefined} onClick={() => onSave({
+          <button className="button ghost" disabled={Boolean(busy)} onClick={onClose}>{readOnly ? 'Close' : 'Cancel'}</button>
+          {!readOnly && <button className="button primary" disabled={!canSave || Boolean(busy)} title={!canSave ? 'Add a title and choose an end time after the start' : undefined} onClick={() => {
+            const next = {
             id: event?.id ?? uid('event'), calendarId, title: title.trim(),
             start: new Date(start).toISOString(), end: new Date(end).toISOString(), location, description, color,
             attendees: attendees.split(',').map((value) => value.trim()).filter(Boolean), reminderMinutes: event?.reminderMinutes ?? 15, recurrence
-          })}><CalendarDays size={16} /> Save event</button>}
+            }
+            setBusy('save')
+            void Promise.resolve(onSave(next)).finally(() => setBusy(undefined))
+          }}><CalendarDays size={16} /> {busy === 'save' ? 'Saving…' : 'Save event'}</button>}
         </footer>
       </div>
     </Modal>

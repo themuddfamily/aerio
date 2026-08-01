@@ -3,8 +3,9 @@ import { capabilitiesFor, capableProviders } from './provider'
 
 describe('provider capabilities', () => {
   it('exposes Calendar and Contacts through the existing Google and Microsoft connections', () => {
+    expect(capabilitiesFor('gmail').modules.calendar).toMatchObject({ transport: 'remote', status: 'ready', read: true, write: true })
+    expect(capabilitiesFor('microsoft').modules.calendar).toMatchObject({ transport: 'remote', status: 'ready', read: true, write: false })
     for (const provider of ['gmail', 'microsoft'] as const) {
-      expect(capabilitiesFor(provider).modules.calendar).toMatchObject({ transport: 'remote', status: 'ready', read: true, write: false })
       expect(capabilitiesFor(provider).modules.contacts).toMatchObject({ transport: 'remote', status: 'ready', read: true, write: false })
     }
   })

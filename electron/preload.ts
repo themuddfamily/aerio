@@ -23,6 +23,9 @@ const api: AerioDesktopApi = {
   productivity: {
     snapshot: () => ipcRenderer.invoke('productivity:snapshot'),
     sync: (accountId) => ipcRenderer.invoke('productivity:sync', accountId),
+    createEvent: (event) => ipcRenderer.invoke('productivity:event-create', event),
+    updateEvent: (event) => ipcRenderer.invoke('productivity:event-update', event),
+    deleteEvent: (eventId) => ipcRenderer.invoke('productivity:event-delete', eventId),
     localSnapshot: () => ipcRenderer.invoke('productivity:local-snapshot'),
     saveLocal: (snapshot) => ipcRenderer.invoke('productivity:local-save', snapshot)
   },

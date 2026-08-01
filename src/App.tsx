@@ -14,7 +14,7 @@ import TasksView from './views/TasksView'
 import NotesView from './views/NotesView'
 import ChatView from './views/ChatView'
 import GmailView from './views/GmailView'
-import type { AppState, Contact, Message, ModuleId } from './types'
+import type { AppState, CalendarEvent, Contact, Message, ModuleId } from './types'
 import type { GmailAccountSummary } from './gmail-types'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from './productivity-types'
 import { unreadCount, uid } from './lib/domain'
@@ -128,6 +128,35 @@ export default function App() {
       setProductivitySyncing(false)
     }
   }, [showToast])
+
+  const enableCalendarEditing = useCallback(async () => {
+    setProductivitySyncing(true)
+    try {
+      const accounts = (await window.aerio.mail.accounts.list()).filter((account) => !account.archived)
+      setConnectedAccounts(accounts)
+      const google = accounts.find((account) => account.provider === 'gmail')
+      if (!google) throw new Error('Connect a Google account to enable Calendar editing')
+      await window.aerio.mail.accounts.reconnect(google.id)
+      const latest = await window.aerio.productivity.sync(google.id)
+      setProductivity(latest)
+      showToast('Google Calendar editing enabled')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Calendar editing could not be enabled')
+    } finally {
+      setProductivitySyncing(false)
+    }
+  }, [showToast])
+
+  const saveProviderEvent = useCallback(async (event: CalendarEvent, exists: boolean) => {
+    const latest = exists
+      ? await window.aerio.productivity.updateEvent(event)
+      : await window.aerio.productivity.createEvent(event)
+    setProductivity(latest)
+  }, [])
+
+  const deleteProviderEvent = useCallback(async (event: CalendarEvent) => {
+    setProductivity(await window.aerio.productivity.deleteEvent(event.id))
+  }, [])
 
   useEffect(() => {
     if (!state || !hydrated.current) return
@@ -246,6 +275,7 @@ export default function App() {
     notes: localModules.notes,
     conversations: []
   }
+  const writableCalendarIds = new Set(productivity.calendars.filter((calendar) => calendar.canWrite).map((calendar) => calendar.id))
   const updateConnectedLocal = (next: AppState) => setLocalModules({ tasks: next.tasks, notes: next.notes })
   const productivityMessage = productivity.sync.some((item) => item.phase === 'error')
     ? productivity.sync.find((item) => item.phase === 'error')?.error ?? 'A provider needs attention.'
@@ -342,7 +372,20 @@ export default function App() {
           <div className="module-content">
             {activeModule === 'mail' && mailMode === 'gmail' && <GmailView onToast={showToast} composeRequest={realComposeRequest} />}
             {activeModule === 'mail' && mailMode === 'demo' && <MailView state={state} query={query} requestedMessageId={requestedDemoMessageId} onChange={setState} onCompose={(replyTo, replyAll, forward, draft) => setCompose({ replyTo, replyAll, forward, draft })} onNavigate={navigate} onToast={showToast} />}
-            {activeModule === 'calendar' && <CalendarView state={mailMode === 'gmail' ? connectedState : state} query={query} onChange={setState} onToast={showToast} readOnly={mailMode === 'gmail'} onSync={syncProductivity} syncing={productivitySyncing} sourceMessage={productivityMessage} />}
+            {activeModule === 'calendar' && <CalendarView
+              state={mailMode === 'gmail' ? connectedState : state}
+              query={query}
+              onChange={setState}
+              onToast={showToast}
+              providerBacked={mailMode === 'gmail'}
+              writableCalendarIds={mailMode === 'gmail' ? writableCalendarIds : undefined}
+              onSync={syncProductivity}
+              onEnableEditing={enableCalendarEditing}
+              onSaveProviderEvent={saveProviderEvent}
+              onDeleteProviderEvent={deleteProviderEvent}
+              syncing={productivitySyncing}
+              sourceMessage={productivityMessage}
+            />}
             {activeModule === 'contacts' && <ContactsView state={mailMode === 'gmail' ? connectedState : state} query={query} onChange={setState} onCompose={(replyTo, initialTo) => setCompose({ replyTo, initialTo })} onChat={openContactChat} onOpenMessage={openDemoMessage} onToast={showToast} readOnly={mailMode === 'gmail'} onSync={syncProductivity} syncing={productivitySyncing} sourceMessage={productivityMessage} />}
             {activeModule === 'tasks' && <TasksView state={mailMode === 'gmail' ? connectedState : state} query={query} onChange={mailMode === 'gmail' ? updateConnectedLocal : setState} onToast={showToast} />}
             {activeModule === 'notes' && <NotesView state={mailMode === 'gmail' ? connectedState : state} query={query} onChange={mailMode === 'gmail' ? updateConnectedLocal : setState} onToast={showToast} />}

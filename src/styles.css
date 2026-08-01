@@ -787,6 +787,12 @@ kbd {
   line-height: 1.45;
 }
 
+.provider-sync-button {
+  width: calc(100% - 16px);
+  justify-content: center;
+  margin: -8px 8px 14px;
+}
+
 :root[data-density="compact"] .message-row {
   padding-top: 9px;
   padding-bottom: 8px;

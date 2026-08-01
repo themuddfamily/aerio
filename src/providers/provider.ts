@@ -72,7 +72,7 @@ export const providerCatalog: Record<ProviderId, ProviderCapabilities> = {
     name: 'Google',
     modules: {
       mail: remoteReady('Gmail mail, labels, drafts, and sending are connected.'),
-      calendar: remoteReadOnly('Google Calendar is synchronized read-only through the same Google account connection.'),
+      calendar: remoteReady('Google Calendar synchronizes through the same Google account connection, including event creation and editing.'),
       contacts: remoteReadOnly('Google Contacts are synchronized read-only through the same Google account connection.'),
       tasks: remotePlanned('Google Tasks support is planned behind the same Google account connection.'),
       notes: localReady('Google does not expose a general Google Keep synchronization API; Aerio notes remain local.'),

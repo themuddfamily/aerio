@@ -41,9 +41,11 @@ Record no secrets in evidence. Use an account alias such as `gmail-a`, the Aerio
 | `MAIL-02` | Search/pagination | Seeded messages are found offline and appear exactly once across page boundaries. |
 | `DESKTOP-01` | Background notification | With Aerio hidden, one incoming message creates one notification; clicking it opens Aerio. Disabled accounts stay silent. |
 | `HEALTH-01` | Diagnostics | Health check reports zero orphans/missing files/failures; export contains no tokens, passwords, message bodies or full local parts of email addresses. |
-| `PROD-AUTH-01` | Productivity consent | Google/Microsoft sign-in grants the documented read-only Calendar and Contacts scopes; an older connection explains that reconnect is required. |
-| `CAL-01` | Calendar initial sync | Calendars and events in the supported date window appear once with correct account, time, location, attendees and recurrence; Aerio exposes no edit controls. |
+| `PROD-AUTH-01` | Productivity consent | Google sign-in grants Calendar event write plus read-only Calendar-list/Contacts scopes; Microsoft grants the documented read-only Calendar/Contacts scopes; an older Google connection explains that reconnect is required. |
+| `CAL-01` | Calendar initial sync | Calendars and events in the supported date window appear once with correct account, time, location, attendees, recurrence and per-calendar write capability. |
 | `CAL-02` | Calendar pagination/time zones | More than one provider page, all-day events, DST boundaries and UTC/non-UTC events render on the correct date and time. |
+| `CAL-WRITE-01` | Google event lifecycle | Double-click a blank month/week/day slot, create an event, then edit and delete it; each change appears in Google Calendar and survives a fresh Aerio sync. |
+| `CAL-WRITE-02` | Google write permissions | Reader calendars and events that cannot be changed expose details without edit/delete controls; an older token offers the one-time enable/reconnect path. |
 | `CONTACT-01` | Contacts initial sync | More than one provider page maps names, email, phone, company, title and groups without duplicates; contacts without an email remain viewable. |
 | `PROD-FAIL-01` | Productivity refresh failure | Revoked scope, 429 and 5xx errors are visible, retry safely, and retain the last successful cached snapshot. |
 

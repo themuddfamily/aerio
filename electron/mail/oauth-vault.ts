@@ -14,6 +14,7 @@ import {
 interface StoredOAuthData {
   googleConfig?: DesktopOAuthConfig
   googleTokens: Record<string, Credentials>
+  googleCalendarWrite: Record<string, boolean>
   microsoftConfig?: { clientId: string }
   microsoftTokens: Record<string, MicrosoftTokenSet>
   imapAccounts: Record<string, ImapAccountInput>
@@ -27,13 +28,14 @@ interface MicrosoftTokenSet {
 
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
-  'https://www.googleapis.com/auth/calendar.readonly',
+  'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+  'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/contacts.readonly'
 ]
 const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.Read', 'Contacts.Read']
 
 export class OAuthVault {
-  private data: StoredOAuthData = { googleTokens: {}, microsoftTokens: {}, imapAccounts: {} }
+  private data: StoredOAuthData = { googleTokens: {}, googleCalendarWrite: {}, microsoftTokens: {}, imapAccounts: {} }
   private accessCache = new Map<string, { token: string; expiresAt: number }>()
 
   constructor(private readonly path: string, private readonly builtIn: BuiltInOAuthClients = {}) {
@@ -54,6 +56,7 @@ export class OAuthVault {
       this.data = {
         googleConfig: parsed.googleConfig ?? parsed.config,
         googleTokens: parsed.googleTokens ?? parsed.tokens ?? {},
+        googleCalendarWrite: parsed.googleCalendarWrite ?? {},
         microsoftConfig: parsed.microsoftConfig,
         microsoftTokens: parsed.microsoftTokens ?? {},
         imapAccounts: parsed.imapAccounts ?? {}
@@ -186,6 +189,13 @@ export class OAuthVault {
       const accountId = createHash('sha256').update(profile.emailAddress.toLowerCase()).digest('hex').slice(0, 24)
       if (expected && expected.accountId !== accountId) throw new Error(`Sign in to ${expected.email}, not a different Google account`)
       this.data.googleTokens[accountId] = { ...result.tokens, ...exchangingClient.credentials }
+      const grantedScopes = new Set((exchangingClient.credentials.scope ?? result.tokens.scope ?? '').split(/\s+/).filter(Boolean))
+      this.data.googleCalendarWrite[accountId] = grantedScopes.has('https://www.googleapis.com/auth/calendar') ||
+        grantedScopes.has('https://www.googleapis.com/auth/calendar.events')
+      this.accessCache.set(accountId, {
+        token: accessToken.token,
+        expiresAt: Number(exchangingClient.credentials.expiry_date ?? Date.now() + 5 * 60_000)
+      })
       this.save()
       return { accountId, email: profile.emailAddress }
     } finally {
@@ -213,6 +223,18 @@ export class OAuthVault {
       expiresAt: Number(oauth.credentials.expiry_date ?? Date.now() + 5 * 60_000)
     })
     return result.token
+  }
+
+  hasGoogleCalendarWriteAccess(accountId: string) {
+    let credentials = this.data.googleTokens[accountId]
+    if (!credentials) {
+      this.load()
+      credentials = this.data.googleTokens[accountId]
+    }
+    const scopes = new Set((credentials?.scope ?? '').split(/\s+/).filter(Boolean))
+    return this.data.googleCalendarWrite[accountId] === true ||
+      scopes.has('https://www.googleapis.com/auth/calendar') ||
+      scopes.has('https://www.googleapis.com/auth/calendar.events')
   }
 
   microsoftStatus(): GmailCredentialStatus {
@@ -372,6 +394,7 @@ export class OAuthVault {
       }
     }
     delete this.data.googleTokens[accountId]
+    delete this.data.googleCalendarWrite[accountId]
     delete this.data.microsoftTokens[accountId]
     delete this.data.imapAccounts[accountId]
     this.accessCache.delete(accountId)
