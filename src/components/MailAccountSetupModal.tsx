@@ -106,14 +106,25 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
         </div>}
 
         {preset?.id === 'gmail' && <div className="provider-setup-body">
-          <div className={`setup-step ${google.configured ? 'complete' : ''}`}><span>{google.configured ? <Check size={17} /> : '1'}</span><div><strong>Google Desktop OAuth app</strong><p>Import the JSON downloaded from Google Cloud. This identifies Aerio to Google; it is not your email password.</p></div><button className="button ghost" onClick={() => void importGoogle()}>{google.configured ? 'Replace JSON' : 'Import JSON'}</button></div>
+          <div className={`setup-step ${google.configured ? 'complete' : ''}`}>
+            <span>{google.configured ? <Check size={17} /> : '1'}</span>
+            <div>
+              <strong>{google.source === 'built-in' ? 'Aerio Google registration' : 'Google Desktop OAuth app'}</strong>
+              <p>{google.source === 'built-in'
+                ? `Included in this Aerio build${google.clientIdHint ? ` (${google.clientIdHint})` : ''}. No credential file is required.`
+                : 'Import the Desktop app JSON downloaded from Google Cloud. This development fallback is not your email password.'}</p>
+            </div>
+            {google.source !== 'built-in' && <button className="button ghost" onClick={() => void importGoogle()}>{google.configured ? 'Replace JSON' : 'Import JSON'}</button>}
+          </div>
           <div className="setup-step"><span>2</span><div><strong>Sign in with Google</strong><p>Your browser asks for Gmail access. Aerio receives a revocable OAuth token.</p></div><button className="button primary" disabled={!google.configured || busy} onClick={() => void finish(() => window.aerio.mail.accounts.connect(), 'Google account connected — sync has started')}>{busy && <LoaderCircle className="spin" size={15} />}Connect Gmail</button></div>
-          <p className="setup-note">Google requires each distributed desktop client to have an OAuth registration. During private development, use your own Desktop app credentials.</p>
+          <p className="setup-note">Aerio uses a desktop OAuth registration and a local PKCE callback. Your Google password is never shared with Aerio.</p>
         </div>}
 
         {preset?.id === 'microsoft' && <div className="provider-setup-body">
-          <label className="field"><span>Microsoft Application (client) ID</span><input value={microsoftClientId} onChange={(event) => setMicrosoftClientId(event.target.value)} placeholder={microsoft.clientIdHint ?? 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'} /></label>
-          <p className="setup-note">Register Aerio as a public desktop client in Microsoft Entra and allow the localhost redirect. Aerio requests mail access plus read-only Calendar and Contacts access through Microsoft Graph.</p>
+          {microsoft.source === 'built-in'
+            ? <div className="setup-step complete"><span><Check size={17} /></span><div><strong>Aerio Microsoft registration</strong><p>Included in this Aerio build{microsoft.clientIdHint ? ` (${microsoft.clientIdHint})` : ''}. No application ID is required.</p></div></div>
+            : <label className="field"><span>Microsoft Application (client) ID</span><input value={microsoftClientId} onChange={(event) => setMicrosoftClientId(event.target.value)} placeholder={microsoft.clientIdHint ?? 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'} /></label>}
+          <p className="setup-note">{microsoft.source === 'built-in' ? 'Sign in with a personal Outlook or Microsoft 365 account. Aerio requests mail access plus read-only Calendar and Contacts access through Microsoft Graph.' : 'Register Aerio as a public desktop client in Microsoft Entra and allow the localhost redirect.'}</p>
           <footer className="setup-actions"><button className="button primary" disabled={busy || (!microsoft.configured && !microsoftClientId.trim())} onClick={() => void connectMicrosoft()}>{busy && <LoaderCircle className="spin" size={15} />}Connect Microsoft</button></footer>
         </div>}
 

@@ -12,9 +12,12 @@ jobs:
     runs-on: windows-latest
     env:
       AERIO_REQUIRE_SIGNING: '1'
+      AERIO_REQUIRE_BUILTIN_OAUTH: '1'
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
       WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      MAIN_VITE_GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+      MAIN_VITE_GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

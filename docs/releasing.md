@@ -8,8 +8,12 @@ Add these GitHub Actions secrets in **Settings → Secrets and variables → Act
 
 - `WIN_CSC_LINK`: a base64-encoded Windows code-signing certificate, or a secure certificate URL accepted by electron-builder.
 - `WIN_CSC_KEY_PASSWORD`: the certificate password.
+- `GOOGLE_OAUTH_CLIENT_ID`: the production Google Desktop app client ID.
+- `GOOGLE_OAUTH_CLIENT_SECRET`: the production Google Desktop app client secret.
 
-The release workflow deliberately fails when either secret is missing. This prevents an unsigned installer from becoming an update candidate.
+The Microsoft public desktop application ID is committed as Aerio's default and can be overridden with `MAIN_VITE_MICROSOFT_CLIENT_ID` when building against another registration. It is an identifier, not a client secret.
+
+The release workflow deliberately fails when signing or built-in OAuth configuration is missing. This prevents an unsigned installer—or one that asks end users for developer credentials—from becoming an update candidate.
 
 ## Prepare a release
 

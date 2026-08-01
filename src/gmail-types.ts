@@ -36,6 +36,7 @@ export interface MailProviderPreset {
 export interface GmailCredentialStatus {
   configured: boolean
   clientIdHint?: string
+  source?: 'built-in' | 'user'
 }
 
 export interface GmailAccountSummary {

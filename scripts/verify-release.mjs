@@ -27,6 +27,14 @@ if (process.env.AERIO_REQUIRE_SIGNING === '1') {
   if (!process.env.WIN_CSC_LINK) failures.push('WIN_CSC_LINK is required for a release build')
   if (!process.env.WIN_CSC_KEY_PASSWORD) failures.push('WIN_CSC_KEY_PASSWORD is required for a release build')
 }
+if (process.env.AERIO_REQUIRE_BUILTIN_OAUTH === '1') {
+  if (!process.env.MAIN_VITE_GOOGLE_CLIENT_ID?.endsWith('.apps.googleusercontent.com')) {
+    failures.push('GOOGLE_OAUTH_CLIENT_ID is required for a release build')
+  }
+  if (!process.env.MAIN_VITE_GOOGLE_CLIENT_SECRET) {
+    failures.push('GOOGLE_OAUTH_CLIENT_SECRET is required for a release build')
+  }
+}
 
 if (failures.length) {
   console.error(`Release preflight failed:\n- ${failures.join('\n- ')}`)

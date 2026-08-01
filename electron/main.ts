@@ -31,6 +31,7 @@ import type {
   SyncProgress
 } from '../src/gmail-types'
 import { OAuthVault } from './mail/oauth-vault'
+import { DEFAULT_MICROSOFT_CLIENT_ID, parseOAuthEnvironment } from './mail/oauth-config'
 import { ImapSmtpClient } from './mail/imap-client'
 import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
 import { MailWorkerClient } from './mail/worker-client'
@@ -40,6 +41,12 @@ import { ProductivityStore } from './productivity/store'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
+
+const builtInOAuthClients = parseOAuthEnvironment({
+  googleClientId: import.meta.env.MAIN_VITE_GOOGLE_CLIENT_ID,
+  googleClientSecret: import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET,
+  microsoftClientId: import.meta.env.MAIN_VITE_MICROSOFT_CLIENT_ID || DEFAULT_MICROSOFT_CLIENT_ID
+})
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'aerio-image', privileges: { secure: true, standard: true, supportFetchAPI: true, bypassCSP: false } }
@@ -230,7 +237,7 @@ function showNewMailNotification(payload: Extract<import('../src/gmail-types').G
 
 async function initializeMail() {
   const userData = app.getPath('userData')
-  oauthVault = new OAuthVault(join(userData, 'oauth-vault.dat'))
+  oauthVault = new OAuthVault(join(userData, 'oauth-vault.dat'), builtInOAuthClients)
   mailWorker = new MailWorkerClient(
     join(__dirname, 'mail-worker.js'),
     (accountId) => requireVault().credential(accountId, accountProviders.get(accountId) ?? 'gmail'),

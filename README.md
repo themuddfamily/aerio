@@ -29,13 +29,13 @@ Open the real-mail workspace and choose **Add mail account**. The setup screen e
 
 ### Gmail
 
-Aerio uses your own Google OAuth client. It does not ship a shared secret or proxy your mail through an Aerio server.
+Aerio uses a Google Desktop OAuth client compiled into the Electron main process. It never proxies your mail through an Aerio server. Development builds read the registration from a git-ignored `.env.local`; official builds receive the same values from GitHub Actions secrets. If a custom build has no embedded registration, the account screen retains a JSON-import fallback for developers.
 
 1. Open the [Google Cloud Console](https://console.cloud.google.com/), create or select a project, and enable the **Gmail API**, **Google Calendar API**, and **People API**.
 2. Configure the OAuth consent screen. For durable personal use, publish it as **In production** and add only the Google accounts you intend to use if Google requests test users. Refresh tokens issued while the app is in **Testing** normally expire after seven days.
 3. Create **OAuth client ID → Desktop app** credentials and download the JSON file.
-4. Run Aerio, switch the badge in the top bar from **Demo workspace** to **Connected workspace**, choose Gmail, and import the JSON.
-5. Select **Connect Gmail**. Your normal browser completes Google sign-in and returns to Aerio through a temporary `127.0.0.1` callback.
+4. Put its `client_id` and `client_secret` into `.env.local` as `MAIN_VITE_GOOGLE_CLIENT_ID` and `MAIN_VITE_GOOGLE_CLIENT_SECRET`, then rebuild Aerio.
+5. Switch to **Connected workspace**, choose Gmail, and select **Connect Gmail**. Your normal browser completes Google sign-in and returns to Aerio through a temporary `127.0.0.1` callback.
 
 Aerio requests Gmail modify access plus read-only Calendar and Contacts access. It does not request permanent-delete, Calendar-write, or Contacts-write access. Existing accounts connected by an older Aerio build must use **Account settings → Reconnect** once to approve the added read-only scopes.
 
@@ -45,7 +45,9 @@ The first download is quota-bound. A mailbox with 100,000 messages can take roug
 
 1. Create an app registration in [Microsoft Entra](https://entra.microsoft.com/).
 2. Enable public client flows and add the **Mobile and desktop applications** redirect URI `http://localhost`.
-3. Copy the Application (client) ID into Aerio. Browser sign-in requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.Read`, and `Contacts.Read` access. Existing connections must reconnect once to grant the added read-only scopes.
+3. Aerio's public Application (client) ID is already included. Choose Microsoft in **Connected workspace** and sign in. The browser requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.Read`, and `Contacts.Read` access. Existing connections must reconnect once to grant the added read-only scopes.
+
+Aerio includes its Microsoft public-client application ID by default, because desktop application IDs are public identifiers rather than secrets. `MAIN_VITE_MICROSOFT_CLIENT_ID` can override it for a separate development registration.
 
 Use an account type supported by the registration. Organization-managed tenants may require an administrator to approve the requested permissions.
 
@@ -79,8 +81,12 @@ Requirements: Node.js 24 or newer and Windows 10/11.
 
 ```powershell
 npm install
+Copy-Item .env.example .env.local
+# Replace the placeholders in .env.local with the Desktop OAuth registrations.
 npm run dev
 ```
+
+Only `MAIN_VITE_` variables are used, so OAuth client configuration is compiled into the Electron main process and is not exposed through the renderer API. Native-app client credentials identify the application but cannot be treated as confidential; user access and refresh tokens remain encrypted separately with Windows DPAPI.
 
 Useful commands:
 

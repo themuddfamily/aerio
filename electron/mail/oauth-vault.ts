@@ -4,7 +4,12 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { OAuth2Client, CodeChallengeMethod, type Credentials } from 'google-auth-library'
 import { safeStorage, shell } from 'electron'
 import type { GmailCredentialStatus, ImapAccountInput, ImapServerSettings, MailProviderId } from '../../src/gmail-types'
-import { parseDesktopOAuthConfig, type DesktopOAuthConfig } from './oauth-config'
+import {
+  parseDesktopOAuthConfig,
+  parseMicrosoftClientId,
+  type BuiltInOAuthClients,
+  type DesktopOAuthConfig
+} from './oauth-config'
 
 interface StoredOAuthData {
   googleConfig?: DesktopOAuthConfig
@@ -31,7 +36,7 @@ export class OAuthVault {
   private data: StoredOAuthData = { googleTokens: {}, microsoftTokens: {}, imapAccounts: {} }
   private accessCache = new Map<string, { token: string; expiresAt: number }>()
 
-  constructor(private readonly path: string) {
+  constructor(private readonly path: string, private readonly builtIn: BuiltInOAuthClients = {}) {
     this.load()
   }
 
@@ -67,22 +72,29 @@ export class OAuthVault {
   }
 
   status(): GmailCredentialStatus {
-    const clientId = this.data.googleConfig?.clientId
+    const clientId = this.googleConfig()?.clientId
     return {
       configured: Boolean(clientId),
-      clientIdHint: clientId ? `${clientId.slice(0, 10)}…${clientId.slice(-12)}` : undefined
+      clientIdHint: clientId ? `${clientId.slice(0, 10)}…${clientId.slice(-12)}` : undefined,
+      source: this.builtIn.googleConfig ? 'built-in' : this.data.googleConfig ? 'user' : undefined
     }
   }
 
   importConfig(path: string) {
+    if (this.builtIn.googleConfig) throw new Error('This Aerio build already includes its Google OAuth registration')
     this.data.googleConfig = parseDesktopOAuthConfig(JSON.parse(readFileSync(path, 'utf8')))
     this.save()
     return this.status()
   }
 
+  private googleConfig() {
+    return this.builtIn.googleConfig ?? this.data.googleConfig
+  }
+
   private config() {
-    if (!this.data.googleConfig) throw new Error('Import Google Desktop OAuth credentials first')
-    return this.data.googleConfig
+    const config = this.googleConfig()
+    if (!config) throw new Error('This Aerio build does not include Google OAuth credentials')
+    return config
   }
 
   private oauth(redirectUri?: string) {
@@ -199,20 +211,28 @@ export class OAuthVault {
   }
 
   microsoftStatus(): GmailCredentialStatus {
-    const clientId = this.data.microsoftConfig?.clientId
-    return { configured: Boolean(clientId), clientIdHint: clientId ? `${clientId.slice(0, 8)}…${clientId.slice(-4)}` : undefined }
+    const clientId = this.microsoftClientId()
+    return {
+      configured: Boolean(clientId),
+      clientIdHint: clientId ? `${clientId.slice(0, 8)}…${clientId.slice(-4)}` : undefined,
+      source: this.builtIn.microsoftClientId ? 'built-in' : this.data.microsoftConfig ? 'user' : undefined
+    }
   }
 
   configureMicrosoft(clientId: string) {
-    const value = clientId.trim()
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) throw new Error('Enter the Application (client) ID from Microsoft Entra')
+    if (this.builtIn.microsoftClientId) throw new Error('This Aerio build already includes its Microsoft OAuth registration')
+    const value = parseMicrosoftClientId(clientId)
     this.data.microsoftConfig = { clientId: value }
     this.save()
     return this.microsoftStatus()
   }
 
+  private microsoftClientId() {
+    return this.builtIn.microsoftClientId ?? this.data.microsoftConfig?.clientId
+  }
+
   async authorizeMicrosoft(expected?: { accountId: string; email: string }) {
-    const clientId = this.data.microsoftConfig?.clientId
+    const clientId = this.microsoftClientId()
     if (!clientId) throw new Error('Configure the Microsoft Entra application client ID first')
     const verifier = randomBytes(64).toString('base64url')
     const challenge = createHash('sha256').update(verifier).digest('base64url')
@@ -279,7 +299,7 @@ export class OAuthVault {
   async microsoftAccessToken(accountId: string) {
     const cached = this.accessCache.get(accountId)
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token
-    const clientId = this.data.microsoftConfig?.clientId
+    const clientId = this.microsoftClientId()
     const current = this.data.microsoftTokens[accountId]
     if (!clientId || !current) throw new Error('This Microsoft account needs to be connected again')
     const response = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
