@@ -8,7 +8,7 @@ import { basename, extname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import initSqlJs, { type Database } from 'sql.js'
 import { createDemoState } from '../src/demo-data'
-import type { AppState, Attachment } from '../src/types'
+import type { AppState, Attachment, MessageWindowRequest } from '../src/types'
 import type {
   ApplyMailActionInput,
   GmailAccountSummary,
@@ -32,6 +32,7 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 let mainWindow: BrowserWindow | null = null
+const messageWindows = new Map<string, BrowserWindow>()
 let tray: Tray | null = null
 let database: Database | null = null
 let databasePath = ''
@@ -240,6 +241,75 @@ function iconPath() {
   return existsSync(candidate) ? candidate : undefined
 }
 
+function configureRendererWindow(window: BrowserWindow) {
+  window.on('maximize', () => window.webContents.send('window:maximized-state', true))
+  window.on('unmaximize', () => window.webContents.send('window:maximized-state', false))
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  window.webContents.on('will-navigate', (event, url) => {
+    if (url === window.webContents.getURL()) return
+    event.preventDefault()
+    if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url)
+  })
+}
+
+function loadRenderer(window: BrowserWindow, query?: Record<string, string>) {
+  if (process.env.ELECTRON_RENDERER_URL) {
+    const url = new URL(process.env.ELECTRON_RENDERER_URL)
+    for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, value)
+    void window.loadURL(url.toString())
+  } else {
+    void window.loadFile(join(__dirname, '../../dist/index.html'), query ? { query } : undefined)
+  }
+}
+
+function validMessageWindowRequest(value: unknown): value is MessageWindowRequest {
+  if (!value || typeof value !== 'object') return false
+  const input = value as Partial<MessageWindowRequest> & { accountId?: unknown; threadId?: unknown }
+  const validText = (text: unknown) => typeof text === 'string' && text.length > 0 && text.length <= 1_000
+  if (!validText(input.title)) return false
+  if (input.source === 'demo') return validText(input.messageId)
+  return input.source === 'gmail' && validText(input.accountId) && validText(input.threadId)
+}
+
+function createMessageWindow(input: MessageWindowRequest) {
+  const key = input.source === 'demo' ? `demo:${input.messageId}` : `gmail:${input.accountId}:${input.threadId}`
+  const existing = messageWindows.get(key)
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore()
+    existing.show()
+    existing.focus()
+    return
+  }
+
+  const messageWindow = new BrowserWindow({
+    width: 900,
+    height: 760,
+    minWidth: 640,
+    minHeight: 480,
+    show: false,
+    frame: false,
+    title: input.title.slice(0, 180),
+    backgroundColor: '#f4f5f7',
+    icon: iconPath(),
+    webPreferences: {
+      preload: join(__dirname, '../preload/preload.cjs'),
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  })
+  messageWindows.set(key, messageWindow)
+  configureRendererWindow(messageWindow)
+  messageWindow.once('ready-to-show', () => messageWindow.show())
+  messageWindow.once('closed', () => messageWindows.delete(key))
+  loadRenderer(messageWindow, input.source === 'demo'
+    ? { view: 'message', source: 'demo', messageId: input.messageId }
+    : { view: 'message', source: 'gmail', accountId: input.accountId, threadId: input.threadId })
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     ...loadBounds(),
@@ -275,8 +345,6 @@ function createWindow() {
   mainWindow.on('move', saveBounds)
   mainWindow.on('show', () => void mailWorker?.request({ type: 'polling', payload: { intervalMs: 60_000 } }))
   mainWindow.on('hide', () => void mailWorker?.request({ type: 'polling', payload: { intervalMs: 5 * 60_000 } }))
-  mainWindow.on('maximize', () => mainWindow?.webContents.send('window:maximized-state', true))
-  mainWindow.on('unmaximize', () => mainWindow?.webContents.send('window:maximized-state', false))
   mainWindow.on('close', (event) => {
     const closeToTray = loadState().settings.closeToTray
     if (!quitting && closeToTray) {
@@ -284,22 +352,21 @@ function createWindow() {
       mainWindow?.hide()
     }
   })
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url)
-    return { action: 'deny' }
-  })
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    const current = mainWindow?.webContents.getURL()
-    if (url === current) return
-    event.preventDefault()
-    if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url)
-  })
+  mainWindow.on('closed', () => { mainWindow = null })
+  configureRendererWindow(mainWindow)
+  loadRenderer(mainWindow, process.env.AERIO_CAPTURE_PATH ? { workspace: 'gmail' } : undefined)
+  return mainWindow
+}
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-  } else {
-    void mainWindow.loadFile(join(__dirname, '../../dist/index.html'), process.env.AERIO_CAPTURE_PATH ? { query: { workspace: 'gmail' } } : undefined)
+function openMainWindow(compose = false) {
+  if (!mainWindow) {
+    const window = createWindow()
+    if (compose) window.webContents.once('did-finish-load', () => window.webContents.send('command:compose'))
+    return
   }
+  mainWindow.show()
+  mainWindow.focus()
+  if (compose) mainWindow.webContents.send('command:compose')
 }
 
 function createTray() {
@@ -308,13 +375,13 @@ function createTray() {
   tray = new Tray(image)
   tray.setToolTip('Aerio')
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Open Aerio', click: () => { mainWindow?.show(); mainWindow?.focus() } },
+    { label: 'Open Aerio', click: () => openMainWindow() },
     { type: 'separator' },
-    { label: 'Compose message', click: () => { mainWindow?.show(); mainWindow?.webContents.send('command:compose') } },
+    { label: 'Compose message', click: () => openMainWindow(true) },
     { type: 'separator' },
     { label: 'Quit Aerio', click: () => { quitting = true; app.quit() } }
   ]))
-  tray.on('double-click', () => { mainWindow?.show(); mainWindow?.focus() })
+  tray.on('double-click', () => openMainWindow())
 }
 
 function registerIpc() {
@@ -342,16 +409,41 @@ function registerIpc() {
       }
     })
   })
+  ipcMain.handle('profile:image:choose', async (event): Promise<string | undefined> => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    const options: Electron.OpenDialogOptions = {
+      title: 'Choose a profile picture',
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      properties: ['openFile']
+    }
+    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
+    const path = result.filePaths[0]
+    if (result.canceled || !path) return
+    const image = nativeImage.createFromPath(path)
+    if (image.isEmpty()) throw new Error('That image could not be opened')
+    const size = image.getSize()
+    const scale = Math.min(1, 256 / Math.max(size.width, size.height))
+    return image.resize({
+      width: Math.max(1, Math.round(size.width * scale)),
+      height: Math.max(1, Math.round(size.height * scale)),
+      quality: 'best'
+    }).toDataURL()
+  })
   ipcMain.handle('notification:show', (_event, input: { title: string; body: string }) => {
     if (Notification.isSupported()) new Notification({ title: input.title.slice(0, 80), body: input.body.slice(0, 240), icon: iconPath() }).show()
   })
-  ipcMain.handle('window:minimize', () => mainWindow?.minimize())
-  ipcMain.handle('window:maximize', () => {
-    if (mainWindow?.isMaximized()) mainWindow.unmaximize()
-    else mainWindow?.maximize()
+  ipcMain.handle('window:minimize', (event) => BrowserWindow.fromWebContents(event.sender)?.minimize())
+  ipcMain.handle('window:maximize', (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (window?.isMaximized()) window.unmaximize()
+    else window?.maximize()
   })
-  ipcMain.handle('window:close', () => mainWindow?.close())
-  ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false)
+  ipcMain.handle('window:close', (event) => BrowserWindow.fromWebContents(event.sender)?.close())
+  ipcMain.handle('window:is-maximized', (event) => BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false)
+  ipcMain.handle('window:open-message', (_event, input: unknown) => {
+    if (!validMessageWindowRequest(input)) throw new Error('Invalid message window request')
+    createMessageWindow(input)
+  })
 
   ipcMain.handle('gmail:credentials:status', () => requireVault().status())
   ipcMain.handle('mail:credentials:microsoft-status', () => requireVault().microsoftStatus())

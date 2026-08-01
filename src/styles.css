@@ -291,7 +291,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background: linear-gradient(135deg, #e58c65, #bd6280);
   font-size: 10px !important;
   font-weight: 750;
+  overflow: hidden;
 }
+
+.profile-button span img { width: 100%; height: 100%; object-fit: cover; }
 
 .profile-button i {
   position: absolute;
@@ -1800,6 +1803,32 @@ kbd {
 .signature-section textarea {
   min-height: 70px;
 }
+
+.profile-editor { display: flex; flex-direction: column; gap: 15px; padding: 22px; }
+.profile-picture-editor { display: flex; align-items: center; gap: 16px; padding-bottom: 17px; border-bottom: 1px solid var(--line); }
+.profile-picture-editor > div { min-width: 0; flex: 1; }
+.profile-picture-editor h3 { margin: 0 0 4px; font-size: 12px; }
+.profile-picture-editor p { margin: 0 0 10px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.profile-preview { width: 78px; height: 78px; flex: 0 0 auto; display: grid; place-items: center; overflow: hidden; border: 3px solid var(--surface); border-radius: 25px; color: white; background: linear-gradient(135deg, #e58c65, #bd6280); box-shadow: 0 0 0 1px var(--line-strong), var(--shadow-sm); font-size: 22px; }
+.profile-preview img { width: 100%; height: 100%; object-fit: cover; }
+.profile-picture-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.profile-info { display: flex; align-items: flex-start; gap: 10px; padding: 11px 12px; border-radius: 9px; color: var(--accent-text); background: var(--accent-soft); }
+.profile-info > span { display: flex; flex-direction: column; gap: 3px; }
+.profile-info strong { font-size: 10.5px; }
+.profile-info small { color: var(--text-soft); font-size: 9.5px; line-height: 1.45; }
+.profile-editor .modal-footer { margin: 2px -22px -22px; }
+
+/* Standalone message windows */
+.message-window-shell { width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--surface); }
+.message-window-content { min-height: 0; flex: 1; display: flex; overflow: hidden; background: var(--surface); }
+.message-window-reader { width: 100%; padding: clamp(24px, 5vw, 54px); }
+.message-window-reader > header,
+.message-window-reader > .gmail-message { max-width: 780px; margin-right: auto; margin-left: auto; }
+.message-window-reader.gmail-thread { max-width: none; }
+.message-window-heading { display: flex; align-items: flex-start; gap: 18px; }
+.message-window-heading h2 { min-width: 0; flex: 1; }
+.message-window-heading .button { flex: 0 0 auto; margin-top: 9px; }
+.titlebar-title { max-width: min(58vw, 560px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Calendar */
 .calendar-sidebar {

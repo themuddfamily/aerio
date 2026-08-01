@@ -1,11 +1,12 @@
 import {
   CalendarDays, CheckCircle2, ChevronRight, Command, ContactRound, HelpCircle, Mail,
-  MessageCircle, Moon, NotebookPen, Plus, Search, Settings, Sparkles, Sun, WifiOff, X
+  MessageCircle, Moon, NotebookPen, Plus, Search, Settings, Sparkles, Sun, UserRound, WifiOff, X
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TitleBar from './components/TitleBar'
 import ComposeModal from './components/ComposeModal'
 import SettingsModal from './components/SettingsModal'
+import ProfileModal from './components/ProfileModal'
 import MailView from './views/MailView'
 import CalendarView from './views/CalendarView'
 import ContactsView from './views/ContactsView'
@@ -41,6 +42,7 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [compose, setCompose] = useState<ComposeState | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [toast, setToast] = useState('')
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved')
@@ -123,6 +125,7 @@ export default function App() {
         setCommandsOpen(false)
         setCompose(null)
         setSettingsOpen(false)
+        setProfileOpen(false)
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -161,6 +164,12 @@ export default function App() {
     setActiveModule(module)
     setQuery('')
   }
+
+  const profile = state.settings.profile ?? {
+    displayName: state.accounts[0]?.name ?? 'Aerio user',
+    email: state.accounts[0]?.email
+  }
+  const profileInitials = profile.displayName.trim().split(/\s+/).filter(Boolean).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || 'A'
 
   const openContactChat = (contact: Contact) => {
     const existing = state.conversations.find((conversation) => conversation.name === contact.name)
@@ -215,7 +224,9 @@ export default function App() {
             <button aria-label="What’s new" title="What’s new" onClick={() => showToast('Welcome to the first Aerio preview')}><Sparkles size={20} /></button>
             <button aria-label="Help" title="Keyboard shortcuts: Ctrl K" onClick={() => setCommandsOpen(true)}><HelpCircle size={20} /></button>
             <button aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)} onContextMenu={(event) => showContextMenu(event, [{ label: 'Open settings', icon: Settings, action: () => setSettingsOpen(true) }], 'Settings')}><Settings size={20} /></button>
-            <button className="profile-button" aria-label="Profile and settings" title="Profile and settings" onClick={() => setSettingsOpen(true)} onContextMenu={(event) => showContextMenu(event, [{ label: 'Open profile and settings', icon: Settings, action: () => setSettingsOpen(true) }], 'Profile')}><span>AA</span><i /></button>
+            <button className="profile-button" aria-label={`Profile: ${profile.displayName}`} title="Your Aerio profile" onClick={() => setProfileOpen(true)} onContextMenu={(event) => showContextMenu(event, [
+              { label: 'Open profile', icon: UserRound, action: () => setProfileOpen(true) }
+            ], profile.displayName)}><span>{profile.avatarDataUrl ? <img src={profile.avatarDataUrl} alt="" /> : profileInitials}</span><i /></button>
           </div>
         </nav>
         <main className="app-main">
@@ -258,6 +269,7 @@ export default function App() {
       </div>
 
       {compose && mailMode === 'demo' && <ComposeModal state={state} replyTo={compose.replyTo} replyAll={compose.replyAll} forward={compose.forward} draft={compose.draft} initialTo={compose.initialTo} onChange={setState} onClose={() => setCompose(null)} onToast={showToast} />}
+      {profileOpen && <ProfileModal profile={profile} onSave={(nextProfile) => setState({ ...state, settings: { ...state.settings, profile: nextProfile } })} onClose={() => setProfileOpen(false)} onToast={showToast} />}
       {settingsOpen && <SettingsModal state={state} onChange={setState} onClose={() => setSettingsOpen(false)} onReset={async () => {
         try {
           const next = await window.aerio.resetState()

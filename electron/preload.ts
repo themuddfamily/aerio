@@ -7,12 +7,14 @@ const api: AerioDesktopApi = {
   saveState: (state: AppState) => ipcRenderer.invoke('state:save', state),
   resetState: () => ipcRenderer.invoke('state:reset'),
   chooseAttachments: () => ipcRenderer.invoke('files:choose'),
+  chooseProfileImage: () => ipcRenderer.invoke('profile:image:choose'),
   notify: (title: string, body: string) => ipcRenderer.invoke('notification:show', { title, body }),
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     maximize: () => ipcRenderer.invoke('window:maximize'),
     close: () => ipcRenderer.invoke('window:close'),
-    isMaximized: () => ipcRenderer.invoke('window:is-maximized')
+    isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
+    openMessage: (input) => ipcRenderer.invoke('window:open-message', input)
   },
   onWindowState: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, maximized: boolean) => callback(maximized)

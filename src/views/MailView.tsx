@@ -1,5 +1,5 @@
 import {
-  Archive, AtSign, CheckCircle2, ChevronDown, Clock3, FileText, Flag, Inbox,
+  Archive, AtSign, CheckCircle2, ChevronDown, Clock3, ExternalLink, FileText, Flag, Inbox,
   Copy, Forward, Mail, MailOpen, Paperclip, Plus, RefreshCw, Reply, ReplyAll,
   Search, Send, Star, Tag, Trash2, Undo2
 } from 'lucide-react'
@@ -65,6 +65,11 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
     if (toast) onToast(toast)
   }
 
+  const openMessageWindow = (message: Message) => {
+    void window.aerio.window.openMessage({ source: 'demo', messageId: message.id, title: message.subject })
+      .catch((error) => onToast(error instanceof Error ? error.message : 'The message window could not be opened'))
+  }
+
   const messageMenuItems = (message: Message): ContextMenuItem[] => {
     const inboxId = state.folders.find((item) => item.accountId === message.accountId && item.system === 'inbox')?.id ?? `${message.accountId}-inbox`
     if (message.draft) return [
@@ -79,6 +84,7 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
     ]
     return [
       { label: 'Open message', icon: MailOpen, action: () => selectMessage(message) },
+      { label: 'Open in new window', icon: ExternalLink, action: () => openMessageWindow(message) },
       { label: 'Reply', icon: Reply, separatorBefore: true, action: () => onCompose(message) },
       { label: 'Reply all', icon: ReplyAll, action: () => onCompose(message, true) },
       { label: 'Forward', icon: Forward, action: () => onCompose(message, false, true) },
@@ -242,7 +248,7 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
           { label: sortNewest ? 'Sort oldest first' : 'Sort newest first', icon: ChevronDown, action: () => setSortNewest((value) => !value) }
         ], 'Message list')}>
           {messages.map((message) => (
-            <button key={message.id} className={`message-row ${selected?.id === message.id ? 'selected' : ''} ${message.unread ? 'unread' : ''}`} onClick={() => selectMessage(message)} onContextMenu={(event) => showMessageMenu(event, message)}>
+            <button key={message.id} className={`message-row ${selected?.id === message.id ? 'selected' : ''} ${message.unread ? 'unread' : ''}`} onClick={() => selectMessage(message)} onDoubleClick={() => openMessageWindow(message)} onContextMenu={(event) => showMessageMenu(event, message)}>
               <span className="avatar" style={{ background: state.contacts.find((contact) => contact.email === message.fromEmail)?.color ?? '#8892a6' }}>{message.from.split(' ').map((part) => part[0]).slice(0, 2).join('')}</span>
               <span className="message-copy">
                 <span className="message-meta"><strong>{message.from}</strong><time>{shortDate(message.date)}</time></span>

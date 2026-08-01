@@ -29,8 +29,11 @@ try {
     env: { ...process.env, NODE_ENV: 'test' }
   })
   const page = await application.firstWindow()
-  page.on('pageerror', (error) => runtimeErrors.push(error.message))
-  page.on('console', (message) => { if (message.type() === 'error') runtimeErrors.push(message.text()) })
+  const trackRuntimeErrors = (target) => {
+    target.on('pageerror', (error) => runtimeErrors.push(error.message))
+    target.on('console', (message) => { if (message.type() === 'error') runtimeErrors.push(message.text()) })
+  }
+  trackRuntimeErrors(page)
   await page.waitForSelector('.app')
 
   const dialog = (name) => page.getByRole('dialog', { name })
@@ -47,8 +50,15 @@ try {
     await assertAccessibleButtons()
   })
 
-  await step('profile button opens settings and theme controls apply', async () => {
-    await page.getByRole('button', { name: 'Profile and settings' }).click()
+  await step('profile management and application settings are separate', async () => {
+    await page.getByRole('button', { name: 'Profile: Alex Avery' }).click()
+    const profileEditor = dialog('Your Aerio profile')
+    await profileEditor.getByLabel('Display name').fill('Aerio Auditor')
+    await profileEditor.getByRole('button', { name: 'Save profile' }).click()
+    await page.getByText('Profile updated').waitFor()
+    await page.getByRole('button', { name: 'Profile: Aerio Auditor' }).waitFor()
+
+    await page.getByRole('button', { name: 'Settings' }).click()
     await dialog('Aerio settings').getByRole('button', { name: 'dark' }).click()
     assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark')
     await dialog('Aerio settings').getByRole('button', { name: 'system' }).click()
@@ -67,6 +77,20 @@ try {
   await step('demo mail account sections, attachments, reply-all, and drafts work', async () => {
     await moduleButton('Mail').click()
     await assertAccessibleButtons()
+    const demoMessage = page.locator('.message-row').filter({ hasText: 'The new identity feels exactly right' })
+    const demoWindowPromise = application.waitForEvent('window')
+    await demoMessage.dblclick()
+    const demoWindow = await demoWindowPromise
+    trackRuntimeErrors(demoWindow)
+    await demoWindow.locator('.message-window-shell').waitFor()
+    await demoWindow.getByRole('heading', { name: 'The new identity feels exactly right' }).waitFor()
+    await demoWindow.getByRole('button', { name: 'Maximize' }).click()
+    await demoWindow.getByRole('button', { name: 'Restore' }).waitFor()
+    await demoWindow.getByRole('button', { name: 'Restore' }).click()
+    const demoWindowClosed = demoWindow.waitForEvent('close')
+    await demoWindow.getByRole('button', { name: 'Close' }).click()
+    await demoWindowClosed
+
     const account = page.getByRole('button', { name: /Personal/ }).filter({ has: page.locator('.account-dot') }).first()
     await account.click()
     assert.equal(await account.getAttribute('aria-expanded'), 'false')

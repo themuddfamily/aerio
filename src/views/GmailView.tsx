@@ -1,5 +1,5 @@
 import {
-  Archive, AtSign, Copy, Download, FileText, Forward, Image, Inbox, LoaderCircle, Mail, MailOpen,
+  Archive, AtSign, Copy, Download, ExternalLink, FileText, Forward, Image, Inbox, LoaderCircle, Mail, MailOpen,
   Paperclip, Pause, Play, Plus, RefreshCw, Reply, Search, Send, Settings2,
   Star, Tag, Trash2, Undo2, UserPlus, WifiOff
 } from 'lucide-react'
@@ -244,6 +244,11 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
 
   const openSummary = (item: MailThreadSummary) => setSelectedKey(`${item.accountId}:${item.id}`)
 
+  const openMessageWindow = (item: MailThreadSummary) => {
+    void window.aerio.window.openMessage({ source: 'gmail', accountId: item.accountId, threadId: item.id, title: item.subject })
+      .catch((error) => onToast(error instanceof Error ? error.message : 'The message window could not be opened'))
+  }
+
   const composeFromSummary = async (item: MailThreadSummary, forward = false) => {
     try {
       const detail = selected?.id === item.id && thread ? thread : await window.aerio.mail.mail.thread(item.accountId, item.id)
@@ -259,6 +264,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
     const inInbox = item.labelIds.includes('INBOX')
     return [
       { label: 'Open conversation', icon: MailOpen, action: () => openSummary(item) },
+      { label: 'Open in new window', icon: ExternalLink, action: () => openMessageWindow(item) },
       { label: 'Reply', icon: Reply, separatorBefore: true, disabled: readOnly || item.draft, action: () => composeFromSummary(item) },
       { label: 'Forward', icon: Forward, disabled: readOnly, action: () => composeFromSummary(item, true) },
       { label: item.unread ? 'Mark as read' : 'Mark as unread', icon: item.unread ? MailOpen : Mail, separatorBefore: true, disabled: readOnly, action: () => applyAction(item.unread ? 'read' : 'unread', item.accountId, [item.id]) },
@@ -411,7 +417,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
           { label: 'Mark visible conversations as read', icon: MailOpen, disabled: !page.items.some((item) => item.unread), action: markVisibleRead }
         ], 'Conversation list')}>
           {page.items.map((item) => (
-            <button key={`${item.accountId}:${item.id}`} className={`message-row ${selectedKey === `${item.accountId}:${item.id}` ? 'selected' : ''} ${item.unread ? 'unread' : ''}`} onClick={() => openSummary(item)} onContextMenu={(event) => showSummaryMenu(event, item)}>
+            <button key={`${item.accountId}:${item.id}`} className={`message-row ${selectedKey === `${item.accountId}:${item.id}` ? 'selected' : ''} ${item.unread ? 'unread' : ''}`} onClick={() => openSummary(item)} onDoubleClick={() => openMessageWindow(item)} onContextMenu={(event) => showSummaryMenu(event, item)}>
               <span className="avatar" style={{ background: accounts.find((account) => account.id === item.accountId)?.color }}>{item.participants[0]?.split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || '?'}</span>
               <span className="message-copy">
                 <span className="message-meta"><strong>{item.participants.join(', ') || 'Unknown sender'}</strong><time>{shortDate(item.lastDate)}</time></span>

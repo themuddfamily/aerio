@@ -2,7 +2,7 @@ import { Minus, Square, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useContextMenu } from './ContextMenu'
 
-export default function TitleBar() {
+export default function TitleBar({ title = 'Aerio' }: { title?: string }) {
   const { showContextMenu } = useContextMenu()
   const [maximized, setMaximized] = useState(false)
 
@@ -20,7 +20,7 @@ export default function TitleBar() {
       <div className="titlebar-drag">
         <div className="brand-lockup">
           <span className="brand-mark">A</span>
-          <span>Aerio</span>
+          <span className="titlebar-title">{title}</span>
         </div>
       </div>
       <div className="window-actions" aria-label="Window controls">

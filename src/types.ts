@@ -2,6 +2,12 @@ export type ModuleId = 'mail' | 'calendar' | 'contacts' | 'tasks' | 'notes' | 'c
 export type ThemePreference = 'system' | 'light' | 'dark'
 export type DensityPreference = 'comfortable' | 'compact'
 
+export interface UserProfile {
+  displayName: string
+  email?: string
+  avatarDataUrl?: string
+}
+
 export interface Account {
   id: string
   name: string
@@ -128,6 +134,7 @@ export interface Settings {
   notifications: boolean
   startModule: ModuleId
   signature: string
+  profile?: UserProfile
 }
 
 export interface AppState {
@@ -153,11 +160,16 @@ export interface DraftInput {
   replyToThreadId?: string
 }
 
+export type MessageWindowRequest =
+  | { source: 'demo'; messageId: string; title: string }
+  | { source: 'gmail'; accountId: string; threadId: string; title: string }
+
 export interface WindowControls {
   minimize(): Promise<void>
   maximize(): Promise<void>
   close(): Promise<void>
   isMaximized(): Promise<boolean>
+  openMessage(input: MessageWindowRequest): Promise<void>
 }
 
 export interface AerioDesktopApi {
@@ -165,6 +177,7 @@ export interface AerioDesktopApi {
   saveState(state: AppState): Promise<{ savedAt: string }>
   resetState(): Promise<AppState>
   chooseAttachments(): Promise<Attachment[]>
+  chooseProfileImage(): Promise<string | undefined>
   notify(title: string, body: string): Promise<void>
   window: WindowControls
   onWindowState(callback: (maximized: boolean) => void): () => void

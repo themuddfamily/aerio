@@ -15,6 +15,7 @@ Aerio is a calm, modern desktop email client for Windows. Version 0.3 adds a mul
 - Optimistic local changes with a 10-second Undo window and a durable provider operation queue
 - Provider drafts with two-second idle autosave, threaded replies, attachments, SMTP delivery, and an offline Outbox
 - Sanitized HTML; scripts and unsafe links are removed, and remote images are blocked by default
+- Dedicated message windows for demo and real mail; double-click a conversation to open or focus its window
 - Read-only local archive or complete local deletion when disconnecting an account
 
 Calendar, Contacts, Tasks, Notes, and Chat are still demo modules. They do not read or modify Google data.
@@ -101,7 +102,7 @@ The app uses Electron 43, React 19, TypeScript, Vite, and two local SQLite paths
 - A dedicated Node worker owns the normalized mail database, Gmail/Graph/IMAP synchronization, SMTP delivery, MIME parsing, full-text search, queued mutations, and drafts.
 - The original `sql.js` store remains isolated to the demo workspace.
 
-Automated coverage includes database migration and backup, normalized mail behavior, provider preset validation, Microsoft delta pagination, optimistic Undo, archive/delete semantics, HTML sanitization, mocked Gmail API behavior, the existing demo domain tests, and pagination over a synthetic 100,000-thread mailbox. Static interaction-contract audits and Playwright-driven Electron passes cover buttons, feature context menus, editing/link/image menus, module actions, account onboarding, and native window controls.
+Automated coverage includes database migration and backup, normalized mail behavior, provider preset validation, Microsoft delta pagination, optimistic Undo, archive/delete semantics, HTML sanitization, mocked Gmail API behavior, the existing demo domain tests, and pagination over a synthetic 100,000-thread mailbox. Static interaction-contract audits and Playwright-driven Electron passes cover buttons, feature context menus, editing/link/image menus, profile management, dedicated demo/real message windows, module actions, account onboarding, and native window controls.
 
 ## Keyboard shortcuts
 

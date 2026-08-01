@@ -122,7 +122,8 @@ export function createDemoState(): AppState {
       closeToTray: true,
       notifications: true,
       startModule: 'mail',
-      signature: 'Alex Avery\nNorthstar Studio'
+      signature: 'Alex Avery\nNorthstar Studio',
+      profile: { displayName: 'Alex Avery', email: 'alex@aerio.app' }
     }
   }
 }

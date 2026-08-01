@@ -76,8 +76,11 @@ try {
     env: { ...process.env, NODE_ENV: 'test' }
   })
   const page = await application.firstWindow()
-  page.on('pageerror', (error) => runtimeErrors.push(error.message))
-  page.on('console', (message) => { if (message.type() === 'error') runtimeErrors.push(message.text()) })
+  const trackRuntimeErrors = (target) => {
+    target.on('pageerror', (error) => runtimeErrors.push(error.message))
+    target.on('console', (message) => { if (message.type() === 'error') runtimeErrors.push(message.text()) })
+  }
+  trackRuntimeErrors(page)
   await page.waitForSelector('.app')
 
   const modeSwitch = page.locator('.mode-switch')
@@ -185,7 +188,7 @@ try {
 
     const message = page.locator('.message-row').filter({ hasText: 'The new identity feels exactly right' })
     await openMenu(message)
-    await expectItems('Reply', 'Reply all', 'Forward', 'Remove star', 'Flag message', 'Archive', 'Move to Trash', 'Add to Tasks', 'Add to Calendar', 'Copy subject')
+    await expectItems('Open in new window', 'Reply', 'Reply all', 'Forward', 'Remove star', 'Flag message', 'Archive', 'Move to Trash', 'Add to Tasks', 'Add to Calendar', 'Copy subject')
     await menuItem('Forward').click()
     await page.getByRole('dialog', { name: 'Forward' }).waitFor()
     await page.getByRole('dialog', { name: 'Forward' }).getByRole('button', { name: 'Close' }).click()
@@ -309,8 +312,19 @@ try {
 
     const realMessage = page.locator('.real-mail .message-row').filter({ hasText: 'Real mail context audit' })
     await realMessage.waitFor()
+    const realWindowPromise = application.waitForEvent('window')
+    await realMessage.dblclick()
+    const realWindow = await realWindowPromise
+    trackRuntimeErrors(realWindow)
+    await realWindow.locator('.message-window-shell').waitFor()
+    await realWindow.getByRole('heading', { name: 'Real mail context audit' }).waitFor()
+    await realWindow.getByText('aerio-context-audit.txt').waitFor()
+    const realWindowClosed = realWindow.waitForEvent('close')
+    await realWindow.getByRole('button', { name: 'Close' }).click()
+    await realWindowClosed
+
     await openMenu(realMessage)
-    await expectItems('Open conversation', 'Reply', 'Forward', 'Mark as unread', 'Remove star', 'Mark as not important', 'Archive', 'Move to Trash', 'Copy subject', 'Copy participants')
+    await expectItems('Open conversation', 'Open in new window', 'Reply', 'Forward', 'Mark as unread', 'Remove star', 'Mark as not important', 'Archive', 'Move to Trash', 'Copy subject', 'Copy participants')
     await menuItem('Forward').click()
     const realCompose = page.getByRole('dialog', { name: 'Compose mail message' })
     await realCompose.waitFor()
@@ -330,6 +344,16 @@ try {
   await step('workspace and theme controls expose direct choices', async () => {
     await openMenu(modeSwitch)
     await expectItems('Demo workspace', 'Real mail', 'New message')
+    await dismiss()
+
+    await openMenu(page.getByRole('button', { name: 'Settings' }))
+    await expectItems('Open settings')
+    assert.doesNotMatch(await popup.innerText(), /Open profile/)
+    await dismiss()
+
+    await openMenu(page.getByRole('button', { name: /Profile:/ }))
+    await expectItems('Open profile')
+    assert.doesNotMatch(await popup.innerText(), /Open settings/)
     await dismiss()
 
     await openMenu(page.locator('.theme-quick'))
