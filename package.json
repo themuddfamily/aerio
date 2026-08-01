@@ -14,15 +14,18 @@
     "test:watch": "vitest",
     "test:live-matrix": "node scripts/validate-live-provider-matrix.mjs",
     "audit:buttons": "node scripts/audit-buttons.mjs",
+    "audit:accessibility": "node scripts/desktop-accessibility-audit.mjs",
     "audit:context-menus": "node scripts/audit-context-menus.mjs",
     "test:context-menus": "npm run audit:context-menus && node scripts/desktop-context-menu-audit.mjs",
-    "test:desktop": "npm run build && npm run audit:buttons && node scripts/desktop-button-audit.mjs && npm run test:context-menus",
+    "test:desktop": "npm run build && npm run audit:buttons && node scripts/desktop-button-audit.mjs && npm run test:context-menus && npm run audit:accessibility",
+    "verify:release": "node scripts/verify-release.mjs",
     "icons": "node scripts/generate-icons.mjs",
-    "package:win": "npm run icons && npm run build && electron-builder --win nsis portable --publish never"
+    "package:win": "npm run verify:release && npm run icons && npm run build && electron-builder --win nsis portable --publish never"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.6",
     "date-fns": "^4.1.0",
+    "electron-updater": "^6.8.9",
     "google-auth-library": "^10.9.1",
     "imapflow": "^1.6.5",
     "lucide-react": "^0.468.0",
@@ -34,6 +37,7 @@
     "sql.js": "^1.13.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
     "@types/node": "^22.10.2",
     "@types/nodemailer": "^8.0.1",
     "@types/react": "^19.0.3",
@@ -46,7 +50,7 @@
     "electron-vite": "^3.0.0",
     "playwright-core": "^1.62.1",
     "png-to-ico": "^3.0.1",
-    "sharp": "^0.33.5",
+    "sharp": "^0.35.3",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
     "vitest": "^3.0.5"
@@ -75,6 +79,7 @@
     ],
     "win": {
       "icon": "build/icon.ico",
+      "verifyUpdateCodeSignature": true,
       "target": [
         "nsis",
         "portable"
@@ -90,6 +95,14 @@
     },
     "portable": {
       "artifactName": "${productName}-${version}-portable-${arch}.${ext}"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "themuddfamily",
+        "repo": "aerio",
+        "releaseType": "draft"
+      }
+    ]
   }
 }

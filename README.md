@@ -1,6 +1,6 @@
 # Aerio
 
-Aerio is a calm, modern desktop email client for Windows. Version 0.4 adds a multi-provider real-mail workspace alongside the original local demo. The workspaces stay separate, so sample content never mixes with a real inbox.
+Aerio is a calm, modern desktop communications client for Windows. The connected workspace supports multi-provider mail plus the first read-only Calendar and Contacts synchronization slice alongside the original local demo. The workspaces stay separate, so sample content never mixes with provider data.
 
 ## Real-mail alpha
 
@@ -19,8 +19,9 @@ Aerio is a calm, modern desktop email client for Windows. Version 0.4 adds a mul
 - Sanitized HTML; scripts and unsafe links are removed, and remote images are blocked by default
 - Dedicated message windows for demo and real mail; double-click a conversation to open or focus its window
 - Read-only local archive or complete local deletion when disconnecting an account
+- Read-only Google Calendar/Contacts and Outlook Calendar/Contacts synchronization, cached in a separate local database
 
-Calendar, Contacts, Tasks, Notes, and Chat are still demo modules. They do not read or modify Google data.
+Tasks, Notes, and Chat remain local/demo modules. Provider Calendar and Contacts data is only loaded after **Sync now** and cannot yet be edited from Aerio.
 
 ## Connect an account
 
@@ -30,13 +31,13 @@ Open the real-mail workspace and choose **Add mail account**. The setup screen e
 
 Aerio uses your own Google OAuth client. It does not ship a shared secret or proxy your mail through an Aerio server.
 
-1. Open the [Google Cloud Console](https://console.cloud.google.com/), create or select a project, and enable the **Gmail API**.
+1. Open the [Google Cloud Console](https://console.cloud.google.com/), create or select a project, and enable the **Gmail API**, **Google Calendar API**, and **People API**.
 2. Configure the OAuth consent screen. For durable personal use, publish it as **In production** and add only the Google accounts you intend to use if Google requests test users. Refresh tokens issued while the app is in **Testing** normally expire after seven days.
 3. Create **OAuth client ID → Desktop app** credentials and download the JSON file.
-4. Run Aerio, switch the badge in the top bar from **Demo workspace** to **Real mail**, choose Gmail, and import the JSON.
+4. Run Aerio, switch the badge in the top bar from **Demo workspace** to **Connected workspace**, choose Gmail, and import the JSON.
 5. Select **Connect Gmail**. Your normal browser completes Google sign-in and returns to Aerio through a temporary `127.0.0.1` callback.
 
-Aerio requests only `https://www.googleapis.com/auth/gmail.modify`. It does not request permanent-delete access, and the UI intentionally offers only Gmail Trash—not irreversible deletion.
+Aerio requests Gmail modify access plus read-only Calendar and Contacts access. It does not request permanent-delete, Calendar-write, or Contacts-write access. Existing accounts connected by an older Aerio build must use **Account settings → Reconnect** once to approve the added read-only scopes.
 
 The first download is quota-bound. A mailbox with 100,000 messages can take roughly seven hours or more, depending on message size, retries, and Google’s per-user quota. Progress is persistent; quitting, losing connectivity, or pausing does not discard completed work.
 
@@ -44,7 +45,7 @@ The first download is quota-bound. A mailbox with 100,000 messages can take roug
 
 1. Create an app registration in [Microsoft Entra](https://entra.microsoft.com/).
 2. Enable public client flows and add the **Mobile and desktop applications** redirect URI `http://localhost`.
-3. Copy the Application (client) ID into Aerio. Browser sign-in requests delegated `User.Read`, `Mail.ReadWrite`, and `Mail.Send` access.
+3. Copy the Application (client) ID into Aerio. Browser sign-in requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.Read`, and `Contacts.Read` access. Existing connections must reconnect once to grant the added read-only scopes.
 
 Use an account type supported by the registration. Organization-managed tenants may require an administrator to approve the requested permissions.
 
@@ -64,7 +65,7 @@ Proton Mail connects through the local [Proton Mail Bridge](https://proton.me/su
 
 - OAuth refresh/access tokens and IMAP/SMTP passwords are encrypted with Electron `safeStorage` (Windows DPAPI) before they are written to disk.
 - Tokens stay in Electron’s main process. The sandboxed renderer receives a narrow typed API and never receives credentials.
-- Mail metadata and search indexes live in normalized SQLite tables using WAL mode.
+- Mail metadata and search indexes live in normalized SQLite tables using WAL mode. Provider calendars and contacts use a separate `productivity.sqlite` cache.
 - Original `.eml` content is written atomically beneath Aerio’s application-data directory.
 - Remote message images are represented by an isolated `aerio-image:` protocol and are fetched only after an explicit per-conversation choice.
 - External HTTP(S) and `mailto:` links open in the system browser/mail handler rather than navigating Aerio.
@@ -102,11 +103,14 @@ The app uses Electron 43, React 19, TypeScript, Vite, and two local SQLite paths
 - The renderer is sandboxed and has no Node.js access.
 - The main process owns OAuth, OS dialogs, safe storage, external navigation, and a typed IPC boundary.
 - A dedicated Node worker owns the normalized mail database, Gmail/Graph/IMAP synchronization, SMTP delivery, MIME parsing, full-text search, queued mutations, and drafts.
+- Main-process Google and Microsoft productivity connectors normalize Calendar and Contacts into an isolated SQLite cache. Failed refreshes retain the last good snapshot; disconnecting removes that account’s cached productivity data.
 - The original `sql.js` store remains isolated to the demo workspace.
 
-Automated coverage includes database migration and backup, provider data integrity, logical duplicate suppression, exact-state Undo, editable drafts, outgoing MIME, new-mail notification filtering, Microsoft delta pagination, mocked Gmail behavior, the existing demo domain tests, and pagination over a synthetic 100,000-thread mailbox. Static interaction-contract audits and Playwright-driven Electron passes cover buttons, feature context menus, editing/link/image menus, profile management, dedicated demo/real message windows, bulk mail organization, account settings, module actions, account onboarding, and native window controls.
+Automated coverage includes database migration and backup, provider data integrity, productivity connector normalization and atomic cache replacement, logical duplicate suppression, exact-state Undo, editable drafts, outgoing MIME, new-mail notification filtering, Microsoft delta pagination, mocked Gmail behavior, the existing demo domain tests, and pagination over a synthetic 100,000-thread mailbox. Static interaction-contract, WCAG, focus-management, and Playwright-driven Electron passes cover buttons, feature context menus, editing/link/image menus, profile management, dedicated demo/real message windows, cached Calendar/Contacts surfaces, bulk mail organization, account settings, module actions, account onboarding, and native window controls.
 
 Live provider behavior is release-gated by the disposable-account scenarios in [`docs/live-provider-test-matrix.md`](docs/live-provider-test-matrix.md). Settings → Mail diagnostics checks database integrity and exports a privacy-redacted troubleshooting report; credentials, message bodies, raw mail, HTML, and attachment paths are excluded.
+
+The longer-term provider boundaries and the reasoning behind local Tasks/Notes and unconfigured Chat are documented in [`docs/module-provider-strategy.md`](docs/module-provider-strategy.md).
 
 ## Keyboard shortcuts
 
@@ -116,6 +120,7 @@ Live provider behavior is release-gated by the disposable-account scenarios in [
 | `Ctrl+N` | New message, or account setup when real mail has no account |
 | `Ctrl+1`…`Ctrl+6` | Switch between modules |
 | `Shift+F10` | Open the context menu for the focused item |
+| `Shift+Enter` | Open the focused message in a separate window |
 | `Esc` | Close the active overlay |
 
 ## Current limitations
@@ -126,4 +131,6 @@ Live provider behavior is release-gated by the disposable-account scenarios in [
 - IMAP can store multiple physical copies of the same message, but Aerio presents them as one logical conversation and keeps every location available for folder actions.
 - Scheduled send remains demo-only and is not presented as a real Gmail capability.
 - Offline drafts are queued until connectivity returns, but conflict resolution with edits made simultaneously in another client is not yet implemented.
+- Connected Calendar and Contacts are currently read-only and refresh manually. The initial Calendar window covers one year in the past through two years in the future; incremental checkpoints and provider writes are next.
+- Google Keep and consumer Google Chat do not expose suitable general synchronization APIs. Aerio Notes remain local, and remote Chat requires a separately defined service strategy.
 - Windows is the tested packaging target; macOS and Linux packaging are not configured.

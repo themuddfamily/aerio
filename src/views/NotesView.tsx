@@ -128,7 +128,7 @@ export default function NotesView({ state, query, onChange, onToast }: NotesView
         {selected ? (
           <>
             <header className="note-editor-toolbar" onContextMenu={(event) => showContextMenu(event, noteMenu(selected), selected.title)}>
-              <select value={selected.folder} onChange={(event) => update({ folder: event.target.value })}>
+              <select aria-label="Note folder" value={selected.folder} onChange={(event) => update({ folder: event.target.value })}>
                 {Array.from(new Set(['Personal', 'Studio', 'Ideas', ...state.notes.map((note) => note.folder)])).map((item) => <option key={item}>{item}</option>)}
               </select>
               <span className="save-state">Saved locally</span>
@@ -142,7 +142,7 @@ export default function NotesView({ state, query, onChange, onToast }: NotesView
               }}><Trash2 size={17} /></button>
             </header>
             <div className="note-paper">
-              <input className="note-title-input" value={selected.title} onChange={(event) => update({ title: event.target.value })} />
+              <input className="note-title-input" aria-label="Note title" value={selected.title} onChange={(event) => update({ title: event.target.value })} />
               <div className="tag-editor">
                 <Tag size={14} /><input value={selected.tags.join(', ')} onChange={(event) => update({ tags: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })} placeholder="Add tags, separated by commas" />
               </div>

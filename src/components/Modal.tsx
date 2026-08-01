@@ -1,5 +1,6 @@
-import { useEffect, type PropsWithChildren } from 'react'
+import type { PropsWithChildren } from 'react'
 import { X } from 'lucide-react'
+import { useDialogFocus } from '../lib/dialog-focus'
 
 interface ModalProps extends PropsWithChildren {
   title: string
@@ -9,17 +10,13 @@ interface ModalProps extends PropsWithChildren {
 }
 
 export default function Modal({ title, subtitle, width = 'medium', onClose, children }: ModalProps) {
-  useEffect(() => {
-    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', close)
-    return () => window.removeEventListener('keydown', close)
-  }, [onClose])
+  const dialogRef = useDialogFocus<HTMLElement>(onClose)
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.currentTarget === event.target) onClose()
     }}>
-      <section className={`modal modal-${width}`} role="dialog" aria-modal="true" aria-label={title}>
+      <section ref={dialogRef} className={`modal modal-${width}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1}>
         <header className="modal-header">
           <div>
             <h2>{title}</h2>

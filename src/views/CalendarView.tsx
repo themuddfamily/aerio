@@ -1,12 +1,12 @@
 import {
   CalendarDays, CalendarPlus2, Check, ChevronLeft, ChevronRight, Clock3, Copy, Eye, EyeOff,
-  MapPin, Pencil, Plus, Repeat2, Trash2, Users
+  MapPin, Pencil, Plus, RefreshCw, Repeat2, Trash2, Users
 } from 'lucide-react'
 import {
   addDays, addMonths, addWeeks, eachDayOfInterval, endOfMonth, endOfWeek, format,
   isSameDay, isSameMonth, parseISO, startOfMonth, startOfWeek, subDays, subMonths, subWeeks
 } from 'date-fns'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { uid } from '../lib/domain'
 import type { AppState, CalendarEvent } from '../types'
 import Modal from '../components/Modal'
@@ -19,11 +19,15 @@ interface CalendarViewProps {
   query: string
   onChange(next: AppState): void
   onToast(message: string): void
+  readOnly?: boolean
+  onSync?(): Promise<void> | void
+  syncing?: boolean
+  sourceMessage?: string
 }
 
 const eventOnDay = (event: CalendarEvent, date: Date) => isSameDay(parseISO(event.start), date)
 
-export default function CalendarView({ state, query, onChange, onToast }: CalendarViewProps) {
+export default function CalendarView({ state, query, onChange, onToast, readOnly = false, onSync, syncing = false, sourceMessage }: CalendarViewProps) {
   const { showContextMenu } = useContextMenu()
   const [mode, setMode] = useState<CalendarMode>('month')
   const [cursor, setCursor] = useState(new Date())
@@ -31,6 +35,11 @@ export default function CalendarView({ state, query, onChange, onToast }: Calend
   const [editing, setEditing] = useState<CalendarEvent | 'new' | null>(null)
   const [newDate, setNewDate] = useState<Date>(new Date())
   const [newCalendarId, setNewCalendarId] = useState<string>()
+  const calendarIds = state.accounts.map((account) => account.id).join('\n')
+
+  useEffect(() => {
+    setActiveCalendars((current) => new Set([...current, ...state.accounts.map((account) => account.id)]))
+  }, [calendarIds])
 
   const filtered = useMemo(() => state.events
     .filter((event) => activeCalendars.has(event.calendarId))
@@ -45,6 +54,7 @@ export default function CalendarView({ state, query, onChange, onToast }: Calend
   }
 
   const createOn = (date: Date, calendarId?: string) => {
+    if (readOnly) return
     setNewDate(date)
     setNewCalendarId(calendarId)
     setEditing('new')
@@ -64,15 +74,15 @@ export default function CalendarView({ state, query, onChange, onToast }: Calend
 
   const eventMenu = (event: CalendarEvent): ContextMenuItem[] => [
     { label: 'Open event', icon: Pencil, action: () => setEditing(event) },
-    { label: 'Duplicate event', icon: Copy, separatorBefore: true, action: () => duplicateEvent(event) },
+    ...(!readOnly ? [{ label: 'Duplicate event', icon: Copy, separatorBefore: true, action: () => duplicateEvent(event) }] satisfies ContextMenuItem[] : []),
     { label: 'Copy event details', icon: Copy, action: () => copyText(`${event.title}\n${format(parseISO(event.start), 'PPpp')} – ${format(parseISO(event.end), 'PPpp')}${event.location ? `\n${event.location}` : ''}`) },
-    { label: 'Delete event', icon: Trash2, separatorBefore: true, danger: true, action: () => deleteEvent(event) }
+    ...(!readOnly ? [{ label: 'Delete event', icon: Trash2, separatorBefore: true, danger: true, action: () => deleteEvent(event) }] satisfies ContextMenuItem[] : [])
   ]
 
   const showEventMenu = (contextEvent: React.MouseEvent, event: CalendarEvent) => showContextMenu(contextEvent, eventMenu(event), event.title)
 
   const showDateMenu = (contextEvent: React.MouseEvent, date: Date) => showContextMenu(contextEvent, [
-    { label: 'New event', icon: CalendarPlus2, action: () => createOn(date) },
+    ...(!readOnly ? [{ label: 'New event', icon: CalendarPlus2, action: () => createOn(date) }] satisfies ContextMenuItem[] : []),
     { label: 'Open day view', icon: CalendarDays, action: () => { setCursor(date); setMode('day') } },
     { label: 'Copy date', icon: Copy, separatorBefore: true, action: () => copyText(format(date, 'PPPP')) }
   ], format(date, 'PPPP'))
@@ -88,7 +98,7 @@ export default function CalendarView({ state, query, onChange, onToast }: Calend
       }) },
       { label: 'Show only this calendar', icon: Eye, action: () => setActiveCalendars(new Set([account.id])) },
       { label: 'Show all calendars', icon: CalendarDays, action: () => setActiveCalendars(new Set(state.accounts.map((item) => item.id))) },
-      { label: `New event in ${account.name}`, icon: CalendarPlus2, separatorBefore: true, action: () => createOn(new Date(), account.id) },
+      ...(!readOnly ? [{ label: `New event in ${account.name}`, icon: CalendarPlus2, separatorBefore: true, action: () => createOn(new Date(), account.id) }] satisfies ContextMenuItem[] : []),
       { label: 'Copy calendar address', icon: Copy, separatorBefore: true, action: () => copyText(account.email) }
     ], account.name)
   }
@@ -102,7 +112,9 @@ export default function CalendarView({ state, query, onChange, onToast }: Calend
   return (
     <div className="workspace">
       <aside className="context-sidebar calendar-sidebar">
-        <button className="compose-button" onClick={() => createOn(new Date())}><Plus size={18} /> New event</button>
+        {readOnly
+          ? <><button className="compose-button" disabled={syncing} onClick={() => void onSync?.()}><RefreshCw className={syncing ? 'spin' : undefined} size={18} /> {syncing ? 'Syncing…' : 'Sync now'}</button><p className="provider-source-note" aria-live="polite">{sourceMessage}</p></>
+          : <button className="compose-button" onClick={() => createOn(new Date())}><Plus size={18} /> New event</button>}
         <MiniCalendar cursor={cursor} selected={cursor} onSelect={setCursor} onContextDate={showDateMenu} />
         <div className="sidebar-group">
           <span className="sidebar-label">My calendars</span>
@@ -157,6 +169,7 @@ export default function CalendarView({ state, query, onChange, onToast }: Calend
           date={newDate}
           defaultCalendarId={newCalendarId}
           state={state}
+          readOnly={readOnly}
           onClose={() => setEditing(null)}
           onSave={(event) => {
             const exists = state.events.some((item) => item.id === event.id)
@@ -164,7 +177,7 @@ export default function CalendarView({ state, query, onChange, onToast }: Calend
             onToast(exists ? 'Event updated' : 'Event created')
             setEditing(null)
           }}
-          onDelete={editing === 'new' ? undefined : () => {
+          onDelete={readOnly || editing === 'new' ? undefined : () => {
             onChange({ ...state, events: state.events.filter((event) => event.id !== editing.id) })
             onToast('Event deleted')
             setEditing(null)
@@ -258,7 +271,7 @@ function Agenda({ events, onSelect, onContextEvent }: { events: CalendarEvent[];
   )
 }
 
-function EventEditor({ event, date, defaultCalendarId, state, onClose, onSave, onDelete }: { event?: CalendarEvent; date: Date; defaultCalendarId?: string; state: AppState; onClose(): void; onSave(event: CalendarEvent): void; onDelete?(): void }) {
+function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, onClose, onSave, onDelete }: { event?: CalendarEvent; date: Date; defaultCalendarId?: string; state: AppState; readOnly?: boolean; onClose(): void; onSave(event: CalendarEvent): void; onDelete?(): void }) {
   const initialStart = event ? parseISO(event.start) : new Date(date)
   if (!event) initialStart.setHours(initialStart.getHours() || 10, 0, 0, 0)
   const initialEnd = event ? parseISO(event.end) : new Date(initialStart.getTime() + 60 * 60 * 1000)
@@ -276,29 +289,29 @@ function EventEditor({ event, date, defaultCalendarId, state, onClose, onSave, o
   const canSave = Boolean(title.trim()) && Number.isFinite(startTime) && Number.isFinite(endTime) && endTime > startTime
 
   return (
-    <Modal title={event ? 'Edit event' : 'New event'} subtitle="Keep time intentional." onClose={onClose}>
+    <Modal title={readOnly ? 'Event details' : event ? 'Edit event' : 'New event'} subtitle={readOnly ? 'Synchronized from your provider.' : 'Keep time intentional.'} onClose={onClose}>
       <div className="form-stack">
-        <label className="field-label">Event title<input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Add a title" /></label>
+        <label className="field-label">Event title<input autoFocus value={title} disabled={readOnly} onChange={(e) => setTitle(e.target.value)} placeholder="Add a title" /></label>
         <div className="form-grid-2">
-          <label className="field-label">Starts<input type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} /></label>
-          <label className="field-label">Ends<input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} /></label>
+          <label className="field-label">Starts<input type="datetime-local" value={start} disabled={readOnly} onChange={(e) => setStart(e.target.value)} /></label>
+          <label className="field-label">Ends<input type="datetime-local" value={end} disabled={readOnly} onChange={(e) => setEnd(e.target.value)} /></label>
         </div>
         <div className="form-grid-2">
-          <label className="field-label">Calendar<select value={calendarId} onChange={(e) => setCalendarId(e.target.value)}>{state.accounts.map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
-          <label className="field-label">Repeat<select value={recurrence} onChange={(e) => setRecurrence(e.target.value as CalendarEvent['recurrence'])}><option value="none">Doesn’t repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>
+          <label className="field-label">Calendar<select value={calendarId} disabled={readOnly} onChange={(e) => setCalendarId(e.target.value)}>{state.accounts.map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
+          <label className="field-label">Repeat<select value={recurrence} disabled={readOnly} onChange={(e) => setRecurrence(e.target.value as CalendarEvent['recurrence'])}><option value="none">Doesn’t repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>
         </div>
-        <label className="field-label"><MapPin size={14} /> Location<input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Add a place or video link" /></label>
-        <label className="field-label"><Users size={14} /> Attendees<input value={attendees} onChange={(e) => setAttendees(e.target.value)} placeholder="Separate email addresses with commas" /></label>
-        <label className="field-label">Notes<textarea value={description} onChange={(e) => setDescription(e.target.value)} /></label>
+        <label className="field-label"><MapPin size={14} /> Location<input value={location} disabled={readOnly} onChange={(e) => setLocation(e.target.value)} placeholder="Add a place or video link" /></label>
+        <label className="field-label"><Users size={14} /> Attendees<input value={attendees} disabled={readOnly} onChange={(e) => setAttendees(e.target.value)} placeholder="Separate email addresses with commas" /></label>
+        <label className="field-label">Notes<textarea value={description} disabled={readOnly} onChange={(e) => setDescription(e.target.value)} /></label>
         <footer className="modal-footer">
           {onDelete && <button className="button danger-subtle" onClick={onDelete}>Delete</button>}
           <span className="spacer" />
-          <button className="button ghost" onClick={onClose}>Cancel</button>
-          <button className="button primary" disabled={!canSave} title={!canSave ? 'Add a title and choose an end time after the start' : undefined} onClick={() => onSave({
+          <button className="button ghost" onClick={onClose}>{readOnly ? 'Close' : 'Cancel'}</button>
+          {!readOnly && <button className="button primary" disabled={!canSave} title={!canSave ? 'Add a title and choose an end time after the start' : undefined} onClick={() => onSave({
             id: event?.id ?? uid('event'), calendarId, title: title.trim(),
             start: new Date(start).toISOString(), end: new Date(end).toISOString(), location, description, color,
             attendees: attendees.split(',').map((value) => value.trim()).filter(Boolean), reminderMinutes: event?.reminderMinutes ?? 15, recurrence
-          })}><CalendarDays size={16} /> Save event</button>
+          })}><CalendarDays size={16} /> Save event</button>}
         </footer>
       </div>
     </Modal>

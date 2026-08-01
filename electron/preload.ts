@@ -9,6 +9,23 @@ const api: AerioDesktopApi = {
   chooseAttachments: () => ipcRenderer.invoke('files:choose'),
   chooseProfileImage: () => ipcRenderer.invoke('profile:image:choose'),
   notify: (title: string, body: string) => ipcRenderer.invoke('notification:show', { title, body }),
+  updates: {
+    status: () => ipcRenderer.invoke('app:update:status'),
+    check: () => ipcRenderer.invoke('app:update:check'),
+    download: () => ipcRenderer.invoke('app:update:download'),
+    install: () => ipcRenderer.invoke('app:update:install'),
+    onStatus: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, status: import('../src/types').AppUpdateStatus) => callback(status)
+      ipcRenderer.on('app:update:status-changed', listener)
+      return () => ipcRenderer.removeListener('app:update:status-changed', listener)
+    }
+  },
+  productivity: {
+    snapshot: () => ipcRenderer.invoke('productivity:snapshot'),
+    sync: (accountId) => ipcRenderer.invoke('productivity:sync', accountId),
+    localSnapshot: () => ipcRenderer.invoke('productivity:local-snapshot'),
+    saveLocal: (snapshot) => ipcRenderer.invoke('productivity:local-save', snapshot)
+  },
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     maximize: () => ipcRenderer.invoke('window:maximize'),

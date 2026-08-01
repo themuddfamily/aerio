@@ -41,6 +41,11 @@ Record no secrets in evidence. Use an account alias such as `gmail-a`, the Aerio
 | `MAIL-02` | Search/pagination | Seeded messages are found offline and appear exactly once across page boundaries. |
 | `DESKTOP-01` | Background notification | With Aerio hidden, one incoming message creates one notification; clicking it opens Aerio. Disabled accounts stay silent. |
 | `HEALTH-01` | Diagnostics | Health check reports zero orphans/missing files/failures; export contains no tokens, passwords, message bodies or full local parts of email addresses. |
+| `PROD-AUTH-01` | Productivity consent | Google/Microsoft sign-in grants the documented read-only Calendar and Contacts scopes; an older connection explains that reconnect is required. |
+| `CAL-01` | Calendar initial sync | Calendars and events in the supported date window appear once with correct account, time, location, attendees and recurrence; Aerio exposes no edit controls. |
+| `CAL-02` | Calendar pagination/time zones | More than one provider page, all-day events, DST boundaries and UTC/non-UTC events render on the correct date and time. |
+| `CONTACT-01` | Contacts initial sync | More than one provider page maps names, email, phone, company, title and groups without duplicates; contacts without an email remain viewable. |
+| `PROD-FAIL-01` | Productivity refresh failure | Revoked scope, 429 and 5xx errors are visible, retry safely, and retain the last successful cached snapshot. |
 
 ## Provider coverage
 
@@ -55,6 +60,15 @@ Every Required cell must have dated evidence before a public beta. `N/A` must in
 | fastmail | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required |
 | custom-imap | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required |
 | proton-bridge | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta |
+
+## Calendar and Contacts coverage
+
+IMAP/SMTP is a mail protocol and does not imply Calendar or Contacts APIs. These scenarios apply only to the OAuth providers whose existing Aerio app connection can request the relevant service scopes.
+
+| Provider | PROD-AUTH-01 | CAL-01 | CAL-02 | CONTACT-01 | PROD-FAIL-01 |
+| --- | --- | --- | --- | --- | --- |
+| gmail | Required | Required | Required | Required | Required |
+| microsoft | Required | Required | Required | Required | Required |
 
 ## Execution log
 

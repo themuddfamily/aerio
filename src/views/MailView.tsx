@@ -242,13 +242,13 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
           </div>
           <button className="text-button" onClick={() => setSortNewest((value) => !value)}>{sortNewest ? 'Newest' : 'Oldest'} <ChevronDown size={13} /></button>
         </div>
-        <div className="message-list" role="list" onContextMenu={(event) => showContextMenu(event, [
+        <div className="message-list" onContextMenu={(event) => showContextMenu(event, [
           { label: 'New message', icon: Plus, action: () => onCompose() },
           { label: 'Mark visible messages as read', icon: MailOpen, separatorBefore: true, disabled: !messages.some((message) => message.unread), action: () => onChange({ ...state, messages: state.messages.map((message) => messages.some((visible) => visible.id === message.id) ? { ...message, unread: false } : message) }) },
           { label: sortNewest ? 'Sort oldest first' : 'Sort newest first', icon: ChevronDown, action: () => setSortNewest((value) => !value) }
         ], 'Message list')}>
           {messages.map((message) => (
-            <button key={message.id} className={`message-row ${selected?.id === message.id ? 'selected' : ''} ${message.unread ? 'unread' : ''}`} onClick={() => selectMessage(message)} onDoubleClick={() => openMessageWindow(message)} onContextMenu={(event) => showMessageMenu(event, message)}>
+            <button key={message.id} className={`message-row ${selected?.id === message.id ? 'selected' : ''} ${message.unread ? 'unread' : ''}`} aria-current={selected?.id === message.id ? 'true' : undefined} onClick={() => selectMessage(message)} onDoubleClick={() => openMessageWindow(message)} onKeyDown={(event) => { if (event.key === 'Enter' && event.shiftKey) { event.preventDefault(); openMessageWindow(message) } }} onContextMenu={(event) => showMessageMenu(event, message)}>
               <span className="avatar" style={{ background: state.contacts.find((contact) => contact.email === message.fromEmail)?.color ?? '#8892a6' }}>{message.from.split(' ').map((part) => part[0]).slice(0, 2).join('')}</span>
               <span className="message-copy">
                 <span className="message-meta"><strong>{message.from}</strong><time>{shortDate(message.date)}</time></span>

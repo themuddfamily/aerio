@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { GmailAccountSummary, GmailDraftInput, GmailDraftRecord, GmailThreadDetail, MailRecipientSuggestion } from '../gmail-types'
 import { formatFileSize } from '../lib/domain'
 import { copyText, useContextMenu } from './ContextMenu'
+import { useDialogFocus } from '../lib/dialog-focus'
 
 interface GmailComposeModalProps {
   accounts: GmailAccountSummary[]
@@ -143,17 +144,7 @@ export default function GmailComposeModal({ accounts, draft, replyTo, forward, o
     if (hasChanges && hasContent && fingerprint !== lastSaved.current) await saveNow(input)
     onClose()
   }
-
-  useEffect(() => {
-    const close = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && status !== 'sending') {
-        event.preventDefault()
-        void closeComposer()
-      }
-    }
-    window.addEventListener('keydown', close)
-    return () => window.removeEventListener('keydown', close)
-  })
+  const dialogRef = useDialogFocus<HTMLElement>(() => void closeComposer(), true, status !== 'sending' && status !== 'closing')
 
   const chooseAttachments = async () => {
     try {
@@ -249,7 +240,7 @@ export default function GmailComposeModal({ accounts, draft, replyTo, forward, o
 
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) void closeComposer() }}>
-      <section className="modal gmail-compose" role="dialog" aria-modal="true" aria-label="Compose mail message">
+      <section ref={dialogRef} className="modal gmail-compose" role="dialog" aria-modal="true" aria-label="Compose mail message" tabIndex={-1}>
         <header className="modal-header">
           <div><h2>{draft ? 'Edit draft' : forward ? 'Forward' : replyTo ? 'Reply' : 'New message'}</h2><p>{statusText}</p></div>
           <button className="icon-button" onClick={() => void closeComposer()} aria-label="Close" title="Save draft and close"><X size={18} /></button>

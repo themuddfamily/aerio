@@ -35,6 +35,11 @@ import { ImapSmtpClient } from './mail/imap-client'
 import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
 import { MailWorkerClient } from './mail/worker-client'
 import { DiagnosticLogger, type DiagnosticRecord } from './diagnostics'
+import { UpdateManager } from './update-manager'
+import { ProductivityStore } from './productivity/store'
+import { GoogleProductivityConnector } from './productivity/google-connector'
+import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
+import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'aerio-image', privileges: { secure: true, standard: true, supportFetchAPI: true, bypassCSP: false } }
@@ -52,6 +57,8 @@ const approvedAttachmentPaths = new Set<string>()
 let quitting = false
 let lastBoundsWrite: NodeJS.Timeout | undefined
 let diagnostics: DiagnosticLogger | null = null
+let updates: UpdateManager | null = null
+let productivityStore: ProductivityStore | null = null
 
 function diagnostic(record: Omit<DiagnosticRecord, 'timestamp'>) {
   diagnostics?.log(record)
@@ -156,6 +163,43 @@ function validateDraft(input: GmailDraftInput, forSend = false) {
   }
   if (attachmentBytes > 20 * 1024 * 1024) throw new Error('Attachments exceed Aerio’s 20 MB sending limit')
   return input
+}
+
+function requireProductivityStore() {
+  if (!productivityStore) throw new Error('Calendar and contacts storage is not ready')
+  return productivityStore
+}
+
+function validLocalModules(value: unknown): value is LocalModuleSnapshot {
+  if (!value || typeof value !== 'object') return false
+  const input = value as Partial<LocalModuleSnapshot>
+  if (!Array.isArray(input.tasks) || !Array.isArray(input.notes) || input.tasks.length > 100_000 || input.notes.length > 100_000) return false
+  return input.tasks.every((task) => task && typeof task.id === 'string' && typeof task.title === 'string' && task.id.length <= 300 && task.title.length <= 10_000) &&
+    input.notes.every((note) => note && typeof note.id === 'string' && typeof note.title === 'string' && typeof note.content === 'string' && note.id.length <= 300 && note.title.length <= 10_000 && note.content.length <= 10_000_000)
+}
+
+async function syncProductivity(accountId: string): Promise<ProductivitySnapshot> {
+  const provider = accountProviders.get(accountId)
+  if (provider !== 'gmail' && provider !== 'microsoft') throw new Error('This mail connection does not provide Calendar or Contacts APIs')
+  const store = requireProductivityStore()
+  store.setSyncing(accountId)
+  const connector = provider === 'gmail'
+    ? new GoogleProductivityConnector(accountId, () => requireVault().accessToken(accountId))
+    : new MicrosoftProductivityConnector(accountId, () => requireVault().microsoftAccessToken(accountId))
+  try {
+    const data = await connector.sync()
+    store.replaceAccount(accountId, provider, data)
+    diagnostic({
+      level: 'info', component: 'provider', event: 'productivity-sync-complete', accountId,
+      details: { provider, calendars: data.calendars.length, events: data.events.length, contacts: data.contacts.length }
+    })
+    return store.snapshot()
+  } catch (error) {
+    const message = error instanceof Error ? error.message.slice(0, 500) : 'Calendar and contacts synchronization failed'
+    store.setError(accountId, message)
+    diagnostic({ level: 'error', component: 'provider', event: 'productivity-sync-error', accountId, message, details: { provider } })
+    throw new Error(message)
+  }
 }
 
 function isPrivateAddress(address: string) {
@@ -492,6 +536,27 @@ function registerIpc() {
   ipcMain.handle('notification:show', (_event, input: { title: string; body: string }) => {
     if (Notification.isSupported()) new Notification({ title: input.title.slice(0, 80), body: input.body.slice(0, 240), icon: iconPath() }).show()
   })
+  ipcMain.handle('productivity:snapshot', () => requireProductivityStore().snapshot())
+  ipcMain.handle('productivity:local-snapshot', () => requireProductivityStore().localSnapshot())
+  ipcMain.handle('productivity:local-save', (_event, snapshot: unknown) => {
+    if (!validLocalModules(snapshot)) throw new Error('Local Tasks or Notes data is invalid')
+    requireProductivityStore().saveLocal(snapshot)
+  })
+  ipcMain.handle('productivity:sync', (_event, accountId: string) => {
+    if (typeof accountId !== 'string' || !accountId || accountId.length > 200) throw new Error('Choose a valid account to synchronize')
+    return syncProductivity(accountId)
+  })
+  ipcMain.handle('app:update:status', () => updates?.status() ?? ({
+    phase: 'unsupported',
+    currentVersion: app.getVersion(),
+    message: 'The update service has not started.'
+  }))
+  ipcMain.handle('app:update:check', () => updates?.check() ?? Promise.reject(new Error('The update service has not started')))
+  ipcMain.handle('app:update:download', () => updates?.download() ?? Promise.reject(new Error('The update service has not started')))
+  ipcMain.handle('app:update:install', () => {
+    if (!updates) throw new Error('The update service has not started')
+    updates.install()
+  })
   ipcMain.handle('window:minimize', (event) => BrowserWindow.fromWebContents(event.sender)?.minimize())
   ipcMain.handle('window:maximize', (event) => {
     const window = BrowserWindow.fromWebContents(event.sender)
@@ -638,6 +703,7 @@ function registerIpc() {
   ipcMain.handle('gmail:accounts:disconnect', async (_event, accountId: string, mode: 'archive' | 'delete') => {
     await requireVault().remove(accountId)
     await requireMailWorker().request({ type: 'accounts:disconnect', payload: { accountId, mode } })
+    requireProductivityStore().removeAccount(accountId)
     accountProviders.delete(accountId)
   })
   ipcMain.handle('gmail:labels:list', (_event, accountIds?: string[]) =>
@@ -733,10 +799,22 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
   await initializeDatabase()
   await initializeMail()
+  productivityStore = new ProductivityStore(join(app.getPath('userData'), 'productivity.sqlite'))
   registerIpc()
   registerRemoteImageProtocol()
   createWindow()
   createTray()
+  updates = new UpdateManager(
+    (status) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('app:update:status-changed', status)),
+    (event, message, details) => diagnostic({
+      level: event.endsWith('error') ? 'error' : 'info',
+      component: 'app',
+      event,
+      message,
+      details
+    })
+  )
+  updates.start()
 
   app.on('activate', () => {
     if (!mainWindow) createWindow()
@@ -746,6 +824,8 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   quitting = true
+  updates?.stop()
+  productivityStore?.close()
   diagnostic({ level: 'info', component: 'app', event: 'shutdown' })
   void mailWorker?.close()
 })

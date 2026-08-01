@@ -14,7 +14,7 @@ export interface Account {
   email: string
   initials: string
   color: string
-  provider: 'demo' | 'gmail' | 'outlook' | 'imap'
+  provider: 'demo' | 'gmail' | 'microsoft' | 'outlook' | 'imap'
 }
 
 export interface Folder {
@@ -172,6 +172,25 @@ export interface WindowControls {
   openMessage(input: MessageWindowRequest): Promise<void>
 }
 
+export type AppUpdatePhase = 'unsupported' | 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'current' | 'error'
+
+export interface AppUpdateStatus {
+  phase: AppUpdatePhase
+  currentVersion: string
+  availableVersion?: string
+  progress?: number
+  message?: string
+  checkedAt?: string
+}
+
+export interface AppUpdateControls {
+  status(): Promise<AppUpdateStatus>
+  check(): Promise<AppUpdateStatus>
+  download(): Promise<AppUpdateStatus>
+  install(): Promise<void>
+  onStatus(callback: (status: AppUpdateStatus) => void): () => void
+}
+
 export interface AerioDesktopApi {
   loadState(): Promise<AppState>
   saveState(state: AppState): Promise<{ savedAt: string }>
@@ -179,6 +198,8 @@ export interface AerioDesktopApi {
   chooseAttachments(): Promise<Attachment[]>
   chooseProfileImage(): Promise<string | undefined>
   notify(title: string, body: string): Promise<void>
+  updates: AppUpdateControls
+  productivity: import('./productivity-types').ProductivityDesktopApi
   window: WindowControls
   onWindowState(callback: (maximized: boolean) => void): () => void
   onComposeCommand(callback: () => void): () => void

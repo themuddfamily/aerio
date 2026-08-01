@@ -1,5 +1,5 @@
 import {
-  Building2, Copy, Edit3, Mail, MapPin, MessageCircle, Phone, Plus, Search, Star, Trash2, Users
+  Building2, Copy, Edit3, Mail, MapPin, MessageCircle, Phone, Plus, RefreshCw, Search, Star, Trash2, Users
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import Modal from '../components/Modal'
@@ -15,9 +15,13 @@ interface ContactsViewProps {
   onChat(contact: Contact): void
   onOpenMessage(messageId: string): void
   onToast(message: string): void
+  readOnly?: boolean
+  onSync?(): Promise<void> | void
+  syncing?: boolean
+  sourceMessage?: string
 }
 
-export default function ContactsView({ state, query, onChange, onCompose, onChat, onOpenMessage, onToast }: ContactsViewProps) {
+export default function ContactsView({ state, query, onChange, onCompose, onChat, onOpenMessage, onToast, readOnly = false, onSync, syncing = false, sourceMessage }: ContactsViewProps) {
   const { showContextMenu } = useContextMenu()
   const [group, setGroup] = useState('All contacts')
   const [selectedId, setSelectedId] = useState(state.contacts[0]?.id ?? '')
@@ -31,12 +35,16 @@ export default function ContactsView({ state, query, onChange, onCompose, onChat
   const selected = contacts.find((contact) => contact.id === selectedId) ?? contacts[0]
   const related = selected ? state.messages.filter((message) => message.fromEmail === selected.email || message.to.includes(selected.email)).slice(0, 4) : []
 
-  const toggleFavourite = (contact: Contact) => onChange({
-    ...state,
-    contacts: state.contacts.map((item) => item.id === contact.id ? { ...item, favorite: !item.favorite } : item)
-  })
+  const toggleFavourite = (contact: Contact) => {
+    if (readOnly) return
+    onChange({
+      ...state,
+      contacts: state.contacts.map((item) => item.id === contact.id ? { ...item, favorite: !item.favorite } : item)
+    })
+  }
 
   const deleteContact = (contact: Contact) => {
+    if (readOnly) return
     if (!window.confirm(`Delete ${contact.name} from your contacts?`)) return
     onChange({ ...state, contacts: state.contacts.filter((item) => item.id !== contact.id) })
     if (selectedId === contact.id) setSelectedId('')
@@ -44,13 +52,15 @@ export default function ContactsView({ state, query, onChange, onCompose, onChat
   }
 
   const contactMenu = (contact: Contact): ContextMenuItem[] => [
-    { label: 'Email', icon: Mail, action: () => onCompose(undefined, contact.email) },
-    { label: 'Start chat', icon: MessageCircle, action: () => onChat(contact) },
-    { label: 'Edit contact', icon: Edit3, separatorBefore: true, action: () => setEditing(contact) },
-    { label: contact.favorite ? 'Remove from favourites' : 'Add to favourites', icon: Star, checked: contact.favorite, action: () => toggleFavourite(contact) },
-    { label: 'Copy email address', icon: Copy, separatorBefore: true, action: () => copyText(contact.email) },
+    { label: 'Email', icon: Mail, disabled: !contact.email, action: () => onCompose(undefined, contact.email) },
+    ...(!readOnly ? [{ label: 'Start chat', icon: MessageCircle, action: () => onChat(contact) }] satisfies ContextMenuItem[] : []),
+    ...(!readOnly ? [
+      { label: 'Edit contact', icon: Edit3, separatorBefore: true, action: () => setEditing(contact) },
+      { label: contact.favorite ? 'Remove from favourites' : 'Add to favourites', icon: Star, checked: contact.favorite, action: () => toggleFavourite(contact) }
+    ] satisfies ContextMenuItem[] : []),
+    { label: 'Copy email address', icon: Copy, separatorBefore: true, disabled: !contact.email, action: () => copyText(contact.email) },
     ...(contact.phone ? [{ label: 'Copy phone number', icon: Phone, action: () => copyText(contact.phone!) }] satisfies ContextMenuItem[] : []),
-    { label: 'Delete contact', icon: Trash2, separatorBefore: true, danger: true, action: () => deleteContact(contact) }
+    ...(!readOnly ? [{ label: 'Delete contact', icon: Trash2, separatorBefore: true, danger: true, action: () => deleteContact(contact) }] satisfies ContextMenuItem[] : [])
   ]
 
   const showContactMenu = (event: React.MouseEvent, contact: Contact) => showContextMenu(event, contactMenu(contact), contact.name)
@@ -65,13 +75,15 @@ export default function ContactsView({ state, query, onChange, onCompose, onChat
   return (
     <div className="workspace">
       <aside className="context-sidebar">
-        <button className="compose-button" onClick={() => setEditing('new')}><Plus size={18} /> New contact</button>
+        {readOnly
+          ? <><button className="compose-button" disabled={syncing} onClick={() => void onSync?.()}><RefreshCw className={syncing ? 'spin' : undefined} size={18} /> {syncing ? 'Syncing…' : 'Sync now'}</button><p className="provider-source-note" aria-live="polite">{sourceMessage}</p></>
+          : <button className="compose-button" onClick={() => setEditing('new')}><Plus size={18} /> New contact</button>}
         <div className="sidebar-group">
           <span className="sidebar-label">Contacts</span>
           {groups.map((item) => (
             <button className={`sidebar-item ${group === item ? 'active' : ''}`} onClick={() => setGroup(item)} onContextMenu={(event) => showContextMenu(event, [
               { label: `Open ${item}`, icon: Users, action: () => setGroup(item) },
-              { label: 'New contact', icon: Plus, separatorBefore: true, action: () => setEditing('new') }
+              ...(!readOnly ? [{ label: 'New contact', icon: Plus, separatorBefore: true, action: () => setEditing('new') }] satisfies ContextMenuItem[] : [])
             ], item)} key={item}>
               {item === 'Favourites' ? <Star size={17} /> : <Users size={17} />}<span>{item}</span>
               <em>{item === 'All contacts' ? state.contacts.length : item === 'Favourites' ? state.contacts.filter((contact) => contact.favorite).length : state.contacts.filter((contact) => contact.group === item).length}</em>
@@ -87,7 +99,7 @@ export default function ContactsView({ state, query, onChange, onCompose, onChat
         <header className="panel-heading"><div><h1>{group}</h1><p>{contacts.length} people</p></div></header>
         <div className="inline-search"><Search size={16} /><span>{query || 'Search from the top bar'}</span></div>
         <div className="contact-list" onContextMenu={(event) => showContextMenu(event, [
-          { label: 'New contact', icon: Plus, action: () => setEditing('new') },
+          ...(!readOnly ? [{ label: 'New contact', icon: Plus, action: () => setEditing('new') }] satisfies ContextMenuItem[] : []),
           { label: `Show ${group}`, icon: Users, action: () => setGroup(group) }
         ], 'Contacts')}>
           {contacts.map((contact) => (
@@ -106,12 +118,12 @@ export default function ContactsView({ state, query, onChange, onCompose, onChat
               <span className="avatar hero-avatar" style={{ background: selected.color }}>{selected.name.split(' ').map((value) => value[0]).join('')}</span>
               <div><h1>{selected.name}</h1><p>{selected.title}{selected.company && ` at ${selected.company}`}</p></div>
               <span className="spacer" />
-              <button className={`icon-button ${selected.favorite ? 'active' : ''}`} aria-label={selected.favorite ? 'Remove from favourites' : 'Add to favourites'} title={selected.favorite ? 'Remove from favourites' : 'Add to favourites'} onClick={() => toggleFavourite(selected)}><Star size={18} fill={selected.favorite ? 'currentColor' : 'none'} /></button>
-              <button className="icon-button" aria-label="Edit contact" title="Edit contact" onClick={() => setEditing(selected)}><Edit3 size={18} /></button>
+              {!readOnly && <><button className={`icon-button ${selected.favorite ? 'active' : ''}`} aria-label={selected.favorite ? 'Remove from favourites' : 'Add to favourites'} title={selected.favorite ? 'Remove from favourites' : 'Add to favourites'} onClick={() => toggleFavourite(selected)}><Star size={18} fill={selected.favorite ? 'currentColor' : 'none'} /></button>
+              <button className="icon-button" aria-label="Edit contact" title="Edit contact" onClick={() => setEditing(selected)}><Edit3 size={18} /></button></>}
             </header>
             <div className="contact-actions">
-              <button onClick={() => onCompose(undefined, selected.email)}><span><Mail size={19} /></span>Email</button>
-              <button onClick={() => onChat(selected)}><span><MessageCircle size={19} /></span>Chat</button>
+              <button disabled={!selected.email} onClick={() => onCompose(undefined, selected.email)}><span><Mail size={19} /></span>Email</button>
+              {!readOnly && <button onClick={() => onChat(selected)}><span><MessageCircle size={19} /></span>Chat</button>}
               <button onClick={() => onToast(selected.phone ? `Call ${selected.phone}` : 'No phone number saved')}><span><Phone size={19} /></span>Call</button>
             </div>
             <div className="contact-detail-grid">
@@ -119,9 +131,9 @@ export default function ContactsView({ state, query, onChange, onCompose, onChat
                 <h3>Details</h3>
                 <dl>
                   <div onContextMenu={(event) => showContextMenu(event, [
-                    { label: 'Email contact', icon: Mail, action: () => onCompose(undefined, selected.email) },
-                    { label: 'Copy email address', icon: Copy, action: () => copyText(selected.email) }
-                  ], 'Email')}><dt><Mail size={15} /> Email</dt><dd>{selected.email}</dd></div>
+                    { label: 'Email contact', icon: Mail, disabled: !selected.email, action: () => onCompose(undefined, selected.email) },
+                    { label: 'Copy email address', icon: Copy, disabled: !selected.email, action: () => copyText(selected.email) }
+                  ], 'Email')}><dt><Mail size={15} /> Email</dt><dd>{selected.email || 'Not added'}</dd></div>
                   <div onContextMenu={(event) => showContextMenu(event, [
                     { label: selected.phone ? `Call ${selected.name}` : 'No phone number saved', icon: Phone, disabled: !selected.phone, action: () => onToast(`Call ${selected.phone}`) },
                     { label: 'Copy phone number', icon: Copy, disabled: !selected.phone, action: () => copyText(selected.phone!) }
@@ -133,7 +145,7 @@ export default function ContactsView({ state, query, onChange, onCompose, onChat
               <section className="detail-card" onContextMenu={(event) => {
                 if (window.getSelection()?.toString()) return
                 showContextMenu(event, [
-                  { label: 'Edit contact notes', icon: Edit3, action: () => setEditing(selected) },
+                  ...(!readOnly ? [{ label: 'Edit contact notes', icon: Edit3, action: () => setEditing(selected) }] satisfies ContextMenuItem[] : []),
                   { label: 'Copy notes', icon: Copy, disabled: !selected.notes, action: () => copyText(selected.notes!) }
                 ], 'Contact notes')
               }}>
@@ -155,7 +167,7 @@ export default function ContactsView({ state, query, onChange, onCompose, onChat
           </>
         ) : <div className="empty-state grow"><Users size={32} /><h3>Select a contact</h3></div>}
       </section>
-      {editing && (
+      {editing && !readOnly && (
         <ContactEditor
           contact={editing === 'new' ? undefined : editing}
           onClose={() => setEditing(null)}

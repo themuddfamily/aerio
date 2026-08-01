@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { Bell, Database, Download, Monitor, Palette, RotateCcw, Stethoscope } from 'lucide-react'
-import type { AppState, DensityPreference, ModuleId, ThemePreference } from '../types'
+import { useEffect, useState } from 'react'
+import { Bell, Database, Download, Monitor, Palette, RefreshCw, RotateCcw, Stethoscope } from 'lucide-react'
+import type { AppState, AppUpdateStatus, DensityPreference, ModuleId, ThemePreference } from '../types'
 import type { MailDiagnosticHealth } from '../gmail-types'
 import Modal from './Modal'
 
@@ -15,9 +15,56 @@ export default function SettingsModal({ state, onChange, onReset, onClose }: Set
   const [health, setHealth] = useState<MailDiagnosticHealth>()
   const [diagnosticStatus, setDiagnosticStatus] = useState<'idle' | 'checking' | 'exporting'>('idle')
   const [diagnosticMessage, setDiagnosticMessage] = useState('')
+  const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus>()
+
+  useEffect(() => {
+    let active = true
+    void window.aerio.updates.status().then((status) => {
+      if (active) setUpdateStatus(status)
+    }).catch((error) => {
+      if (active) setUpdateStatus({ phase: 'error', currentVersion: 'Unknown', message: error instanceof Error ? error.message : 'Update status is unavailable.' })
+    })
+    const unsubscribe = window.aerio.updates.onStatus((status) => {
+      if (active) setUpdateStatus(status)
+    })
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [])
+
   const setSettings = (updates: Partial<AppState['settings']>) => {
     onChange({ ...state, settings: { ...state.settings, ...updates } })
   }
+
+  const runUpdateAction = async () => {
+    if (!updateStatus) return
+    try {
+      if (updateStatus.phase === 'available') setUpdateStatus(await window.aerio.updates.download())
+      else if (updateStatus.phase === 'ready') await window.aerio.updates.install()
+      else setUpdateStatus(await window.aerio.updates.check())
+    } catch (error) {
+      setUpdateStatus((current) => ({
+        phase: 'error',
+        currentVersion: current?.currentVersion ?? 'Unknown',
+        availableVersion: current?.availableVersion,
+        message: error instanceof Error ? error.message : 'The update action failed.'
+      }))
+    }
+  }
+
+  const updateActionLabel = !updateStatus
+    ? 'Loading update status…'
+    : updateStatus.phase === 'checking'
+      ? 'Checking…'
+      : updateStatus.phase === 'available'
+        ? 'Download update'
+        : updateStatus.phase === 'downloading'
+          ? `Downloading… ${Math.round(updateStatus.progress ?? 0)}%`
+          : updateStatus.phase === 'ready'
+            ? 'Restart and install'
+            : 'Check for updates'
+  const updateActionDisabled = !updateStatus || ['unsupported', 'checking', 'downloading'].includes(updateStatus.phase)
 
   const checkHealth = async () => {
     setDiagnosticStatus('checking')
@@ -51,18 +98,33 @@ export default function SettingsModal({ state, onChange, onReset, onClose }: Set
     <Modal title="Aerio settings" subtitle="Make your workspace feel just right." width="medium" onClose={onClose}>
       <div className="settings-sections">
         <section className="settings-section">
+          <div className="settings-icon"><RefreshCw size={18} /></div>
+          <div className="settings-content">
+            <h3>Aerio updates</h3>
+            <p>Installed Windows builds check GitHub Releases and let you choose when to download and restart.</p>
+            <button className="button ghost" disabled={updateActionDisabled} onClick={() => void runUpdateAction()}>
+              {updateStatus?.phase === 'available' ? <Download size={16} /> : <RefreshCw size={16} />}
+              {updateActionLabel}
+            </button>
+            {updateStatus?.phase === 'downloading' && <progress className="update-progress" max="100" value={updateStatus.progress ?? 0} aria-label="Update download progress" />}
+            <small className={updateStatus?.phase === 'error' ? 'diagnostic-error' : undefined} aria-live="polite">
+              {updateStatus ? `Version ${updateStatus.currentVersion} · ${updateStatus.message ?? updateStatus.phase}` : 'Reading update status…'}
+            </small>
+          </div>
+        </section>
+        <section className="settings-section">
           <div className="settings-icon"><Palette size={18} /></div>
           <div className="settings-content">
             <h3>Appearance</h3>
             <p>Choose a theme and how much information appears at once.</p>
             <div className="segmented wide">
               {(['system', 'light', 'dark'] as ThemePreference[]).map((theme) => (
-                <button key={theme} className={state.settings.theme === theme ? 'active' : ''} onClick={() => setSettings({ theme })}>{theme}</button>
+                <button key={theme} className={state.settings.theme === theme ? 'active' : ''} aria-pressed={state.settings.theme === theme} onClick={() => setSettings({ theme })}>{theme}</button>
               ))}
             </div>
             <div className="segmented wide">
               {(['comfortable', 'compact'] as DensityPreference[]).map((density) => (
-                <button key={density} className={state.settings.density === density ? 'active' : ''} onClick={() => setSettings({ density })}>{density}</button>
+                <button key={density} className={state.settings.density === density ? 'active' : ''} aria-pressed={state.settings.density === density} onClick={() => setSettings({ density })}>{density}</button>
               ))}
             </div>
           </div>
@@ -115,14 +177,16 @@ export default function SettingsModal({ state, onChange, onReset, onClose }: Set
           <div className="settings-content">
             <h3>Local demo data</h3>
             <p>Aerio keeps this release entirely on your computer in a local SQLite database.</p>
-            <button className="button danger-subtle" onClick={() => { if (window.confirm('Reset all demo mail, calendar, contacts, tasks, notes, chats, and settings? Real mail is not affected.')) void onReset() }}><RotateCcw size={16} /> Reset demo data</button>
+            <button className="button danger-subtle" onClick={() => { if (window.confirm('Reset all demo mail, calendar, contacts, tasks, notes, chats, and settings? Connected workspace data is not affected.')) void onReset() }}><RotateCcw size={16} /> Reset demo data</button>
           </div>
         </section>
         <section className="settings-section signature-section">
           <div className="settings-icon"><Database size={18} /></div>
           <div className="settings-content">
             <h3>Demo workspace signature</h3>
-            <textarea value={state.settings.signature} onChange={(event) => setSettings({ signature: event.target.value })} />
+            <label className="field-label">Signature
+              <textarea value={state.settings.signature} onChange={(event) => setSettings({ signature: event.target.value })} />
+            </label>
           </div>
         </section>
       </div>

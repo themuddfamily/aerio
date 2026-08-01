@@ -1,0 +1,39 @@
+name: Windows release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      AERIO_REQUIRE_SIGNING: '1'
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run verify:release
+      - run: npm test
+      - run: npm run test:live-matrix
+      - run: npm run test:desktop
+      - run: npm run icons
+      - run: npx electron-builder --win nsis portable --publish always --config.forceCodeSigning=true
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aerio-windows-${{ github.ref_name }}
+          path: |
+            release/*-setup-*.exe
+            release/*-portable-*.exe
+            release/latest.yml
+            release/*.blockmap
+          if-no-files-found: error

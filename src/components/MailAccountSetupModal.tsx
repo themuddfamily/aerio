@@ -1,6 +1,7 @@
 import { ArrowLeft, Check, KeyRound, LoaderCircle, Mail, Server, ShieldCheck, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { GmailCredentialStatus, ImapAccountInput, MailProviderId, MailProviderPreset } from '../gmail-types'
+import { useDialogFocus } from '../lib/dialog-focus'
 
 interface Props {
   onClose(): void
@@ -17,6 +18,7 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
   const [microsoft, setMicrosoft] = useState(emptyStatus)
   const [microsoftClientId, setMicrosoftClientId] = useState('')
   const [busy, setBusy] = useState(false)
+  const dialogRef = useDialogFocus<HTMLElement>(onClose, true, !busy)
   const preset = useMemo(() => presets.find((item) => item.id === selected), [presets, selected])
   const [imap, setImap] = useState<ImapAccountInput>({
     provider: 'imap', email: '', displayName: '', username: '', password: '',
@@ -34,12 +36,6 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
       setMicrosoft(microsoftStatus)
     }).catch((error) => onToast(error instanceof Error ? error.message : 'Account setup could not start'))
   }, [onToast])
-
-  useEffect(() => {
-    const close = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose() }
-    window.addEventListener('keydown', close)
-    return () => window.removeEventListener('keydown', close)
-  }, [busy, onClose])
 
   const choose = (value: MailProviderPreset) => {
     setSelected(value.id)
@@ -92,7 +88,7 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
 
   return (
     <div className="modal-backdrop mail-account-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="modal mail-account-setup" role="dialog" aria-modal="true" aria-label="Add mail account">
+      <section ref={dialogRef} className="modal mail-account-setup" role="dialog" aria-modal="true" aria-label="Add mail account" tabIndex={-1}>
         <header className="modal-header">
           <div className="setup-heading">
             {selected && <button className="icon-button" onClick={() => setSelected(undefined)} aria-label="Back to providers"><ArrowLeft size={18} /></button>}
@@ -117,7 +113,7 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
 
         {preset?.id === 'microsoft' && <div className="provider-setup-body">
           <label className="field"><span>Microsoft Application (client) ID</span><input value={microsoftClientId} onChange={(event) => setMicrosoftClientId(event.target.value)} placeholder={microsoft.clientIdHint ?? 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'} /></label>
-          <p className="setup-note">Register Aerio as a public desktop client in Microsoft Entra and allow the localhost redirect. Aerio requests Mail.ReadWrite and Mail.Send through Microsoft Graph.</p>
+          <p className="setup-note">Register Aerio as a public desktop client in Microsoft Entra and allow the localhost redirect. Aerio requests mail access plus read-only Calendar and Contacts access through Microsoft Graph.</p>
           <footer className="setup-actions"><button className="button primary" disabled={busy || (!microsoft.configured && !microsoftClientId.trim())} onClick={() => void connectMicrosoft()}>{busy && <LoaderCircle className="spin" size={15} />}Connect Microsoft</button></footer>
         </div>}
 

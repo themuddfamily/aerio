@@ -20,7 +20,12 @@ interface MicrosoftTokenSet {
   expiresAt: number
 }
 
-const SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
+const SCOPES = [
+  'https://www.googleapis.com/auth/gmail.modify',
+  'https://www.googleapis.com/auth/calendar.readonly',
+  'https://www.googleapis.com/auth/contacts.readonly'
+]
+const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.Read', 'Contacts.Read']
 
 export class OAuthVault {
   private data: StoredOAuthData = { googleTokens: {}, microsoftTokens: {}, imapAccounts: {} }
@@ -242,7 +247,7 @@ export class OAuthVault {
         resolve({ redirectUri: `http://localhost:${address.port}`, code, close: () => { clearTimeout(timeout); server.close() } })
       })
     })
-    const scopes = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send']
+    const scopes = MICROSOFT_SCOPES
     const authorization = new URL('https://login.microsoftonline.com/common/oauth2/v2.0/authorize')
     authorization.search = new URLSearchParams({ client_id: clientId, response_type: 'code', redirect_uri: callback.redirectUri, response_mode: 'query', scope: scopes.join(' '), state, code_challenge: challenge, code_challenge_method: 'S256', prompt: 'select_account' }).toString()
     await shell.openExternal(authorization.toString())
@@ -279,7 +284,7 @@ export class OAuthVault {
     if (!clientId || !current) throw new Error('This Microsoft account needs to be connected again')
     const response = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: clientId, grant_type: 'refresh_token', refresh_token: current.refreshToken, scope: 'openid profile offline_access User.Read Mail.ReadWrite Mail.Send' })
+      body: new URLSearchParams({ client_id: clientId, grant_type: 'refresh_token', refresh_token: current.refreshToken, scope: MICROSOFT_SCOPES.join(' ') })
     })
     const token = await response.json() as { access_token?: string; refresh_token?: string; expires_in?: number; error_description?: string }
     if (!response.ok || !token.access_token) throw new Error(token.error_description ?? 'Microsoft token refresh failed')

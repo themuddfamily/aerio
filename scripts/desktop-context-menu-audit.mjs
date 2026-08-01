@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import electronPath from 'electron'
 import { _electron as electron } from 'playwright-core'
 import { MailDatabase } from '../electron/mail/database.ts'
+import { ProductivityStore } from '../electron/productivity/store.ts'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const profile = mkdtempSync(join(tmpdir(), 'aerio-context-menu-audit-'))
@@ -71,6 +72,21 @@ function seedRealMailFixture() {
     attachmentPaths: []
   }, { status: 'synced' })
   database.close()
+
+  const productivity = new ProductivityStore(join(profile, 'productivity.sqlite'))
+  productivity.replaceAccount('context-audit-account', 'gmail', {
+    calendars: [{ id: 'context-calendar', remoteId: 'primary', accountId: 'context-audit-account', provider: 'gmail', name: 'Audit calendar', color: '#1d7a62', primary: true, canWrite: true }],
+    events: [{
+      id: 'context-event', remoteId: 'remote-event', accountId: 'context-audit-account', provider: 'gmail', readOnly: true,
+      calendarId: 'context-calendar', title: 'Connected calendar review', start: '2026-08-01T10:00:00.000Z', end: '2026-08-01T11:00:00.000Z',
+      color: '#1d7a62', attendees: ['pilot@aerio.local'], reminderMinutes: 30, recurrence: 'none'
+    }],
+    contacts: [{
+      id: 'context-contact', remoteId: 'people/context', accountId: 'context-audit-account', provider: 'gmail', readOnly: true,
+      name: 'Connected Contact', email: 'contact@aerio.local', phone: '+44 20 0000 0000', group: 'Google', favorite: false, color: '#1d7a62'
+    }]
+  })
+  productivity.close()
 }
 
 async function step(name, task) {
@@ -100,7 +116,7 @@ try {
   await page.waitForSelector('.app')
 
   const modeSwitch = page.locator('.mode-switch')
-  if ((await modeSwitch.innerText()).includes('Real mail')) {
+  if ((await modeSwitch.innerText()).includes('Connected workspace')) {
     await modeSwitch.click()
     await page.getByText('Demo workspace', { exact: true }).waitFor()
   }
@@ -312,6 +328,25 @@ try {
   await step('real mail menus cover accounts, folders, labels, conversations, messages, and attachments', async () => {
     await modeSwitch.click()
     await page.locator('.real-mail').waitFor()
+    const productivitySnapshot = await page.evaluate(() => window.aerio.productivity.snapshot())
+    assert.equal(productivitySnapshot.events.length, 1, `Unexpected productivity snapshot: ${JSON.stringify(productivitySnapshot)}`)
+
+    await moduleButton('Calendar').click()
+    await page.waitForTimeout(200)
+    assert.match(await page.locator('.module-content').innerText(), /Connected calendar review/, `Connected Calendar did not render. Snapshot: ${JSON.stringify(productivitySnapshot)}`)
+    await page.getByRole('button', { name: 'Connected calendar review' }).click()
+    const eventDetails = page.getByRole('dialog', { name: 'Event details' })
+    await eventDetails.waitFor()
+    assert.equal(await eventDetails.getByLabel('Event title').isDisabled(), true)
+    await eventDetails.getByRole('button', { name: 'Close' }).last().click()
+    await page.getByRole('button', { name: 'Sync now' }).waitFor()
+
+    await moduleButton('Contacts').click()
+    await page.getByText('Connected Contact', { exact: true }).first().waitFor()
+    assert.equal(await page.getByRole('button', { name: 'New contact' }).count(), 0)
+
+    await moduleButton('Mail').click()
+    await page.locator('.real-mail').waitFor()
 
     await openMenu(page.locator('.real-mail .context-sidebar .sidebar-item').filter({ hasText: 'Inbox' }).first())
     await expectItems('Open Inbox', 'New message', 'Check for mail')
@@ -388,7 +423,7 @@ try {
 
   await step('workspace and theme controls expose direct choices', async () => {
     await openMenu(modeSwitch)
-    await expectItems('Demo workspace', 'Real mail', 'New message')
+    await expectItems('Demo workspace', 'Connected workspace', 'Sync Calendar and Contacts', 'New message')
     await dismiss()
 
     await openMenu(page.getByRole('button', { name: 'Settings' }))
