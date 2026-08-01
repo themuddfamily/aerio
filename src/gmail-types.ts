@@ -1,6 +1,6 @@
 export type GmailAccountStatus = 'connecting' | 'syncing' | 'ready' | 'paused' | 'needs-auth' | 'archived' | 'error'
 export type GmailSyncPhase = 'idle' | 'inventory' | 'downloading' | 'catch-up' | 'incremental' | 'paused' | 'complete' | 'error'
-export type MailActionKind = 'archive' | 'unarchive' | 'read' | 'unread' | 'star' | 'unstar' | 'important' | 'unimportant' | 'trash' | 'untrash' | 'label' | 'unlabel'
+export type MailActionKind = 'archive' | 'unarchive' | 'read' | 'unread' | 'star' | 'unstar' | 'important' | 'unimportant' | 'trash' | 'untrash' | 'label' | 'unlabel' | 'move'
 export type MailProviderId = 'gmail' | 'microsoft' | 'icloud' | 'yahoo' | 'fastmail' | 'imap' | 'proton-bridge'
 
 export interface ImapAccountInput {
@@ -49,6 +49,25 @@ export interface GmailAccountSummary {
   archived: boolean
   lastSyncAt?: string
   error?: string
+  signature: string
+  notifications: boolean
+  syncEnabled: boolean
+}
+
+export interface ImapServerSettings {
+  username: string
+  imapHost: string
+  imapPort: number
+  imapSecurity: 'tls' | 'starttls'
+  smtpHost: string
+  smtpPort: number
+  smtpSecurity: 'tls' | 'starttls'
+  allowInvalidCertificates: boolean
+  passwordConfigured: boolean
+}
+
+export interface ImapServerSettingsUpdate extends Omit<ImapServerSettings, 'passwordConfigured'> {
+  password?: string
 }
 
 export interface SyncProgress {
@@ -169,18 +188,65 @@ export interface GmailDraftInput {
   attachmentPaths: string[]
 }
 
+export interface MailRecipientSuggestion {
+  accountId: string
+  email: string
+  name?: string
+}
+
+export type GmailDraftStatus = 'local' | 'syncing' | 'synced' | 'queued' | 'sent' | 'failed' | 'discard-queued' | 'discarding' | 'discarded'
+
 export interface GmailDraftResult {
   id: string
   gmailDraftId?: string
-  status: 'local' | 'syncing' | 'synced' | 'queued' | 'sent' | 'failed'
+  status: GmailDraftStatus
   updatedAt: string
   error?: string
+}
+
+export interface MailAccountSettingsInput {
+  accountId: string
+  displayName: string
+  color: string
+  signature: string
+  notifications: boolean
+  syncEnabled: boolean
+}
+
+export interface GmailDraftRecord extends Omit<GmailDraftInput, 'id'>, GmailDraftResult {}
+
+export interface GmailDraftAttachmentFile {
+  name: string
+  size: number
+  path: string
 }
 
 export interface MailStorageStats {
   totalBytes: number
   freeBytes: number
   accounts: { accountId: string; bytes: number; messages: number }[]
+}
+
+export interface MailDiagnosticHealth {
+  generatedAt: string
+  integrity: 'ok' | 'error'
+  integrityMessage: string
+  accounts: Array<{
+    accountId: string
+    provider: MailProviderId
+    status: GmailAccountStatus
+    messages: number
+    threads: number
+    pendingDownloads: number
+    failedDownloads: number
+    queuedOperations: number
+    failedOperations: number
+    editableDrafts: number
+    failedDrafts: number
+  }>
+  orphanedMessages: number
+  orphanedAttachments: number
+  missingRawFiles: number
 }
 
 export interface GmailDesktopApi {
@@ -196,23 +262,34 @@ export interface GmailDesktopApi {
     connect(): Promise<GmailAccountSummary>
     connectMicrosoft(): Promise<GmailAccountSummary>
     connectImap(input: ImapAccountInput): Promise<GmailAccountSummary>
+    update(input: MailAccountSettingsInput): Promise<GmailAccountSummary>
+    verify(accountId: string): Promise<void>
+    reconnect(accountId: string): Promise<void>
+    imapSettings(accountId: string): Promise<ImapServerSettings>
+    updateImap(accountId: string, input: ImapServerSettingsUpdate): Promise<ImapServerSettings>
     disconnect(accountId: string, mode: 'archive' | 'delete'): Promise<void>
   }
   mail: {
     labels(accountIds?: string[]): Promise<GmailLabel[]>
+    suggestRecipients(query: string, accountIds?: string[]): Promise<MailRecipientSuggestion[]>
     list(query: MailQuery): Promise<MailPage>
     thread(accountId: string, threadId: string, allowRemoteImages?: boolean): Promise<GmailThreadDetail>
     action(input: ApplyMailActionInput): Promise<PendingOperation>
     undo(operationId: string): Promise<boolean>
   }
   drafts: {
+    list(accountIds?: string[]): Promise<GmailDraftRecord[]>
+    get(id: string): Promise<GmailDraftRecord | undefined>
     save(input: GmailDraftInput): Promise<GmailDraftResult>
     send(input: GmailDraftInput): Promise<GmailDraftResult>
+    delete(id: string): Promise<GmailDraftResult>
+    stageMessageAttachments(draftId: string, accountId: string, messageId: string): Promise<GmailDraftAttachmentFile[]>
   }
   sync: {
     start(accountId?: string): Promise<void>
     pause(accountId: string): Promise<void>
     resume(accountId: string): Promise<void>
+    rebuild(accountId: string): Promise<void>
     progress(): Promise<SyncProgress[]>
   }
   attachments: {
@@ -220,6 +297,10 @@ export interface GmailDesktopApi {
     save(accountId: string, messageId: string, attachmentId: string, filename: string): Promise<{ savedPath?: string; error?: string }>
   }
   storage(): Promise<MailStorageStats>
+  diagnostics: {
+    health(): Promise<MailDiagnosticHealth>
+    export(): Promise<{ savedPath?: string }>
+  }
   onEvent(callback: (event: GmailWorkerEvent) => void): () => void
 }
 
@@ -232,6 +313,7 @@ export type MailThreadDetail = GmailThreadDetail
 export type MailLabel = GmailLabel
 export type MailDraftInput = GmailDraftInput
 export type MailDraftResult = GmailDraftResult
+export type MailDraftRecord = GmailDraftRecord
 export type MailWorkerEvent = GmailWorkerEvent
 
 export type GmailWorkerEvent =
@@ -240,3 +322,4 @@ export type GmailWorkerEvent =
   | { type: 'mail-changed'; payload: { accountId: string; threadIds?: string[] } }
   | { type: 'operation'; payload: PendingOperation }
   | { type: 'connectivity'; payload: { online: boolean } }
+  | { type: 'new-mail'; payload: { accountId: string; count: number; threadId?: string; subject?: string; sender?: string } }

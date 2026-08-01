@@ -132,8 +132,8 @@ export class ImapSmtpClient {
       const destination = action === 'trash' ? this.folderFor(folders, '\\Trash')
         : action === 'untrash' || action === 'unarchive' ? folders.find((folder) => folder.path.toUpperCase() === 'INBOX')?.path
           : action === 'archive' ? this.folderFor(folders, '\\Archive')
-            : action === 'label' && labelId?.startsWith('folder:') ? labelId.slice(7) : undefined
-      if (['trash', 'untrash', 'archive', 'unarchive', 'label'].includes(action) && !destination) {
+        : (action === 'label' || action === 'move') && labelId?.startsWith('folder:') ? labelId.slice(7) : undefined
+      if (['trash', 'untrash', 'archive', 'unarchive', 'label', 'move'].includes(action) && !destination) {
         throw new Error(`The mail server does not expose a destination folder for ${action}`)
       }
       const grouped = new Map<string, { folder: string; uid: number }[]>()

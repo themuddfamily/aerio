@@ -167,6 +167,10 @@ export class GmailClient {
     })
   }
 
+  deleteDraft(draftId: string) {
+    return this.request<void>(`/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE' })
+  }
+
   sendDraft(draftId: string, raw?: string) {
     return this.request<GmailMessageReference>('/drafts/send', {
       method: 'POST',

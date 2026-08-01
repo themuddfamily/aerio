@@ -3,7 +3,7 @@ import { createServer } from 'node:http'
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { OAuth2Client, CodeChallengeMethod, type Credentials } from 'google-auth-library'
 import { safeStorage, shell } from 'electron'
-import type { GmailCredentialStatus, ImapAccountInput, MailProviderId } from '../../src/gmail-types'
+import type { GmailCredentialStatus, ImapAccountInput, ImapServerSettings, MailProviderId } from '../../src/gmail-types'
 import { parseDesktopOAuthConfig, type DesktopOAuthConfig } from './oauth-config'
 
 interface StoredOAuthData {
@@ -85,7 +85,7 @@ export class OAuthVault {
     return new OAuth2Client(config.clientId, config.clientSecret, redirectUri)
   }
 
-  async authorize() {
+  async authorize(expected?: { accountId: string; email: string }) {
     const oauth = this.oauth()
     const { codeVerifier, codeChallenge } = await oauth.generateCodeVerifierAsync()
     const state = randomBytes(32).toString('base64url')
@@ -166,6 +166,7 @@ export class OAuthVault {
       if (!profileResponse.ok) throw new Error(`Could not read the Gmail profile (${profileResponse.status})`)
       const profile = await profileResponse.json() as { emailAddress: string }
       const accountId = createHash('sha256').update(profile.emailAddress.toLowerCase()).digest('hex').slice(0, 24)
+      if (expected && expected.accountId !== accountId) throw new Error(`Sign in to ${expected.email}, not a different Google account`)
       this.data.googleTokens[accountId] = { ...result.tokens, ...exchangingClient.credentials }
       this.save()
       return { accountId, email: profile.emailAddress }
@@ -205,7 +206,7 @@ export class OAuthVault {
     return this.microsoftStatus()
   }
 
-  async authorizeMicrosoft() {
+  async authorizeMicrosoft(expected?: { accountId: string; email: string }) {
     const clientId = this.data.microsoftConfig?.clientId
     if (!clientId) throw new Error('Configure the Microsoft Entra application client ID first')
     const verifier = randomBytes(64).toString('base64url')
@@ -260,6 +261,7 @@ export class OAuthVault {
       const email = profile.mail ?? profile.userPrincipalName
       if (!email) throw new Error('The Microsoft account does not expose a mailbox address')
       const accountId = createHash('sha256').update(`microsoft:${profile.id}`).digest('hex').slice(0, 24)
+      if (expected && expected.accountId !== accountId) throw new Error(`Sign in to ${expected.email}, not a different Microsoft account`)
       this.data.microsoftTokens[accountId] = { accessToken: token.access_token, refreshToken: token.refresh_token, expiresAt: Date.now() + Number(token.expires_in ?? 3600) * 1_000 }
       this.accessCache.set(accountId, { token: token.access_token, expiresAt: this.data.microsoftTokens[accountId].expiresAt })
       this.save()
@@ -297,6 +299,21 @@ export class OAuthVault {
     const config = this.data.imapAccounts[accountId]
     if (!config) throw new Error('This mail account needs to be connected again')
     return config
+  }
+
+  imapSettings(accountId: string): ImapServerSettings {
+    const config = this.imapCredential(accountId)
+    return {
+      username: config.username,
+      imapHost: config.imapHost,
+      imapPort: config.imapPort,
+      imapSecurity: config.imapSecurity,
+      smtpHost: config.smtpHost,
+      smtpPort: config.smtpPort,
+      smtpSecurity: config.smtpSecurity,
+      allowInvalidCertificates: Boolean(config.allowInvalidCertificates),
+      passwordConfigured: Boolean(config.password)
+    }
   }
 
   async credential(accountId: string, provider: MailProviderId) {

@@ -16,7 +16,10 @@ it('paginates a synthetic 100,000-conversation mailbox without scanning it in Ja
     displayName: 'Scale',
     color: '#6558e8',
     status: 'ready',
-    archived: false
+    archived: false,
+    signature: '',
+    notifications: true,
+    syncEnabled: true
   })
   database.close()
 

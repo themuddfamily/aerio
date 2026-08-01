@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync
 import { createHash } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
-import { tmpdir } from 'node:os'
+import { arch, platform, release, tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import initSqlJs, { type Database } from 'sql.js'
@@ -13,11 +13,19 @@ import type {
   ApplyMailActionInput,
   GmailAccountSummary,
   GmailDraftInput,
+  GmailDraftRecord,
+  GmailDraftAttachmentFile,
+  GmailDraftResult,
   GmailLabel,
   GmailThreadDetail,
   ImapAccountInput,
+  ImapServerSettings,
+  ImapServerSettingsUpdate,
   MailPage,
+  MailAccountSettingsInput,
+  MailDiagnosticHealth,
   MailQuery,
+  MailRecipientSuggestion,
   MailStorageStats,
   PendingOperation,
   SyncProgress
@@ -26,6 +34,7 @@ import { OAuthVault } from './mail/oauth-vault'
 import { ImapSmtpClient } from './mail/imap-client'
 import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
 import { MailWorkerClient } from './mail/worker-client'
+import { DiagnosticLogger, type DiagnosticRecord } from './diagnostics'
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'aerio-image', privileges: { secure: true, standard: true, supportFetchAPI: true, bypassCSP: false } }
@@ -42,6 +51,11 @@ const accountProviders = new Map<string, GmailAccountSummary['provider']>()
 const approvedAttachmentPaths = new Set<string>()
 let quitting = false
 let lastBoundsWrite: NodeJS.Timeout | undefined
+let diagnostics: DiagnosticLogger | null = null
+
+function diagnostic(record: Omit<DiagnosticRecord, 'timestamp'>) {
+  diagnostics?.log(record)
+}
 
 const validState = (value: unknown): value is AppState => {
   if (!value || typeof value !== 'object') return false
@@ -112,10 +126,35 @@ function safeFilename(value: string) {
   return cleaned || 'attachment'
 }
 
-function validateDraft(input: GmailDraftInput) {
-  if (input.attachmentPaths.some((path) => !approvedAttachmentPaths.has(path))) {
+function validateDraft(input: GmailDraftInput, forSend = false) {
+  if (!input || typeof input !== 'object' || typeof input.accountId !== 'string' || !input.accountId || input.accountId.length > 200) throw new Error('Choose a valid sending account')
+  if (!Array.isArray(input.to) || !Array.isArray(input.cc) || !Array.isArray(input.bcc) || !Array.isArray(input.attachmentPaths)) throw new Error('The draft is invalid')
+  if (input.id !== undefined && (typeof input.id !== 'string' || !input.id || input.id.length > 200)) throw new Error('The draft id is invalid')
+  const addresses = [...input.to, ...input.cc, ...input.bcc]
+  if (addresses.length > 500) throw new Error('A message cannot contain more than 500 recipients')
+  if (forSend && !addresses.length) throw new Error('Add at least one recipient')
+  const validAddress = (value: string) => {
+    const candidate = value.match(/<([^<>]+)>\s*$/)?.[1] ?? value
+    return value.length <= 500 && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(candidate.trim())
+  }
+  if (addresses.some((address) => typeof address !== 'string' || !validAddress(address))) throw new Error('Check the recipient email addresses')
+  if (typeof input.subject !== 'string' || input.subject.length > 998) throw new Error('The subject is too long')
+  if (typeof input.text !== 'string' || (input.html !== undefined && typeof input.html !== 'string') || input.text.length > 20_000_000 || (input.html?.length ?? 0) > 20_000_000) throw new Error('The message body is too large')
+  if (input.attachmentPaths.length > 50) throw new Error('A message cannot contain more than 50 attachments')
+  if (input.attachmentPaths.some((path) => typeof path !== 'string' || !approvedAttachmentPaths.has(path))) {
     throw new Error('A draft referenced a file that was not selected through Aerio')
   }
+  let attachmentBytes = 0
+  for (const path of input.attachmentPaths) {
+    try {
+      const details = statSync(path)
+      if (!details.isFile()) throw new Error('not a file')
+      attachmentBytes += details.size
+    } catch {
+      throw new Error(`An attachment is no longer available: ${basename(path)}`)
+    }
+  }
+  if (attachmentBytes > 20 * 1024 * 1024) throw new Error('Attachments exceed Aerio’s 20 MB sending limit')
   return input
 }
 
@@ -134,13 +173,34 @@ function isPrivateAddress(address: string) {
   return true
 }
 
+function showNewMailNotification(payload: Extract<import('../src/gmail-types').GmailWorkerEvent, { type: 'new-mail' }>['payload']) {
+  if (!Notification.isSupported() || mainWindow?.isFocused() || !loadState().settings.notifications) return
+  const title = payload.count === 1 ? payload.sender || 'New message' : `${payload.count.toLocaleString()} new messages`
+  const notification = new Notification({ title, body: payload.count === 1 ? payload.subject || 'Open Aerio to read it' : 'Open Aerio to view your inbox', icon: iconPath() })
+  notification.on('click', () => {
+    openMainWindow()
+    if (payload.threadId) createMessageWindow({ source: 'gmail', accountId: payload.accountId, threadId: payload.threadId, title: payload.subject || 'New message' })
+  })
+  notification.show()
+}
+
 async function initializeMail() {
   const userData = app.getPath('userData')
   oauthVault = new OAuthVault(join(userData, 'oauth-vault.dat'))
   mailWorker = new MailWorkerClient(
     join(__dirname, 'mail-worker.js'),
     (accountId) => requireVault().credential(accountId, accountProviders.get(accountId) ?? 'gmail'),
-    (event) => mainWindow?.webContents.send('gmail:event', event)
+    (event) => {
+      diagnostic({
+        level: event.type === 'sync-progress' && event.payload.phase === 'error' ? 'error' : 'info',
+        component: 'mail-worker',
+        event: event.type,
+        accountId: 'accountId' in event.payload ? event.payload.accountId : undefined,
+        details: event.payload as unknown as Record<string, unknown>
+      })
+      if (event.type === 'new-mail') showNewMailNotification(event.payload)
+      mainWindow?.webContents.send('gmail:event', event)
+    }
   )
   await mailWorker.request({
     type: 'initialize',
@@ -460,6 +520,40 @@ function registerIpc() {
     return requireVault().importConfig(result.filePaths[0])
   })
   ipcMain.handle('gmail:accounts:list', () => requireMailWorker().request<GmailAccountSummary[]>({ type: 'accounts:list' }))
+  ipcMain.handle('mail:accounts:update', (_event, input: MailAccountSettingsInput) => {
+    if (!input || typeof input.accountId !== 'string' || typeof input.displayName !== 'string' || !input.displayName.trim() || input.displayName.length > 200) throw new Error('Enter a valid sender name')
+    if (!/^#[0-9a-f]{6}$/i.test(input.color)) throw new Error('Choose a valid account colour')
+    if (typeof input.signature !== 'string' || input.signature.length > 20_000) throw new Error('The signature is too long')
+    return requireMailWorker().request<GmailAccountSummary>({ type: 'accounts:update', payload: { ...input, displayName: input.displayName.trim() } })
+  })
+  ipcMain.handle('mail:accounts:verify', (_event, accountId: string) => {
+    if (typeof accountId !== 'string' || !accountId) throw new Error('Invalid account id')
+    return requireMailWorker().request({ type: 'accounts:verify', payload: { accountId } })
+  })
+  ipcMain.handle('mail:accounts:reconnect', async (_event, accountId: string) => {
+    const account = (await requireMailWorker().request<GmailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId)
+    if (!account) throw new Error('Account not found')
+    if (account.provider !== 'gmail' && account.provider !== 'microsoft') throw new Error('Update the app password or server credentials by reconnecting this IMAP account')
+    if (account.provider === 'gmail') await requireVault().authorize({ accountId: account.id, email: account.email })
+    else await requireVault().authorizeMicrosoft({ accountId: account.id, email: account.email })
+    await requireMailWorker().request({ type: 'accounts:verify', payload: { accountId } })
+    await requireMailWorker().request({ type: 'sync:start', payload: { accountId } })
+  })
+  ipcMain.handle('mail:accounts:imap-settings', (_event, accountId: string): ImapServerSettings => {
+    if (accountProviders.get(accountId) === 'gmail' || accountProviders.get(accountId) === 'microsoft') throw new Error('This OAuth account does not use IMAP server settings')
+    return requireVault().imapSettings(accountId)
+  })
+  ipcMain.handle('mail:accounts:imap-update', async (_event, accountId: string, input: ImapServerSettingsUpdate): Promise<ImapServerSettings> => {
+    if (!input || typeof input !== 'object') throw new Error('Enter valid IMAP and SMTP server settings')
+    const current = requireVault().imapCredential(accountId)
+    if (input.password !== undefined && typeof input.password !== 'string') throw new Error('Enter a valid password')
+    const candidate = validateImapAccount({ ...current, ...input, password: input.password?.trim() || current.password })
+    await new ImapSmtpClient(candidate).verify()
+    requireVault().storeImap(accountId, candidate)
+    await requireMailWorker().request({ type: 'accounts:verify', payload: { accountId } })
+    await requireMailWorker().request({ type: 'sync:start', payload: { accountId } })
+    return requireVault().imapSettings(accountId)
+  })
   ipcMain.handle('gmail:accounts:connect', async () => {
     const authorized = await requireVault().authorize()
     const account: GmailAccountSummary = {
@@ -469,7 +563,10 @@ function registerIpc() {
       displayName: authorized.email.split('@')[0],
       color: accountColor(authorized.accountId),
       status: 'connecting',
-      archived: false
+      archived: false,
+      signature: '',
+      notifications: true,
+      syncEnabled: true
     }
     accountProviders.set(account.id, account.provider)
     try {
@@ -491,7 +588,10 @@ function registerIpc() {
       displayName: authorized.displayName,
       color: accountColor(authorized.accountId),
       status: 'connecting',
-      archived: false
+      archived: false,
+      signature: '',
+      notifications: true,
+      syncEnabled: true
     }
     accountProviders.set(account.id, account.provider)
     try {
@@ -517,7 +617,10 @@ function registerIpc() {
       displayName: input.displayName?.trim() || input.email.split('@')[0],
       color: accountColor(accountId),
       status: 'connecting',
-      archived: false
+      archived: false,
+      signature: '',
+      notifications: true,
+      syncEnabled: true
     }
     requireVault().storeImap(accountId, input)
     accountProviders.set(account.id, account.provider)
@@ -539,6 +642,8 @@ function registerIpc() {
   })
   ipcMain.handle('gmail:labels:list', (_event, accountIds?: string[]) =>
     requireMailWorker().request<GmailLabel[]>({ type: 'labels:list', payload: { accountIds } }))
+  ipcMain.handle('mail:recipients:suggest', (_event, query: string, accountIds?: string[]) =>
+    requireMailWorker().request<MailRecipientSuggestion[]>({ type: 'recipients:suggest', payload: { query: typeof query === 'string' ? query.slice(0, 200) : '', accountIds } }))
   ipcMain.handle('gmail:mail:list', (_event, query: MailQuery) =>
     requireMailWorker().request<MailPage>({ type: 'mail:list', payload: query }))
   ipcMain.handle('gmail:mail:thread', (_event, accountId: string, threadId: string, allowRemoteImages?: boolean) =>
@@ -550,17 +655,59 @@ function registerIpc() {
   ipcMain.handle('gmail:drafts:save', (_event, input: GmailDraftInput) =>
     requireMailWorker().request({ type: 'drafts:save', payload: validateDraft(input) }))
   ipcMain.handle('gmail:drafts:send', (_event, input: GmailDraftInput) =>
-    requireMailWorker().request({ type: 'drafts:send', payload: validateDraft(input) }))
+    requireMailWorker().request({ type: 'drafts:send', payload: validateDraft(input, true) }))
+  ipcMain.handle('gmail:drafts:list', async (_event, accountIds?: string[]) => {
+    const drafts = await requireMailWorker().request<GmailDraftRecord[]>({ type: 'drafts:list', payload: { accountIds } })
+    for (const draft of drafts) for (const path of draft.attachmentPaths) approvedAttachmentPaths.add(path)
+    return drafts
+  })
+  ipcMain.handle('gmail:drafts:get', async (_event, id: string) => {
+    if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid draft id')
+    const draft = await requireMailWorker().request<GmailDraftRecord | undefined>({ type: 'drafts:get', payload: { id } })
+    if (draft) for (const path of draft.attachmentPaths) approvedAttachmentPaths.add(path)
+    return draft
+  })
+  ipcMain.handle('gmail:drafts:delete', (_event, id: string) => {
+    if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid draft id')
+    return requireMailWorker().request<GmailDraftResult>({ type: 'drafts:delete', payload: { id } })
+  })
+  ipcMain.handle('gmail:drafts:stage-message-attachments', async (_event, draftId: string, accountId: string, messageId: string) => {
+    if (![draftId, accountId, messageId].every((value) => typeof value === 'string' && value.length > 0 && value.length <= 500)) throw new Error('Invalid attachment staging request')
+    const files = await requireMailWorker().request<GmailDraftAttachmentFile[]>({ type: 'drafts:stage-message-attachments', payload: { draftId, accountId, messageId } })
+    for (const file of files) approvedAttachmentPaths.add(file.path)
+    return files
+  })
   ipcMain.handle('gmail:sync:start', (_event, accountId?: string) =>
     requireMailWorker().request({ type: 'sync:start', payload: { accountId } }))
   ipcMain.handle('gmail:sync:pause', (_event, accountId: string) =>
     requireMailWorker().request({ type: 'sync:pause', payload: { accountId } }))
   ipcMain.handle('gmail:sync:resume', (_event, accountId: string) =>
     requireMailWorker().request({ type: 'sync:resume', payload: { accountId } }))
+  ipcMain.handle('mail:sync:rebuild', (_event, accountId: string) =>
+    requireMailWorker().request({ type: 'sync:rebuild', payload: { accountId } }))
   ipcMain.handle('gmail:sync:progress', () =>
     requireMailWorker().request<SyncProgress[]>({ type: 'sync:progress' }))
   ipcMain.handle('gmail:storage', () =>
     requireMailWorker().request<MailStorageStats>({ type: 'storage:stats' }))
+  ipcMain.handle('mail:diagnostics:health', () =>
+    requireMailWorker().request<MailDiagnosticHealth>({ type: 'diagnostics:health' }))
+  ipcMain.handle('mail:diagnostics:export', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    const result = owner
+      ? await dialog.showSaveDialog(owner, { title: 'Export Aerio diagnostics', defaultPath: `aerio-diagnostics-${new Date().toISOString().slice(0, 10)}.json`, filters: [{ name: 'JSON', extensions: ['json'] }] })
+      : await dialog.showSaveDialog({ title: 'Export Aerio diagnostics', defaultPath: `aerio-diagnostics-${new Date().toISOString().slice(0, 10)}.json`, filters: [{ name: 'JSON', extensions: ['json'] }] })
+    if (result.canceled || !result.filePath) return {}
+    const health = await requireMailWorker().request<MailDiagnosticHealth>({ type: 'diagnostics:health' })
+    diagnostics?.exportBundle(result.filePath, {
+      appVersion: app.getVersion(),
+      electronVersion: process.versions.electron,
+      nodeVersion: process.versions.node,
+      operatingSystem: `${platform()} ${release()} ${arch()}`,
+      packaged: app.isPackaged
+    }, health)
+    diagnostic({ level: 'info', component: 'app', event: 'diagnostics-exported' })
+    return { savedPath: result.filePath }
+  })
   ipcMain.handle('gmail:network', (_event, online: boolean) =>
     requireMailWorker().request({ type: 'network', payload: { online } }))
   ipcMain.handle('gmail:attachment:open', async (_event, accountId: string, messageId: string, attachmentId: string, filename: string) => {
@@ -581,6 +728,8 @@ function registerIpc() {
 }
 
 app.whenReady().then(async () => {
+  diagnostics = new DiagnosticLogger(join(app.getPath('userData'), 'logs', 'aerio.jsonl'))
+  diagnostic({ level: 'info', component: 'app', event: 'startup', details: { version: app.getVersion(), packaged: app.isPackaged } })
   Menu.setApplicationMenu(null)
   await initializeDatabase()
   await initializeMail()
@@ -597,8 +746,12 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   quitting = true
+  diagnostic({ level: 'info', component: 'app', event: 'shutdown' })
   void mailWorker?.close()
 })
+
+process.on('unhandledRejection', (error) => diagnostic({ level: 'error', component: 'app', event: 'unhandled-rejection', message: error instanceof Error ? error.message : String(error) }))
+process.on('uncaughtExceptionMonitor', (error) => diagnostic({ level: 'error', component: 'app', event: 'uncaught-exception', message: error.message, details: { stack: error.stack } }))
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin' && !loadState().settings.closeToTray) app.quit()

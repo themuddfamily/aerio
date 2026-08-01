@@ -1,7 +1,8 @@
 import { parentPort } from 'node:worker_threads'
 import { createHash } from 'node:crypto'
-import { readFileSync, renameSync, statfsSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statfsSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
+import { join, sep } from 'node:path'
 import PostalMime, { type Address, type Attachment as ParsedAttachment } from 'postal-mime'
 import type {
   GmailDraftInput,
@@ -24,8 +25,10 @@ import type {
 import { MailDatabase, type ParsedMailMessage } from './mail/database'
 import { GmailApiError, GmailClient, type GmailRawMessage } from './mail/gmail-client'
 import { ImapSmtpClient, labelsForImapFolders, type ImapFolder } from './mail/imap-client'
-import { MicrosoftGraphClient, microsoftLabels, type GraphFolder, type GraphMessage } from './mail/microsoft-client'
+import { MicrosoftGraphClient, MicrosoftGraphError, microsoftLabels, type GraphFolder, type GraphMessage } from './mail/microsoft-client'
 import { sanitizeMessageHtml } from './mail/message-security'
+import { buildNewMailNotification } from './mail/new-mail'
+import { createMime, createMimeBuffer } from './mail/mime-builder'
 
 const port = parentPort!
 if (!port) throw new Error('The Aerio mail worker must run in a worker thread')
@@ -40,6 +43,7 @@ const syncing = new Set<string>()
 const syncScheduled = new Set<string>()
 const credentialRequests = new Map<string, { resolve: (value: AccountCredential) => void; reject: (error: Error) => void }>()
 const nextRequestAt = new Map<string, number>()
+const draftQueues = new Map<string, Promise<unknown>>()
 
 const emit = (event: GmailWorkerEvent) => port.postMessage({ kind: 'event', event } satisfies WorkerEventMessage)
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
@@ -48,7 +52,7 @@ function schedulePolling(intervalMs: number) {
   clearInterval(pollTimer)
   pollTimer = setInterval(() => {
     if (!database || !online) return
-    for (const account of database.listAccounts().filter((item) => !item.archived && item.status !== 'needs-auth')) void syncAccount(account.id)
+    for (const account of database.listAccounts().filter((item) => !item.archived && item.syncEnabled && item.status !== 'needs-auth')) void syncAccount(account.id)
   }, Math.min(Math.max(intervalMs, 60_000), 5 * 60_000))
 }
 
@@ -128,12 +132,19 @@ async function parseRawAndStore(accountId: string, message: {
   remoteUid?: string
 }) {
   if (!database) throw new Error('Database is not initialized')
+  const isNew = !database.hasMessage(accountId, message.id)
   const raw = message.raw
   const path = database.rawPath(accountId, message.id)
   const temporary = `${path}.partial`
   writeFileSync(temporary, raw)
-  renameSync(temporary, path)
-  const parsed = await PostalMime.parse(raw)
+  let parsed: Awaited<ReturnType<typeof PostalMime.parse>>
+  try {
+    parsed = await PostalMime.parse(raw)
+    renameSync(temporary, path)
+  } catch (error) {
+    rmSync(temporary, { force: true })
+    throw error
+  }
   const from = sender(parsed.from)
   const attachments = parsed.attachments.map((attachment, index) => ({
     id: attachmentId(attachment, index),
@@ -169,7 +180,7 @@ async function parseRawAndStore(accountId: string, message: {
     remoteUid: message.remoteUid
   }
   database.upsertMessage(record)
-  return record
+  return { record, isNew }
 }
 
 async function parseAndStore(accountId: string, message: GmailRawMessage) {
@@ -235,7 +246,8 @@ async function downloadInventory(accountId: string) {
   const hasInventory = Number(checkpoint?.total ?? 0) > 0
   if (!hasInventory) database.resetInventory(accountId)
   let pageToken = checkpoint?.page_token ? String(checkpoint.page_token) : undefined
-  if (!hasInventory || pageToken) {
+  const inventoryComplete = Boolean(checkpoint?.inventory_complete)
+  if (!inventoryComplete) {
     progress(accountId, 'inventory', 'Building the mailbox inventory')
     do {
       await assertCanSync(accountId)
@@ -249,9 +261,11 @@ async function downloadInventory(accountId: string) {
       })
     } while (pageToken)
     database.reconcileInventory(accountId)
+    database.completeInventory(accountId)
   }
 
   progress(accountId, 'downloading', 'Downloading messages for offline use')
+  database.retryFailedSyncItems(accountId)
   while (true) {
     await assertCanSync(accountId)
     const pending = database.pendingMessageIds(accountId, 2)
@@ -274,7 +288,10 @@ async function downloadInventory(accountId: string) {
       if (value.completed % 20 < 2) emit({ type: 'mail-changed', payload: { accountId } })
     }
   }
-  database.setAccountHistory(accountId, profile.historyId, true)
+  const failed = database.syncFailureCount(accountId)
+  if (failed) throw new Error(`${failed.toLocaleString()} message${failed === 1 ? '' : 's'} could not be downloaded after repeated attempts`)
+  const initialHistoryId = database.getSyncCheckpoint(accountId)?.initial_history_id
+  database.setAccountHistory(accountId, initialHistoryId ? String(initialHistoryId) : profile.historyId, true)
   const done = progress(accountId, 'complete', 'Mailbox is available offline')
   emit({ type: 'accounts-changed', payload: database.listAccounts() })
   emit({ type: 'mail-changed', payload: { accountId } })
@@ -289,6 +306,7 @@ async function incrementalSync(accountId: string) {
   progress(accountId, 'incremental', 'Checking for changes')
   let pageToken: string | undefined
   let latestHistoryId = startHistoryId
+  const newMessages: ParsedMailMessage[] = []
   try {
     do {
       await assertCanSync(accountId)
@@ -303,7 +321,8 @@ async function incrementalSync(accountId: string) {
         for (const entry of history.labelsRemoved ?? []) changed.add(entry.message.id)
         for (const messageId of changed) {
           try {
-            await parseAndStore(accountId, await client.getRawMessage(messageId))
+            const stored = await parseAndStore(accountId, await client.getRawMessage(messageId))
+            if (stored.isNew) newMessages.push(stored.record)
           } catch (error) {
             if (error instanceof GmailApiError && error.status === 404) database.deleteMessage(accountId, messageId)
             else throw error
@@ -322,6 +341,7 @@ async function incrementalSync(accountId: string) {
   database.setAccountHistory(accountId, latestHistoryId, true)
   progress(accountId, 'complete', 'Up to date')
   emit({ type: 'mail-changed', payload: { accountId } })
+  emitNewMail(accountId, newMessages)
 }
 
 interface ImapProviderState {
@@ -331,6 +351,8 @@ interface ImapProviderState {
 async function syncImapAccount(accountId: string) {
   if (!database) throw new Error('Database is not initialized')
   const client = await imapClientFor(accountId)
+  const firstSync = !database.getAccountHistory(accountId)
+  const newMessages: ParsedMailMessage[] = []
   progress(accountId, 'inventory', 'Checking IMAP folders')
   await client.withConnection(async (connection) => {
     const folders = await client.listFolders(connection)
@@ -379,7 +401,7 @@ async function syncImapAccount(accountId: string) {
           const parsed = await PostalMime.parse(fetched.raw)
           const rootHeader = parsed.references?.split(/\s+/).filter(Boolean)[0] ?? parsed.inReplyTo ?? parsed.messageId ?? item.threadId
           const threadId = createHash('sha256').update(rootHeader).digest('base64url').slice(0, 32)
-          await parseRawAndStore(accountId, {
+          const stored = await parseRawAndStore(accountId, {
             id: item.id,
             threadId,
             historyId: `${inventory.uidValidity}:${uid}`,
@@ -390,6 +412,7 @@ async function syncImapAccount(accountId: string) {
             remoteFolderId: folder.path,
             remoteUid: String(uid)
           })
+          if (stored.isNew) newMessages.push(stored.record)
         } catch (error) {
           database!.markSyncItem(accountId, item.id, 'failed', error instanceof Error ? error.message : String(error))
         }
@@ -401,6 +424,7 @@ async function syncImapAccount(accountId: string) {
   progress(accountId, 'complete', 'Up to date')
   emit({ type: 'accounts-changed', payload: database.listAccounts() })
   emit({ type: 'mail-changed', payload: { accountId } })
+  if (!firstSync) emitNewMail(accountId, newMessages)
 }
 
 interface MicrosoftProviderState {
@@ -427,32 +451,53 @@ function microsoftSystemLabels(folder: GraphFolder, message: GraphMessage) {
 async function syncMicrosoftAccount(accountId: string) {
   if (!database) throw new Error('Database is not initialized')
   const client = microsoftClientFor(accountId)
+  const firstSync = !database.getAccountHistory(accountId)
+  const fullAccountInventory = firstSync
+  const newMessages: ParsedMailMessage[] = []
   progress(accountId, 'inventory', 'Checking Microsoft mail folders')
   const folders = await client.listFolders()
   database.replaceLabels(accountId, microsoftLabels(accountId, folders))
   const state = database.getProviderState<MicrosoftProviderState>(accountId, { deltaLinks: {} })
+  const currentFolderIds = new Set(folders.map((folder) => folder.id))
+  for (const priorFolderId of Object.keys(state.deltaLinks)) {
+    if (currentFolderIds.has(priorFolderId)) continue
+    database.reconcileRemoteFolder(accountId, priorFolderId, new Set())
+    delete state.deltaLinks[priorFolderId]
+  }
   state.specialFolders = Object.fromEntries(folders.filter((folder) => folder.specialUse).map((folder) => [folder.specialUse!, folder.id]))
   if (!database.getAccountHistory(accountId)) database.resetInventory(accountId)
   const removed = new Set<string>()
   const active = new Set<string>()
   for (const folder of folders) {
     await assertCanSync(accountId)
-    const delta = await client.delta(folder.id, state.deltaLinks[folder.id])
+    let fullFolderInventory = !state.deltaLinks[folder.id]
+    let delta
+    try {
+      delta = await client.delta(folder.id, state.deltaLinks[folder.id])
+    } catch (error) {
+      if (!(error instanceof MicrosoftGraphError) || error.status !== 410 || !state.deltaLinks[folder.id]) throw error
+      delete state.deltaLinks[folder.id]
+      fullFolderInventory = true
+      delta = await client.delta(folder.id)
+    }
+    const currentFolderMessages = new Set<string>()
     for (const message of delta.messages) {
       if (message['@removed']) {
         removed.add(message.id)
         continue
       }
       active.add(message.id)
+      currentFolderMessages.add(message.id)
       const labels = microsoftSystemLabels(folder, message)
-      if (database.hasMessage(accountId, message.id)) {
-        database.updateMessageLabels(accountId, message.id, labels, `graph:${Date.now()}`)
-        continue
-      }
       const threadId = message.conversationId ?? message.id
       database.addInventory(accountId, [{ id: message.id, threadId, remoteFolderId: folder.id, remoteUid: message.id }])
+      if (database.hasMessage(accountId, message.id) && !fullAccountInventory) {
+        database.updateMessageLabels(accountId, message.id, labels, `graph:${Date.now()}`, { remoteFolderId: folder.id, remoteUid: message.id })
+        database.markSyncItem(accountId, message.id, 'complete')
+        continue
+      }
       try {
-        await parseRawAndStore(accountId, {
+        const stored = await parseRawAndStore(accountId, {
           id: message.id,
           threadId,
           historyId: `graph:${Date.now()}`,
@@ -462,19 +507,23 @@ async function syncMicrosoftAccount(accountId: string) {
           remoteFolderId: folder.id,
           remoteUid: message.id
         })
+        if (stored.isNew) newMessages.push(stored.record)
       } catch (error) {
         database.markSyncItem(accountId, message.id, 'failed', error instanceof Error ? error.message : String(error))
       }
     }
+    if (fullFolderInventory) database.reconcileRemoteFolder(accountId, folder.id, currentFolderMessages)
     if (delta.deltaLink) state.deltaLinks[folder.id] = delta.deltaLink
     progress(accountId, 'downloading', `Updated ${folder.displayName}`)
   }
   for (const id of removed) if (!active.has(id)) database.deleteMessage(accountId, id)
+  if (fullAccountInventory) database.reconcileInventory(accountId)
   database.setProviderState(accountId, state)
   database.setAccountHistory(accountId, `graph:${Date.now()}`, true)
   progress(accountId, 'complete', 'Up to date')
   emit({ type: 'accounts-changed', payload: database.listAccounts() })
   emit({ type: 'mail-changed', payload: { accountId } })
+  if (!firstSync) emitNewMail(accountId, newMessages)
 }
 
 async function syncAccount(accountId: string, forceFull = false) {
@@ -493,6 +542,7 @@ async function syncAccount(accountId: string, forceFull = false) {
   emit({ type: 'accounts-changed', payload: database.listAccounts() })
   try {
     const provider = database.getAccount(accountId)?.provider
+    if (forceFull) database.resetInventory(accountId)
     if (provider === 'microsoft') await syncMicrosoftAccount(accountId)
     else if (provider && provider !== 'gmail') await syncImapAccount(accountId)
     else if (forceFull || !database.getAccountHistory(accountId)) await downloadInventory(accountId)
@@ -506,6 +556,7 @@ async function syncAccount(accountId: string, forceFull = false) {
       return
     }
     const auth = (error instanceof GmailApiError && (error.status === 401 || error.status === 403)) ||
+      (error instanceof MicrosoftGraphError && (error.status === 401 || error.status === 403)) ||
       /invalid_grant|connect(ed)? again|unauthori[sz]ed|authentication failed|invalid credentials|login failed/i.test(message)
     database.setAccountStatus(accountId, auth ? 'needs-auth' : 'error', message)
     progress(accountId, 'error', message)
@@ -526,6 +577,7 @@ function labelsForAction(action: MailActionKind, labelId?: string) {
   if (action === 'unimportant') return { add: [], remove: ['IMPORTANT'] }
   if (action === 'label') return { add: labelId ? [labelId] : [], remove: [] }
   if (action === 'unlabel') return { add: [], remove: labelId ? [labelId] : [] }
+  if (action === 'move') return { add: labelId ? [labelId] : [], remove: ['INBOX', 'TRASH', 'SPAM'].filter((label) => label !== labelId) }
   return { add: [], remove: [] }
 }
 
@@ -543,7 +595,7 @@ async function processOperations() {
       const provider = database.getAccount(accountId)?.provider ?? 'gmail'
       if (provider === 'gmail') {
         const client = clientFor(accountId)
-        if (kind === 'trash') await client.trashThreads(threadIds)
+        if (kind === 'trash' || (kind === 'move' && labelId === 'TRASH')) await client.trashThreads(threadIds)
         else if (kind === 'untrash') await client.untrashThreads(threadIds)
         else {
           const labels = labelsForAction(kind, labelId)
@@ -565,43 +617,57 @@ async function processOperations() {
       emit({ type: 'operation', payload: { id, accountId, kind, status: 'succeeded' } })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      database.updateOperation(id, 'failed', message)
-      emit({ type: 'operation', payload: { id, accountId, kind, status: 'failed', error: message } })
+      const attempts = database.operationAttempts(id)
+      if (attempts < 5) {
+        database.rescheduleOperation(id, message, Math.min(5 * 60_000, (2 ** attempts) * 2_000))
+        emit({ type: 'operation', payload: { id, accountId, kind, status: 'queued', error: message } })
+      } else {
+        database.restoreOperationSnapshot(id, 'failed', message)
+        emit({ type: 'operation', payload: { id, accountId, kind, status: 'failed', error: message } })
+        emit({ type: 'mail-changed', payload: { accountId, threadIds } })
+      }
     }
   }
   await processQueuedDrafts()
 }
 
-function encodeHeader(value: string) {
-  return value.replaceAll(/[\r\n]+/g, ' ').trim()
+function safeDraftPart(value: string) {
+  return value.replaceAll(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'file'
 }
 
-function createMimeBuffer(input: GmailDraftInput, from?: string, omitBcc = false) {
-  const boundary = `aerio-${crypto.randomUUID()}`
-  const headers = [
-    ...(from ? [`From: ${encodeHeader(from)}`] : []),
-    `To: ${input.to.map(encodeHeader).join(', ')}`,
-    ...(input.cc.length ? [`Cc: ${input.cc.map(encodeHeader).join(', ')}`] : []),
-    ...(!omitBcc && input.bcc.length ? [`Bcc: ${input.bcc.map(encodeHeader).join(', ')}`] : []),
-    `Subject: ${encodeHeader(input.subject)}`,
-    'MIME-Version: 1.0',
-    ...(input.inReplyTo ? [`In-Reply-To: ${encodeHeader(input.inReplyTo)}`] : []),
-    ...(input.references?.length ? [`References: ${input.references.map(encodeHeader).join(' ')}`] : []),
-    `Content-Type: multipart/mixed; boundary="${boundary}"`
-  ]
-  const sections = [
-    `--${boundary}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${input.text}`
-  ]
-  for (const path of input.attachmentPaths) {
-    const name = encodeHeader(basename(path)).replaceAll('"', '')
-    const content = readFileSync(path).toString('base64').replace(/.{76}/g, '$&\r\n')
-    sections.push(`--${boundary}\r\nContent-Type: application/octet-stream; name="${name}"\r\nContent-Disposition: attachment; filename="${name}"\r\nContent-Transfer-Encoding: base64\r\n\r\n${content}`)
+function stageDraftAttachments(input: GmailDraftInput): GmailDraftInput {
+  const id = input.id ?? crypto.randomUUID()
+  const directory = join(contentPath, 'drafts', safeDraftPart(id))
+  mkdirSync(directory, { recursive: true })
+  const staged = input.attachmentPaths.map((source, index) => {
+    const resolvedPrefix = `${directory}${sep}`.toLowerCase()
+    if (source.toLowerCase().startsWith(resolvedPrefix) && existsSync(source)) return source
+    const sourceKey = createHash('sha256').update(source.toLowerCase()).digest('hex').slice(0, 10)
+    const target = join(directory, `${index}-${sourceKey}-${safeDraftPart(basename(source))}`)
+    if (!existsSync(target)) copyFileSync(source, target)
+    return target
+  })
+  const keep = new Set(staged.map((path) => path.toLowerCase()))
+  for (const filename of readdirSync(directory)) {
+    const candidate = join(directory, filename)
+    if (!keep.has(candidate.toLowerCase())) rmSync(candidate, { force: true })
   }
-  return Buffer.from(`${headers.join('\r\n')}\r\n\r\n${sections.join('\r\n')}\r\n--${boundary}--\r\n`)
+  return { ...input, id, attachmentPaths: staged }
 }
 
-function createMime(input: GmailDraftInput, from?: string) {
-  return createMimeBuffer(input, from).toString('base64url')
+function removeDraftFiles(id: string) {
+  rmSync(join(contentPath, 'drafts', safeDraftPart(id)), { recursive: true, force: true })
+}
+
+function serializeDraft<T>(id: string, action: () => Promise<T>) {
+  const prior = draftQueues.get(id)?.catch(() => undefined) ?? Promise.resolve()
+  const current = prior.then(action)
+  draftQueues.set(id, current)
+  const cleanup = () => {
+    if (draftQueues.get(id) === current) draftQueues.delete(id)
+  }
+  void current.then(cleanup, cleanup)
+  return current
 }
 
 function draftInputFromRow(row: Record<string, string | number | bigint | null>): GmailDraftInput {
@@ -623,12 +689,14 @@ function draftInputFromRow(row: Record<string, string | number | bigint | null>)
 
 async function saveDraft(input: GmailDraftInput) {
   if (!database) throw new Error('Database is not initialized')
+  input = stageDraftAttachments(input)
   let result = database.saveDraft(input, { status: online ? 'syncing' : 'local' })
   if (!online) return result
   try {
     const row = database.getDraft(result.id)
     const provider = database.getAccount(input.accountId)?.provider ?? 'gmail'
-    const from = database.getAccount(input.accountId)?.email
+    const account = database.getAccount(input.accountId)
+    const from = account ? `${account.displayName} <${account.email}>` : undefined
     let remoteId: string
     if (provider === 'gmail') {
       const raw = createMime({ ...input, id: result.id }, from)
@@ -651,12 +719,14 @@ async function saveDraft(input: GmailDraftInput) {
 
 async function sendDraft(input: GmailDraftInput) {
   if (!database) throw new Error('Database is not initialized')
+  input = stageDraftAttachments(input)
   let result = database.saveDraft(input, { status: online ? 'syncing' : 'queued' })
   if (!online) return result
   try {
     const row = database.getDraft(result.id)
     const provider = database.getAccount(input.accountId)?.provider ?? 'gmail'
-    const from = database.getAccount(input.accountId)?.email
+    const account = database.getAccount(input.accountId)
+    const from = account ? `${account.displayName} <${account.email}>` : undefined
     if (provider === 'gmail') {
       const raw = createMime({ ...input, id: result.id }, from)
       if (row?.gmail_draft_id) await clientFor(input.accountId).sendDraft(String(row.gmail_draft_id), raw)
@@ -669,6 +739,7 @@ async function sendDraft(input: GmailDraftInput) {
       if (row?.gmail_draft_id) await client.deleteDraft(String(row.gmail_draft_id))
     }
     result = { ...result, status: 'sent', updatedAt: new Date().toISOString() }
+    removeDraftFiles(result.id)
   } catch (error) {
     result = { ...result, status: 'failed', error: error instanceof Error ? error.message : String(error), updatedAt: new Date().toISOString() }
   }
@@ -676,10 +747,39 @@ async function sendDraft(input: GmailDraftInput) {
   return result
 }
 
+async function discardDraft(id: string) {
+  if (!database) throw new Error('Database is not initialized')
+  const row = database.getDraft(id)
+  if (!row) {
+    removeDraftFiles(id)
+    return { id, status: 'discarded' as const, updatedAt: new Date().toISOString() }
+  }
+  const remoteId = row.gmail_draft_id ? String(row.gmail_draft_id) : undefined
+  const accountId = String(row.account_id)
+  const provider = database.getAccount(accountId)?.provider ?? 'gmail'
+  let result: GmailDraftResult = { id, gmailDraftId: remoteId, status: 'discarding', updatedAt: new Date().toISOString() }
+  database.updateDraftResult(id, result)
+  try {
+    if (remoteId) {
+      if (provider === 'gmail') await clientFor(accountId).deleteDraft(remoteId)
+      else if (provider === 'microsoft') await microsoftClientFor(accountId).deleteDraft(remoteId)
+      else await (await imapClientFor(accountId)).deleteDraft(remoteId)
+    }
+    database.deleteDraftRecord(id)
+    removeDraftFiles(id)
+    result = { ...result, status: 'discarded', updatedAt: new Date().toISOString() }
+  } catch (error) {
+    result = { ...result, status: 'failed', error: error instanceof Error ? error.message : String(error), updatedAt: new Date().toISOString() }
+    database.updateDraftResult(id, result)
+  }
+  return result
+}
+
 async function processQueuedDrafts() {
   if (!database || !online) return
-  for (const row of database.draftsToSync()) await saveDraft(draftInputFromRow(row))
-  for (const row of database.queuedDrafts()) await sendDraft(draftInputFromRow(row))
+  for (const row of database.draftsToDiscard()) await serializeDraft(String(row.id), () => discardDraft(String(row.id)))
+  for (const row of database.draftsToSync()) await serializeDraft(String(row.id), () => saveDraft(draftInputFromRow(row)))
+  for (const row of database.queuedDrafts()) await serializeDraft(String(row.id), () => sendDraft(draftInputFromRow(row)))
 }
 
 async function extractAttachment(accountId: string, messageId: string, attachmentIdValue: string, targetPath: string) {
@@ -693,6 +793,30 @@ async function extractAttachment(accountId: string, messageId: string, attachmen
     ? Buffer.from(attachment.content, attachment.encoding === 'base64' ? 'base64' : 'utf8')
     : Buffer.from(attachment.content instanceof ArrayBuffer ? new Uint8Array(attachment.content) : attachment.content)
   writeFileSync(targetPath, content)
+}
+
+async function stageMessageAttachments(draftId: string, accountId: string, messageId: string) {
+  if (!database) throw new Error('Database is not initialized')
+  const rawPath = database.getMessageRaw(accountId, messageId)
+  if (!rawPath) throw new Error('The original message is not available offline')
+  const parsed = await PostalMime.parse(readFileSync(rawPath))
+  const directory = join(contentPath, 'drafts', safeDraftPart(draftId))
+  mkdirSync(directory, { recursive: true })
+  return parsed.attachments.map((attachment, index) => {
+    const name = attachment.filename || `attachment-${index + 1}`
+    const path = join(directory, `${index}-${safeDraftPart(name)}`)
+    const content = typeof attachment.content === 'string'
+      ? Buffer.from(attachment.content, attachment.encoding === 'base64' ? 'base64' : 'utf8')
+      : Buffer.from(attachment.content instanceof ArrayBuffer ? new Uint8Array(attachment.content) : attachment.content)
+    writeFileSync(path, content)
+    return { name, size: content.byteLength, path }
+  })
+}
+
+function emitNewMail(accountId: string, records: ParsedMailMessage[]) {
+  if (!database?.getAccount(accountId)?.notifications) return
+  const payload = buildNewMailNotification(accountId, records)
+  if (payload) emit({ type: 'new-mail', payload })
 }
 
 async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
@@ -727,6 +851,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     return
   }
   if (command.type === 'labels:list') return database.listLabels(command.payload.accountIds)
+  if (command.type === 'recipients:suggest') return database.suggestRecipients(command.payload.query, command.payload.accountIds)
   if (command.type === 'mail:list') return database.listThreads(command.payload)
   if (command.type === 'mail:thread') {
     const thread = database.getThread(command.payload.accountId, command.payload.threadId)
@@ -747,8 +872,37 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     if (undone) emit({ type: 'mail-changed', payload: { accountId: '' } })
     return undone
   }
-  if (command.type === 'drafts:save') return saveDraft(command.payload)
-  if (command.type === 'drafts:send') return sendDraft(command.payload)
+  if (command.type === 'drafts:list') return database.listDrafts(command.payload.accountIds)
+  if (command.type === 'drafts:get') return database.getDraftRecord(command.payload.id)
+  if (command.type === 'drafts:save') {
+    const id = command.payload.id ?? crypto.randomUUID()
+    return serializeDraft(id, () => saveDraft({ ...command.payload, id }))
+  }
+  if (command.type === 'accounts:update') {
+    const updated = database.updateAccountSettings(command.payload)
+    if (updated.syncEnabled) {
+      paused.delete(updated.id)
+      if (updated.status === 'paused') database.setAccountStatus(updated.id, 'syncing')
+      void syncAccount(updated.id)
+    } else {
+      paused.add(updated.id)
+      database.setAccountStatus(updated.id, 'paused')
+      progress(updated.id, 'paused', 'Automatic sync disabled for this account')
+    }
+    const result = database.getAccount(updated.id)!
+    emit({ type: 'accounts-changed', payload: database.listAccounts() })
+    return result
+  }
+  if (command.type === 'drafts:send') {
+    const id = command.payload.id ?? crypto.randomUUID()
+    return serializeDraft(id, () => sendDraft({ ...command.payload, id }))
+  }
+  if (command.type === 'drafts:delete') {
+    if (!database.getDraft(command.payload.id)) return discardDraft(command.payload.id)
+    const queued = database.requestDraftDiscard(command.payload.id)
+    return online ? serializeDraft(command.payload.id, () => discardDraft(command.payload.id)) : queued
+  }
+  if (command.type === 'drafts:stage-message-attachments') return stageMessageAttachments(command.payload.draftId, command.payload.accountId, command.payload.messageId)
   if (command.type === 'sync:start') {
     const accounts = command.payload.accountId
       ? database.listAccounts().filter((item) => item.id === command.payload.accountId)
@@ -773,6 +927,16 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     const stats = statfsSync(contentPath)
     return database.storageStats(Number(stats.bavail) * Number(stats.bsize))
   }
+  if (command.type === 'sync:rebuild') {
+    const account = database.getAccount(command.payload.accountId)
+    if (!account) throw new Error('Account not found')
+    if (!account.syncEnabled) throw new Error('Enable synchronization for this account before rebuilding it')
+    paused.delete(account.id)
+    database.resetForFullSync(account.id)
+    void syncAccount(account.id, true)
+    return
+  }
+  if (command.type === 'diagnostics:health') return database.diagnosticHealth()
   if (command.type === 'attachment:extract') {
     await extractAttachment(command.payload.accountId, command.payload.messageId, command.payload.attachmentId, command.payload.targetPath)
     return
@@ -786,7 +950,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'polling') {
     schedulePolling(command.payload.intervalMs)
     if (command.payload.intervalMs <= 60_000) {
-      for (const account of database.listAccounts().filter((item) => !item.archived && item.status !== 'needs-auth')) void syncAccount(account.id)
+      for (const account of database.listAccounts().filter((item) => !item.archived && item.syncEnabled && item.status !== 'needs-auth')) void syncAccount(account.id)
     }
     return
   }

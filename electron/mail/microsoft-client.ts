@@ -27,10 +27,17 @@ export interface GraphMessage {
   '@removed'?: { reason?: string }
 }
 
+export class MicrosoftGraphError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'MicrosoftGraphError'
+  }
+}
+
 export class MicrosoftGraphClient {
   constructor(private readonly token: () => Promise<string>) {}
 
-  private async request<T>(path: string, init: RequestInit = {}) {
+  private async response(path: string, init: RequestInit = {}, attempt = 0): Promise<Response> {
     const response = await fetch(path.startsWith('https://') ? path : `https://graph.microsoft.com/v1.0${path}`, {
       ...init,
       headers: {
@@ -40,12 +47,28 @@ export class MicrosoftGraphClient {
         ...init.headers
       }
     })
+    if (!response.ok && (response.status === 429 || response.status >= 500) && attempt < 6) {
+      const retryHeader = response.headers.get('retry-after')
+      const retrySeconds = Number(retryHeader)
+      const retryDate = retryHeader && !Number.isFinite(retrySeconds) ? Date.parse(retryHeader) - Date.now() : 0
+      const delay = Number.isFinite(retrySeconds) && retrySeconds > 0
+        ? retrySeconds * 1_000
+        : retryDate > 0 ? retryDate : Math.min(64_000, (2 ** attempt) * 1_000 + Math.floor(Math.random() * 1_000))
+      await new Promise((resolve) => setTimeout(resolve, delay))
+      return this.response(path, init, attempt + 1)
+    }
+    return response
+  }
+
+  private async request<T>(path: string, init: RequestInit = {}) {
+    const response = await this.response(path, init)
     if (!response.ok) {
       const value = await response.json().catch(() => ({})) as { error?: { message?: string } }
-      throw new Error(value.error?.message ?? `Microsoft Graph request failed (${response.status})`)
+      throw new MicrosoftGraphError(value.error?.message ?? `Microsoft Graph request failed (${response.status})`, response.status)
     }
-    if (response.status === 204) return undefined as T
-    return response.json() as Promise<T>
+    if (response.status === 204 || response.status === 202 || response.headers.get('content-length') === '0') return undefined as T
+    const text = await response.text()
+    return text ? JSON.parse(text) as T : undefined as T
   }
 
   async listFolders() {
@@ -98,16 +121,14 @@ export class MicrosoftGraphClient {
   }
 
   async messageRaw(id: string) {
-    const response = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(id)}/$value`, {
-      headers: { Authorization: `Bearer ${await this.token()}`, Prefer: 'IdType="ImmutableId"', Accept: 'message/rfc822' }
-    })
-    if (!response.ok) throw new Error(`Microsoft could not download a message (${response.status})`)
+    const response = await this.response(`/me/messages/${encodeURIComponent(id)}/$value`, { headers: { Accept: 'message/rfc822' } })
+    if (!response.ok) throw new MicrosoftGraphError(`Microsoft could not download a message (${response.status})`, response.status)
     return Buffer.from(await response.arrayBuffer())
   }
 
   async applyAction(ids: string[], action: MailActionKind, folderId?: string) {
     for (const id of ids) {
-      if (action === 'trash' || action === 'archive' || action === 'untrash' || action === 'unarchive' || action === 'label') {
+      if (action === 'trash' || action === 'archive' || action === 'untrash' || action === 'unarchive' || action === 'label' || action === 'move') {
         if (!folderId) throw new Error('Microsoft did not expose the destination mail folder')
         await this.request(`/me/messages/${encodeURIComponent(id)}/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destinationId: folderId }) })
       } else {
@@ -124,13 +145,12 @@ export class MicrosoftGraphClient {
 
   async saveDraft(raw: Buffer, existingId?: string) {
     if (existingId) await this.request(`/me/messages/${encodeURIComponent(existingId)}`, { method: 'DELETE' }).catch(() => undefined)
-    const response = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+    const result = await this.request<{ id?: string }>('/me/messages', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${await this.token()}`, 'Content-Type': 'text/plain', Prefer: 'IdType="ImmutableId"' },
+      headers: { 'Content-Type': 'text/plain' },
       body: raw.toString('base64')
     })
-    const result = await response.json().catch(() => ({})) as { id?: string; error?: { message?: string } }
-    if (!response.ok || !result.id) throw new Error(result.error?.message ?? 'Microsoft could not save the draft')
+    if (!result?.id) throw new Error('Microsoft could not save the draft')
     return result.id
   }
 
@@ -139,15 +159,15 @@ export class MicrosoftGraphClient {
       await this.request(`/me/messages/${encodeURIComponent(draftId)}/send`, { method: 'POST' })
       return
     }
-    const response = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+    await this.request<void>('/me/sendMail', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${await this.token()}`, 'Content-Type': 'text/plain' },
+      headers: { 'Content-Type': 'text/plain' },
       body: raw.toString('base64')
     })
-    if (!response.ok) {
-      const result = await response.json().catch(() => ({})) as { error?: { message?: string } }
-      throw new Error(result.error?.message ?? `Microsoft could not send the message (${response.status})`)
-    }
+  }
+
+  deleteDraft(id: string) {
+    return this.request<void>(`/me/messages/${encodeURIComponent(id)}`, { method: 'DELETE' })
   }
 }
 

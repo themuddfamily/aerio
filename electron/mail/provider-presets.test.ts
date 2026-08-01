@@ -26,5 +26,6 @@ describe('mail provider presets', () => {
     expect(validateImapAccount(input)).toMatchObject({ email: 'person@example.com', username: 'person@example.com' })
     expect(() => validateImapAccount({ ...input, imapHost: 'https://imap.example.com' })).toThrow(/hostnames or IP addresses/)
     expect(() => validateImapAccount({ ...input, allowInvalidCertificates: true })).toThrow(/only for a local Proton Bridge/)
+    expect(() => validateImapAccount({ ...input, smtpSecurity: 'none' as 'tls' })).toThrow(/TLS or STARTTLS/)
   })
 })

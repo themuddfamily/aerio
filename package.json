@@ -1,6 +1,6 @@
 {
   "name": "aerio",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A calm, modern desktop communications and productivity client.",
   "main": "dist-electron/main/main.js",
   "author": "Aerio",
@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:live-matrix": "node scripts/validate-live-provider-matrix.mjs",
     "audit:buttons": "node scripts/audit-buttons.mjs",
     "audit:context-menus": "node scripts/audit-context-menus.mjs",
     "test:context-menus": "npm run audit:context-menus && node scripts/desktop-context-menu-audit.mjs",

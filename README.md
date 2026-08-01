@@ -1,6 +1,6 @@
 # Aerio
 
-Aerio is a calm, modern desktop email client for Windows. Version 0.3 adds a multi-provider real-mail workspace alongside the original local demo. The workspaces stay separate, so sample content never mixes with a real inbox.
+Aerio is a calm, modern desktop email client for Windows. Version 0.4 adds a multi-provider real-mail workspace alongside the original local demo. The workspaces stay separate, so sample content never mixes with a real inbox.
 
 ## Real-mail alpha
 
@@ -11,9 +11,11 @@ Aerio is a calm, modern desktop email client for Windows. Version 0.3 adds a mul
 - Raw RFC 2822 messages, MIME bodies, and attachments stored locally
 - Resumable sync checkpoints, Gmail History, Microsoft delta links, IMAP folder reconciliation, adaptive polling, and manual pause/resume
 - SQLite-backed folder views, cursor pagination, and full-text offline search
-- Archive, read/unread, star, importance, label, and Trash actions
-- Optimistic local changes with a 10-second Undo window and a durable provider operation queue
-- Provider drafts with two-second idle autosave, threaded replies, attachments, SMTP delivery, and an offline Outbox
+- Single and multi-select Archive, read/unread, star, importance, move, label, and Trash actions
+- Optimistic local changes with exact-state Undo, retry/backoff, and a durable provider operation queue
+- Editable provider drafts with idle autosave, rich-text composition, recipient suggestions, signatures, forwarding attachments, SMTP delivery, and an offline Outbox
+- Per-account identity, synchronization, notification, OAuth, IMAP/SMTP, connection-test, and local-rebuild settings
+- Privacy-redacted diagnostics, storage-integrity checks, and background new-mail notifications
 - Sanitized HTML; scripts and unsafe links are removed, and remote images are blocked by default
 - Dedicated message windows for demo and real mail; double-click a conversation to open or focus its window
 - Read-only local archive or complete local deletion when disconnecting an account
@@ -102,7 +104,9 @@ The app uses Electron 43, React 19, TypeScript, Vite, and two local SQLite paths
 - A dedicated Node worker owns the normalized mail database, Gmail/Graph/IMAP synchronization, SMTP delivery, MIME parsing, full-text search, queued mutations, and drafts.
 - The original `sql.js` store remains isolated to the demo workspace.
 
-Automated coverage includes database migration and backup, normalized mail behavior, provider preset validation, Microsoft delta pagination, optimistic Undo, archive/delete semantics, HTML sanitization, mocked Gmail API behavior, the existing demo domain tests, and pagination over a synthetic 100,000-thread mailbox. Static interaction-contract audits and Playwright-driven Electron passes cover buttons, feature context menus, editing/link/image menus, profile management, dedicated demo/real message windows, module actions, account onboarding, and native window controls.
+Automated coverage includes database migration and backup, provider data integrity, logical duplicate suppression, exact-state Undo, editable drafts, outgoing MIME, new-mail notification filtering, Microsoft delta pagination, mocked Gmail behavior, the existing demo domain tests, and pagination over a synthetic 100,000-thread mailbox. Static interaction-contract audits and Playwright-driven Electron passes cover buttons, feature context menus, editing/link/image menus, profile management, dedicated demo/real message windows, bulk mail organization, account settings, module actions, account onboarding, and native window controls.
+
+Live provider behavior is release-gated by the disposable-account scenarios in [`docs/live-provider-test-matrix.md`](docs/live-provider-test-matrix.md). Settings → Mail diagnostics checks database integrity and exports a privacy-redacted troubleshooting report; credentials, message bodies, raw mail, HTML, and attachment paths are excluded.
 
 ## Keyboard shortcuts
 
@@ -119,7 +123,7 @@ Automated coverage includes database migration and backup, normalized mail behav
 - Multi-provider support is an alpha. Gmail has not been submitted for Google OAuth verification, and Microsoft uses the app registration supplied by the user.
 - Automated tests use mocked provider responses. Live validation requires real provider accounts, app registrations, or app passwords.
 - IMAP has no universal standard for Archive or special folders. Aerio reports an error instead of guessing when a server does not advertise a required destination.
-- IMAP mailboxes that expose the same message in multiple physical folders may show separate offline copies.
+- IMAP can store multiple physical copies of the same message, but Aerio presents them as one logical conversation and keeps every location available for folder actions.
 - Scheduled send remains demo-only and is not presented as a real Gmail capability.
 - Offline drafts are queued until connectivity returns, but conflict resolution with edits made simultaneously in another client is not yet implemented.
 - Windows is the tested packaging target; macOS and Linux packaging are not configured.

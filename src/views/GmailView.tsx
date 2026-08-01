@@ -1,14 +1,18 @@
 import {
-  Archive, AtSign, Copy, Download, ExternalLink, FileText, Forward, Image, Inbox, LoaderCircle, Mail, MailOpen,
+  Archive, AtSign, CheckSquare, Copy, Download, Edit3, ExternalLink, FileText, FolderInput, Forward, Image, Inbox, LoaderCircle, Mail, MailOpen,
   Paperclip, Pause, Play, Plus, RefreshCw, Reply, Search, Send, Settings2,
-  Star, Tag, Trash2, Undo2, UserPlus, WifiOff
+  Star, Tag, Tags, Trash2, Undo2, UserPlus, WifiOff, X
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import GmailComposeModal from '../components/GmailComposeModal'
 import MailAccountSetupModal from '../components/MailAccountSetupModal'
+import MailAccountSettingsModal from '../components/MailAccountSettingsModal'
+import MailOrganizeModal from '../components/MailOrganizeModal'
 import type {
   GmailAccountSummary,
+  ApplyMailActionInput,
   GmailAttachment,
+  GmailDraftRecord,
   GmailLabel,
   GmailMessageDetail,
   GmailThreadDetail,
@@ -46,6 +50,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
   const [accounts, setAccounts] = useState<GmailAccountSummary[]>([])
   const [labels, setLabels] = useState<GmailLabel[]>([])
   const [page, setPage] = useState<MailPage>(emptyPage)
+  const [localDrafts, setLocalDrafts] = useState<GmailDraftRecord[]>([])
   const [history, setHistory] = useState<(string | undefined)[]>([])
   const [folder, setFolder] = useState<NonNullable<MailQuery['folder']>>('inbox')
   const [labelId, setLabelId] = useState<string>()
@@ -55,19 +60,35 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
   const [thread, setThread] = useState<GmailThreadDetail>()
   const [sync, setSync] = useState<SyncProgress[]>([])
   const [loading, setLoading] = useState(true)
-  const [compose, setCompose] = useState<{ reply?: GmailThreadDetail; forward?: boolean }>()
-  const [pending, setPending] = useState<PendingOperation>()
+  const [compose, setCompose] = useState<{ draft?: GmailDraftRecord; reply?: GmailThreadDetail; forward?: boolean }>()
+  const [pending, setPending] = useState<PendingOperation[]>([])
+  const [checkedKeys, setCheckedKeys] = useState<Set<string>>(new Set())
+  const [organizeMode, setOrganizeMode] = useState<'move' | 'label'>()
   const [remoteImages, setRemoteImages] = useState(false)
   const [accountSetup, setAccountSetup] = useState(false)
+  const [settingsAccount, setSettingsAccount] = useState<GmailAccountSummary>()
   const handledComposeRequest = useRef(0)
   const selected = page.items.find((item) => `${item.accountId}:${item.id}` === selectedKey)
   const selectedAccount = accounts.find((item) => item.id === selected?.accountId)
+  const checkedItems = useMemo(() => page.items.filter((item) => checkedKeys.has(`${item.accountId}:${item.id}`)), [checkedKeys, page.items])
 
   const refreshAccounts = useCallback(async () => {
     const next = await window.aerio.mail.accounts.list()
     setAccounts(next)
     return next
   }, [])
+
+  const loadDrafts = useCallback(async () => {
+    if (!accounts.length) {
+      setLocalDrafts([])
+      return
+    }
+    try {
+      setLocalDrafts(await window.aerio.mail.drafts.list(accountId === 'all' ? undefined : [accountId]))
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Drafts could not be loaded')
+    }
+  }, [accountId, accounts.length, onToast])
 
   const loadPage = useCallback(async (cursor?: string) => {
     if (!accounts.length) {
@@ -113,23 +134,31 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
       if (event.type === 'sync-progress') setSync((items) => [...items.filter((item) => item.accountId !== event.payload.accountId), event.payload])
       if (event.type === 'mail-changed') void loadPage()
       if (event.type === 'operation' && event.payload.status === 'failed') onToast(event.payload.error ?? 'The mail provider rejected the change')
-      if (event.type === 'operation' && event.payload.id === pending?.id && event.payload.status === 'succeeded') setPending(undefined)
+      if (event.type === 'operation' && event.payload.status === 'succeeded') setPending((items) => items.filter((item) => item.id !== event.payload.id))
       if (event.type === 'connectivity' && !event.payload.online) onToast('Offline — changes will be sent when you reconnect')
+      if (event.type === 'new-mail') onToast(event.payload.count === 1 ? `New message${event.payload.sender ? ` from ${event.payload.sender}` : ''}` : `${event.payload.count} new messages`)
     })
     return unsubscribe
-  }, [loadPage, onToast, pending?.id])
+  }, [loadPage, onToast])
 
   useEffect(() => {
-    if (!pending?.undoUntil) return
-    const delay = Math.max(0, new Date(pending.undoUntil).getTime() - Date.now())
-    const timer = setTimeout(() => setPending(undefined), delay)
+    const undoUntil = pending.map((item) => item.undoUntil).filter(Boolean).sort()[0]
+    if (!undoUntil) return
+    const delay = Math.max(0, new Date(undoUntil).getTime() - Date.now())
+    const timer = setTimeout(() => setPending([]), delay)
     return () => clearTimeout(timer)
   }, [pending])
+
+  useEffect(() => setCheckedKeys(new Set()), [accountId, folder, labelId, search])
 
   useEffect(() => {
     setHistory([])
     void loadPage()
   }, [loadPage])
+
+  useEffect(() => {
+    if (folder === 'drafts') void loadDrafts()
+  }, [folder, loadDrafts])
 
   useEffect(() => {
     if (!selected) {
@@ -154,7 +183,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
     if (!targetAccount || !threadIds.length) return
     try {
       const operation = await window.aerio.mail.mail.action({ accountId: targetAccount, threadIds, action })
-      if (showUndo) setPending(operation)
+      if (showUndo) setPending([operation])
       await loadPage()
     } catch (error) {
       onToast(error instanceof Error ? error.message : 'The change could not be queued')
@@ -162,12 +191,12 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
   }
 
   const undo = async () => {
-    if (!pending) return
+    if (!pending.length) return
     try {
-      const restored = await window.aerio.mail.mail.undo(pending.id)
-      if (restored) {
+      const restored = await Promise.all(pending.map((operation) => window.aerio.mail.mail.undo(operation.id)))
+      if (restored.some(Boolean)) {
         onToast('Change undone')
-        setPending(undefined)
+        setPending([])
         await loadPage()
       }
     } catch (error) {
@@ -242,6 +271,47 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
     if (groups.size) onToast('Visible conversations marked as read')
   }
 
+  const applyOrganizeRequests = async (requests: ApplyMailActionInput[]) => {
+    try {
+      const operations: PendingOperation[] = []
+      for (const request of requests) operations.push(await window.aerio.mail.mail.action(request))
+      setPending(operations)
+      setCheckedKeys(new Set())
+      await loadPage()
+      onToast(`${checkedItems.length.toLocaleString()} conversation${checkedItems.length === 1 ? '' : 's'} updated`)
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'The bulk change could not be queued')
+    }
+  }
+
+  const applyBulkAction = async (action: MailActionKind) => {
+    const groups = new Map<string, string[]>()
+    for (const item of checkedItems) groups.set(item.accountId, [...(groups.get(item.accountId) ?? []), item.id])
+    await applyOrganizeRequests([...groups].map(([targetAccount, threadIds]) => ({ accountId: targetAccount, threadIds, action })))
+  }
+
+  const toggleChecked = (item: MailThreadSummary, index: number, range: boolean) => {
+    const key = `${item.accountId}:${item.id}`
+    setCheckedKeys((current) => {
+      const next = new Set(current)
+      if (range && current.size) {
+        const lastIndex = Math.max(...page.items.map((entry, itemIndex) => current.has(`${entry.accountId}:${entry.id}`) ? itemIndex : -1))
+        const [start, end] = [Math.min(lastIndex, index), Math.max(lastIndex, index)]
+        for (const entry of page.items.slice(start, end + 1)) next.add(`${entry.accountId}:${entry.id}`)
+      } else if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const toggleAllVisible = () => setCheckedKeys((current) => {
+    const visible = page.items.map((item) => `${item.accountId}:${item.id}`)
+    const all = visible.length > 0 && visible.every((key) => current.has(key))
+    const next = new Set(current)
+    for (const key of visible) all ? next.delete(key) : next.add(key)
+    return next
+  })
+
   const openSummary = (item: MailThreadSummary) => setSelectedKey(`${item.accountId}:${item.id}`)
 
   const openMessageWindow = (item: MailThreadSummary) => {
@@ -258,6 +328,22 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
     }
   }
 
+  const discardLocalDraft = async (draft: GmailDraftRecord) => {
+    if (!window.confirm(`Discard “${draft.subject || '(No subject)'}”?`)) return
+    try {
+      const result = await window.aerio.mail.drafts.delete(draft.id)
+      onToast(result.status === 'discard-queued' ? 'Offline — draft will be discarded after reconnecting' : 'Draft discarded')
+      await loadDrafts()
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Draft could not be discarded')
+    }
+  }
+
+  const visibleLocalDrafts = folder === 'drafts' ? localDrafts.filter((draft) => {
+    const term = search.trim().toLowerCase()
+    return !term || `${draft.subject} ${draft.to.join(' ')} ${draft.text}`.toLowerCase().includes(term)
+  }) : []
+
   const summaryMenu = (item: MailThreadSummary): ContextMenuItem[] => {
     const account = accounts.find((candidate) => candidate.id === item.accountId)
     const readOnly = Boolean(account?.archived)
@@ -271,6 +357,8 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
       { label: item.starred ? 'Remove star' : 'Add star', icon: Star, checked: item.starred, disabled: readOnly, action: () => applyAction(item.starred ? 'unstar' : 'star', item.accountId, [item.id]) },
       { label: item.important ? 'Mark as not important' : 'Mark as important', icon: Tag, checked: item.important, disabled: readOnly, action: () => applyAction(item.important ? 'unimportant' : 'important', item.accountId, [item.id]) },
       { label: inInbox ? 'Archive' : 'Move to inbox', icon: inInbox ? Archive : Inbox, separatorBefore: true, disabled: readOnly, action: () => applyAction(inInbox ? 'archive' : 'unarchive', item.accountId, [item.id]) },
+      { label: 'Move to…', icon: FolderInput, disabled: readOnly, action: () => { setCheckedKeys(new Set([`${item.accountId}:${item.id}`])); setOrganizeMode('move') } },
+      { label: 'Manage labels…', icon: Tags, disabled: readOnly || accounts.find((account) => account.id === item.accountId)?.provider !== 'gmail', action: () => { setCheckedKeys(new Set([`${item.accountId}:${item.id}`])); setOrganizeMode('label') } },
       { label: item.trashed ? 'Restore from Trash' : 'Move to Trash', icon: Trash2, danger: !item.trashed, disabled: readOnly, action: () => applyAction(item.trashed ? 'untrash' : 'trash', item.accountId, [item.id]) },
       { label: 'Copy subject', icon: Copy, separatorBefore: true, action: () => copyText(item.subject) },
       { label: 'Copy participants', icon: AtSign, action: () => copyText(item.participants.join(', ')) }
@@ -328,6 +416,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
       { label: 'Check for mail', icon: RefreshCw, separatorBefore: true, disabled: account?.archived, action: () => startSync(account?.id) },
       ...(account && progress ? [{ label: progress.phase === 'paused' ? 'Resume sync' : 'Pause sync', icon: progress.phase === 'paused' ? Play : Pause, action: () => toggleSync(account, progress.phase === 'paused') }] satisfies ContextMenuItem[] : []),
       { label: 'Offline storage', icon: Download, action: showStorage },
+      ...(account ? [{ label: 'Account settings…', icon: Settings2, separatorBefore: true, action: () => setSettingsAccount(account) }] satisfies ContextMenuItem[] : []),
       ...(account ? [{ label: 'Copy email address', icon: Copy, separatorBefore: true, action: () => copyText(account.email) }] satisfies ContextMenuItem[] : []),
       ...(account && !account.archived ? [{ label: 'Disconnect account…', icon: Settings2, separatorBefore: true, danger: true, action: () => disconnect(account) }] satisfies ContextMenuItem[] : [])
     ], account?.email ?? 'All accounts')
@@ -392,16 +481,28 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
           ], label.name)}><Tag size={15} /><span>{label.name}</span></button>)}</div>}
         <div className="gmail-sidebar-footer">
           <button onClick={() => void showStorage()}><Download size={14} /> Offline storage</button>
-          {accounts.filter((account) => !account.archived).map((account) => <button key={account.id} title={`Disconnect ${account.email}`} onClick={() => void disconnect(account)} onContextMenu={(event) => showAccountMenu(event, account)}><Settings2 size={14} /> {account.email.split('@')[0]}</button>)}
+          {accounts.filter((account) => !account.archived).map((account) => <button key={account.id} title={`Settings for ${account.email}`} onClick={() => setSettingsAccount(account)} onContextMenu={(event) => showAccountMenu(event, account)}><Settings2 size={14} /> {account.email.split('@')[0]}</button>)}
         </div>
       </aside>
 
       <section className="mail-list-panel">
         <header className="panel-heading">
-          <div><h1>{labels.find((label) => label.id === labelId && label.accountId === accountId)?.name ?? folderNames[folder]}</h1><p>{page.total.toLocaleString()} conversations</p></div>
+          <div><h1>{labels.find((label) => label.id === labelId && label.accountId === accountId)?.name ?? folderNames[folder]}</h1><p>{page.total.toLocaleString()} conversations{folder === 'drafts' && localDrafts.length ? ` · ${localDrafts.length.toLocaleString()} editable drafts` : ''}</p></div>
           <button className="icon-button" title="Check for mail" onClick={() => void startSync(accountId === 'all' ? undefined : accountId)}><RefreshCw size={17} /></button>
         </header>
         <div className="gmail-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search offline mail…" /><span>FTS</span></div>
+        {checkedItems.length > 0 && <div className="bulk-mail-toolbar">
+          <button className="icon-button" title="Clear selection" onClick={() => setCheckedKeys(new Set())}><X size={16} /></button>
+          <strong>{checkedItems.length.toLocaleString()} selected</strong>
+          <span className="toolbar-divider" />
+          <button className="button ghost small" onClick={() => void applyBulkAction('archive')}><Archive size={15} /> Archive</button>
+          <button className="button ghost small" onClick={() => void applyBulkAction('read')}><MailOpen size={15} /> Read</button>
+          <button className="button ghost small" onClick={() => void applyBulkAction('star')}><Star size={15} /> Star</button>
+          <button className="button ghost small" onClick={() => setOrganizeMode('move')}><FolderInput size={15} /> Move</button>
+          <button className="button ghost small" onClick={() => setOrganizeMode('label')}><Tags size={15} /> Labels</button>
+          <span className="spacer" />
+          <button className="button danger-subtle small" onClick={() => void applyBulkAction('trash')}><Trash2 size={15} /> Trash</button>
+        </div>}
         {activeProgress.map((item) => {
           const account = accounts.find((entry) => entry.id === item.accountId)
           const percent = item.total ? Math.round(item.completed / item.total * 100) : 0
@@ -416,8 +517,22 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
           { label: 'Check for mail', icon: RefreshCw, separatorBefore: true, disabled: syncUnavailable, action: () => startSync(accountId === 'all' ? undefined : accountId) },
           { label: 'Mark visible conversations as read', icon: MailOpen, disabled: !page.items.some((item) => item.unread), action: markVisibleRead }
         ], 'Conversation list')}>
-          {page.items.map((item) => (
-            <button key={`${item.accountId}:${item.id}`} className={`message-row ${selectedKey === `${item.accountId}:${item.id}` ? 'selected' : ''} ${item.unread ? 'unread' : ''}`} onClick={() => openSummary(item)} onDoubleClick={() => openMessageWindow(item)} onContextMenu={(event) => showSummaryMenu(event, item)}>
+          {visibleLocalDrafts.map((draft) => <button key={`draft:${draft.id}`} className={`message-row local-draft-row ${draft.status === 'failed' ? 'draft-failed' : ''}`} onClick={() => setCompose({ draft })} onDoubleClick={() => setCompose({ draft })} onContextMenu={(event) => showContextMenu(event, [
+            { label: 'Edit draft', icon: Edit3, action: () => setCompose({ draft }) },
+            { label: 'Discard draft', icon: Trash2, separatorBefore: true, danger: true, action: () => discardLocalDraft(draft) }
+          ], draft.subject || 'Draft')}>
+            <span className="avatar draft-avatar"><FileText size={16} /></span>
+            <span className="message-copy">
+              <span className="message-meta"><strong>Draft · {draft.to.join(', ') || 'No recipients'}</strong><time>{shortDate(draft.updatedAt)}</time></span>
+              <span className="message-subject">{draft.subject || '(No subject)'}</span>
+              <span className="message-preview">{draft.error || draft.text || 'Empty draft'}</span>
+              <span className="message-tags"><em>{draft.status === 'failed' ? 'Save failed' : draft.status === 'local' ? 'Waiting for connection' : 'Editable draft'}</em>{draft.attachmentPaths.length > 0 && <Paperclip size={13} />}</span>
+            </span>
+          </button>)}
+          {page.items.length > 0 && <button className="select-visible-mail" onClick={toggleAllVisible}><CheckSquare size={14} /> {page.items.every((item) => checkedKeys.has(`${item.accountId}:${item.id}`)) ? 'Clear visible selection' : 'Select visible conversations'}</button>}
+          {page.items.map((item, index) => (
+            <div key={`${item.accountId}:${item.id}`} role="button" tabIndex={0} className={`message-row ${selectedKey === `${item.accountId}:${item.id}` ? 'selected' : ''} ${checkedKeys.has(`${item.accountId}:${item.id}`) ? 'checked' : ''} ${item.unread ? 'unread' : ''}`} onClick={() => openSummary(item)} onDoubleClick={() => openMessageWindow(item)} onKeyDown={(event) => { if (event.key === 'Enter') openSummary(item) }} onContextMenu={(event) => showSummaryMenu(event, item)}>
+              <input className="message-select" type="checkbox" aria-label={`Select ${item.subject}`} checked={checkedKeys.has(`${item.accountId}:${item.id}`)} readOnly onClick={(event) => { event.stopPropagation(); toggleChecked(item, index, event.shiftKey) }} />
               <span className="avatar" style={{ background: accounts.find((account) => account.id === item.accountId)?.color }}>{item.participants[0]?.split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || '?'}</span>
               <span className="message-copy">
                 <span className="message-meta"><strong>{item.participants.join(', ') || 'Unknown sender'}</strong><time>{shortDate(item.lastDate)}</time></span>
@@ -426,9 +541,9 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
                 <span className="message-tags">{item.messageCount > 1 && <em>{item.messageCount} messages</em>}{item.hasAttachments && <Paperclip size={13} />}</span>
               </span>
               <span className="row-flags">{item.starred && <Star size={13} fill="currentColor" />}</span>
-            </button>
+            </div>
           ))}
-          {!loading && !page.items.length && <div className="empty-state"><Search size={28} /><h3>No conversations here</h3><p>Try another mailbox or search.</p></div>}
+          {!loading && !page.items.length && !visibleLocalDrafts.length && <div className="empty-state"><Search size={28} /><h3>No conversations here</h3><p>Try another mailbox or search.</p></div>}
           {loading && <div className="empty-state"><LoaderCircle className="spin" size={28} /><p>Loading local mail…</p></div>}
         </div>
         <footer className="gmail-pagination"><button className="button ghost small" disabled={!history.length} onClick={() => { const prior = history.slice(0, -1); setHistory(prior); void loadPage(prior.at(-1)) }}>Previous</button><button className="button ghost small" disabled={!page.nextCursor} onClick={() => { setHistory((items) => [...items, page.nextCursor]); void loadPage(page.nextCursor) }}>Next</button></footer>
@@ -457,9 +572,11 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
         </> : <div className="empty-state grow">{accounts.some((item) => item.status === 'syncing') ? <><LoaderCircle className="spin" size={34} /><h3>Downloading your mailbox</h3><p>Conversations appear here as soon as they are available.</p></> : <><Inbox size={34} /><h3>Select a conversation</h3><p>Choose a conversation to read it here.</p></>}</div>}
       </section>
 
-      {pending && <div className="undo-toast"><span>Mail change queued</span><button onClick={() => void undo()}><Undo2 size={15} /> Undo</button><button onClick={() => setPending(undefined)}>Dismiss</button></div>}
-      {compose && <GmailComposeModal accounts={accounts.filter((account) => !account.archived)} replyTo={compose.reply} forward={compose.forward} onClose={() => setCompose(undefined)} onSent={() => void loadPage()} onToast={onToast} />}
+      {pending.length > 0 && <div className="undo-toast"><span>{pending.length > 1 ? `${pending.length} mail changes queued` : 'Mail change queued'}</span><button onClick={() => void undo()}><Undo2 size={15} /> Undo</button><button onClick={() => setPending([])}>Dismiss</button></div>}
+      {compose && <GmailComposeModal accounts={accounts.filter((account) => !account.archived)} draft={compose.draft} replyTo={compose.reply} forward={compose.forward} onClose={() => { setCompose(undefined); if (folder === 'drafts') void loadDrafts() }} onSent={() => { void loadPage(); void loadDrafts() }} onToast={onToast} />}
       {accountSetup && <MailAccountSetupModal onClose={() => setAccountSetup(false)} onConnected={accountConnected} onToast={onToast} />}
+      {settingsAccount && <MailAccountSettingsModal account={settingsAccount} onSaved={(updated) => { setAccounts((items) => items.map((item) => item.id === updated.id ? updated : item)); setSettingsAccount(updated) }} onClose={() => setSettingsAccount(undefined)} onToast={onToast} />}
+      {organizeMode && <MailOrganizeModal mode={organizeMode} items={checkedItems} accounts={accounts} labels={labels} onApply={applyOrganizeRequests} onClose={() => setOrganizeMode(undefined)} />}
     </div>
   )
 }

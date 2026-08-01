@@ -6,13 +6,17 @@ import type {
   GmailAccountSummary,
   GmailAttachment,
   GmailDraftInput,
+  GmailDraftRecord,
   GmailDraftResult,
   GmailLabel,
   GmailMessageDetail,
   GmailThreadDetail,
   MailActionKind,
+  MailAccountSettingsInput,
+  MailDiagnosticHealth,
   MailPage,
   MailQuery,
+  MailRecipientSuggestion,
   MailStorageStats,
   PendingOperation,
   SyncProgress
@@ -47,6 +51,10 @@ interface DatabaseRow {
 }
 
 const nowIso = () => new Date().toISOString()
+const addressParts = (value: string) => {
+  const match = value.trim().match(/^(.*?)\s*<([^<>]+)>$/)
+  return { name: match?.[1]?.trim().replace(/^"|"$/g, '') || undefined, email: (match?.[2] ?? value).trim().toLowerCase() }
+}
 const json = <T>(value: string | null | undefined, fallback: T): T => {
   try {
     return value ? JSON.parse(value) as T : fallback
@@ -114,6 +122,9 @@ export class MailDatabase {
         history_id TEXT,
         last_sync_at TEXT,
         error TEXT,
+        signature TEXT NOT NULL DEFAULT '',
+        notifications INTEGER NOT NULL DEFAULT 1,
+        sync_enabled INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -200,6 +211,15 @@ export class MailDatabase {
       );
       CREATE INDEX IF NOT EXISTS gmail_sync_pending ON gmail_sync_items(account_id, status, message_id);
 
+      CREATE TABLE IF NOT EXISTS gmail_recipients (
+        account_id TEXT NOT NULL REFERENCES gmail_accounts(id) ON DELETE CASCADE,
+        email TEXT NOT NULL,
+        name TEXT,
+        last_used_at TEXT NOT NULL,
+        PRIMARY KEY (account_id, email)
+      );
+      CREATE INDEX IF NOT EXISTS gmail_recipients_recent ON gmail_recipients(last_used_at DESC);
+
       CREATE TABLE IF NOT EXISTS gmail_sync_state (
         account_id TEXT PRIMARY KEY REFERENCES gmail_accounts(id) ON DELETE CASCADE,
         phase TEXT NOT NULL DEFAULT 'idle',
@@ -213,6 +233,7 @@ export class MailDatabase {
         paused_reason TEXT,
         message TEXT,
         provider_state_json TEXT NOT NULL DEFAULT '{}'
+        ,inventory_complete INTEGER NOT NULL DEFAULT 0
       );
 
       CREATE TABLE IF NOT EXISTS gmail_operations (
@@ -229,6 +250,7 @@ export class MailDatabase {
         error TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+        ,before_labels_json TEXT NOT NULL DEFAULT '{}'
       );
       CREATE INDEX IF NOT EXISTS gmail_operations_due ON gmail_operations(status, execute_after);
 
@@ -270,12 +292,19 @@ export class MailDatabase {
     if (!messageColumns.has('remote_uid')) this.db.exec('ALTER TABLE gmail_messages ADD COLUMN remote_uid TEXT')
     const accountColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_accounts)').all() as { name: string }[]).map((column) => column.name))
     if (!accountColumns.has('provider')) this.db.exec(`ALTER TABLE gmail_accounts ADD COLUMN provider TEXT NOT NULL DEFAULT 'gmail'`)
+    if (!accountColumns.has('signature')) this.db.exec(`ALTER TABLE gmail_accounts ADD COLUMN signature TEXT NOT NULL DEFAULT ''`)
+    if (!accountColumns.has('notifications')) this.db.exec(`ALTER TABLE gmail_accounts ADD COLUMN notifications INTEGER NOT NULL DEFAULT 1`)
+    if (!accountColumns.has('sync_enabled')) this.db.exec(`ALTER TABLE gmail_accounts ADD COLUMN sync_enabled INTEGER NOT NULL DEFAULT 1`)
     const inventoryColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_sync_items)').all() as { name: string }[]).map((column) => column.name))
     if (!inventoryColumns.has('remote_folder_id')) this.db.exec('ALTER TABLE gmail_sync_items ADD COLUMN remote_folder_id TEXT')
     if (!inventoryColumns.has('remote_uid')) this.db.exec('ALTER TABLE gmail_sync_items ADD COLUMN remote_uid TEXT')
     const syncColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_sync_state)').all() as { name: string }[]).map((column) => column.name))
     if (!syncColumns.has('provider_state_json')) this.db.exec(`ALTER TABLE gmail_sync_state ADD COLUMN provider_state_json TEXT NOT NULL DEFAULT '{}'`)
-    this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(3, ?)').run(nowIso())
+    if (!syncColumns.has('inventory_complete')) this.db.exec(`ALTER TABLE gmail_sync_state ADD COLUMN inventory_complete INTEGER NOT NULL DEFAULT 0`)
+    const operationColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_operations)').all() as { name: string }[]).map((column) => column.name))
+    if (!operationColumns.has('before_labels_json')) this.db.exec(`ALTER TABLE gmail_operations ADD COLUMN before_labels_json TEXT NOT NULL DEFAULT '{}'`)
+    this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(4, ?)').run(nowIso())
+    this.recoverInterruptedWork()
   }
 
   listAccounts(): GmailAccountSummary[] {
@@ -289,18 +318,21 @@ export class MailDatabase {
       status: String(row.status) as GmailAccountSummary['status'],
       archived: Boolean(row.archived),
       lastSyncAt: row.last_sync_at ? String(row.last_sync_at) : undefined,
-      error: row.error ? String(row.error) : undefined
+      error: row.error ? String(row.error) : undefined,
+      signature: String(row.signature ?? ''),
+      notifications: Boolean(row.notifications),
+      syncEnabled: Boolean(row.sync_enabled)
     }))
   }
 
   upsertAccount(account: GmailAccountSummary) {
     const timestamp = nowIso()
     this.stmt(`
-      INSERT INTO gmail_accounts(id,provider,email,display_name,avatar_url,color,status,archived,last_sync_at,error,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO gmail_accounts(id,provider,email,display_name,avatar_url,color,status,archived,last_sync_at,error,signature,notifications,sync_enabled,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET provider=excluded.provider,email=excluded.email,display_name=excluded.display_name,avatar_url=excluded.avatar_url,
         color=excluded.color,status=excluded.status,archived=excluded.archived,error=excluded.error,updated_at=excluded.updated_at
-    `).run(account.id, account.provider, account.email, account.displayName, account.avatarUrl ?? null, account.color, account.status, account.archived ? 1 : 0, account.lastSyncAt ?? null, account.error ?? null, timestamp, timestamp)
+    `).run(account.id, account.provider, account.email, account.displayName, account.avatarUrl ?? null, account.color, account.status, account.archived ? 1 : 0, account.lastSyncAt ?? null, account.error ?? null, account.signature, account.notifications ? 1 : 0, account.syncEnabled ? 1 : 0, timestamp, timestamp)
     this.stmt(`INSERT OR IGNORE INTO gmail_sync_state(account_id,phase,updated_at) VALUES(?,'idle',?)`).run(account.id, timestamp)
   }
 
@@ -310,6 +342,19 @@ export class MailDatabase {
 
   setAccountStatus(accountId: string, status: GmailAccountSummary['status'], error?: string) {
     this.stmt('UPDATE gmail_accounts SET status=?,error=?,updated_at=? WHERE id=?').run(status, error ?? null, nowIso(), accountId)
+  }
+
+  updateAccountSettings(input: MailAccountSettingsInput) {
+    if (!this.getAccount(input.accountId)) throw new Error('Account not found')
+    this.stmt('UPDATE gmail_accounts SET display_name=?,color=?,signature=?,notifications=?,sync_enabled=?,updated_at=? WHERE id=?')
+      .run(input.displayName.trim(), input.color, input.signature, input.notifications ? 1 : 0, input.syncEnabled ? 1 : 0, nowIso(), input.accountId)
+    return this.getAccount(input.accountId)!
+  }
+
+  resetForFullSync(accountId: string) {
+    this.resetInventory(accountId)
+    this.stmt(`UPDATE gmail_accounts SET history_id=NULL,status='syncing',error=NULL,updated_at=? WHERE id=?`).run(nowIso(), accountId)
+    this.stmt(`UPDATE gmail_sync_state SET provider_state_json='{}',initial_history_id=NULL WHERE account_id=?`).run(accountId)
   }
 
   setAccountHistory(accountId: string, historyId: string, completedSync = false) {
@@ -430,9 +475,41 @@ export class MailDatabase {
   resetInventory(accountId: string) {
     this.transaction(() => {
       this.stmt('DELETE FROM gmail_sync_items WHERE account_id=?').run(accountId)
-      this.stmt(`UPDATE gmail_sync_state SET phase='inventory',completed=0,total=0,transferred_bytes=0,page_token=NULL,started_at=?,updated_at=?,message=NULL WHERE account_id=?`)
+      this.stmt(`UPDATE gmail_sync_state SET phase='inventory',completed=0,total=0,transferred_bytes=0,page_token=NULL,inventory_complete=0,started_at=?,updated_at=?,message=NULL WHERE account_id=?`)
         .run(nowIso(), nowIso(), accountId)
     })
+  }
+
+  suggestRecipients(query: string, accountIds?: string[]): MailRecipientSuggestion[] {
+    const where: string[] = []
+    const params: string[] = []
+    if (accountIds?.length) {
+      where.push(`account_id IN (${accountIds.map(() => '?').join(',')})`)
+      params.push(...accountIds)
+    }
+    if (query.trim()) {
+      where.push(`(lower(email) LIKE ? ESCAPE '\\' OR lower(COALESCE(name,'')) LIKE ? ESCAPE '\\')`)
+      const term = `%${query.trim().toLowerCase().replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`
+      params.push(term, term)
+    }
+    const sql = `SELECT account_id,email,name FROM gmail_recipients ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY last_used_at DESC LIMIT 12`
+    return (this.db.prepare(sql).all(...params) as DatabaseRow[]).map((row) => ({
+      accountId: String(row.account_id),
+      email: String(row.email),
+      name: row.name ? String(row.name) : undefined
+    }))
+  }
+
+  completeInventory(accountId: string) {
+    this.stmt('UPDATE gmail_sync_state SET inventory_complete=1,page_token=NULL,updated_at=? WHERE account_id=?').run(nowIso(), accountId)
+  }
+
+  retryFailedSyncItems(accountId: string) {
+    this.stmt(`UPDATE gmail_sync_items SET status='pending',attempts=0,error=NULL WHERE account_id=? AND status='failed' AND attempts>=5`).run(accountId)
+  }
+
+  syncFailureCount(accountId: string) {
+    return Number((this.stmt(`SELECT COUNT(*) count FROM gmail_sync_items WHERE account_id=? AND status='failed'`).get(accountId) as DatabaseRow).count)
   }
 
   reconcileInventory(accountId: string) {
@@ -459,6 +536,8 @@ export class MailDatabase {
     const labels = new Set(message.labelIds)
     const syncItem = this.stmt('SELECT status FROM gmail_sync_items WHERE account_id=? AND message_id=?').get(message.accountId, message.id) as DatabaseRow | undefined
     const inventoryCompletion = Boolean(syncItem && syncItem.status !== 'complete')
+    const existing = this.stmt('SELECT thread_id FROM gmail_messages WHERE account_id=? AND id=?').get(message.accountId, message.id) as DatabaseRow | undefined
+    const previousThreadId = existing?.thread_id ? String(existing.thread_id) : undefined
     this.transaction(() => {
       this.stmt(`
         INSERT INTO gmail_threads(account_id,id,subject,participants_json,snippet,last_date,unread,starred,important,trashed,draft,sent,inbox,has_attachments,message_count,label_ids_json)
@@ -483,7 +562,7 @@ export class MailDatabase {
       this.stmt(`
         INSERT INTO gmail_messages(account_id,id,thread_id,history_id,internal_date,from_name,from_email,to_json,cc_json,subject,header_message_id,references_json,snippet,body_text,body_html,label_ids_json,size_estimate,raw_path,remote_folder_id,remote_uid)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(account_id,id) DO UPDATE SET history_id=excluded.history_id,internal_date=excluded.internal_date,
+        ON CONFLICT(account_id,id) DO UPDATE SET thread_id=excluded.thread_id,history_id=excluded.history_id,internal_date=excluded.internal_date,
           from_name=excluded.from_name,from_email=excluded.from_email,to_json=excluded.to_json,cc_json=excluded.cc_json,
           subject=excluded.subject,header_message_id=excluded.header_message_id,references_json=excluded.references_json,
           snippet=excluded.snippet,body_text=excluded.body_text,body_html=excluded.body_html,
@@ -503,11 +582,19 @@ export class MailDatabase {
       this.stmt('DELETE FROM gmail_fts WHERE account_id=? AND message_id=?').run(message.accountId, message.id)
       this.stmt('INSERT INTO gmail_fts(account_id,message_id,thread_id,subject,sender,recipients,body,attachment_names) VALUES(?,?,?,?,?,?,?,?)')
         .run(message.accountId, message.id, message.threadId, message.subject, `${message.fromName} ${message.fromEmail}`, [...message.to, ...message.cc].join(' '), message.text, message.attachments.map((item) => item.filename).join(' '))
+      const upsertRecipient = this.stmt(`INSERT INTO gmail_recipients(account_id,email,name,last_used_at) VALUES(?,?,?,?)
+        ON CONFLICT(account_id,email) DO UPDATE SET name=COALESCE(excluded.name,gmail_recipients.name),last_used_at=MAX(gmail_recipients.last_used_at,excluded.last_used_at)`)
+      const recipients = [{ name: message.fromName || undefined, email: message.fromEmail.toLowerCase() }, ...[...message.to, ...message.cc].map(addressParts)]
+      for (const recipient of recipients) {
+        if (/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(recipient.email)) upsertRecipient.run(message.accountId, recipient.email, recipient.name ?? null, message.internalDate)
+      }
       this.markSyncItem(message.accountId, message.id, 'complete')
       if (inventoryCompletion) {
         this.stmt('UPDATE gmail_sync_state SET completed=completed+1,transferred_bytes=transferred_bytes+?,updated_at=? WHERE account_id=?')
           .run(message.sizeEstimate, nowIso(), message.accountId)
       }
+      this.rebuildThread(message.accountId, message.threadId)
+      if (previousThreadId && previousThreadId !== message.threadId) this.rebuildThread(message.accountId, previousThreadId)
     })
   }
 
@@ -540,10 +627,12 @@ export class MailDatabase {
     return removed
   }
 
-  updateMessageLabels(accountId: string, messageId: string, labelIds: string[], historyId: string) {
+  updateMessageLabels(accountId: string, messageId: string, labelIds: string[], historyId: string, location?: { remoteFolderId: string; remoteUid: string }) {
     const row = this.stmt('SELECT thread_id FROM gmail_messages WHERE account_id=? AND id=?').get(accountId, messageId) as DatabaseRow | undefined
     if (!row) return
-    this.stmt('UPDATE gmail_messages SET label_ids_json=?,history_id=? WHERE account_id=? AND id=?').run(JSON.stringify(labelIds), historyId, accountId, messageId)
+    if (location) this.stmt('UPDATE gmail_messages SET label_ids_json=?,history_id=?,remote_folder_id=?,remote_uid=? WHERE account_id=? AND id=?')
+      .run(JSON.stringify(labelIds), historyId, location.remoteFolderId, location.remoteUid, accountId, messageId)
+    else this.stmt('UPDATE gmail_messages SET label_ids_json=?,history_id=? WHERE account_id=? AND id=?').run(JSON.stringify(labelIds), historyId, accountId, messageId)
     this.rebuildThread(accountId, String(row.thread_id))
   }
 
@@ -565,10 +654,11 @@ export class MailDatabase {
       this.stmt('DELETE FROM gmail_threads WHERE account_id=? AND id=?').run(accountId, threadId)
       return
     }
-    const newest = rows.at(-1)!
-    const labelSets = rows.map((row) => new Set(json<string[]>(String(row.label_ids_json), [])))
-    const participants = Array.from(new Set(rows.map((row) => String(row.from_name || row.from_email)).filter(Boolean)))
-    const allLabels = Array.from(new Set(rows.flatMap((row) => json<string[]>(String(row.label_ids_json), []))))
+    const logical = this.logicalMessages(rows)
+    const newest = logical.at(-1)!.row
+    const labelSets = logical.map((message) => message.labels)
+    const participants = Array.from(new Set(logical.map(({ row }) => String(row.from_name || row.from_email)).filter(Boolean)))
+    const allLabels = Array.from(new Set(logical.flatMap((message) => [...message.labels])))
     const attachments = Number((this.stmt('SELECT COUNT(*) count FROM gmail_attachments a JOIN gmail_messages m ON m.account_id=a.account_id AND m.id=a.message_id WHERE m.account_id=? AND m.thread_id=?').get(accountId, threadId) as DatabaseRow).count)
     this.stmt(`
       UPDATE gmail_threads SET subject=?,participants_json=?,snippet=?,last_date=?,unread=?,starred=?,important=?,trashed=?,draft=?,sent=?,inbox=?,has_attachments=?,message_count=?,label_ids_json=?
@@ -578,8 +668,23 @@ export class MailDatabase {
       labelSets.some((set) => set.has('UNREAD')) ? 1 : 0, labelSets.some((set) => set.has('STARRED')) ? 1 : 0,
       labelSets.some((set) => set.has('IMPORTANT')) ? 1 : 0, labelSets.every((set) => set.has('TRASH')) ? 1 : 0,
       labelSets.some((set) => set.has('DRAFT')) ? 1 : 0, labelSets.some((set) => set.has('SENT')) ? 1 : 0,
-      labelSets.some((set) => set.has('INBOX')) ? 1 : 0, attachments ? 1 : 0, rows.length, JSON.stringify(allLabels), accountId, threadId
+      labelSets.some((set) => set.has('INBOX')) ? 1 : 0, attachments ? 1 : 0, logical.length, JSON.stringify(allLabels), accountId, threadId
     )
+  }
+
+  private logicalMessages(rows: DatabaseRow[]) {
+    const grouped = new Map<string, { row: DatabaseRow; labels: Set<string> }>()
+    for (const row of rows) {
+      const header = row.header_message_id ? String(row.header_message_id).trim().toLowerCase() : ''
+      const key = header || `local:${String(row.id)}`
+      const existing = grouped.get(key)
+      if (!existing) grouped.set(key, { row, labels: new Set(json<string[]>(String(row.label_ids_json), [])) })
+      else {
+        for (const label of json<string[]>(String(row.label_ids_json), [])) existing.labels.add(label)
+        if (String(row.internal_date) > String(existing.row.internal_date)) existing.row = row
+      }
+    }
+    return [...grouped.values()].sort((left, right) => String(left.row.internal_date).localeCompare(String(right.row.internal_date)))
   }
 
   listThreads(query: MailQuery): MailPage {
@@ -648,7 +753,7 @@ export class MailDatabase {
   getThread(accountId: string, threadId: string): GmailThreadDetail {
     const rows = this.stmt('SELECT * FROM gmail_messages WHERE account_id=? AND thread_id=? ORDER BY internal_date').all(accountId, threadId) as DatabaseRow[]
     if (!rows.length) throw new Error('Thread not found')
-    const messages: GmailMessageDetail[] = rows.map((row) => ({
+    const messages: GmailMessageDetail[] = this.logicalMessages(rows).map(({ row, labels }) => ({
       accountId,
       id: String(row.id),
       threadId,
@@ -663,7 +768,7 @@ export class MailDatabase {
       text: String(row.body_text),
       html: String(row.body_html),
       sanitizedHtml: '',
-      labelIds: json<string[]>(String(row.label_ids_json), []),
+      labelIds: [...labels],
       attachments: (this.stmt('SELECT * FROM gmail_attachments WHERE account_id=? AND message_id=? ORDER BY filename').all(accountId, String(row.id)) as DatabaseRow[]).map((item) => ({
         id: String(item.id),
         messageId: String(row.id),
@@ -687,6 +792,7 @@ export class MailDatabase {
     if (action === 'unimportant') return { add: [] as string[], remove: ['IMPORTANT'] }
     if (action === 'label') return { add: labelId ? [labelId] : [], remove: [] as string[] }
     if (action === 'unlabel') return { add: [] as string[], remove: labelId ? [labelId] : [] }
+    if (action === 'move') return { add: labelId ? [labelId] : [], remove: [] as string[] }
     return { add: [] as string[], remove: [] as string[] }
   }
 
@@ -694,22 +800,41 @@ export class MailDatabase {
     const inverses: Record<MailActionKind, MailActionKind> = {
       archive: 'unarchive', unarchive: 'archive', read: 'unread', unread: 'read',
       star: 'unstar', unstar: 'star', important: 'unimportant', unimportant: 'important',
-      trash: 'untrash', untrash: 'trash', label: 'unlabel', unlabel: 'label'
+      trash: 'untrash', untrash: 'trash', label: 'unlabel', unlabel: 'label', move: 'move'
     }
     return inverses[action]
   }
 
   applyLocalAction(input: ApplyMailActionInput, operationId = crypto.randomUUID(), delayMs = 10_000): PendingOperation {
+    if (!this.getAccount(input.accountId)) throw new Error('Account not found')
+    if (!input.threadIds.length) throw new Error('Select at least one conversation')
+    if ((input.action === 'label' || input.action === 'unlabel' || input.action === 'move') && !input.labelId) throw new Error(input.action === 'move' ? 'Choose a destination' : 'Choose a label')
+    const provider = this.getAccount(input.accountId)!.provider
+    const destinationLabel = input.labelId ? this.stmt('SELECT name FROM gmail_labels WHERE account_id=? AND id=?').get(input.accountId, input.labelId) as DatabaseRow | undefined : undefined
     const created = nowIso()
     const undoUntil = new Date(Date.now() + delayMs).toISOString()
     const { add, remove } = this.actionLabels(input.action, input.labelId)
+    const beforeLabels: Record<string, string[]> = {}
     this.transaction(() => {
       for (const threadId of input.threadIds) {
         const messageRows = this.stmt('SELECT id,label_ids_json FROM gmail_messages WHERE account_id=? AND thread_id=?').all(input.accountId, threadId) as DatabaseRow[]
+        if (!messageRows.length) throw new Error(`Conversation ${threadId} was not found`)
         for (const row of messageRows) {
-          const labels = new Set(json<string[]>(String(row.label_ids_json), []))
+          const original = json<string[]>(String(row.label_ids_json), [])
+          beforeLabels[String(row.id)] = original
+          const labels = new Set(original)
           if (input.action === 'trash') labels.add('TRASH')
           else if (input.action === 'untrash') labels.delete('TRASH')
+          else if (input.action === 'move' && input.labelId) {
+            if (provider !== 'gmail') for (const label of [...labels]) if (label.startsWith('folder:')) labels.delete(label)
+            for (const label of ['INBOX', 'TRASH', 'SPAM', 'ARCHIVE']) labels.delete(label)
+            labels.add(input.labelId)
+            const destination = String(destinationLabel?.name ?? input.labelId).toLowerCase()
+            if (input.labelId === 'INBOX' || destination === 'inbox') labels.add('INBOX')
+            else if (input.labelId === 'TRASH' || /trash|deleted/.test(destination)) labels.add('TRASH')
+            else if (input.labelId === 'SPAM' || /spam|junk/.test(destination)) labels.add('SPAM')
+            else if (input.labelId === 'ARCHIVE' || destination.includes('archive')) labels.add('ARCHIVE')
+          }
           else {
             add.forEach((label) => labels.add(label))
             remove.forEach((label) => labels.delete(label))
@@ -719,9 +844,9 @@ export class MailDatabase {
         this.rebuildThread(input.accountId, threadId)
       }
       this.stmt(`
-        INSERT INTO gmail_operations(id,account_id,thread_ids_json,kind,label_id,inverse_kind,status,execute_after,undo_until,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,'queued',?,?,?,?)
-      `).run(operationId, input.accountId, JSON.stringify(input.threadIds), input.action, input.labelId ?? null, this.inverseAction(input.action), undoUntil, undoUntil, created, created)
+        INSERT INTO gmail_operations(id,account_id,thread_ids_json,kind,label_id,inverse_kind,status,execute_after,undo_until,created_at,updated_at,before_labels_json)
+        VALUES(?,?,?,?,?,?,'queued',?,?,?,?,?)
+      `).run(operationId, input.accountId, JSON.stringify(input.threadIds), input.action, input.labelId ?? null, this.inverseAction(input.action), undoUntil, undoUntil, created, created, JSON.stringify(beforeLabels))
     })
     return { id: operationId, accountId: input.accountId, kind: input.action, status: 'queued', undoUntil }
   }
@@ -737,21 +862,7 @@ export class MailDatabase {
       labelId: row.label_id ? String(row.label_id) : undefined
     }
     if (row.status === 'queued') {
-      this.stmt(`UPDATE gmail_operations SET status='cancelled',updated_at=? WHERE id=?`).run(nowIso(), operationId)
-      const { add, remove } = this.actionLabels(inverse, input.labelId)
-      this.transaction(() => {
-        for (const threadId of input.threadIds) {
-          const messages = this.stmt('SELECT id,label_ids_json FROM gmail_messages WHERE account_id=? AND thread_id=?').all(input.accountId, threadId) as DatabaseRow[]
-          for (const message of messages) {
-            const labels = new Set(json<string[]>(String(message.label_ids_json), []))
-            if (inverse === 'trash') labels.add('TRASH')
-            else if (inverse === 'untrash') labels.delete('TRASH')
-            else { add.forEach((label) => labels.add(label)); remove.forEach((label) => labels.delete(label)) }
-            this.stmt('UPDATE gmail_messages SET label_ids_json=? WHERE account_id=? AND id=?').run(JSON.stringify([...labels]), input.accountId, String(message.id))
-          }
-          this.rebuildThread(input.accountId, threadId)
-        }
-      })
+      this.restoreOperationSnapshot(operationId, 'cancelled')
       return true
     }
     this.applyLocalAction(input, crypto.randomUUID(), 0)
@@ -763,7 +874,37 @@ export class MailDatabase {
   }
 
   updateOperation(id: string, status: PendingOperation['status'], error?: string) {
-    this.stmt('UPDATE gmail_operations SET status=?,attempts=attempts+1,error=?,updated_at=? WHERE id=?').run(status, error ?? null, nowIso(), id)
+    this.stmt(`UPDATE gmail_operations SET status=?,attempts=attempts+CASE WHEN ?='running' THEN 1 ELSE 0 END,error=?,updated_at=? WHERE id=?`).run(status, status, error ?? null, nowIso(), id)
+  }
+
+  rescheduleOperation(id: string, error: string, delayMs: number) {
+    this.stmt(`UPDATE gmail_operations SET status='queued',execute_after=?,error=?,updated_at=? WHERE id=?`).run(new Date(Date.now() + delayMs).toISOString(), error, nowIso(), id)
+  }
+
+  operationAttempts(id: string) {
+    return Number((this.stmt('SELECT attempts FROM gmail_operations WHERE id=?').get(id) as DatabaseRow | undefined)?.attempts ?? 0)
+  }
+
+  restoreOperationSnapshot(id: string, status: 'cancelled' | 'failed', error?: string) {
+    const row = this.stmt('SELECT * FROM gmail_operations WHERE id=?').get(id) as DatabaseRow | undefined
+    if (!row) return false
+    const accountId = String(row.account_id)
+    const threads = json<string[]>(String(row.thread_ids_json), [])
+    const snapshot = json<Record<string, string[]>>(String(row.before_labels_json), {})
+    this.transaction(() => {
+      for (const [messageId, labels] of Object.entries(snapshot)) {
+        this.stmt('UPDATE gmail_messages SET label_ids_json=? WHERE account_id=? AND id=?').run(JSON.stringify(labels), accountId, messageId)
+      }
+      for (const threadId of threads) this.rebuildThread(accountId, threadId)
+      this.stmt('UPDATE gmail_operations SET status=?,error=?,updated_at=? WHERE id=?').run(status, error ?? null, nowIso(), id)
+    })
+    return true
+  }
+
+  recoverInterruptedWork() {
+    const timestamp = nowIso()
+    this.stmt(`UPDATE gmail_operations SET status='queued',execute_after=?,error='Recovered after Aerio closed during the provider request',updated_at=? WHERE status='running'`).run(timestamp, timestamp)
+    this.stmt(`UPDATE gmail_drafts SET status='failed',error='Aerio closed while this draft was being saved or sent. Review it before retrying.',updated_at=? WHERE status='syncing'`).run(timestamp)
   }
 
   saveDraft(input: GmailDraftInput, result: Partial<GmailDraftResult> = {}): GmailDraftResult {
@@ -788,6 +929,58 @@ export class MailDatabase {
 
   getDraft(id: string) {
     return this.stmt('SELECT * FROM gmail_drafts WHERE id=?').get(id) as DatabaseRow | undefined
+  }
+
+  private draftRecord(row: DatabaseRow): GmailDraftRecord {
+    return {
+      id: String(row.id),
+      accountId: String(row.account_id),
+      gmailDraftId: row.gmail_draft_id ? String(row.gmail_draft_id) : undefined,
+      threadId: row.thread_id ? String(row.thread_id) : undefined,
+      inReplyTo: row.in_reply_to ? String(row.in_reply_to) : undefined,
+      references: json<string[]>(String(row.references_json), []),
+      to: json<string[]>(String(row.to_json), []),
+      cc: json<string[]>(String(row.cc_json), []),
+      bcc: json<string[]>(String(row.bcc_json), []),
+      subject: String(row.subject),
+      text: String(row.body_text),
+      html: row.body_html ? String(row.body_html) : undefined,
+      attachmentPaths: json<string[]>(String(row.attachment_paths_json), []),
+      status: String(row.status) as GmailDraftRecord['status'],
+      updatedAt: String(row.updated_at),
+      error: row.error ? String(row.error) : undefined
+    }
+  }
+
+  getDraftRecord(id: string) {
+    const row = this.getDraft(id)
+    return row ? this.draftRecord(row) : undefined
+  }
+
+  listDrafts(accountIds?: string[]) {
+    const where = [`status NOT IN ('sent','discarded','discard-queued')`]
+    const params: string[] = []
+    if (accountIds?.length) {
+      where.push(`account_id IN (${accountIds.map(() => '?').join(',')})`)
+      params.push(...accountIds)
+    }
+    return (this.db.prepare(`SELECT * FROM gmail_drafts WHERE ${where.join(' AND ')} ORDER BY updated_at DESC`).all(...params) as DatabaseRow[]).map((row) => this.draftRecord(row))
+  }
+
+  requestDraftDiscard(id: string): GmailDraftResult {
+    const row = this.getDraft(id)
+    if (!row) throw new Error('Draft not found')
+    const updatedAt = nowIso()
+    this.stmt(`UPDATE gmail_drafts SET status='discard-queued',error=NULL,updated_at=? WHERE id=?`).run(updatedAt, id)
+    return { id, gmailDraftId: row.gmail_draft_id ? String(row.gmail_draft_id) : undefined, status: 'discard-queued', updatedAt }
+  }
+
+  draftsToDiscard() {
+    return this.stmt(`SELECT * FROM gmail_drafts WHERE status='discard-queued' ORDER BY updated_at LIMIT 20`).all() as DatabaseRow[]
+  }
+
+  deleteDraftRecord(id: string) {
+    this.stmt('DELETE FROM gmail_drafts WHERE id=?').run(id)
   }
 
   queuedDrafts() {
@@ -818,6 +1011,40 @@ export class MailDatabase {
       totalBytes: accounts.reduce((sum, row) => sum + Number(row.bytes ?? 0), 0),
       freeBytes,
       accounts: accounts.map((row) => ({ accountId: String(row.account_id), bytes: Number(row.bytes ?? 0), messages: Number(row.messages) }))
+    }
+  }
+
+  diagnosticHealth(): MailDiagnosticHealth {
+    const integrityRow = this.db.prepare('PRAGMA integrity_check').get() as DatabaseRow | undefined
+    const integrityMessage = String(integrityRow?.integrity_check ?? Object.values(integrityRow ?? {})[0] ?? 'unknown')
+    const accounts = this.listAccounts().map((account) => {
+      const count = (sql: string, ...params: string[]) => Number((this.db.prepare(sql).get(...params) as DatabaseRow | undefined)?.count ?? 0)
+      return {
+        accountId: account.id,
+        provider: account.provider,
+        status: account.status,
+        messages: count('SELECT COUNT(*) count FROM gmail_messages WHERE account_id=?', account.id),
+        threads: count('SELECT COUNT(*) count FROM gmail_threads WHERE account_id=?', account.id),
+        pendingDownloads: count(`SELECT COUNT(*) count FROM gmail_sync_items WHERE account_id=? AND status='pending'`, account.id),
+        failedDownloads: count(`SELECT COUNT(*) count FROM gmail_sync_items WHERE account_id=? AND status='failed'`, account.id),
+        queuedOperations: count(`SELECT COUNT(*) count FROM gmail_operations WHERE account_id=? AND status IN ('queued','running')`, account.id),
+        failedOperations: count(`SELECT COUNT(*) count FROM gmail_operations WHERE account_id=? AND status='failed'`, account.id),
+        editableDrafts: count(`SELECT COUNT(*) count FROM gmail_drafts WHERE account_id=? AND status NOT IN ('sent','discarded','discard-queued')`, account.id),
+        failedDrafts: count(`SELECT COUNT(*) count FROM gmail_drafts WHERE account_id=? AND status='failed'`, account.id)
+      }
+    })
+    const orphanedMessages = Number((this.db.prepare(`SELECT COUNT(*) count FROM gmail_messages m LEFT JOIN gmail_threads t ON t.account_id=m.account_id AND t.id=m.thread_id WHERE t.id IS NULL`).get() as DatabaseRow).count)
+    const orphanedAttachments = Number((this.db.prepare(`SELECT COUNT(*) count FROM gmail_attachments a LEFT JOIN gmail_messages m ON m.account_id=a.account_id AND m.id=a.message_id WHERE m.id IS NULL`).get() as DatabaseRow).count)
+    const paths = this.db.prepare('SELECT raw_path FROM gmail_messages').all() as DatabaseRow[]
+    const missingRawFiles = paths.reduce((total, row) => total + (this.rawExists(String(row.raw_path)) ? 0 : 1), 0)
+    return {
+      generatedAt: nowIso(),
+      integrity: integrityMessage === 'ok' ? 'ok' : 'error',
+      integrityMessage,
+      accounts,
+      orphanedMessages,
+      orphanedAttachments,
+      missingRawFiles
     }
   }
 

@@ -20,6 +20,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - run: npm run test:live-matrix
       - run: npm run test:desktop
       - run: npm run package:win
       - uses: actions/upload-artifact@v4

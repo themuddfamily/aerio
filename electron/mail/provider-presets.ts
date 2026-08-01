@@ -11,6 +11,7 @@ export const PROVIDER_PRESETS: MailProviderPreset[] = [
 ]
 
 export function validateImapAccount(input: ImapAccountInput) {
+  if (!input || typeof input !== 'object') throw new Error('Complete every required account and server field')
   if (!['icloud', 'yahoo', 'fastmail', 'imap', 'proton-bridge'].includes(input.provider)) throw new Error('Choose a valid IMAP/SMTP provider')
   const textFields = [input.email, input.username, input.password, input.imapHost, input.smtpHost]
   if (textFields.some((value) => !value?.trim())) throw new Error('Complete every required account and server field')
@@ -18,6 +19,8 @@ export function validateImapAccount(input: ImapAccountInput) {
   if (!/^\S+@\S+\.\S+$/.test(email)) throw new Error('Enter a valid email address')
   if (!Number.isInteger(input.imapPort) || input.imapPort < 1 || input.imapPort > 65_535) throw new Error('Enter a valid IMAP port')
   if (!Number.isInteger(input.smtpPort) || input.smtpPort < 1 || input.smtpPort > 65_535) throw new Error('Enter a valid SMTP port')
+  if (!['tls', 'starttls'].includes(input.imapSecurity) || !['tls', 'starttls'].includes(input.smtpSecurity)) throw new Error('Choose TLS or STARTTLS for each mail server')
+  if (input.allowInvalidCertificates !== undefined && typeof input.allowInvalidCertificates !== 'boolean') throw new Error('Choose a valid certificate policy')
   if (/[:/\\\s]/.test(input.imapHost) || /[:/\\\s]/.test(input.smtpHost)) throw new Error('Server names must be hostnames or IP addresses, without a protocol or port')
   const localBridge = ['127.0.0.1', 'localhost'].includes(input.imapHost.trim().toLowerCase()) && ['127.0.0.1', 'localhost'].includes(input.smtpHost.trim().toLowerCase())
   if (input.allowInvalidCertificates && (input.provider !== 'proton-bridge' || !localBridge)) throw new Error('Invalid TLS certificates are allowed only for a local Proton Bridge connection')

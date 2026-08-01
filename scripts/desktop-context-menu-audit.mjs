@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -14,6 +14,8 @@ let application
 
 function seedRealMailFixture() {
   const database = new MailDatabase(join(profile, 'aerio.sqlite'), join(profile, 'mail'))
+  const rawPath = join(profile, 'context-message-1.eml')
+  writeFileSync(rawPath, 'From: Aerio Test Pilot <pilot@aerio.local>\r\nTo: audit@aerio.local\r\nSubject: Real mail context audit\r\n\r\nContext audit body')
   database.upsertAccount({
     id: 'context-audit-account',
     provider: 'gmail',
@@ -21,7 +23,10 @@ function seedRealMailFixture() {
     displayName: 'Aerio Audit',
     color: '#1d7a62',
     status: 'needs-auth',
-    archived: false
+    archived: false,
+    signature: '',
+    notifications: true,
+    syncEnabled: true
   })
   database.replaceLabels('context-audit-account', [
     { accountId: 'context-audit-account', id: 'RELEASE', name: 'Release', type: 'user', color: '#1d7a62' }
@@ -45,7 +50,7 @@ function seedRealMailFixture() {
     html: '<p>This local message exercises the <strong>production mail workspace</strong> without contacting an email provider.</p>',
     labelIds: ['INBOX', 'STARRED', 'IMPORTANT', 'RELEASE'],
     sizeEstimate: 2048,
-    rawPath: join(profile, 'context-message-1.eml'),
+    rawPath,
     attachments: [{
       id: 'context-attachment-1',
       messageId: 'context-message-1',
@@ -54,6 +59,17 @@ function seedRealMailFixture() {
       size: 128
     }]
   })
+  database.saveDraft({
+    id: 'context-draft-1',
+    accountId: 'context-audit-account',
+    to: ['reader@aerio.local'],
+    cc: [],
+    bcc: [],
+    subject: 'Editable real mail draft',
+    text: 'This draft should reopen without contacting the provider.',
+    html: '<p>This draft should <strong>reopen</strong> without contacting the provider.</p>',
+    attachmentPaths: []
+  }, { status: 'synced' })
   database.close()
 }
 
@@ -303,8 +319,13 @@ try {
 
     const realAccount = page.locator('.gmail-account-row').filter({ hasText: 'audit@aerio.local' })
     await openMenu(realAccount)
-    await expectItems('Open audit@aerio.local', 'New message', 'Check for mail', 'Offline storage', 'Copy email address', 'Disconnect account…')
-    await dismiss()
+    await expectItems('Open audit@aerio.local', 'New message', 'Check for mail', 'Offline storage', 'Account settings…', 'Copy email address', 'Disconnect account…')
+    await menuItem('Account settings…').click()
+    const accountSettings = page.getByRole('dialog', { name: 'Mail account settings' })
+    await accountSettings.waitFor()
+    await accountSettings.getByLabel('Display name').fill('Aerio Audit Updated')
+    await accountSettings.getByRole('button', { name: 'Save changes' }).click()
+    await accountSettings.waitFor({ state: 'hidden' })
 
     await openMenu(page.locator('.real-mail .sidebar-item').filter({ hasText: 'Release' }))
     await expectItems('Open Release', 'New message', 'Check account for mail')
@@ -312,6 +333,19 @@ try {
 
     const realMessage = page.locator('.real-mail .message-row').filter({ hasText: 'Real mail context audit' })
     await realMessage.waitFor()
+    await realMessage.getByRole('checkbox', { name: 'Select Real mail context audit' }).click()
+    const bulkToolbar = page.locator('.bulk-mail-toolbar')
+    await bulkToolbar.getByText('1 selected', { exact: true }).waitFor()
+    await bulkToolbar.getByRole('button', { name: 'Move' }).click()
+    const moveDialog = page.getByRole('dialog', { name: 'Move conversations' })
+    await moveDialog.waitFor()
+    await moveDialog.getByRole('button', { name: 'Cancel' }).click()
+    await bulkToolbar.getByRole('button', { name: 'Labels' }).click()
+    const labelsDialog = page.getByRole('dialog', { name: 'Manage labels' })
+    await labelsDialog.waitFor()
+    await labelsDialog.getByRole('button', { name: 'Cancel' }).click()
+    await bulkToolbar.getByRole('button', { name: 'Clear selection' }).click()
+    await bulkToolbar.waitFor({ state: 'hidden' })
     const realWindowPromise = application.waitForEvent('window')
     await realMessage.dblclick()
     const realWindow = await realWindowPromise
@@ -339,6 +373,17 @@ try {
     await openMenu(page.locator('.real-mail .attachment-card').filter({ hasText: 'aerio-context-audit.txt' }))
     await expectItems('Open attachment', 'Save as…', 'Copy filename')
     await dismiss()
+
+    await page.locator('.real-mail .context-sidebar .sidebar-item').filter({ hasText: 'Drafts' }).first().click()
+    const savedDraft = page.locator('.real-mail .local-draft-row').filter({ hasText: 'Editable real mail draft' })
+    await savedDraft.waitFor()
+    await savedDraft.dblclick()
+    const editDraft = page.getByRole('dialog', { name: 'Compose mail message' })
+    await editDraft.getByRole('heading', { name: 'Edit draft' }).waitFor()
+    assert.equal(await editDraft.getByPlaceholder('name@example.com').inputValue(), 'reader@aerio.local')
+    await editDraft.getByRole('button', { name: 'Close' }).click()
+    await editDraft.waitFor({ state: 'hidden' })
+    await page.locator('.real-mail .context-sidebar .sidebar-item').filter({ hasText: 'Inbox' }).first().click()
   })
 
   await step('workspace and theme controls expose direct choices', async () => {
@@ -350,6 +395,12 @@ try {
     await expectItems('Open settings')
     assert.doesNotMatch(await popup.innerText(), /Open profile/)
     await dismiss()
+
+    await page.getByRole('button', { name: 'Settings' }).click()
+    const settings = page.getByRole('dialog', { name: 'Aerio settings' })
+    await settings.getByRole('button', { name: 'Check mail storage' }).click()
+    await settings.getByText('Mail storage is healthy.').waitFor()
+    await settings.getByRole('button', { name: 'Close' }).click()
 
     await openMenu(page.getByRole('button', { name: /Profile:/ }))
     await expectItems('Open profile')
@@ -368,5 +419,5 @@ try {
   console.log('Desktop context-menu audit passed.')
 } finally {
   if (application) await application.close().catch(() => undefined)
-  rmSync(profile, { recursive: true, force: true })
+  rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 }
