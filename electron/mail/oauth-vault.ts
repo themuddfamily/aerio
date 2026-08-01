@@ -10,6 +10,7 @@ import {
   type BuiltInOAuthClients,
   type DesktopOAuthConfig
 } from './oauth-config'
+import { sendOAuthCallbackPage } from './oauth-callback-page'
 
 interface StoredOAuthData {
   googleConfig?: DesktopOAuthConfig
@@ -124,23 +125,22 @@ export class OAuthVault {
       const server = createServer((request, response) => {
         const url = new URL(request.url ?? '/', 'http://127.0.0.1')
         if (url.pathname !== '/oauth/callback') {
-          response.writeHead(404).end('Not found')
+          sendOAuthCallbackPage(response, 404, { kind: 'not-found' })
           return
         }
         if (url.searchParams.get('state') !== state) {
-          response.writeHead(400).end('Invalid OAuth state. You can close this tab.')
+          sendOAuthCallbackPage(response, 400, { kind: 'invalid-state', provider: 'Google' })
           rejectCode?.(new Error('Google returned an invalid OAuth state'))
           return
         }
         const error = url.searchParams.get('error')
         const returnedCode = url.searchParams.get('code')
         if (error || !returnedCode) {
-          response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Aerio was not authorized. You can close this tab.')
+          sendOAuthCallbackPage(response, 400, { kind: 'denied', provider: 'Google' })
           rejectCode?.(new Error(error ? `Google sign-in failed: ${error}` : 'Google did not return an authorization code'))
           return
         }
-        response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-          .end('<!doctype html><title>Aerio connected</title><style>body{font:16px system-ui;margin:4rem;max-width:38rem}h1{color:#176b55}</style><h1>Google account connected</h1><p>You can close this tab and return to Aerio.</p>')
+        sendOAuthCallbackPage(response, 200, { kind: 'success', provider: 'Google' })
         settleCode?.(returnedCode)
       })
       server.on('error', (error) => {
@@ -270,20 +270,23 @@ export class OAuthVault {
       const code = new Promise<string>((resolveCode, rejectCode) => { settle = resolveCode; fail = rejectCode })
       const server = createServer((request, response) => {
         const url = new URL(request.url ?? '/', 'http://localhost')
+        if (url.pathname !== '/') {
+          sendOAuthCallbackPage(response, 404, { kind: 'not-found' })
+          return
+        }
         if (url.searchParams.get('state') !== state) {
-          response.writeHead(400).end('Invalid OAuth state. You can close this tab.')
+          sendOAuthCallbackPage(response, 400, { kind: 'invalid-state', provider: 'Microsoft' })
           fail?.(new Error('Microsoft returned an invalid OAuth state'))
           return
         }
         const returnedCode = url.searchParams.get('code')
         const oauthError = url.searchParams.get('error_description') ?? url.searchParams.get('error')
         if (!returnedCode || oauthError) {
-          response.writeHead(400).end('Aerio was not authorized. You can close this tab.')
+          sendOAuthCallbackPage(response, 400, { kind: 'denied', provider: 'Microsoft' })
           fail?.(new Error(oauthError ?? 'Microsoft did not return an authorization code'))
           return
         }
-        response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-          .end('<!doctype html><title>Aerio connected</title><style>body{font:16px system-ui;margin:4rem}h1{color:#176b55}</style><h1>Microsoft account connected</h1><p>You can close this tab and return to Aerio.</p>')
+        sendOAuthCallbackPage(response, 200, { kind: 'success', provider: 'Microsoft' })
         settle?.(returnedCode)
       })
       const timeout = setTimeout(() => { server.close(); fail?.(new Error('Microsoft sign-in timed out after five minutes')) }, 5 * 60_000)
