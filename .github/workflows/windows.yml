@@ -22,7 +22,11 @@ jobs:
       - run: npm test
       - run: npm run test:live-matrix
       - run: npm run test:desktop
-      - run: npm run package:win
+      - name: Package Windows artifacts
+        run: npm run package:win
+        env:
+          AERIO_REQUIRE_BUILTIN_OAUTH: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+          MAIN_VITE_GOOGLE_CLIENT_SECRET: ${{ github.event_name == 'pull_request' && '' || secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
       - uses: actions/upload-artifact@v7
         with:
           name: aerio-windows

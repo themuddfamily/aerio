@@ -19,8 +19,9 @@
     "test:context-menus": "npm run audit:context-menus && node scripts/desktop-context-menu-audit.mjs",
     "test:desktop": "npm run build && npm run audit:buttons && node scripts/desktop-button-audit.mjs && npm run test:context-menus && npm run audit:accessibility",
     "verify:release": "node scripts/verify-release.mjs",
+    "verify:built-oauth": "node scripts/verify-built-oauth.mjs",
     "icons": "node scripts/generate-icons.mjs",
-    "package:win": "npm run verify:release && npm run icons && npm run build && electron-builder --win nsis portable --publish never"
+    "package:win": "npm run verify:release && npm run icons && npm run build && npm run verify:built-oauth && electron-builder --win nsis portable --publish never"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.6",

@@ -10,13 +10,6 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
-    env:
-      AERIO_REQUIRE_SIGNING: '1'
-      AERIO_REQUIRE_BUILTIN_OAUTH: '1'
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-      MAIN_VITE_GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -24,12 +17,26 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run verify:release
+      - name: Verify release configuration
+        run: npm run verify:release
+        env:
+          AERIO_REQUIRE_SIGNING: '1'
+          AERIO_REQUIRE_BUILTIN_OAUTH: '1'
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          MAIN_VITE_GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
       - run: npm test
       - run: npm run test:live-matrix
       - run: npm run test:desktop
       - run: npm run icons
-      - run: npx electron-builder --win nsis portable --publish always --config.forceCodeSigning=true
+      - name: Build and publish signed Windows artifacts
+        run: npm run build && npm run verify:built-oauth && npx electron-builder --win nsis portable --publish always --config.forceCodeSigning=true
+        env:
+          AERIO_REQUIRE_BUILTIN_OAUTH: '1'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          MAIN_VITE_GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
       - uses: actions/upload-artifact@v7
         with:
           name: aerio-windows-${{ github.ref_name }}
