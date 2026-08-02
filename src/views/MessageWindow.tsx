@@ -1,6 +1,7 @@
 import { Copy, Download, Image, Inbox, LoaderCircle, Paperclip } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import TitleBar from '../components/TitleBar'
+import SenderAvatar from '../components/SenderAvatar'
 import { copyText, useContextMenu } from '../components/ContextMenu'
 import { formatFileSize } from '../lib/domain'
 import type { GmailAttachment, GmailMessageDetail, GmailThreadDetail } from '../gmail-types'
@@ -120,7 +121,7 @@ export default function MessageWindow() {
           <article className="message-reader gmail-thread message-window-reader">
             <header><div className="message-window-heading"><h2>{thread.subject}</h2>{!remoteImages && <button className="button ghost small" onClick={() => void loadRemoteImages()}><Image size={15} /> Load remote images</button>}</div></header>
             {thread.messages.map((message) => <section className="gmail-message" key={message.id}>
-              <header className="sender-card"><span className="avatar large">{(message.fromName || message.fromEmail).split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase()}</span><span><strong>{message.fromName || message.fromEmail}</strong><small>{message.fromEmail} · {messageDate(message.date)}</small></span></header>
+              <header className="sender-card"><SenderAvatar email={message.fromEmail} name={message.fromName} large /><span><strong>{message.fromName || message.fromEmail}</strong><small>{message.fromEmail} · {messageDate(message.date)}</small></span></header>
               {message.sanitizedHtml ? <div className="message-body gmail-html" dangerouslySetInnerHTML={{ __html: message.sanitizedHtml }} /> : <div className="message-body gmail-text">{message.text}</div>}
               {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} onContextMenu={(event) => showContextMenu(event, [
                 { label: 'Open attachment', icon: Download, action: () => openAttachment(message, attachment) },

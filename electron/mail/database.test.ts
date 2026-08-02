@@ -76,7 +76,7 @@ describe('MailDatabase', () => {
 
     const inbox = database.listThreads({ folder: 'inbox' })
     expect(inbox.total).toBe(1)
-    expect(inbox.items[0]).toMatchObject({ id: 'thread-1', unread: true, messageCount: 1 })
+    expect(inbox.items[0]).toMatchObject({ id: 'thread-1', senderEmail: 'ada@example.com', unread: true, messageCount: 1 })
     expect(database.listThreads({ folder: 'all', search: 'offline engine' }).items).toHaveLength(1)
 
     const detail = database.getThread('account-1', 'thread-1')
@@ -123,6 +123,7 @@ describe('MailDatabase', () => {
     expect(database.listThreads({ folder: 'all' }).items[0]).toMatchObject({
       subject: 'Re: Aerio launch',
       participants: ['Ada Lovelace', 'Grace Hopper'],
+      senderEmail: 'grace@example.com',
       unread: true,
       messageCount: 2
     })

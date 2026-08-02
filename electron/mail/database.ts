@@ -143,6 +143,7 @@ export class MailDatabase {
         id TEXT NOT NULL,
         subject TEXT NOT NULL,
         participants_json TEXT NOT NULL DEFAULT '[]',
+        sender_email TEXT NOT NULL DEFAULT '',
         snippet TEXT NOT NULL DEFAULT '',
         last_date TEXT NOT NULL,
         unread INTEGER NOT NULL DEFAULT 0,
@@ -290,6 +291,13 @@ export class MailDatabase {
     if (!messageColumns.has('references_json')) this.db.exec(`ALTER TABLE gmail_messages ADD COLUMN references_json TEXT NOT NULL DEFAULT '[]'`)
     if (!messageColumns.has('remote_folder_id')) this.db.exec('ALTER TABLE gmail_messages ADD COLUMN remote_folder_id TEXT')
     if (!messageColumns.has('remote_uid')) this.db.exec('ALTER TABLE gmail_messages ADD COLUMN remote_uid TEXT')
+    const threadColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_threads)').all() as { name: string }[]).map((column) => column.name))
+    if (!threadColumns.has('sender_email')) this.db.exec(`ALTER TABLE gmail_threads ADD COLUMN sender_email TEXT NOT NULL DEFAULT ''`)
+    this.db.exec(`UPDATE gmail_threads SET sender_email=COALESCE((
+      SELECT from_email FROM gmail_messages
+      WHERE account_id=gmail_threads.account_id AND thread_id=gmail_threads.id
+      ORDER BY internal_date DESC LIMIT 1
+    ), '') WHERE sender_email=''`)
     const accountColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_accounts)').all() as { name: string }[]).map((column) => column.name))
     if (!accountColumns.has('provider')) this.db.exec(`ALTER TABLE gmail_accounts ADD COLUMN provider TEXT NOT NULL DEFAULT 'gmail'`)
     if (!accountColumns.has('signature')) this.db.exec(`ALTER TABLE gmail_accounts ADD COLUMN signature TEXT NOT NULL DEFAULT ''`)
@@ -304,6 +312,7 @@ export class MailDatabase {
     const operationColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_operations)').all() as { name: string }[]).map((column) => column.name))
     if (!operationColumns.has('before_labels_json')) this.db.exec(`ALTER TABLE gmail_operations ADD COLUMN before_labels_json TEXT NOT NULL DEFAULT '{}'`)
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(4, ?)').run(nowIso())
+    this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(5, ?)').run(nowIso())
     this.recoverInterruptedWork()
   }
 
@@ -540,10 +549,11 @@ export class MailDatabase {
     const previousThreadId = existing?.thread_id ? String(existing.thread_id) : undefined
     this.transaction(() => {
       this.stmt(`
-        INSERT INTO gmail_threads(account_id,id,subject,participants_json,snippet,last_date,unread,starred,important,trashed,draft,sent,inbox,has_attachments,message_count,label_ids_json)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)
+        INSERT INTO gmail_threads(account_id,id,subject,participants_json,sender_email,snippet,last_date,unread,starred,important,trashed,draft,sent,inbox,has_attachments,message_count,label_ids_json)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)
         ON CONFLICT(account_id,id) DO UPDATE SET
           subject=CASE WHEN excluded.last_date>=gmail_threads.last_date THEN excluded.subject ELSE gmail_threads.subject END,
+          sender_email=CASE WHEN excluded.last_date>=gmail_threads.last_date THEN excluded.sender_email ELSE gmail_threads.sender_email END,
           snippet=CASE WHEN excluded.last_date>=gmail_threads.last_date THEN excluded.snippet ELSE gmail_threads.snippet END,
           last_date=MAX(gmail_threads.last_date,excluded.last_date),
           unread=MAX(gmail_threads.unread,excluded.unread),starred=MAX(gmail_threads.starred,excluded.starred),
@@ -553,7 +563,7 @@ export class MailDatabase {
           message_count=(SELECT COUNT(*)+1 FROM gmail_messages WHERE account_id=excluded.account_id AND thread_id=excluded.id AND id<>?),
           label_ids_json=excluded.label_ids_json
       `).run(
-        message.accountId, message.threadId, message.subject, JSON.stringify([message.fromName || message.fromEmail]),
+        message.accountId, message.threadId, message.subject, JSON.stringify([message.fromName || message.fromEmail]), message.fromEmail,
         message.snippet, message.internalDate, labels.has('UNREAD') ? 1 : 0, labels.has('STARRED') ? 1 : 0,
         labels.has('IMPORTANT') ? 1 : 0, labels.has('TRASH') ? 1 : 0, labels.has('DRAFT') ? 1 : 0,
         labels.has('SENT') ? 1 : 0, labels.has('INBOX') ? 1 : 0, message.attachments.length ? 1 : 0,
@@ -661,10 +671,10 @@ export class MailDatabase {
     const allLabels = Array.from(new Set(logical.flatMap((message) => [...message.labels])))
     const attachments = Number((this.stmt('SELECT COUNT(*) count FROM gmail_attachments a JOIN gmail_messages m ON m.account_id=a.account_id AND m.id=a.message_id WHERE m.account_id=? AND m.thread_id=?').get(accountId, threadId) as DatabaseRow).count)
     this.stmt(`
-      UPDATE gmail_threads SET subject=?,participants_json=?,snippet=?,last_date=?,unread=?,starred=?,important=?,trashed=?,draft=?,sent=?,inbox=?,has_attachments=?,message_count=?,label_ids_json=?
+      UPDATE gmail_threads SET subject=?,participants_json=?,sender_email=?,snippet=?,last_date=?,unread=?,starred=?,important=?,trashed=?,draft=?,sent=?,inbox=?,has_attachments=?,message_count=?,label_ids_json=?
       WHERE account_id=? AND id=?
     `).run(
-      String(newest.subject), JSON.stringify(participants), String(newest.snippet), String(newest.internal_date),
+      String(newest.subject), JSON.stringify(participants), String(newest.from_email), String(newest.snippet), String(newest.internal_date),
       labelSets.some((set) => set.has('UNREAD')) ? 1 : 0, labelSets.some((set) => set.has('STARRED')) ? 1 : 0,
       labelSets.some((set) => set.has('IMPORTANT')) ? 1 : 0, labelSets.every((set) => set.has('TRASH')) ? 1 : 0,
       labelSets.some((set) => set.has('DRAFT')) ? 1 : 0, labelSets.some((set) => set.has('SENT')) ? 1 : 0,
@@ -731,6 +741,7 @@ export class MailDatabase {
       id: String(row.id),
       subject: String(row.subject || '(No subject)'),
       participants: json<string[]>(String(row.participants_json), []),
+      senderEmail: String(row.sender_email || ''),
       snippet: String(row.snippet),
       lastDate: String(row.last_date),
       unread: Boolean(row.unread),

@@ -842,6 +842,26 @@ kbd {
   font-size: 11px;
 }
 
+.sender-domain-avatar {
+  position: relative;
+  overflow: hidden;
+}
+
+.sender-domain-avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 5px;
+  border-radius: inherit;
+  background: #fff;
+  object-fit: contain;
+}
+
+.sender-domain-avatar.large img {
+  padding: 6px;
+}
+
 .avatar.hero-avatar {
   width: 72px;
   height: 72px;

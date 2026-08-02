@@ -41,6 +41,7 @@ import { ProductivityStore } from './productivity/store'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
+import { senderDomainFromEmail } from '../src/lib/sender-avatar'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -74,6 +75,8 @@ let diagnostics: DiagnosticLogger | null = null
 let updates: UpdateManager | null = null
 let productivityStore: ProductivityStore | null = null
 let readyToOpenWindows = false
+const senderFaviconCache = new Map<string, { image: Buffer | null; expiresAt: number }>()
+const senderFaviconRequests = new Map<string, Promise<Buffer | null>>()
 
 function diagnostic(record: Omit<DiagnosticRecord, 'timestamp'>) {
   diagnostics?.log(record)
@@ -365,10 +368,63 @@ function accountColor(accountId: string) {
   return accountColors[Number.parseInt(accountId.slice(0, 2), 16) % accountColors.length]
 }
 
+function cacheSenderFavicon(domain: string, image: Buffer | null) {
+  if (senderFaviconCache.size >= 512) senderFaviconCache.delete(senderFaviconCache.keys().next().value as string)
+  senderFaviconCache.set(domain, {
+    image,
+    expiresAt: Date.now() + (image ? 7 * 24 * 60 * 60_000 : 10 * 60_000)
+  })
+  return image
+}
+
+async function loadSenderFavicon(domain: string) {
+  const cached = senderFaviconCache.get(domain)
+  if (cached && cached.expiresAt > Date.now()) return cached.image
+  senderFaviconCache.delete(domain)
+  const existing = senderFaviconRequests.get(domain)
+  if (existing) return existing
+  const request = (async () => {
+    try {
+      const target = new URL('https://www.google.com/s2/favicons')
+      target.searchParams.set('domain_url', `https://${domain}`)
+      target.searchParams.set('sz', '64')
+      const response = await net.fetch(target.toString(), {
+        credentials: 'omit',
+        headers: { 'User-Agent': 'Aerio sender icon resolver', Accept: 'image/png,image/x-icon,image/*' }
+      })
+      const declaredSize = Number(response.headers.get('content-length') ?? 0)
+      if (!response.ok || declaredSize > 512 * 1024) return cacheSenderFavicon(domain, null)
+      const encoded = Buffer.from(await response.arrayBuffer())
+      if (!encoded.length || encoded.length > 512 * 1024) return cacheSenderFavicon(domain, null)
+      const image = nativeImage.createFromBuffer(encoded)
+      if (image.isEmpty()) return cacheSenderFavicon(domain, null)
+      const normalized = image.resize({ width: 64, height: 64, quality: 'best' }).toPNG()
+      return cacheSenderFavicon(domain, normalized.length ? normalized : null)
+    } catch {
+      return cacheSenderFavicon(domain, null)
+    }
+  })()
+  senderFaviconRequests.set(domain, request)
+  try {
+    return await request
+  } finally {
+    senderFaviconRequests.delete(domain)
+  }
+}
+
 function registerRemoteImageProtocol() {
   protocol.handle('aerio-image', async (request) => {
     try {
       const url = new URL(request.url)
+      if (url.hostname === 'favicon') {
+        const requestedDomain = decodeURIComponent(url.pathname.replace(/^\//, '')).toLowerCase()
+        const domain = senderDomainFromEmail(`sender@${requestedDomain}`)
+        if (!domain || domain !== requestedDomain) return new Response('Blocked', { status: 403 })
+        const image = await loadSenderFavicon(domain)
+        return image
+          ? new Response(Uint8Array.from(image), { headers: { 'Cache-Control': 'public, max-age=604800, immutable', 'Content-Type': 'image/png' } })
+          : new Response('No sender icon', { status: 404 })
+      }
       if (url.hostname !== 'fetch') return new Response('Not found', { status: 404 })
       const encoded = url.pathname.replace(/^\//, '')
       const remote = Buffer.from(encoded, 'base64url').toString('utf8')

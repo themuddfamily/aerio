@@ -8,6 +8,7 @@ import GmailComposeModal from '../components/GmailComposeModal'
 import MailAccountSetupModal from '../components/MailAccountSetupModal'
 import MailAccountSettingsModal from '../components/MailAccountSettingsModal'
 import MailOrganizeModal from '../components/MailOrganizeModal'
+import SenderAvatar from '../components/SenderAvatar'
 import type {
   GmailAccountSummary,
   ApplyMailActionInput,
@@ -546,7 +547,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
           {page.items.map((item, index) => (
             <div key={`${item.accountId}:${item.id}`} role="button" tabIndex={0} aria-current={selectedKey === `${item.accountId}:${item.id}` ? 'true' : undefined} className={`message-row ${selectedKey === `${item.accountId}:${item.id}` ? 'selected' : ''} ${checkedKeys.has(`${item.accountId}:${item.id}`) ? 'checked' : ''} ${item.unread ? 'unread' : ''}`} onClick={() => openSummary(item)} onDoubleClick={() => openMessageWindow(item)} onKeyDown={(event) => { if (event.key === 'Enter' && event.shiftKey) { event.preventDefault(); openMessageWindow(item) } else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openSummary(item) } }} onContextMenu={(event) => showSummaryMenu(event, item)}>
               <input className="message-select" type="checkbox" aria-label={`Select ${item.subject}`} checked={checkedKeys.has(`${item.accountId}:${item.id}`)} readOnly onClick={(event) => { event.stopPropagation(); toggleChecked(item, index, event.shiftKey) }} />
-              <span className="avatar" style={{ background: accounts.find((account) => account.id === item.accountId)?.color }}>{item.participants[0]?.split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || '?'}</span>
+              <SenderAvatar email={item.senderEmail} name={item.participants[0]} fallbackColor={accounts.find((account) => account.id === item.accountId)?.color} />
               <span className="message-copy">
                 <span className="message-meta"><strong>{item.participants.join(', ') || 'Unknown sender'}</strong><time>{shortDate(item.lastDate)}</time></span>
                 <span className="message-subject">{item.subject}</span>
@@ -576,7 +577,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
           <article className="message-reader gmail-thread" onContextMenu={(event) => showSummaryMenu(event, selected)}>
             <header><div className="reader-labels">{selected.labelIds.filter((label) => !['INBOX', 'UNREAD'].includes(label)).slice(0, 5).map((label) => <span key={label}>{label}</span>)}</div><h2>{thread.subject}</h2></header>
             {thread.messages.map((message) => <section className="gmail-message" key={message.id} onContextMenu={(event) => showProviderMessageMenu(event, message)}>
-              <header className="sender-card"><span className="avatar large">{(message.fromName || message.fromEmail).split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase()}</span><span><strong>{message.fromName || message.fromEmail}</strong><small>{message.fromEmail} · {new Date(message.date).toLocaleString()}</small></span><span className="spacer" />{!selectedAccount?.archived && <button className="button ghost small" onClick={() => setCompose({ reply: thread })}><Reply size={15} /> Reply</button>}</header>
+              <header className="sender-card"><SenderAvatar email={message.fromEmail} name={message.fromName} large /><span><strong>{message.fromName || message.fromEmail}</strong><small>{message.fromEmail} · {new Date(message.date).toLocaleString()}</small></span><span className="spacer" />{!selectedAccount?.archived && <button className="button ghost small" onClick={() => setCompose({ reply: thread })}><Reply size={15} /> Reply</button>}</header>
               {message.sanitizedHtml ? <div className="message-body gmail-html" dangerouslySetInnerHTML={{ __html: message.sanitizedHtml }} /> : <div className="message-body gmail-text">{message.text}</div>}
               {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} onContextMenu={(event) => showAttachmentMenu(event, message, attachment)}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{formatFileSize(attachment.size)}</small></span><button className="icon-button" title="Open" onClick={() => void openAttachment(message, attachment)}><Download size={16} /></button><button className="button ghost small" onClick={() => void saveAttachment(message, attachment)}>Save as</button></div>)}</div>}
             </section>)}

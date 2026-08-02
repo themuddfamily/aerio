@@ -88,6 +88,7 @@ export interface MailThreadSummary {
   id: string
   subject: string
   participants: string[]
+  senderEmail: string
   snippet: string
   lastDate: string
   unread: boolean
