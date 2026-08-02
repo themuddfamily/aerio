@@ -43,6 +43,7 @@ import { MicrosoftProductivityConnector } from './productivity/microsoft-connect
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
 import { senderDomainFromEmail } from '../src/lib/sender-avatar'
 import { mailPollingIntervalForWindow } from './mail/polling-policy'
+import { faviconDomainCandidates } from './mail/favicon-domains'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -78,7 +79,8 @@ let updates: UpdateManager | null = null
 let productivityStore: ProductivityStore | null = null
 let readyToOpenWindows = false
 const senderFaviconCache = new Map<string, { image: Buffer | null; expiresAt: number }>()
-const senderFaviconRequests = new Map<string, Promise<Buffer | null>>()
+const senderFaviconCandidateRequests = new Map<string, Promise<Buffer | null>>()
+const senderFaviconResolutionRequests = new Map<string, Promise<Buffer | null>>()
 
 function diagnostic(record: Omit<DiagnosticRecord, 'timestamp'>) {
   diagnostics?.log(record)
@@ -391,11 +393,11 @@ function cacheSenderFavicon(domain: string, image: Buffer | null) {
   return image
 }
 
-async function loadSenderFavicon(domain: string) {
+async function loadSenderFaviconCandidate(domain: string) {
   const cached = senderFaviconCache.get(domain)
   if (cached && cached.expiresAt > Date.now()) return cached.image
   senderFaviconCache.delete(domain)
-  const existing = senderFaviconRequests.get(domain)
+  const existing = senderFaviconCandidateRequests.get(domain)
   if (existing) return existing
   const request = (async () => {
     try {
@@ -418,11 +420,31 @@ async function loadSenderFavicon(domain: string) {
       return cacheSenderFavicon(domain, null)
     }
   })()
-  senderFaviconRequests.set(domain, request)
+  senderFaviconCandidateRequests.set(domain, request)
   try {
     return await request
   } finally {
-    senderFaviconRequests.delete(domain)
+    senderFaviconCandidateRequests.delete(domain)
+  }
+}
+
+async function loadSenderFavicon(domain: string) {
+  const cached = senderFaviconCache.get(domain)
+  if (cached?.image && cached.expiresAt > Date.now()) return cached.image
+  const existing = senderFaviconResolutionRequests.get(domain)
+  if (existing) return existing
+  const request = (async () => {
+    for (const candidate of faviconDomainCandidates(domain)) {
+      const image = await loadSenderFaviconCandidate(candidate)
+      if (image) return cacheSenderFavicon(domain, image)
+    }
+    return cacheSenderFavicon(domain, null)
+  })()
+  senderFaviconResolutionRequests.set(domain, request)
+  try {
+    return await request
+  } finally {
+    senderFaviconResolutionRequests.delete(domain)
   }
 }
 

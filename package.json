@@ -35,7 +35,8 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "sanitize-html": "^2.17.6",
-    "sql.js": "^1.13.0"
+    "sql.js": "^1.13.0",
+    "tldts": "^7.4.10"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",
