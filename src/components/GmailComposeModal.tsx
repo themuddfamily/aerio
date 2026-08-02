@@ -9,6 +9,7 @@ interface GmailComposeModalProps {
   accounts: GmailAccountSummary[]
   draft?: GmailDraftRecord
   replyTo?: GmailThreadDetail
+  replyAll?: boolean
   forward?: boolean
   onClose(): void
   onSent(): void
@@ -34,19 +35,30 @@ const splitAddresses = (value: string) => {
 }
 const fileName = (path: string) => (path.split(/[\\/]/).at(-1) || 'attachment').replace(/^\d+(?:-[a-f0-9]{10})?-/, '')
 const escapeHtml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('\n', '<br>')
+const addressEmail = (value: string) => value.trim().match(/<([^<>]+)>$/)?.[1].trim().toLowerCase() ?? value.trim().toLowerCase()
 
-export default function GmailComposeModal({ accounts, draft, replyTo, forward, onClose, onSent, onToast }: GmailComposeModalProps) {
+export default function GmailComposeModal({ accounts, draft, replyTo, replyAll, forward, onClose, onSent, onToast }: GmailComposeModalProps) {
   const { showContextMenu } = useContextMenu()
   const replyMessage = replyTo?.messages.at(-1)
   const forwardedText = replyTo && forward && replyMessage ? `\n\n---------- Forwarded message ----------\nFrom: ${replyMessage.fromName || replyMessage.fromEmail} <${replyMessage.fromEmail}>\nDate: ${new Date(replyMessage.date).toLocaleString()}\nSubject: ${replyMessage.subject}\n\n${replyMessage.text}` : ''
   const initialAccountId = draft?.accountId ?? replyTo?.accountId ?? accounts[0]?.id ?? ''
+  const ownEmail = accounts.find((account) => account.id === initialAccountId)?.email.toLowerCase()
+  const uniqueRecipients = (values: string[]) => Array.from(new Map(values
+    .filter((value) => value && addressEmail(value) !== ownEmail)
+    .map((value) => [addressEmail(value), value])).values())
+  const replyRecipients = replyAll && replyMessage
+    ? uniqueRecipients([replyMessage.fromEmail, ...replyMessage.to])
+    : replyMessage ? uniqueRecipients(addressEmail(replyMessage.fromEmail) === ownEmail ? replyMessage.to : [replyMessage.fromEmail]) : []
+  const replyCc = replyAll && replyMessage
+    ? uniqueRecipients(replyMessage.cc).filter((value) => !replyRecipients.some((recipient) => addressEmail(recipient) === addressEmail(value)))
+    : []
   const signature = draft ? '' : accounts.find((account) => account.id === initialAccountId)?.signature.trim() ?? ''
   const initialText = draft?.text ?? `${signature ? `\n\n-- \n${signature}` : ''}${forwardedText}`
   const initialHtml = draft?.html ?? `${signature ? `<div><br></div><div>-- <br>${escapeHtml(signature)}</div>` : ''}${forwardedText ? `<div>${escapeHtml(forwardedText)}</div>` : ''}`
   const [accountId, setAccountId] = useState(initialAccountId)
   const [draftId] = useState(() => draft?.id ?? crypto.randomUUID())
-  const [to, setTo] = useState(draft?.to.join(', ') ?? (forward ? '' : replyMessage?.fromEmail ?? ''))
-  const [cc, setCc] = useState(draft?.cc.join(', ') ?? '')
+  const [to, setTo] = useState(draft?.to.join(', ') ?? (forward ? '' : replyRecipients.join(', ')))
+  const [cc, setCc] = useState(draft?.cc.join(', ') ?? replyCc.join(', '))
   const [bcc, setBcc] = useState(draft?.bcc.join(', ') ?? '')
   const [bccVisible, setBccVisible] = useState(Boolean(draft?.bcc.length))
   const [subject, setSubject] = useState(draft?.subject ?? (replyTo ? forward ? (/^fwd:/i.test(replyTo.subject) ? replyTo.subject : `Fwd: ${replyTo.subject}`) : (/^re:/i.test(replyTo.subject) ? replyTo.subject : `Re: ${replyTo.subject}`) : ''))
@@ -243,7 +255,7 @@ export default function GmailComposeModal({ accounts, draft, replyTo, forward, o
       : status === 'sending' ? 'Sending…'
         : status === 'closing' ? 'Saving before closing…'
           : status === 'failed' ? draft?.error ?? 'Draft not saved — retry available' : 'Real mail'
-  const composeTitle = draft ? 'Edit draft' : forward ? 'Forward' : replyTo ? 'Reply' : 'New message'
+  const composeTitle = draft ? 'Edit draft' : forward ? 'Forward' : replyTo ? replyAll ? 'Reply all' : 'Reply' : 'New message'
 
   return (
     <ModalShell

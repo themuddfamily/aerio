@@ -2436,6 +2436,20 @@ kbd {
 
 /* Standalone message windows */
 .message-window-shell { width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--surface); }
+.message-window-toolbar {
+  min-height: 48px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-2) 68%, var(--surface));
+}
+.message-window-toolbar .button { flex: 0 0 auto; white-space: nowrap; }
+.message-window-toolbar .spacer { min-width: 10px; flex: 1 1 auto; }
+.message-window-toolbar .icon-button.active { color: var(--accent-text); background: var(--accent-soft); }
 .message-window-content { min-height: 0; flex: 1; display: flex; overflow: hidden; background: var(--surface); }
 .message-window-reader { width: 100%; padding: clamp(24px, 5vw, 54px); }
 .message-window-reader > header,
