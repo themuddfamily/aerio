@@ -9,6 +9,7 @@ import MailAccountSetupModal from '../components/MailAccountSetupModal'
 import MailAccountSettingsModal from '../components/MailAccountSettingsModal'
 import MailOrganizeModal from '../components/MailOrganizeModal'
 import SenderAvatar from '../components/SenderAvatar'
+import ThreadMessageAccordion from '../components/ThreadMessageAccordion'
 import type {
   GmailAccountSummary,
   ApplyMailActionInput,
@@ -59,6 +60,8 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
   const [search, setSearch] = useState('')
   const [selectedKey, setSelectedKey] = useState('')
   const [thread, setThread] = useState<GmailThreadDetail>()
+  const [expandedMessageId, setExpandedMessageId] = useState<string>()
+  const [threadLoading, setThreadLoading] = useState(false)
   const [sync, setSync] = useState<SyncProgress[]>([])
   const [loading, setLoading] = useState(true)
   const [compose, setCompose] = useState<{ draft?: GmailDraftRecord; reply?: GmailThreadDetail; forward?: boolean }>()
@@ -163,11 +166,25 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
   useEffect(() => {
     if (!selected) {
       setThread(undefined)
+      setExpandedMessageId(undefined)
+      setThreadLoading(false)
       return
     }
+    let cancelled = false
     setRemoteImages(false)
-    void window.aerio.mail.mail.thread(selected.accountId, selected.id).then(setThread).catch((error) => onToast(error instanceof Error ? error.message : 'Conversation could not be opened'))
+    setThread(undefined)
+    setThreadLoading(true)
+    void window.aerio.mail.mail.thread(selected.accountId, selected.id).then((detail) => {
+      if (cancelled) return
+      setThread(detail)
+      setExpandedMessageId(detail.messages.at(-1)?.id)
+    }).catch((error) => {
+      if (!cancelled) onToast(error instanceof Error ? error.message : 'Conversation could not be opened')
+    }).finally(() => {
+      if (!cancelled) setThreadLoading(false)
+    })
     if (selected.unread) void applyAction('read', selected.accountId, [selected.id], false)
+    return () => { cancelled = true }
     // The action helper is intentionally excluded: selecting a row is the trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedKey])
@@ -410,8 +427,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
 
   const showProviderMessageMenu = (event: React.MouseEvent, message: GmailMessageDetail) => {
     if (window.getSelection()?.toString() || (event.target instanceof Element && event.target.closest('a[href], img[src]'))) return
-    const index = thread?.messages.findIndex((item) => item.id === message.id) ?? -1
-    const replyThread = thread && index >= 0 ? { ...thread, messages: thread.messages.slice(0, index + 1) } : thread
+    const replyThread = replyThreadFor(message)
     showContextMenu(event, [
       { label: 'Reply', icon: Reply, disabled: selectedAccount?.archived || !replyThread, action: () => setCompose({ reply: replyThread }) },
       { label: 'Forward', icon: Forward, disabled: selectedAccount?.archived || !replyThread, action: () => setCompose({ reply: replyThread, forward: true }) },
@@ -419,6 +435,11 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
       { label: 'Copy sender address', icon: AtSign, action: () => copyText(message.fromEmail) },
       { label: 'Copy message text', icon: Copy, action: () => copyText(message.text) }
     ], message.subject)
+  }
+
+  const replyThreadFor = (message: GmailMessageDetail) => {
+    const index = thread?.messages.findIndex((item) => item.id === message.id) ?? -1
+    return thread && index >= 0 ? { ...thread, messages: thread.messages.slice(0, index + 1) } : thread
   }
 
   const showAccountMenu = (event: React.MouseEvent, account?: GmailAccountSummary) => {
@@ -575,14 +596,20 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
           </div>
           <article className="message-reader gmail-thread" onContextMenu={(event) => showSummaryMenu(event, selected)}>
             <header><div className="reader-labels">{selected.labelIds.filter((label) => !['INBOX', 'UNREAD'].includes(label)).slice(0, 5).map((label) => <span key={label}>{label}</span>)}</div><h2>{thread.subject}</h2></header>
-            {thread.messages.map((message) => <section className="gmail-message" key={message.id} onContextMenu={(event) => showProviderMessageMenu(event, message)}>
-              <header className="sender-card"><SenderAvatar email={message.fromEmail} name={message.fromName} large /><span><strong>{message.fromName || message.fromEmail}</strong><small>{message.fromEmail} · {new Date(message.date).toLocaleString()}</small></span><span className="spacer" />{!selectedAccount?.archived && <button className="button ghost small" onClick={() => setCompose({ reply: thread })}><Reply size={15} /> Reply</button>}</header>
-              {message.sanitizedHtml ? <div className="message-body gmail-html" dangerouslySetInnerHTML={{ __html: message.sanitizedHtml }} /> : <div className="message-body gmail-text">{message.text}</div>}
+            {thread.messages.map((message) => <ThreadMessageAccordion
+              key={message.id}
+              message={message}
+              expanded={expandedMessageId === message.id}
+              dateLabel={new Date(message.date).toLocaleString()}
+              onToggle={() => setExpandedMessageId((current) => current === message.id ? undefined : message.id)}
+              onReply={selectedAccount?.archived ? undefined : () => setCompose({ reply: replyThreadFor(message) })}
+              onContextMenu={(event) => showProviderMessageMenu(event, message)}
+            >
               {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} onContextMenu={(event) => showAttachmentMenu(event, message, attachment)}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{formatFileSize(attachment.size)}</small></span><button className="icon-button" title="Open" onClick={() => void openAttachment(message, attachment)}><Download size={16} /></button><button className="button ghost small" onClick={() => void saveAttachment(message, attachment)}>Save as</button></div>)}</div>}
-            </section>)}
+            </ThreadMessageAccordion>)}
             {!selectedAccount?.archived && <div className="quick-actions"><button className="button ghost" onClick={() => setCompose({ reply: thread })}><Reply size={16} /> Reply</button></div>}
           </article>
-        </> : <div className="empty-state grow">{accounts.some((item) => item.status === 'syncing') ? <><LoaderCircle className="spin" size={34} /><h3>Downloading your mailbox</h3><p>Conversations appear here as soon as they are available.</p></> : <><Inbox size={34} /><h3>Select a conversation</h3><p>Choose a conversation to read it here.</p></>}</div>}
+        </> : <div className="empty-state grow">{threadLoading ? <><LoaderCircle className="spin" size={34} /><h3>Opening conversation</h3><p>Loading the selected thread from local storage.</p></> : accounts.some((item) => item.status === 'syncing') ? <><LoaderCircle className="spin" size={34} /><h3>Downloading your mailbox</h3><p>Conversations appear here as soon as they are available.</p></> : <><Inbox size={34} /><h3>Select a conversation</h3><p>Choose a conversation to read it here.</p></>}</div>}
       </section>
 
       {pending.length > 0 && <div className="undo-toast"><span>{pending.length > 1 ? `${pending.length} mail changes queued` : 'Mail change queued'}</span><button onClick={() => void undo()}><Undo2 size={15} /> Undo</button><button onClick={() => setPending([])}>Dismiss</button></div>}

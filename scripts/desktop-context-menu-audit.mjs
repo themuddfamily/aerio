@@ -16,7 +16,9 @@ let application
 function seedRealMailFixture() {
   const database = new MailDatabase(join(profile, 'aerio.sqlite'), join(profile, 'mail'))
   const rawPath = join(profile, 'context-message-1.eml')
+  const earlierRawPath = join(profile, 'context-message-0.eml')
   writeFileSync(rawPath, 'From: Aerio Test Pilot <pilot@aerio.local>\r\nTo: audit@aerio.local\r\nSubject: Real mail context audit\r\n\r\nContext audit body')
+  writeFileSync(earlierRawPath, 'From: Earlier Sender <earlier@aerio.local>\r\nTo: audit@aerio.local\r\nSubject: Real mail context audit\r\n\r\nEarlier collapsed reply')
   database.upsertAccount({
     id: 'context-audit-account',
     provider: 'gmail',
@@ -32,7 +34,31 @@ function seedRealMailFixture() {
   database.replaceLabels('context-audit-account', [
     { accountId: 'context-audit-account', id: 'RELEASE', name: 'Release', type: 'user', color: '#1d7a62' }
   ])
-  database.addInventory('context-audit-account', [{ id: 'context-message-1', threadId: 'context-thread-1' }])
+  database.addInventory('context-audit-account', [
+    { id: 'context-message-0', threadId: 'context-thread-1' },
+    { id: 'context-message-1', threadId: 'context-thread-1' }
+  ])
+  database.upsertMessage({
+    accountId: 'context-audit-account',
+    id: 'context-message-0',
+    threadId: 'context-thread-1',
+    historyId: '99',
+    internalDate: '2026-07-30T09:30:00.000Z',
+    fromName: 'Earlier Sender',
+    fromEmail: 'earlier@aerio.local',
+    to: ['audit@aerio.local'],
+    cc: [],
+    subject: 'Real mail context audit',
+    messageIdHeader: '<context-message-0@aerio.local>',
+    references: [],
+    snippet: 'This earlier reply should start collapsed.',
+    text: 'This earlier reply should start collapsed when its conversation opens.',
+    html: '<p>This earlier reply should start <strong>collapsed</strong> when its conversation opens.</p>',
+    labelIds: ['INBOX', 'RELEASE'],
+    sizeEstimate: 1024,
+    rawPath: earlierRawPath,
+    attachments: []
+  })
   database.upsertMessage({
     accountId: 'context-audit-account',
     id: 'context-message-1',
@@ -368,6 +394,18 @@ try {
 
     const realMessage = page.locator('.real-mail .message-row').filter({ hasText: 'Real mail context audit' })
     await realMessage.waitFor()
+    const earlierReply = page.getByRole('button', { name: 'Expand message from Earlier Sender' })
+    const newestReply = page.getByRole('button', { name: 'Collapse message from Aerio Test Pilot' })
+    await earlierReply.waitFor()
+    await newestReply.waitFor()
+    assert.equal(await earlierReply.getAttribute('aria-expanded'), 'false')
+    assert.equal(await newestReply.getAttribute('aria-expanded'), 'true')
+    await earlierReply.click()
+    await page.getByRole('button', { name: 'Collapse message from Earlier Sender' }).waitFor()
+    const collapsedNewestReply = page.getByRole('button', { name: 'Expand message from Aerio Test Pilot' })
+    await collapsedNewestReply.waitFor()
+    assert.equal(await collapsedNewestReply.getAttribute('aria-expanded'), 'false')
+    await collapsedNewestReply.click()
     await realMessage.getByRole('checkbox', { name: 'Select Real mail context audit' }).click()
     const bulkToolbar = page.locator('.bulk-mail-toolbar')
     await bulkToolbar.getByText('1 selected', { exact: true }).waitFor()
@@ -387,6 +425,8 @@ try {
     trackRuntimeErrors(realWindow)
     await realWindow.locator('.message-window-shell').waitFor()
     await realWindow.getByRole('heading', { name: 'Real mail context audit' }).waitFor()
+    await realWindow.getByRole('button', { name: 'Expand message from Earlier Sender' }).waitFor()
+    await realWindow.getByRole('button', { name: 'Collapse message from Aerio Test Pilot' }).waitFor()
     await realWindow.getByText('aerio-context-audit.txt').waitFor()
     const realWindowClosed = realWindow.waitForEvent('close')
     await realWindow.getByRole('button', { name: 'Close' }).click()

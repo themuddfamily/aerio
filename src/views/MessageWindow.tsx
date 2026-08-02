@@ -1,7 +1,7 @@
 import { Copy, Download, Image, Inbox, LoaderCircle, Paperclip } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import TitleBar from '../components/TitleBar'
-import SenderAvatar from '../components/SenderAvatar'
+import ThreadMessageAccordion from '../components/ThreadMessageAccordion'
 import { copyText, useContextMenu } from '../components/ContextMenu'
 import { formatFileSize } from '../lib/domain'
 import type { GmailAttachment, GmailMessageDetail, GmailThreadDetail } from '../gmail-types'
@@ -30,6 +30,7 @@ export default function MessageWindow() {
   const [state, setState] = useState<AppState>()
   const [demoMessage, setDemoMessage] = useState<Message>()
   const [thread, setThread] = useState<GmailThreadDetail>()
+  const [expandedMessageId, setExpandedMessageId] = useState<string>()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [remoteImages, setRemoteImages] = useState(false)
@@ -56,7 +57,9 @@ export default function MessageWindow() {
         setDemoMessage(message)
         return
       }
-      setThread(await window.aerio.mail.mail.thread(source.accountId, source.threadId))
+      const detail = await window.aerio.mail.mail.thread(source.accountId, source.threadId)
+      setThread(detail)
+      setExpandedMessageId(detail.messages.at(-1)?.id)
     }).catch((reason) => setError(reason instanceof Error ? reason.message : 'The message could not be opened')).finally(() => setLoading(false))
   }, [source])
 
@@ -120,15 +123,13 @@ export default function MessageWindow() {
         {!loading && thread && (
           <article className="message-reader gmail-thread message-window-reader">
             <header><div className="message-window-heading"><h2>{thread.subject}</h2>{!remoteImages && <button className="button ghost small" onClick={() => void loadRemoteImages()}><Image size={15} /> Load remote images</button>}</div></header>
-            {thread.messages.map((message) => <section className="gmail-message" key={message.id}>
-              <header className="sender-card"><SenderAvatar email={message.fromEmail} name={message.fromName} large /><span><strong>{message.fromName || message.fromEmail}</strong><small>{message.fromEmail} · {messageDate(message.date)}</small></span></header>
-              {message.sanitizedHtml ? <div className="message-body gmail-html" dangerouslySetInnerHTML={{ __html: message.sanitizedHtml }} /> : <div className="message-body gmail-text">{message.text}</div>}
+            {thread.messages.map((message) => <ThreadMessageAccordion key={message.id} message={message} expanded={expandedMessageId === message.id} dateLabel={messageDate(message.date)} onToggle={() => setExpandedMessageId((current) => current === message.id ? undefined : message.id)}>
               {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} onContextMenu={(event) => showContextMenu(event, [
                 { label: 'Open attachment', icon: Download, action: () => openAttachment(message, attachment) },
                 { label: 'Save as…', icon: Download, action: () => saveAttachment(message, attachment) },
                 { label: 'Copy filename', icon: Copy, separatorBefore: true, action: () => copyText(attachment.filename) }
               ], attachment.filename)}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{formatFileSize(attachment.size)}</small></span><button className="icon-button" title="Open" onClick={() => void openAttachment(message, attachment)}><Download size={16} /></button><button className="button ghost small" onClick={() => void saveAttachment(message, attachment)}>Save as</button></div>)}</div>}
-            </section>)}
+            </ThreadMessageAccordion>)}
           </article>
         )}
       </main>
