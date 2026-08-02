@@ -11,14 +11,14 @@ import type { AppState, Message } from '../types'
 
 type MessageWindowSource =
   | { type: 'demo'; messageId: string }
-  | { type: 'gmail'; accountId: string; threadId: string }
+  | { type: 'gmail'; accountId: string; threadId: string; messageId?: string }
 
 function windowSource(): MessageWindowSource | undefined {
   const params = new URLSearchParams(window.location.search)
   if (params.get('view') !== 'message') return
   if (params.get('source') === 'demo' && params.get('messageId')) return { type: 'demo', messageId: params.get('messageId')! }
   if (params.get('source') === 'gmail' && params.get('accountId') && params.get('threadId')) {
-    return { type: 'gmail', accountId: params.get('accountId')!, threadId: params.get('threadId')! }
+    return { type: 'gmail', accountId: params.get('accountId')!, threadId: params.get('threadId')!, messageId: params.get('messageId') ?? undefined }
   }
 }
 
@@ -70,7 +70,7 @@ export default function MessageWindow() {
       ])
       setAccounts(accountList)
       setThread(detail)
-      setExpandedMessageId(detail.messages.at(-1)?.id)
+      setExpandedMessageId(source.messageId && detail.messages.some((message) => message.id === source.messageId) ? source.messageId : detail.messages.at(-1)?.id)
     }).catch((reason) => setError(reason instanceof Error ? reason.message : 'The message could not be opened')).finally(() => setLoading(false))
   }, [source])
 

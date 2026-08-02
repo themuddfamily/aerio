@@ -398,8 +398,8 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
     setFolder('all')
   }
 
-  const openMessageWindow = (item: MailThreadSummary) => {
-    void window.aerio.window.openMessage({ source: 'gmail', accountId: item.accountId, threadId: item.id, title: item.subject })
+  const openMessageWindow = (item: MailThreadSummary, messageId?: string) => {
+    void window.aerio.window.openMessage({ source: 'gmail', accountId: item.accountId, threadId: item.id, messageId, title: item.subject })
       .catch((error) => onToast(error instanceof Error ? error.message : 'The message window could not be opened'))
   }
 
@@ -640,7 +640,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
               </div>
               {listExpanded && <div className="thread-list-region">
                 {listThreadLoadingKey === threadKey && !listDetail && <div className="thread-list-loading"><LoaderCircle className="spin" size={14} /> Loading thread…</div>}
-                {listDetail && <ThreadListPreview thread={listDetail} selectedMessageId={selectedKey === threadKey ? expandedMessageId : undefined} dateLabel={shortDate} onSelect={(message) => openSummary(item, message.id)} onContextMenu={(event) => showSummaryMenu(event, item)} />}
+                {listDetail && <ThreadListPreview thread={listDetail} selectedMessageId={selectedKey === threadKey ? expandedMessageId : undefined} dateLabel={shortDate} onSelect={(message) => openSummary(item, message.id)} onOpenWindow={(message) => openMessageWindow(item, message.id)} onContextMenu={(event) => showSummaryMenu(event, item)} />}
               </div>}
             </div>
           })}

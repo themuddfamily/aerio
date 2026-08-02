@@ -403,6 +403,16 @@ try {
     const newestListMessage = listThread.getByRole('button', { name: 'Open message from Aerio Test Pilot' })
     await earlierListMessage.click()
     await page.getByRole('button', { name: 'Collapse message from Earlier Sender' }).waitFor()
+    const replyWindowPromise = application.waitForEvent('window')
+    await earlierListMessage.dblclick()
+    const replyWindow = await replyWindowPromise
+    trackRuntimeErrors(replyWindow)
+    await replyWindow.locator('.message-window-shell').waitFor()
+    await replyWindow.getByRole('button', { name: 'Collapse message from Earlier Sender' }).waitFor()
+    await replyWindow.getByRole('button', { name: 'Expand message from Aerio Test Pilot' }).waitFor()
+    const replyWindowClosed = replyWindow.waitForEvent('close')
+    await replyWindow.getByRole('button', { name: 'Close' }).click()
+    await replyWindowClosed
     await newestListMessage.click()
     const earlierReply = page.getByRole('button', { name: 'Expand message from Earlier Sender' })
     const newestReply = page.getByRole('button', { name: 'Collapse message from Aerio Test Pilot' })

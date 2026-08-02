@@ -588,15 +588,15 @@ function loadRenderer(window: BrowserWindow, query?: Record<string, string>) {
 
 function validMessageWindowRequest(value: unknown): value is MessageWindowRequest {
   if (!value || typeof value !== 'object') return false
-  const input = value as Partial<MessageWindowRequest> & { accountId?: unknown; threadId?: unknown }
+  const input = value as Partial<MessageWindowRequest> & { accountId?: unknown; threadId?: unknown; messageId?: unknown }
   const validText = (text: unknown) => typeof text === 'string' && text.length > 0 && text.length <= 1_000
   if (!validText(input.title)) return false
   if (input.source === 'demo') return validText(input.messageId)
-  return input.source === 'gmail' && validText(input.accountId) && validText(input.threadId)
+  return input.source === 'gmail' && validText(input.accountId) && validText(input.threadId) && (input.messageId === undefined || validText(input.messageId))
 }
 
 function createMessageWindow(input: MessageWindowRequest) {
-  const key = input.source === 'demo' ? `demo:${input.messageId}` : `gmail:${input.accountId}:${input.threadId}`
+  const key = input.source === 'demo' ? `demo:${input.messageId}` : `gmail:${input.accountId}:${input.threadId}:${input.messageId ?? 'thread'}`
   const existing = messageWindows.get(key)
   if (existing && !existing.isDestroyed()) {
     if (existing.isMinimized()) existing.restore()
@@ -628,7 +628,7 @@ function createMessageWindow(input: MessageWindowRequest) {
   messageWindow.once('closed', () => messageWindows.delete(key))
   loadRenderer(messageWindow, input.source === 'demo'
     ? { view: 'message', source: 'demo', messageId: input.messageId }
-    : { view: 'message', source: 'gmail', accountId: input.accountId, threadId: input.threadId })
+    : { view: 'message', source: 'gmail', accountId: input.accountId, threadId: input.threadId, ...(input.messageId ? { messageId: input.messageId } : {}) })
 }
 
 function createWindow() {

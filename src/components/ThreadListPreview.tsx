@@ -8,6 +8,7 @@ interface ThreadListPreviewProps {
   selectedMessageId?: string
   dateLabel(value: string): string
   onSelect(message: GmailMessageDetail): void
+  onOpenWindow(message: GmailMessageDetail): void
   onContextMenu?(event: MouseEvent<HTMLElement>): void
 }
 
@@ -15,7 +16,7 @@ function previewText(message: GmailMessageDetail) {
   return message.text.replace(/\s+/g, ' ').trim().slice(0, 140) || 'No message preview available'
 }
 
-export default function ThreadListPreview({ thread, selectedMessageId, dateLabel, onSelect, onContextMenu }: ThreadListPreviewProps) {
+export default function ThreadListPreview({ thread, selectedMessageId, dateLabel, onSelect, onOpenWindow, onContextMenu }: ThreadListPreviewProps) {
   return (
     <div className="thread-list-preview" role="group" aria-label={`Messages in ${thread.subject}`}>
       {thread.messages.map((message, index) => {
@@ -26,7 +27,9 @@ export default function ThreadListPreview({ thread, selectedMessageId, dateLabel
           className={`thread-list-child ${selectedMessageId === message.id ? 'active' : ''}`}
           aria-label={`Open message from ${sender}`}
           aria-current={selectedMessageId === message.id ? 'true' : undefined}
+          title="Double-click to open in a new window"
           onClick={() => onSelect(message)}
+          onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); onOpenWindow(message) }}
           onContextMenu={onContextMenu}
         >
           <span className="thread-list-connector" aria-hidden="true" />
