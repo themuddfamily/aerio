@@ -648,7 +648,10 @@ export class MailDatabase {
 
   deleteMessage(accountId: string, messageId: string) {
     const row = this.stmt('SELECT thread_id,raw_path FROM gmail_messages WHERE account_id=? AND id=?').get(accountId, messageId) as DatabaseRow | undefined
-    if (!row) return
+    if (!row) {
+      this.stmt('DELETE FROM gmail_sync_items WHERE account_id=? AND message_id=?').run(accountId, messageId)
+      return
+    }
     this.transaction(() => {
       this.stmt('DELETE FROM gmail_fts WHERE account_id=? AND message_id=?').run(accountId, messageId)
       this.stmt('DELETE FROM gmail_sync_items WHERE account_id=? AND message_id=?').run(accountId, messageId)

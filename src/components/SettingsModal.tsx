@@ -167,7 +167,7 @@ export default function SettingsModal({ state, onChange, onReset, onClose }: Set
           <div className="settings-content">
             <h3>Notifications</h3>
             <label className="toggle-row">
-              <span><strong>Desktop notifications</strong><small>Show new mail, reminders, and sending confirmations.</small></span>
+              <span><strong>Desktop notifications</strong><small>Use native desktop notifications for new mail, including while Aerio is open.</small></span>
               <input type="checkbox" checked={state.settings.notifications} onChange={(event) => setSettings({ notifications: event.target.checked })} />
             </label>
           </div>

@@ -46,7 +46,7 @@ export type MailWorkerCommand =
   | { type: 'diagnostics:health' }
   | { type: 'attachment:extract'; payload: { accountId: string; messageId: string; attachmentId: string; targetPath: string } }
   | { type: 'network'; payload: { online: boolean } }
-  | { type: 'polling'; payload: { intervalMs: number } }
+  | { type: 'polling'; payload: { intervalMs: number; immediate?: boolean } }
   | { type: 'shutdown' }
 
 export type MailWorkerResult =

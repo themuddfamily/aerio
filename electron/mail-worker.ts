@@ -29,6 +29,11 @@ import { MicrosoftGraphClient, MicrosoftGraphError, microsoftLabels, type GraphF
 import { sanitizeMessageHtml } from './mail/message-security'
 import { buildNewMailNotification } from './mail/new-mail'
 import { createMime, createMimeBuffer } from './mail/mime-builder'
+import {
+  BACKGROUND_MAIL_POLL_INTERVAL_MS,
+  clampMailPollingInterval,
+  mailPollingIntervalForProvider
+} from './mail/polling-policy'
 
 const port = parentPort!
 if (!port) throw new Error('The Aerio mail worker must run in a worker thread')
@@ -44,16 +49,27 @@ const syncScheduled = new Set<string>()
 const credentialRequests = new Map<string, { resolve: (value: AccountCredential) => void; reject: (error: Error) => void }>()
 const nextRequestAt = new Map<string, number>()
 const draftQueues = new Map<string, Promise<unknown>>()
+const lastAutomaticSyncAt = new Map<string, number>()
+let pollingIntervalMs = BACKGROUND_MAIL_POLL_INTERVAL_MS
 
 const emit = (event: GmailWorkerEvent) => port.postMessage({ kind: 'event', event } satisfies WorkerEventMessage)
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 
+function pollAccounts() {
+  if (!database || !online) return
+  const now = Date.now()
+  for (const account of database.listAccounts().filter((item) => !item.archived && item.syncEnabled && item.status !== 'needs-auth' && item.status !== 'paused' && !paused.has(item.id))) {
+    const cadence = mailPollingIntervalForProvider(pollingIntervalMs, account.provider)
+    if (now - (lastAutomaticSyncAt.get(account.id) ?? 0) < cadence) continue
+    lastAutomaticSyncAt.set(account.id, now)
+    void syncAccount(account.id)
+  }
+}
+
 function schedulePolling(intervalMs: number) {
   clearInterval(pollTimer)
-  pollTimer = setInterval(() => {
-    if (!database || !online) return
-    for (const account of database.listAccounts().filter((item) => !item.archived && item.syncEnabled && item.status !== 'needs-auth')) void syncAccount(account.id)
-  }, Math.min(Math.max(intervalMs, 60_000), 5 * 60_000))
+  pollingIntervalMs = clampMailPollingInterval(intervalMs)
+  pollTimer = setInterval(pollAccounts, pollingIntervalMs)
 }
 
 async function getCredential(accountId: string) {
@@ -273,6 +289,8 @@ async function downloadInventory(accountId: string) {
 
   progress(accountId, 'downloading', 'Downloading messages for offline use')
   database.retryFailedSyncItems(accountId)
+  let catchUpHistoryId = String(database.getSyncCheckpoint(accountId)?.initial_history_id ?? profile.historyId)
+  let nextCatchUpAt = Date.now() + 15_000
   while (true) {
     await assertCanSync(accountId)
     const pending = database.pendingMessageIds(accountId, 2)
@@ -293,50 +311,92 @@ async function downloadInventory(accountId: string) {
     }
     const value = progress(accountId, 'downloading', 'Downloading messages for offline use')
     if (value.completed % 20 < 2) emit({ type: 'mail-changed', payload: { accountId } })
+    if (Date.now() >= nextCatchUpAt) {
+      const catchUp = await applyGmailHistory(accountId, catchUpHistoryId)
+      catchUpHistoryId = catchUp.latestHistoryId
+      const catchUpProgress = database.getSyncProgress(accountId)[0]
+      if (catchUpProgress) database.updateSyncProgress(catchUpProgress, { initialHistoryId: catchUpHistoryId })
+      if (catchUp.changed) emit({ type: 'mail-changed', payload: { accountId } })
+      emitNewMail(accountId, catchUp.newMessages)
+      nextCatchUpAt = Date.now() + 15_000
+    }
   }
+  const finalCatchUp = await applyGmailHistory(accountId, catchUpHistoryId)
+  catchUpHistoryId = finalCatchUp.latestHistoryId
+  const current = database.getSyncProgress(accountId)[0]
+  if (current) database.updateSyncProgress(current, { initialHistoryId: catchUpHistoryId })
+  if (finalCatchUp.changed) emit({ type: 'mail-changed', payload: { accountId } })
+  emitNewMail(accountId, finalCatchUp.newMessages)
   const failed = database.syncFailureCount(accountId)
   if (failed) throw new Error(`${failed.toLocaleString()} message${failed === 1 ? '' : 's'} could not be downloaded after repeated attempts`)
-  const initialHistoryId = database.getSyncCheckpoint(accountId)?.initial_history_id
-  database.setAccountHistory(accountId, initialHistoryId ? String(initialHistoryId) : profile.historyId, true)
+  database.setAccountHistory(accountId, catchUpHistoryId, true)
   const done = progress(accountId, 'complete', 'Mailbox is available offline')
   emit({ type: 'accounts-changed', payload: database.listAccounts() })
   emit({ type: 'mail-changed', payload: { accountId } })
   return done
 }
 
+async function applyGmailHistory(accountId: string, startHistoryId: string) {
+  if (!database) throw new Error('Database is not initialized')
+  const client = clientFor(accountId)
+  let pageToken: string | undefined
+  let latestHistoryId = startHistoryId
+  let changed = false
+  const changedMessages = new Map<string, { id: string; threadId: string }>()
+  const addedMessageIds = new Set<string>()
+  do {
+    await assertCanSync(accountId)
+    const page = await client.listHistory(startHistoryId, pageToken)
+    latestHistoryId = page.historyId ?? latestHistoryId
+    for (const history of page.history ?? []) {
+      latestHistoryId = history.id || latestHistoryId
+      for (const deleted of history.messagesDeleted ?? []) {
+        database.deleteMessage(accountId, deleted.message.id)
+        changedMessages.delete(deleted.message.id)
+        changed = true
+      }
+      for (const entry of history.messagesAdded ?? []) {
+        changedMessages.set(entry.message.id, entry.message)
+        addedMessageIds.add(entry.message.id)
+        changed = true
+      }
+      for (const entry of history.labelsAdded ?? []) {
+        changedMessages.set(entry.message.id, entry.message)
+        changed = true
+      }
+      for (const entry of history.labelsRemoved ?? []) {
+        changedMessages.set(entry.message.id, entry.message)
+        changed = true
+      }
+    }
+    pageToken = page.nextPageToken
+  } while (pageToken)
+
+  database.addInventory(accountId, [...changedMessages.values()])
+  const newMessages: ParsedMailMessage[] = []
+  for (const message of changedMessages.values()) {
+    try {
+      const stored = await parseAndStore(accountId, await client.getRawMessage(message.id))
+      if (stored.isNew && addedMessageIds.has(message.id)) newMessages.push(stored.record)
+    } catch (error) {
+      if (error instanceof GmailApiError && error.status === 404) database.deleteMessage(accountId, message.id)
+      else throw error
+    }
+  }
+  return { latestHistoryId, changed, newMessages }
+}
+
 async function incrementalSync(accountId: string) {
   if (!database) throw new Error('Database is not initialized')
   const startHistoryId = database.getAccountHistory(accountId)
   if (!startHistoryId) return downloadInventory(accountId)
-  const client = clientFor(accountId)
   progress(accountId, 'incremental', 'Checking for changes')
-  let pageToken: string | undefined
-  let latestHistoryId = startHistoryId
-  const newMessages: ParsedMailMessage[] = []
   try {
-    do {
-      await assertCanSync(accountId)
-      const page = await client.listHistory(startHistoryId, pageToken)
-      latestHistoryId = page.historyId ?? latestHistoryId
-      for (const history of page.history ?? []) {
-        latestHistoryId = history.id || latestHistoryId
-        for (const deleted of history.messagesDeleted ?? []) database.deleteMessage(accountId, deleted.message.id)
-        const changed = new Set<string>()
-        for (const entry of history.messagesAdded ?? []) changed.add(entry.message.id)
-        for (const entry of history.labelsAdded ?? []) changed.add(entry.message.id)
-        for (const entry of history.labelsRemoved ?? []) changed.add(entry.message.id)
-        for (const messageId of changed) {
-          try {
-            const stored = await parseAndStore(accountId, await client.getRawMessage(messageId))
-            if (stored.isNew) newMessages.push(stored.record)
-          } catch (error) {
-            if (error instanceof GmailApiError && error.status === 404) database.deleteMessage(accountId, messageId)
-            else throw error
-          }
-        }
-      }
-      pageToken = page.nextPageToken
-    } while (pageToken)
+    const result = await applyGmailHistory(accountId, startHistoryId)
+    database.setAccountHistory(accountId, result.latestHistoryId, true)
+    progress(accountId, 'complete', 'Up to date')
+    if (result.changed) emit({ type: 'mail-changed', payload: { accountId } })
+    emitNewMail(accountId, result.newMessages)
   } catch (error) {
     if (error instanceof GmailApiError && error.status === 404) {
       database.resetInventory(accountId)
@@ -344,10 +404,6 @@ async function incrementalSync(accountId: string) {
     }
     throw error
   }
-  database.setAccountHistory(accountId, latestHistoryId, true)
-  progress(accountId, 'complete', 'Up to date')
-  emit({ type: 'mail-changed', payload: { accountId } })
-  emitNewMail(accountId, newMessages)
 }
 
 interface ImapProviderState {
@@ -830,7 +886,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     clearInterval(operationTimer)
     clearInterval(pollTimer)
     operationTimer = setInterval(() => void processOperations(), 2_000)
-    schedulePolling(60_000)
+    schedulePolling(BACKGROUND_MAIL_POLL_INTERVAL_MS)
     return
   }
   if (!database) throw new Error('Database is not initialized')
@@ -948,14 +1004,15 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'network') {
     online = command.payload.online
     emit({ type: 'connectivity', payload: { online } })
-    if (online) void processOperations()
+    if (online) {
+      void processOperations()
+      pollAccounts()
+    }
     return
   }
   if (command.type === 'polling') {
     schedulePolling(command.payload.intervalMs)
-    if (command.payload.intervalMs <= 60_000) {
-      for (const account of database.listAccounts().filter((item) => !item.archived && item.syncEnabled && item.status !== 'needs-auth')) void syncAccount(account.id)
-    }
+    if (command.payload.immediate) pollAccounts()
     return
   }
   if (command.type === 'shutdown') {

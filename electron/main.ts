@@ -42,6 +42,7 @@ import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
 import { senderDomainFromEmail } from '../src/lib/sender-avatar'
+import { mailPollingIntervalForWindow } from './mail/polling-policy'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -55,6 +56,7 @@ const builtInOAuthClients = parseOAuthEnvironment({
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) app.quit()
+if (process.platform === 'win32') app.setAppUserModelId('com.aerio.desktop')
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'aerio-image', privileges: { secure: true, standard: true, supportFetchAPI: true, bypassCSP: false } }
@@ -306,7 +308,7 @@ function isPrivateAddress(address: string) {
 }
 
 function showNewMailNotification(payload: Extract<import('../src/gmail-types').GmailWorkerEvent, { type: 'new-mail' }>['payload']) {
-  if (!Notification.isSupported() || mainWindow?.isFocused() || !loadState().settings.notifications) return
+  if (!Notification.isSupported() || !loadState().settings.notifications) return
   const title = payload.count === 1 ? payload.sender || 'New message' : `${payload.count.toLocaleString()} new messages`
   const notification = new Notification({ title, body: payload.count === 1 ? payload.subject || 'Open Aerio to read it' : 'Open Aerio to view your inbox', icon: iconPath() })
   notification.on('click', () => {
@@ -314,6 +316,18 @@ function showNewMailNotification(payload: Extract<import('../src/gmail-types').G
     if (payload.threadId) createMessageWindow({ source: 'gmail', accountId: payload.accountId, threadId: payload.threadId, title: payload.subject || 'New message' })
   })
   notification.show()
+}
+
+function updateMailPolling(immediate = false) {
+  if (!mailWorker || !mainWindow) return
+  const intervalMs = mailPollingIntervalForWindow({
+    visible: mainWindow.isVisible(),
+    focused: mainWindow.isFocused(),
+    minimized: mainWindow.isMinimized()
+  })
+  void mailWorker.request({ type: 'polling', payload: { intervalMs, immediate } }).catch((error) => {
+    diagnostic({ level: 'error', component: 'mail-worker', event: 'polling-update-failed', message: error instanceof Error ? error.message : String(error) })
+  })
 }
 
 async function initializeMail() {
@@ -628,8 +642,12 @@ function createWindow() {
   })
   mainWindow.on('resize', saveBounds)
   mainWindow.on('move', saveBounds)
-  mainWindow.on('show', () => void mailWorker?.request({ type: 'polling', payload: { intervalMs: 60_000 } }))
-  mainWindow.on('hide', () => void mailWorker?.request({ type: 'polling', payload: { intervalMs: 5 * 60_000 } }))
+  mainWindow.on('show', () => updateMailPolling(true))
+  mainWindow.on('focus', () => updateMailPolling(true))
+  mainWindow.on('restore', () => updateMailPolling(true))
+  mainWindow.on('hide', () => updateMailPolling())
+  mainWindow.on('blur', () => updateMailPolling())
+  mainWindow.on('minimize', () => updateMailPolling())
   mainWindow.on('close', (event) => {
     const closeToTray = loadState().settings.closeToTray
     if (!quitting && closeToTray) {

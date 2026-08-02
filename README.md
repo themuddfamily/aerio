@@ -9,13 +9,13 @@ Aerio is a calm, modern desktop communications client for Windows. The connected
 - Multiple mixed-provider accounts and unified folders, with no hard-coded account limit
 - Complete mailbox inventory, including Spam and Trash, followed by newest-first offline download
 - Raw RFC 2822 messages, MIME bodies, and attachments stored locally
-- Resumable sync checkpoints, Gmail History, Microsoft delta links, IMAP folder reconciliation, adaptive polling, and manual pause/resume
+- Resumable sync checkpoints, Gmail History, Microsoft delta links, IMAP folder reconciliation, 15-second active/one-minute background polling, and manual pause/resume
 - SQLite-backed folder views, cursor pagination, and full-text offline search
 - Single and multi-select Archive, read/unread, star, importance, move, label, and Trash actions
 - Optimistic local changes with exact-state Undo, retry/backoff, and a durable provider operation queue
 - Editable provider drafts with idle autosave, rich-text composition, recipient suggestions, signatures, forwarding attachments, SMTP delivery, and an offline Outbox
 - Per-account identity, synchronization, notification, OAuth, IMAP/SMTP, connection-test, and local-rebuild settings
-- Privacy-redacted diagnostics, storage-integrity checks, and background new-mail notifications
+- Privacy-redacted diagnostics, storage-integrity checks, and native new-mail notifications that open the relevant conversation
 - Sanitized HTML; scripts and unsafe links are removed, and remote images are blocked by default
 - Dedicated message windows for demo and real mail; double-click a conversation to open or focus its window
 - Read-only local archive or complete local deletion when disconnecting an account

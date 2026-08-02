@@ -137,7 +137,6 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
       if (event.type === 'operation' && event.payload.status === 'failed') onToast(event.payload.error ?? 'The mail provider rejected the change')
       if (event.type === 'operation' && event.payload.status === 'succeeded') setPending((items) => items.filter((item) => item.id !== event.payload.id))
       if (event.type === 'connectivity' && !event.payload.online) onToast('Offline — changes will be sent when you reconnect')
-      if (event.type === 'new-mail') onToast(event.payload.count === 1 ? `New message${event.payload.sender ? ` from ${event.payload.sender}` : ''}` : `${event.payload.count} new messages`)
     })
     return unsubscribe
   }, [loadPage, onToast])

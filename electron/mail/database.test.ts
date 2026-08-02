@@ -172,6 +172,15 @@ describe('MailDatabase', () => {
     database.close()
   })
 
+  it('removes a deleted Gmail message from the pending initial-download queue', () => {
+    const { database } = setup()
+    database.addInventory('account-1', [{ id: 'deleted-before-download', threadId: 'thread-deleted' }])
+    expect(database.pendingMessageIds('account-1', 10)).toHaveLength(1)
+    database.deleteMessage('account-1', 'deleted-before-download')
+    expect(database.pendingMessageIds('account-1', 10)).toHaveLength(0)
+    database.close()
+  })
+
   it('moves Gmail conversations out of Inbox into a user label and can undo exactly', () => {
     const { database } = setup()
     database.replaceLabels('account-1', [{ accountId: 'account-1', id: 'project-a', name: 'Project A', type: 'user' }])
