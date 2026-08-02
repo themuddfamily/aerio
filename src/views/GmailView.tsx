@@ -1,5 +1,5 @@
 import {
-  Archive, AtSign, CheckSquare, Copy, Download, Edit3, ExternalLink, FileText, FolderInput, Forward, Image, Inbox, LoaderCircle, Mail, MailOpen,
+  Archive, AtSign, CheckSquare, ChevronDown, Copy, Download, Edit3, ExternalLink, FileText, FolderInput, Forward, Image, Inbox, LoaderCircle, Mail, MailOpen,
   Paperclip, Pause, Play, Plus, RefreshCw, Reply, Search, Send, Settings2,
   Star, Tag, Tags, Trash2, Undo2, UserPlus, WifiOff, X
 } from 'lucide-react'
@@ -9,6 +9,7 @@ import MailAccountSetupModal from '../components/MailAccountSetupModal'
 import MailAccountSettingsModal from '../components/MailAccountSettingsModal'
 import MailOrganizeModal from '../components/MailOrganizeModal'
 import SenderAvatar from '../components/SenderAvatar'
+import ThreadListPreview from '../components/ThreadListPreview'
 import ThreadMessageAccordion from '../components/ThreadMessageAccordion'
 import type {
   GmailAccountSummary,
@@ -62,6 +63,9 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
   const [thread, setThread] = useState<GmailThreadDetail>()
   const [expandedMessageId, setExpandedMessageId] = useState<string>()
   const [threadLoading, setThreadLoading] = useState(false)
+  const [expandedListThreadKey, setExpandedListThreadKey] = useState<string>()
+  const [listThreadDetails, setListThreadDetails] = useState<Record<string, GmailThreadDetail>>({})
+  const [listThreadLoadingKey, setListThreadLoadingKey] = useState<string>()
   const [sync, setSync] = useState<SyncProgress[]>([])
   const [loading, setLoading] = useState(true)
   const [compose, setCompose] = useState<{ draft?: GmailDraftRecord; reply?: GmailThreadDetail; forward?: boolean }>()
@@ -72,6 +76,7 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
   const [accountSetup, setAccountSetup] = useState(false)
   const [settingsAccount, setSettingsAccount] = useState<GmailAccountSummary>()
   const handledComposeRequest = useRef(0)
+  const requestedMessage = useRef<{ threadKey: string; messageId: string } | undefined>(undefined)
   const selected = page.items.find((item) => `${item.accountId}:${item.id}` === selectedKey)
   const selectedAccount = accounts.find((item) => item.id === selected?.accountId)
   const checkedItems = useMemo(() => page.items.filter((item) => checkedKeys.has(`${item.accountId}:${item.id}`)), [checkedKeys, page.items])
@@ -176,8 +181,14 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
     setThreadLoading(true)
     void window.aerio.mail.mail.thread(selected.accountId, selected.id).then((detail) => {
       if (cancelled) return
+      const threadKey = `${selected.accountId}:${selected.id}`
+      const preferred = requestedMessage.current?.threadKey === threadKey && detail.messages.some((message) => message.id === requestedMessage.current?.messageId)
+        ? requestedMessage.current.messageId
+        : detail.messages.at(-1)?.id
       setThread(detail)
-      setExpandedMessageId(detail.messages.at(-1)?.id)
+      setListThreadDetails((current) => ({ ...current, [threadKey]: detail }))
+      setExpandedMessageId(preferred)
+      if (requestedMessage.current?.threadKey === threadKey) requestedMessage.current = undefined
     }).catch((error) => {
       if (!cancelled) onToast(error instanceof Error ? error.message : 'Conversation could not be opened')
     }).finally(() => {
@@ -329,7 +340,51 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
     return next
   })
 
-  const openSummary = (item: MailThreadSummary) => setSelectedKey(`${item.accountId}:${item.id}`)
+  const openSummary = (item: MailThreadSummary, messageId?: string) => {
+    const threadKey = `${item.accountId}:${item.id}`
+    requestedMessage.current = messageId ? { threadKey, messageId } : undefined
+    if (threadKey === selectedKey && messageId && thread?.messages.some((message) => message.id === messageId)) {
+      setExpandedMessageId(messageId)
+      return
+    }
+    setSelectedKey(threadKey)
+  }
+
+  const toggleListThread = async (item: MailThreadSummary) => {
+    const threadKey = `${item.accountId}:${item.id}`
+    if (expandedListThreadKey === threadKey) {
+      setExpandedListThreadKey(undefined)
+      setListThreadDetails((current) => {
+        const next = { ...current }
+        delete next[threadKey]
+        return next
+      })
+      return
+    }
+    if (expandedListThreadKey) {
+      setListThreadDetails((current) => {
+        const next = { ...current }
+        delete next[expandedListThreadKey]
+        return next
+      })
+    }
+    setExpandedListThreadKey(threadKey)
+    if (listThreadDetails[threadKey]) return
+    if (selectedKey === threadKey && thread) {
+      setListThreadDetails((current) => ({ ...current, [threadKey]: thread }))
+      return
+    }
+    setListThreadLoadingKey(threadKey)
+    try {
+      const detail = await window.aerio.mail.mail.thread(item.accountId, item.id)
+      setListThreadDetails((current) => ({ ...current, [threadKey]: detail }))
+    } catch (error) {
+      setExpandedListThreadKey((current) => current === threadKey ? undefined : current)
+      onToast(error instanceof Error ? error.message : 'Conversation replies could not be loaded')
+    } finally {
+      setListThreadLoadingKey((current) => current === threadKey ? undefined : current)
+    }
+  }
 
   function selectAccount(nextAccountId: string) {
     setAccountId(nextAccountId)
@@ -564,19 +619,31 @@ export default function GmailView({ onToast, composeRequest = 0 }: GmailViewProp
             </span>
           </button>)}
           {page.items.length > 0 && <button className="select-visible-mail" onClick={toggleAllVisible}><CheckSquare size={14} /> {page.items.every((item) => checkedKeys.has(`${item.accountId}:${item.id}`)) ? 'Clear visible selection' : 'Select visible conversations'}</button>}
-          {page.items.map((item, index) => (
-            <div key={`${item.accountId}:${item.id}`} role="button" tabIndex={0} aria-current={selectedKey === `${item.accountId}:${item.id}` ? 'true' : undefined} className={`message-row ${selectedKey === `${item.accountId}:${item.id}` ? 'selected' : ''} ${checkedKeys.has(`${item.accountId}:${item.id}`) ? 'checked' : ''} ${item.unread ? 'unread' : ''}`} onClick={() => openSummary(item)} onDoubleClick={() => openMessageWindow(item)} onKeyDown={(event) => { if (event.key === 'Enter' && event.shiftKey) { event.preventDefault(); openMessageWindow(item) } else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openSummary(item) } }} onContextMenu={(event) => showSummaryMenu(event, item)}>
-              <input className="message-select" type="checkbox" aria-label={`Select ${item.subject}`} checked={checkedKeys.has(`${item.accountId}:${item.id}`)} readOnly onClick={(event) => { event.stopPropagation(); toggleChecked(item, index, event.shiftKey) }} />
-              <SenderAvatar email={item.senderEmail} name={item.participants[0]} fallbackColor={accounts.find((account) => account.id === item.accountId)?.color} />
-              <span className="message-copy">
-                <span className="message-meta"><strong>{item.participants.join(', ') || 'Unknown sender'}</strong><time>{shortDate(item.lastDate)}</time></span>
-                <span className="message-subject">{item.subject}</span>
-                <span className="message-preview">{item.snippet}</span>
-                <span className="message-tags">{item.messageCount > 1 && <em>{item.messageCount} messages</em>}{item.hasAttachments && <Paperclip size={13} />}</span>
-              </span>
-              <span className="row-flags">{item.starred && <Star size={13} fill="currentColor" />}</span>
+          {page.items.map((item, index) => {
+            const threadKey = `${item.accountId}:${item.id}`
+            const listExpanded = expandedListThreadKey === threadKey
+            const listDetail = listThreadDetails[threadKey]
+            return <div className={`message-thread-stack ${listExpanded ? 'expanded' : ''}`} key={threadKey}>
+              <div role="button" tabIndex={0} aria-current={selectedKey === threadKey ? 'true' : undefined} className={`message-row ${selectedKey === threadKey ? 'selected' : ''} ${checkedKeys.has(threadKey) ? 'checked' : ''} ${item.unread ? 'unread' : ''}`} onClick={() => openSummary(item)} onDoubleClick={() => openMessageWindow(item)} onKeyDown={(event) => { if (event.key === 'Enter' && event.shiftKey) { event.preventDefault(); openMessageWindow(item) } else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openSummary(item) } }} onContextMenu={(event) => showSummaryMenu(event, item)}>
+                <input className="message-select" type="checkbox" aria-label={`Select ${item.subject}`} checked={checkedKeys.has(threadKey)} readOnly onClick={(event) => { event.stopPropagation(); toggleChecked(item, index, event.shiftKey) }} />
+                <SenderAvatar email={item.senderEmail} name={item.participants[0]} fallbackColor={accounts.find((account) => account.id === item.accountId)?.color} />
+                <span className="message-copy">
+                  <span className="message-meta"><strong>{item.participants.join(', ') || 'Unknown sender'}</strong><time>{shortDate(item.lastDate)}</time></span>
+                  <span className="message-subject">{item.subject}</span>
+                  <span className="message-preview">{item.snippet}</span>
+                  <span className="message-tags">
+                    {item.messageCount > 1 && <><em>{item.messageCount} messages</em><button type="button" className={`thread-list-toggle ${listExpanded ? 'expanded' : ''}`} aria-label={`${listExpanded ? 'Collapse' : 'Expand'} ${item.messageCount} messages in ${item.subject}`} aria-expanded={listExpanded} onClick={(event) => { event.stopPropagation(); void toggleListThread(item) }} onDoubleClick={(event) => event.stopPropagation()}><ChevronDown size={13} /></button></>}
+                    {item.hasAttachments && <Paperclip size={13} />}
+                  </span>
+                </span>
+                <span className="row-flags">{item.starred && <Star size={13} fill="currentColor" />}</span>
+              </div>
+              {listExpanded && <div className="thread-list-region">
+                {listThreadLoadingKey === threadKey && !listDetail && <div className="thread-list-loading"><LoaderCircle className="spin" size={14} /> Loading thread…</div>}
+                {listDetail && <ThreadListPreview thread={listDetail} selectedMessageId={selectedKey === threadKey ? expandedMessageId : undefined} dateLabel={shortDate} onSelect={(message) => openSummary(item, message.id)} onContextMenu={(event) => showSummaryMenu(event, item)} />}
+              </div>}
             </div>
-          ))}
+          })}
           {!loading && !page.items.length && !visibleLocalDrafts.length && <div className="empty-state"><Search size={28} /><h3>No conversations here</h3><p>Try another mailbox or search.</p></div>}
           {loading && <div className="empty-state"><LoaderCircle className="spin" size={28} /><p>Loading local mail…</p></div>}
         </div>
