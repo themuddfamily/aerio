@@ -46,7 +46,7 @@ describe('GmailClient', () => {
   })
 
   it('adds page tokens and safely encodes message identifiers', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response('{}', { status: 200 })))
     vi.stubGlobal('fetch', fetchMock)
     const client = new GmailClient('account', async () => 'token')
     await client.listMessages('page/token')
@@ -76,7 +76,7 @@ describe('GmailClient', () => {
   })
 
   it('calls the expected thread mutation endpoints and payloads', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response('{}', { status: 200 })))
     vi.stubGlobal('fetch', fetchMock)
     const client = new GmailClient('account', async () => 'token')
     await client.modifyThreads(['thread/1'], ['STARRED'], ['UNREAD'])
@@ -91,12 +91,13 @@ describe('GmailClient', () => {
   })
 
   it('creates, updates, and deletes provider drafts', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'draft-1', message: { id: 'message-1', threadId: 'thread-1' } }), { status: 200 }))
+    const fetchMock = vi.fn().mockImplementation((_url, init?: RequestInit) => Promise.resolve(init?.method === 'DELETE'
+      ? new Response(null, { status: 204 })
+      : new Response(JSON.stringify({ id: 'draft-1', message: { id: 'message-1', threadId: 'thread-1' } }), { status: 200 })))
     vi.stubGlobal('fetch', fetchMock)
     const client = new GmailClient('account', async () => 'token')
     await client.createDraft('raw', 'thread-1')
     await client.updateDraft('draft/1', 'new-raw')
-    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
     await client.deleteDraft('draft/1')
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ message: { raw: 'raw', threadId: 'thread-1' } })
     expect(fetchMock.mock.calls[1][0]).toContain('/drafts/draft%2F1')
@@ -105,7 +106,7 @@ describe('GmailClient', () => {
   })
 
   it('sends existing drafts with and without replacement MIME', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'message', threadId: 'thread' }), { status: 200 }))
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ id: 'message', threadId: 'thread' }), { status: 200 })))
     vi.stubGlobal('fetch', fetchMock)
     const client = new GmailClient('account', async () => 'token')
     await client.sendDraft('draft-1')
@@ -115,7 +116,7 @@ describe('GmailClient', () => {
   })
 
   it('sends new messages with optional thread association', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'message', threadId: 'thread' }), { status: 200 }))
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ id: 'message', threadId: 'thread' }), { status: 200 })))
     vi.stubGlobal('fetch', fetchMock)
     const client = new GmailClient('account', async () => 'token')
     await client.sendMessage('raw')
