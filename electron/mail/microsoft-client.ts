@@ -134,8 +134,10 @@ export class MicrosoftGraphClient {
     return { messages, deltaLink: checkpoint }
   }
 
-  rawMessage(id: string) {
-    return this.request<ArrayBuffer>(`/me/messages/${encodeURIComponent(id)}/$value`, { headers: { Accept: 'message/rfc822' } })
+  async rawMessage(id: string) {
+    const response = await this.response(`/me/messages/${encodeURIComponent(id)}/$value`, { headers: { Accept: 'message/rfc822' } })
+    if (!response.ok) throw new MicrosoftGraphError(`Microsoft could not download a message (${response.status})`, response.status)
+    return response.arrayBuffer()
   }
 
   async messageRaw(id: string) {
