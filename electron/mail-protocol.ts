@@ -14,6 +14,8 @@ import type {
   MailWorkerEvent,
   ImapAccountInput,
   MailPage,
+  MailFolderUnreadCounts,
+  MailAccountUnreadCounts,
   MailAccountSettingsInput,
   MailQuery,
   MailRecipientSuggestion,
@@ -33,6 +35,8 @@ export type MailWorkerCommand =
   | { type: 'labels:list'; payload: { accountIds?: string[] } }
   | { type: 'recipients:suggest'; payload: { query: string; accountIds?: string[] } }
   | { type: 'mail:list'; payload: MailQuery }
+  | { type: 'mail:unread-counts'; payload: { accountIds?: string[] } }
+  | { type: 'mail:account-unread-counts' }
   | { type: 'mail:thread'; payload: { accountId: string; threadId: string; allowRemoteImages?: boolean } }
   | { type: 'mail:source'; payload: { accountId: string; messageId: string } }
   | { type: 'mail:action'; payload: ApplyMailActionInput }
@@ -77,6 +81,8 @@ export type MailWorkerResult =
   | MailThreadDetail
   | MailMessageSource
   | MailPage
+  | MailFolderUnreadCounts
+  | MailAccountUnreadCounts
   | PendingOperation
   | SyncProgress[]
   | MailStorageStats

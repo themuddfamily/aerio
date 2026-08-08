@@ -1,13 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, shell, Tray } from 'electron'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { arch, platform, release, tmpdir } from 'node:os'
-import { basename, extname, join } from 'node:path'
+import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createDefaultPreferences, defaultSettings } from '../src/preferences'
-import type { AppPreferences, Attachment, CalendarEvent, MessageWindowRequest, ModuleId, Settings } from '../src/types'
+import type { AppPreferences, Attachment, CalendarEvent, Contact, MessageWindowRequest, ModuleId, Settings } from '../src/types'
 import type {
   ApplyMailActionInput,
   MailAccountSummary,
@@ -26,6 +26,8 @@ import type {
   ImapServerSettings,
   ImapServerSettingsUpdate,
   MailPage,
+  MailFolderUnreadCounts,
+  MailAccountUnreadCounts,
   MailAccountSettingsInput,
   MailDiagnosticHealth,
   MailQuery,
@@ -73,6 +75,9 @@ let mainWindow: BrowserWindow | null = null
 const messageWindows = new Map<string, BrowserWindow>()
 let tray: Tray | null = null
 let database: DatabaseSync | null = null
+let applicationLocked = false
+let failedUnlockAttempts = 0
+let unlockBlockedUntil = 0
 let oauthVault: OAuthVault | null = null
 let mailWorker: MailWorkerClient | null = null
 const accountProviders = new Map<string, MailAccountSummary['provider']>()
@@ -115,6 +120,7 @@ function preferencesFromUnknown(value: unknown): AppPreferences | undefined {
       theme: candidate.theme as Settings['theme'],
       density: candidate.density as Settings['density'],
       closeToTray: candidate.closeToTray,
+      launchAtLogin: typeof candidate.launchAtLogin === 'boolean' ? candidate.launchAtLogin : defaultSettings.launchAtLogin,
       notifications: candidate.notifications,
       startModule: candidate.startModule as ModuleId,
       ...(profile && !isUntouchedSampleProfile ? { profile: {
@@ -153,10 +159,17 @@ async function initializePreferencesDatabase() {
       schema_version INTEGER NOT NULL,
       payload TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS app_lock (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      salt TEXT NOT NULL,
+      verifier TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     )
   `)
   const result = database.prepare('SELECT payload FROM app_preferences WHERE id = 1').get()
   if (!result) savePreferences(readLegacyPreferences(userData) ?? createDefaultPreferences())
+  applicationLocked = Boolean(loadAppLockRecord())
 }
 
 function requireMailWorker() {
@@ -178,6 +191,8 @@ function validateDraft(input: MailDraftInput, forSend = false) {
   if (!input || typeof input !== 'object' || typeof input.accountId !== 'string' || !input.accountId || input.accountId.length > 200) throw new Error('Choose a valid sending account')
   if (!Array.isArray(input.to) || !Array.isArray(input.cc) || !Array.isArray(input.bcc) || !Array.isArray(input.attachmentPaths)) throw new Error('The draft is invalid')
   if (input.id !== undefined && (typeof input.id !== 'string' || !input.id || input.id.length > 200)) throw new Error('The draft id is invalid')
+  if (input.expectedUpdatedAt !== undefined && (typeof input.expectedUpdatedAt !== 'string' || !Number.isFinite(Date.parse(input.expectedUpdatedAt)))) throw new Error('The draft revision is invalid')
+  if (input.expectedRemoteRevision !== undefined && (typeof input.expectedRemoteRevision !== 'string' || !input.expectedRemoteRevision || input.expectedRemoteRevision.length > 1_000)) throw new Error('The provider draft revision is invalid')
   const addresses = [...input.to, ...input.cc, ...input.bcc]
   if (addresses.length > 500) throw new Error('A message cannot contain more than 500 recipients')
   if (forSend && !addresses.length) throw new Error('Add at least one recipient')
@@ -241,12 +256,139 @@ function requireProductivityStore() {
   return productivityStore
 }
 
+const NOTE_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
+const NOTE_BACKUP_ATTACHMENT_MAX_BYTES = 100 * 1024 * 1024
+
+function noteAttachmentsDirectory() {
+  return join(app.getPath('userData'), 'note-attachments')
+}
+
+function isManagedNoteAttachmentPath(path: string) {
+  const root = resolve(noteAttachmentsDirectory())
+  const candidate = resolve(path)
+  const nested = relative(root, candidate)
+  return Boolean(nested) && !nested.startsWith('..') && !isAbsolute(nested)
+}
+
+function referencedNoteAttachmentPaths(snapshot: LocalModuleSnapshot) {
+  return new Set(snapshot.notes.flatMap((note) => note.attachments ?? []).flatMap((attachment) => attachment.path ? [resolve(attachment.path)] : []))
+}
+
+function cleanupRemovedNoteAttachments(previous: LocalModuleSnapshot, next: LocalModuleSnapshot) {
+  const retained = referencedNoteAttachmentPaths(next)
+  for (const path of referencedNoteAttachmentPaths(previous)) {
+    if (!retained.has(path) && isManagedNoteAttachmentPath(path) && existsSync(path)) {
+      try { unlinkSync(path) } catch { /* The next cleanup pass can retry an in-use file. */ }
+    }
+  }
+}
+
 function validLocalModules(value: unknown): value is LocalModuleSnapshot {
   if (!value || typeof value !== 'object') return false
   const input = value as Partial<LocalModuleSnapshot>
   if (!Array.isArray(input.tasks) || !Array.isArray(input.notes) || input.tasks.length > 100_000 || input.notes.length > 100_000) return false
-  return input.tasks.every((task) => task && typeof task.id === 'string' && typeof task.title === 'string' && task.id.length <= 300 && task.title.length <= 10_000) &&
-    input.notes.every((note) => note && typeof note.id === 'string' && typeof note.title === 'string' && typeof note.content === 'string' && note.id.length <= 300 && note.title.length <= 10_000 && note.content.length <= 10_000_000)
+  if (input.contacts !== undefined && (!Array.isArray(input.contacts) || input.contacts.length > 100_000)) return false
+  const text = (candidate: unknown, max: number, required = false) => typeof candidate === 'string' && candidate.length <= max && (!required || Boolean(candidate.trim()))
+  return input.tasks.every((task) => task && text(task.id, 300, true) && text(task.listId, 300, true) && text(task.title, 10_000, true) &&
+      (task.notes === undefined || text(task.notes, 1_000_000)) && (task.due === undefined || (text(task.due, 100) && Number.isFinite(Date.parse(task.due)))) &&
+      ['low', 'normal', 'high'].includes(task.priority) && typeof task.completed === 'boolean' && Array.isArray(task.subtasks) && task.subtasks.length <= 10_000 &&
+      task.subtasks.every((subtask) => subtask && text(subtask.id, 300, true) && text(subtask.title, 10_000, true) && typeof subtask.completed === 'boolean') &&
+      (task.recurrence === undefined || ['none', 'daily', 'weekly', 'monthly'].includes(task.recurrence))) &&
+    input.notes.every((note) => note && text(note.id, 300, true) && text(note.folder, 300, true) && text(note.title, 10_000, true) && text(note.content, 10_000_000) &&
+      Array.isArray(note.tags) && note.tags.length <= 1_000 && note.tags.every((tag) => text(tag, 300, true)) && typeof note.pinned === 'boolean' && typeof note.archived === 'boolean' &&
+      text(note.updatedAt, 100) && Number.isFinite(Date.parse(note.updatedAt)) && (note.color === undefined || text(note.color, 100)) &&
+      (note.attachments === undefined || (Array.isArray(note.attachments) && note.attachments.length <= 50 && note.attachments.every((attachment) =>
+        attachment && text(attachment.id, 300, true) && text(attachment.name, 1_000, true) && Number.isSafeInteger(attachment.size) && attachment.size >= 0 && attachment.size <= NOTE_ATTACHMENT_MAX_BYTES &&
+        text(attachment.path, 32_767, true) && (attachment.mime === undefined || text(attachment.mime, 300)))))) &&
+    (input.contacts ?? []).every((contact) => contact && text(contact.id, 300, true) && text(contact.name, 10_000, true) && text(contact.email, 10_000) &&
+      text(contact.group, 300, true) && text(contact.color, 100, true) && typeof contact.favorite === 'boolean' && contact.source === 'local' &&
+      [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || text(field, 1_000_000)))
+}
+
+interface ArchivedNoteAttachment {
+  id: string
+  name: string
+  size: number
+  mime?: string
+  dataBase64: string
+}
+
+interface LocalDataBackup {
+  format: 'aerio-local-data'
+  schemaVersion: 1 | 2
+  exportedAt: string
+  data: LocalModuleSnapshot
+  attachments?: ArchivedNoteAttachment[]
+}
+
+function localDataBackupFromUnknown(value: unknown): LocalDataBackup | undefined {
+  if (!value || typeof value !== 'object') return
+  const backup = value as Partial<LocalDataBackup>
+  if (backup.format !== 'aerio-local-data' || (backup.schemaVersion !== 1 && backup.schemaVersion !== 2) || typeof backup.exportedAt !== 'string' || !validLocalModules(backup.data)) return
+  if (backup.schemaVersion === 1 && backup.data.notes.some((note) => (note.attachments?.length ?? 0) > 0)) return
+  if (backup.schemaVersion === 2 && (!Array.isArray(backup.attachments) || backup.attachments.length > 5_000 || !backup.attachments.every((attachment) =>
+    attachment && typeof attachment.id === 'string' && Boolean(attachment.id.trim()) && attachment.id.length <= 300 &&
+    typeof attachment.name === 'string' && Boolean(attachment.name.trim()) && attachment.name.length <= 1_000 &&
+    Number.isSafeInteger(attachment.size) && attachment.size >= 0 && attachment.size <= NOTE_ATTACHMENT_MAX_BYTES &&
+    (attachment.mime === undefined || (typeof attachment.mime === 'string' && attachment.mime.length <= 300)) &&
+    typeof attachment.dataBase64 === 'string' && attachment.dataBase64.length <= Math.ceil(NOTE_ATTACHMENT_MAX_BYTES / 3) * 4 + 4 &&
+    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(attachment.dataBase64)))) return
+  if (backup.schemaVersion === 2 && new Set(backup.attachments!.map((attachment) => attachment.id)).size !== backup.attachments!.length) return
+  return backup as LocalDataBackup
+}
+
+function createLocalDataBackup(snapshot: LocalModuleSnapshot): LocalDataBackup {
+  const archived = new Map<string, ArchivedNoteAttachment>()
+  let total = 0
+  for (const attachment of snapshot.notes.flatMap((note) => note.attachments ?? [])) {
+    if (archived.has(attachment.id)) continue
+    if (!attachment.path || !isManagedNoteAttachmentPath(attachment.path) || !existsSync(attachment.path)) throw new Error(`The note attachment “${attachment.name}” is unavailable`)
+    const bytes = Buffer.from(readFileSync(attachment.path))
+    if (bytes.byteLength !== attachment.size || bytes.byteLength > NOTE_ATTACHMENT_MAX_BYTES) throw new Error(`The note attachment “${attachment.name}” changed or is too large`)
+    total += bytes.byteLength
+    if (total > NOTE_BACKUP_ATTACHMENT_MAX_BYTES) throw new Error('Note attachments exceed the 100 MB backup limit')
+    archived.set(attachment.id, { id: attachment.id, name: attachment.name, size: bytes.byteLength, mime: attachment.mime, dataBase64: bytes.toString('base64') })
+  }
+  return { format: 'aerio-local-data', schemaVersion: 2, exportedAt: new Date().toISOString(), data: snapshot, attachments: [...archived.values()] }
+}
+
+function materializeLocalDataBackup(backup: LocalDataBackup): { snapshot: LocalModuleSnapshot; createdPaths: string[] } {
+  if (backup.schemaVersion === 1) return { snapshot: backup.data, createdPaths: [] }
+  const archived = new Map((backup.attachments ?? []).map((attachment) => [attachment.id, attachment]))
+  const paths = new Map<string, string>()
+  const createdPaths: string[] = []
+  let total = 0
+  try {
+    const notes = backup.data.notes.map((note) => ({
+      ...note,
+      attachments: note.attachments?.map((attachment) => {
+        const stored = archived.get(attachment.id)
+        if (!stored) throw new Error(`The backup is missing the attachment “${attachment.name}”`)
+        const bytes = Buffer.from(stored.dataBase64, 'base64')
+        if (bytes.byteLength !== stored.size || bytes.toString('base64') !== stored.dataBase64 || bytes.byteLength > NOTE_ATTACHMENT_MAX_BYTES) {
+          throw new Error(`The backup attachment “${attachment.name}” is invalid`)
+        }
+        total += paths.has(attachment.id) ? 0 : bytes.byteLength
+        if (total > NOTE_BACKUP_ATTACHMENT_MAX_BYTES) throw new Error('Note attachments exceed the 100 MB restore limit')
+        let path = paths.get(attachment.id)
+        if (!path) {
+          const extension = extname(stored.name)
+          path = join(noteAttachmentsDirectory(), `${crypto.randomUUID()}${extension.length <= 12 ? extension : ''}`)
+          mkdirSync(noteAttachmentsDirectory(), { recursive: true })
+          writeFileSync(path, bytes, { mode: 0o600 })
+          paths.set(attachment.id, path)
+          createdPaths.push(path)
+        }
+        return { id: stored.id, name: stored.name, size: stored.size, mime: stored.mime, path }
+      })
+    }))
+    return { snapshot: { ...backup.data, notes }, createdPaths }
+  } catch (error) {
+    for (const path of createdPaths) {
+      try { if (existsSync(path)) unlinkSync(path) } catch { /* Do not mask the restore validation error. */ }
+    }
+    throw error
+  }
 }
 
 async function syncProductivity(accountId: string): Promise<ProductivitySnapshot> {
@@ -258,12 +400,18 @@ async function syncProductivity(accountId: string): Promise<ProductivitySnapshot
     ? new GoogleProductivityConnector(
       accountId,
       () => requireVault().accessToken(accountId),
-      requireVault().hasGoogleCalendarWriteAccess(accountId)
+      requireVault().hasGoogleCalendarWriteAccess(accountId),
+      requireVault().hasGoogleContactsWriteAccess(accountId)
     )
-    : new MicrosoftProductivityConnector(accountId, () => requireVault().microsoftAccessToken(accountId))
+    : new MicrosoftProductivityConnector(
+      accountId,
+      () => requireVault().microsoftAccessToken(accountId),
+      requireVault().hasMicrosoftCalendarWriteAccess(accountId),
+      requireVault().hasMicrosoftContactsWriteAccess(accountId)
+    )
   try {
-    const data = await connector.sync()
-    store.replaceAccount(accountId, provider, data)
+    const data = await connector.sync(store.accountData(accountId), store.checkpoints(accountId))
+    store.replaceAccount(accountId, provider, data, data.checkpoints)
     diagnostic({
       level: 'info', component: 'provider', event: 'productivity-sync-complete', accountId,
       details: { provider, calendars: data.calendars.length, events: data.events.length, contacts: data.contacts.length }
@@ -293,6 +441,15 @@ function validCalendarEvent(value: unknown): value is CalendarEvent {
   return event.recurrence === undefined || event.recurrence === 'none' || event.recurrence === 'daily' || event.recurrence === 'weekly' || event.recurrence === 'monthly'
 }
 
+function validContact(value: unknown): value is Contact {
+  if (!value || typeof value !== 'object') return false
+  const contact = value as Partial<Contact>
+  const validText = (input: unknown, max: number, required = false) => typeof input === 'string' && input.length <= max && (!required || Boolean(input.trim()))
+  return validText(contact.id, 500, true) && validText(contact.name, 10_000, true) && validText(contact.email, 10_000) &&
+    validText(contact.group, 300, true) && validText(contact.color, 100, true) && typeof contact.favorite === 'boolean' &&
+    [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || validText(field, 100_000))
+}
+
 function googleCalendarConnector(accountId: string) {
   return new GoogleProductivityConnector(
     accountId,
@@ -301,12 +458,42 @@ function googleCalendarConnector(accountId: string) {
   )
 }
 
+function microsoftCalendarConnector(accountId: string) {
+  return new MicrosoftProductivityConnector(
+    accountId,
+    () => requireVault().microsoftAccessToken(accountId),
+    requireVault().hasMicrosoftCalendarWriteAccess(accountId)
+  )
+}
+
+function googleContactsConnector(accountId: string) {
+  return new GoogleProductivityConnector(
+    accountId,
+    () => requireVault().accessToken(accountId),
+    requireVault().hasGoogleCalendarWriteAccess(accountId),
+    requireVault().hasGoogleContactsWriteAccess(accountId)
+  )
+}
+
+function microsoftContactsConnector(accountId: string) {
+  return new MicrosoftProductivityConnector(
+    accountId,
+    () => requireVault().microsoftAccessToken(accountId),
+    requireVault().hasMicrosoftCalendarWriteAccess(accountId),
+    requireVault().hasMicrosoftContactsWriteAccess(accountId)
+  )
+}
+
+function writableCalendarConnector(calendar: import('../src/productivity-types').SyncedCalendar) {
+  return calendar.provider === 'gmail' ? googleCalendarConnector(calendar.accountId) : microsoftCalendarConnector(calendar.accountId)
+}
+
 async function createProductivityEvent(input: CalendarEvent) {
   const store = requireProductivityStore()
   const calendar = store.snapshot().calendars.find((item) => item.id === input.calendarId)
   if (!calendar) throw new Error('That calendar is no longer available')
-  if (calendar.provider !== 'gmail') throw new Error('Event editing is currently available for Google Calendar accounts')
-  const saved = await googleCalendarConnector(calendar.accountId).createEvent(calendar, input)
+  if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
+  const saved = await writableCalendarConnector(calendar).createEvent(calendar, input)
   store.upsertEvent(saved)
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-created', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
   return store.snapshot()
@@ -321,8 +508,9 @@ async function updateProductivityEvent(input: CalendarEvent) {
   if (input.calendarId !== current.calendarId) throw new Error('Moving an existing event to another calendar is not supported yet')
   const calendar = snapshot.calendars.find((item) => item.id === current.calendarId)
   if (!calendar) throw new Error('That calendar is no longer available')
-  if (calendar.provider !== 'gmail') throw new Error('Event editing is currently available for Google Calendar accounts')
-  const saved = await googleCalendarConnector(calendar.accountId).updateEvent(calendar, current, input)
+  if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
+  if (current.provider !== calendar.provider || current.accountId !== calendar.accountId) throw new Error('The event’s calendar connection changed; synchronize before editing')
+  const saved = await writableCalendarConnector(calendar).updateEvent(calendar, current, input)
   store.upsertEvent(saved)
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-updated', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
   return store.snapshot()
@@ -336,10 +524,47 @@ async function deleteProductivityEvent(eventId: string) {
   if (current.readOnly) throw new Error('This event cannot be deleted')
   const calendar = snapshot.calendars.find((item) => item.id === current.calendarId)
   if (!calendar) throw new Error('That calendar is no longer available')
-  if (calendar.provider !== 'gmail') throw new Error('Event editing is currently available for Google Calendar accounts')
-  await googleCalendarConnector(calendar.accountId).deleteEvent(calendar, current)
+  if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
+  if (current.provider !== calendar.provider || current.accountId !== calendar.accountId) throw new Error('The event’s calendar connection changed; synchronize before deleting')
+  await writableCalendarConnector(calendar).deleteEvent(calendar, current)
   store.deleteEvent(current.id)
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-deleted', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
+  return store.snapshot()
+}
+
+function writableContactsConnector(accountId: string, provider: 'gmail' | 'microsoft') {
+  return provider === 'gmail' ? googleContactsConnector(accountId) : microsoftContactsConnector(accountId)
+}
+
+async function createProductivityContact(accountId: string, input: Contact) {
+  const provider = accountProviders.get(accountId)
+  if (provider !== 'gmail' && provider !== 'microsoft') throw new Error('Choose a connected Google or Microsoft account')
+  const store = requireProductivityStore()
+  const saved = await writableContactsConnector(accountId, provider).createContact(input)
+  store.upsertContact(saved)
+  diagnostic({ level: 'info', component: 'provider', event: 'contact-created', accountId, details: { provider } })
+  return { contact: saved, snapshot: store.snapshot() }
+}
+
+async function updateProductivityContact(input: Contact) {
+  const store = requireProductivityStore()
+  const current = store.snapshot().contacts.find((contact) => contact.id === input.id)
+  if (!current) throw new Error('That contact is no longer available')
+  if (current.readOnly) throw new Error('Reconnect this account once to enable Contacts editing')
+  const saved = await writableContactsConnector(current.accountId, current.provider).updateContact(current, input)
+  store.upsertContact(saved)
+  diagnostic({ level: 'info', component: 'provider', event: 'contact-updated', accountId: current.accountId, details: { provider: current.provider } })
+  return { contact: saved, snapshot: store.snapshot() }
+}
+
+async function deleteProductivityContact(contactId: string) {
+  const store = requireProductivityStore()
+  const current = store.snapshot().contacts.find((contact) => contact.id === contactId)
+  if (!current) throw new Error('That contact is no longer available')
+  if (current.readOnly) throw new Error('Reconnect this account once to enable Contacts editing')
+  await writableContactsConnector(current.accountId, current.provider).deleteContact(current)
+  store.deleteContact(current.id)
+  diagnostic({ level: 'info', component: 'provider', event: 'contact-deleted', accountId: current.accountId, details: { provider: current.provider } })
   return store.snapshot()
 }
 
@@ -364,7 +589,7 @@ function showNewMailNotification(payload: Extract<import('../src/mail-types').Ma
   const notification = new Notification({ title, body: payload.count === 1 ? payload.subject || 'Open Aerio to read it' : 'Open Aerio to view your inbox', icon: iconPath() })
   notification.on('click', () => {
     openMainWindow()
-    if (payload.threadId) createMessageWindow({ source: 'connected', accountId: payload.accountId, threadId: payload.threadId, title: payload.subject || 'New message' })
+    if (payload.threadId && !appLockStatus().locked) createMessageWindow({ source: 'connected', accountId: payload.accountId, threadId: payload.threadId, title: payload.subject || 'New message' })
   })
   notification.show()
 }
@@ -558,7 +783,101 @@ function savePreferences(preferences: AppPreferences) {
        payload = excluded.payload,
         updated_at = excluded.updated_at`
   ).run(normalized.schemaVersion, JSON.stringify(normalized), updatedAt)
+  if (app.isPackaged && process.platform === 'win32') app.setLoginItemSettings({ openAtLogin: Boolean(normalized.settings.launchAtLogin) })
   return { savedAt: updatedAt }
+}
+
+interface AppLockRecord {
+  salt: string
+  verifier: string
+}
+
+function loadAppLockRecord(): AppLockRecord | undefined {
+  if (!database) throw new Error('Aerio database is not ready')
+  const result = database.prepare('SELECT salt, verifier FROM app_lock WHERE id = 1').get() as Partial<AppLockRecord> | undefined
+  if (!result) return
+  if (typeof result.salt !== 'string' || typeof result.verifier !== 'string' ||
+      !/^[A-Za-z0-9+/]{22}==$/.test(result.salt) || !/^[A-Za-z0-9+/]{43}=$/.test(result.verifier)) {
+    throw new Error('Stored Aerio app-lock data is invalid')
+  }
+  return { salt: result.salt, verifier: result.verifier }
+}
+
+function appLockStatus() {
+  const enabled = Boolean(loadAppLockRecord())
+  return { enabled, locked: enabled && applicationLocked }
+}
+
+function validAppLockPassphrase(value: unknown): value is string {
+  return typeof value === 'string' && value.length >= 8 && value.length <= 256 && value.trim().length >= 8
+}
+
+function appLockVerifier(passphrase: string, salt: Buffer) {
+  return scryptSync(passphrase, salt, 32)
+}
+
+function verifyAppLockPassphrase(passphrase: unknown, record = loadAppLockRecord()) {
+  if (!record) throw new Error('Aerio app lock is not enabled')
+  if (typeof passphrase !== 'string' || passphrase.length > 256) throw new Error('Enter the app-lock passphrase')
+  const wait = unlockBlockedUntil - Date.now()
+  if (wait > 0) throw new Error(`Too many attempts. Try again in ${Math.ceil(wait / 1_000)} seconds`)
+  const actual = appLockVerifier(passphrase, Buffer.from(record.salt, 'base64'))
+  const expected = Buffer.from(record.verifier, 'base64')
+  if (!timingSafeEqual(actual, expected)) {
+    failedUnlockAttempts += 1
+    if (failedUnlockAttempts >= 5) {
+      unlockBlockedUntil = Date.now() + 30_000
+      failedUnlockAttempts = 0
+    }
+    throw new Error('The app-lock passphrase is incorrect')
+  }
+  failedUnlockAttempts = 0
+  unlockBlockedUntil = 0
+}
+
+function publishAppLockStatus() {
+  const status = appLockStatus()
+  BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('app-lock:status-changed', status))
+  return status
+}
+
+function enableAppLock(passphrase: unknown) {
+  if (loadAppLockRecord()) throw new Error('Aerio app lock is already enabled')
+  if (!validAppLockPassphrase(passphrase)) throw new Error('Use a passphrase of 8 to 256 characters')
+  const salt = randomBytes(16)
+  const verifier = appLockVerifier(passphrase, salt)
+  const updatedAt = new Date().toISOString()
+  database!.prepare(
+    `INSERT INTO app_lock (id, salt, verifier, updated_at) VALUES (1, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET salt = excluded.salt, verifier = excluded.verifier, updated_at = excluded.updated_at`
+  ).run(salt.toString('base64'), verifier.toString('base64'), updatedAt)
+  applicationLocked = false
+  return publishAppLockStatus()
+}
+
+function disableAppLock(passphrase: unknown) {
+  verifyAppLockPassphrase(passphrase)
+  database!.prepare('DELETE FROM app_lock WHERE id = 1').run()
+  applicationLocked = false
+  return publishAppLockStatus()
+}
+
+function lockApplication() {
+  if (!loadAppLockRecord()) return appLockStatus()
+  applicationLocked = true
+  for (const window of messageWindows.values()) window.close()
+  return publishAppLockStatus()
+}
+
+function unlockApplication(passphrase: unknown) {
+  const record = loadAppLockRecord()
+  if (!record) {
+    applicationLocked = false
+    return appLockStatus()
+  }
+  verifyAppLockPassphrase(passphrase, record)
+  applicationLocked = false
+  return publishAppLockStatus()
 }
 
 function boundsPath() {
@@ -646,6 +965,7 @@ function validMessageWindowRequest(value: unknown): value is MessageWindowReques
 }
 
 function createMessageWindow(input: MessageWindowRequest) {
+  if (appLockStatus().locked) throw new Error('Unlock Aerio before opening a message window')
   const key = `mail:${input.accountId}:${input.threadId}:${input.messageId ?? 'thread'}`
   const existing = messageWindows.get(key)
   if (existing && !existing.isDestroyed()) {
@@ -717,7 +1037,7 @@ function createWindow() {
   mainWindow.on('show', () => updateMailPolling(true))
   mainWindow.on('focus', () => updateMailPolling(true))
   mainWindow.on('restore', () => updateMailPolling(true))
-  mainWindow.on('hide', () => updateMailPolling())
+  mainWindow.on('hide', () => { updateMailPolling(); lockApplication() })
   mainWindow.on('blur', () => updateMailPolling())
   mainWindow.on('minimize', () => updateMailPolling())
   mainWindow.on('close', (event) => {
@@ -736,7 +1056,7 @@ function createWindow() {
 function openMainWindow(compose = false) {
   if (!mainWindow) {
     const window = createWindow()
-    if (compose) window.webContents.once('did-finish-load', () => window.webContents.send('command:compose'))
+    if (compose && !appLockStatus().locked) window.webContents.once('did-finish-load', () => window.webContents.send('command:compose'))
     return
   }
   if (mainWindow.isMinimized()) mainWindow.restore()
@@ -744,7 +1064,7 @@ function openMainWindow(compose = false) {
       mainWindow.show()
       mainWindow.focus()
     }
-  if (compose) mainWindow.webContents.send('command:compose')
+  if (compose && !appLockStatus().locked) mainWindow.webContents.send('command:compose')
 }
 
 function createTray() {
@@ -765,6 +1085,11 @@ function createTray() {
 function registerIpc() {
   ipcMain.handle('preferences:load', () => loadPreferences())
   ipcMain.handle('preferences:save', (_event, preferences: AppPreferences) => savePreferences(preferences))
+  ipcMain.handle('app-lock:status', () => appLockStatus())
+  ipcMain.handle('app-lock:enable', (_event, passphrase: unknown) => enableAppLock(passphrase))
+  ipcMain.handle('app-lock:disable', (_event, passphrase: unknown) => disableAppLock(passphrase))
+  ipcMain.handle('app-lock:lock', () => lockApplication())
+  ipcMain.handle('app-lock:unlock', (_event, passphrase: unknown) => unlockApplication(passphrase))
   ipcMain.handle('files:choose', async (): Promise<Attachment[]> => {
     const options: Electron.OpenDialogOptions = { properties: ['openFile', 'multiSelections'] }
     const result = mainWindow
@@ -809,7 +1134,86 @@ function registerIpc() {
   ipcMain.handle('productivity:local-snapshot', () => requireProductivityStore().localSnapshot())
   ipcMain.handle('productivity:local-save', (_event, snapshot: unknown) => {
     if (!validLocalModules(snapshot)) throw new Error('Local Tasks or Notes data is invalid')
-    requireProductivityStore().saveLocal(snapshot)
+    const store = requireProductivityStore()
+    const previous = store.localSnapshot()
+    store.saveLocal(snapshot)
+    cleanupRemovedNoteAttachments(previous, snapshot)
+  })
+  ipcMain.handle('productivity:note-attachments-choose', async (event): Promise<Attachment[]> => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    const options: Electron.OpenDialogOptions = { title: 'Attach files to note', properties: ['openFile', 'multiSelections'] }
+    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
+    if (result.canceled) return []
+    if (result.filePaths.length > 50) throw new Error('Attach no more than 50 files to a note')
+    const files = result.filePaths.map((source) => ({ source, file: statSync(source) }))
+    for (const { source, file } of files) {
+      if (!file.isFile() || file.size > NOTE_ATTACHMENT_MAX_BYTES) throw new Error(`“${basename(source)}” must be a file no larger than 25 MB`)
+    }
+    mkdirSync(noteAttachmentsDirectory(), { recursive: true })
+    const copiedPaths: string[] = []
+    try {
+      return files.map(({ source, file }) => {
+        const extension = extname(source)
+        const path = join(noteAttachmentsDirectory(), `${crypto.randomUUID()}${extension.length <= 12 ? extension : ''}`)
+        copyFileSync(source, path)
+        copiedPaths.push(path)
+        return { id: crypto.randomUUID(), name: basename(source), size: file.size, path, mime: extension.slice(1) || undefined }
+      })
+    } catch (error) {
+      for (const path of copiedPaths) {
+        try { if (existsSync(path)) unlinkSync(path) } catch { /* Do not mask the copy error. */ }
+      }
+      throw error
+    }
+  })
+  ipcMain.handle('productivity:note-attachment-open', async (_event, path: unknown) => {
+    if (typeof path !== 'string' || !path || path.length > 32_767 || !isManagedNoteAttachmentPath(path) || !existsSync(path)) throw new Error('That note attachment is no longer available')
+    const error = await shell.openPath(path)
+    return error ? { error } : {}
+  })
+  ipcMain.handle('productivity:local-export', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    const filename = `Aerio-local-data-${new Date().toISOString().slice(0, 10)}.json`
+    const options: Electron.SaveDialogOptions = {
+      title: 'Export Aerio local data',
+      defaultPath: filename,
+      filters: [{ name: 'Aerio local data', extensions: ['json'] }]
+    }
+    const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return {}
+    const backup = createLocalDataBackup(requireProductivityStore().localSnapshot())
+    writeFileSync(result.filePath, `${JSON.stringify(backup, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+    return { savedPath: result.filePath }
+  })
+  ipcMain.handle('productivity:local-import', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    const options: Electron.OpenDialogOptions = {
+      title: 'Restore Aerio local data',
+      filters: [{ name: 'Aerio local data', extensions: ['json'] }],
+      properties: ['openFile']
+    }
+    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
+    const path = result.filePaths[0]
+    if (result.canceled || !path) return
+    const file = statSync(path)
+    if (!file.isFile() || file.size > 150 * 1024 * 1024) throw new Error('Choose an Aerio local-data backup smaller than 150 MB')
+    let parsed: unknown
+    try { parsed = JSON.parse(readFileSync(path, 'utf8')) }
+    catch { throw new Error('That file is not a readable Aerio local-data backup') }
+    const backup = localDataBackupFromUnknown(parsed)
+    if (!backup) throw new Error('That backup is invalid or was created by an unsupported Aerio version')
+    const { snapshot: restored, createdPaths } = materializeLocalDataBackup(backup)
+    const store = requireProductivityStore()
+    const previous = store.localSnapshot()
+    try { store.saveLocal(restored) }
+    catch (error) {
+      for (const path of createdPaths) {
+        try { if (existsSync(path)) unlinkSync(path) } catch { /* Do not mask the storage error. */ }
+      }
+      throw error
+    }
+    cleanupRemovedNoteAttachments(previous, restored)
+    return restored
   })
   ipcMain.handle('productivity:sync', (_event, accountId: string) => {
     if (typeof accountId !== 'string' || !accountId || accountId.length > 200) throw new Error('Choose a valid account to synchronize')
@@ -826,6 +1230,19 @@ function registerIpc() {
   ipcMain.handle('productivity:event-delete', (_event, eventId: unknown) => {
     if (typeof eventId !== 'string' || !eventId || eventId.length > 500) throw new Error('Choose a valid event')
     return deleteProductivityEvent(eventId)
+  })
+  ipcMain.handle('productivity:contact-create', (_event, accountId: unknown, input: unknown) => {
+    if (typeof accountId !== 'string' || !accountId || accountId.length > 200) throw new Error('Choose a valid provider account')
+    if (!validContact(input)) throw new Error('Enter valid contact details')
+    return createProductivityContact(accountId, input)
+  })
+  ipcMain.handle('productivity:contact-update', (_event, input: unknown) => {
+    if (!validContact(input)) throw new Error('Enter valid contact details')
+    return updateProductivityContact(input)
+  })
+  ipcMain.handle('productivity:contact-delete', (_event, contactId: unknown) => {
+    if (typeof contactId !== 'string' || !contactId || contactId.length > 500) throw new Error('Choose a valid contact')
+    return deleteProductivityContact(contactId)
   })
   ipcMain.handle('app:update:status', () => updates?.status() ?? ({
     phase: 'unsupported',
@@ -993,6 +1410,10 @@ function registerIpc() {
     requireMailWorker().request<MailRecipientSuggestion[]>({ type: 'recipients:suggest', payload: { query: typeof query === 'string' ? query.slice(0, 200) : '', accountIds } }))
   ipcMain.handle('mail:threads:list', (_event, query: MailQuery) =>
     requireMailWorker().request<MailPage>({ type: 'mail:list', payload: query }))
+  ipcMain.handle('mail:folders:unread-counts', (_event, accountIds?: string[]) =>
+    requireMailWorker().request<MailFolderUnreadCounts>({ type: 'mail:unread-counts', payload: { accountIds } }))
+  ipcMain.handle('mail:accounts:unread-counts', () =>
+    requireMailWorker().request<MailAccountUnreadCounts>({ type: 'mail:account-unread-counts' }))
   ipcMain.handle('mail:threads:get', (_event, accountId: string, threadId: string, allowRemoteImages?: boolean) =>
     requireMailWorker().request<MailThreadDetail>({ type: 'mail:thread', payload: { accountId, threadId, allowRemoteImages } }))
   ipcMain.handle('mail:message:source', (_event, accountId: string, messageId: string) =>

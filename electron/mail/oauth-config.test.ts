@@ -52,6 +52,9 @@ describe('parseDesktopOAuthConfig', () => {
       .toThrow(/both MAIN_VITE_GOOGLE_CLIENT_ID/)
     expect(() => parseOAuthEnvironment({ microsoftClientId: 'not-a-uuid' }))
       .toThrow(/valid UUID/)
+    expect(() => parseDesktopOAuthConfig({
+      installed: { client_id: 'not-google', client_secret: '' }
+    })).toThrow(/missing its client ID or client secret/)
   })
 
   it('keeps Aerio’s default Microsoft registration valid', () => {
@@ -67,5 +70,17 @@ describe('parseDesktopOAuthConfig', () => {
       clientId: DEFAULT_GOOGLE_CLIENT_ID,
       clientSecret: 'desktop-secret'
     })
+  })
+
+  it('rejects non-object files and accepts desktop credentials without redirect metadata', () => {
+    expect(() => parseDesktopOAuthConfig(null)).toThrow(/valid JSON/)
+    expect(() => parseDesktopOAuthConfig('credentials')).toThrow(/valid JSON/)
+    expect(parseDesktopOAuthConfig({
+      installed: {
+        client_id: '123.apps.googleusercontent.com',
+        client_secret: 'secret'
+      }
+    })).toEqual({ clientId: '123.apps.googleusercontent.com', clientSecret: 'secret' })
+    expect(parseOAuthEnvironment({})).toEqual({ googleConfig: undefined, microsoftClientId: undefined })
   })
 })

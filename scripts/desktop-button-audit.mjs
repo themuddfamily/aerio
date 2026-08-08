@@ -102,15 +102,14 @@ try {
     await moduleButton('Calendar').click()
     await assertAccessibleButtons()
     await page.getByRole('button', { name: 'Enable event editing' }).click()
-    await page.getByText('Connect a Google account to enable Calendar editing').waitFor()
+    await page.getByText('Connect Google or Microsoft to enable Calendar editing').waitFor()
   })
 
-  await step('contacts and chat show connected empty states', async () => {
+  await step('contacts show a local-first empty state and Chat stays outside v1 navigation', async () => {
     await moduleButton('Contacts').click()
     await assertAccessibleButtons()
     await page.getByRole('heading', { name: 'Select a contact' }).waitFor()
-    await moduleButton('Chat').click()
-    await page.getByRole('heading', { name: 'No chat service connected' }).waitFor()
+    assert.equal(await page.locator('.module-rail').getByRole('button', { name: 'Chat', exact: true }).count(), 0)
   })
 
   await step('task editor blocks empty saves and creates a task', async () => {

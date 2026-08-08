@@ -10,4 +10,8 @@ describe('updateSupport', () => {
     expect(updateSupport({ packaged: false, platform: 'win32', portable: false })).toMatchObject({ supported: false, reason: expect.stringMatching(/installed release/) })
     expect(updateSupport({ packaged: true, platform: 'win32', portable: true })).toMatchObject({ supported: false, reason: expect.stringMatching(/Portable/) })
   })
+
+  it('explains why non-Windows builds cannot self-update', () => {
+    expect(updateSupport({ packaged: true, platform: 'darwin', portable: false })).toMatchObject({ supported: false, reason: expect.stringMatching(/Windows/) })
+  })
 })

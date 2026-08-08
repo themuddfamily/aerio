@@ -25,15 +25,16 @@ interface MicrosoftTokenSet {
   accessToken: string
   refreshToken: string
   expiresAt: number
+  scope?: string
 }
 
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
   'https://www.googleapis.com/auth/calendar.events',
-  'https://www.googleapis.com/auth/contacts.readonly'
+  'https://www.googleapis.com/auth/contacts'
 ]
-const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.Read', 'Contacts.Read']
+const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.ReadWrite', 'Contacts.ReadWrite']
 
 export class OAuthVault {
   private data: StoredOAuthData = { googleTokens: {}, googleCalendarWrite: {}, microsoftTokens: {}, imapAccounts: {} }
@@ -237,6 +238,16 @@ export class OAuthVault {
       scopes.has('https://www.googleapis.com/auth/calendar.events')
   }
 
+  hasGoogleContactsWriteAccess(accountId: string) {
+    let credentials = this.data.googleTokens[accountId]
+    if (!credentials) {
+      this.load()
+      credentials = this.data.googleTokens[accountId]
+    }
+    const scopes = new Set((credentials?.scope ?? '').split(/\s+/).filter(Boolean))
+    return scopes.has('https://www.googleapis.com/auth/contacts')
+  }
+
   microsoftStatus(): MailCredentialStatus {
     const clientId = this.microsoftClientId()
     return {
@@ -308,7 +319,7 @@ export class OAuthVault {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ client_id: clientId, grant_type: 'authorization_code', code, redirect_uri: callback.redirectUri, code_verifier: verifier, scope: scopes.join(' ') })
       })
-      const token = await tokenResponse.json() as { access_token?: string; refresh_token?: string; expires_in?: number; error_description?: string }
+      const token = await tokenResponse.json() as { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string; error_description?: string }
       if (!tokenResponse.ok || !token.access_token || !token.refresh_token) throw new Error(token.error_description ?? 'Microsoft did not return renewable credentials')
       const profileResponse = await fetch('https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName', { headers: { Authorization: `Bearer ${token.access_token}` } })
       const profile = await profileResponse.json() as { id?: string; displayName?: string; mail?: string; userPrincipalName?: string; error?: { message?: string } }
@@ -317,7 +328,7 @@ export class OAuthVault {
       if (!email) throw new Error('The Microsoft account does not expose a mailbox address')
       const accountId = createHash('sha256').update(`microsoft:${profile.id}`).digest('hex').slice(0, 24)
       if (expected && expected.accountId !== accountId) throw new Error(`Sign in to ${expected.email}, not a different Microsoft account`)
-      this.data.microsoftTokens[accountId] = { accessToken: token.access_token, refreshToken: token.refresh_token, expiresAt: Date.now() + Number(token.expires_in ?? 3600) * 1_000 }
+      this.data.microsoftTokens[accountId] = { accessToken: token.access_token, refreshToken: token.refresh_token, expiresAt: Date.now() + Number(token.expires_in ?? 3600) * 1_000, scope: token.scope }
       this.accessCache.set(accountId, { token: token.access_token, expiresAt: this.data.microsoftTokens[accountId].expiresAt })
       this.save()
       return { accountId, email, displayName: profile.displayName ?? email.split('@')[0] }
@@ -340,13 +351,31 @@ export class OAuthVault {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ client_id: clientId, grant_type: 'refresh_token', refresh_token: current.refreshToken, scope: MICROSOFT_SCOPES.join(' ') })
     })
-    const token = await response.json() as { access_token?: string; refresh_token?: string; expires_in?: number; error_description?: string }
+    const token = await response.json() as { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string; error_description?: string }
     if (!response.ok || !token.access_token) throw new Error(token.error_description ?? 'Microsoft token refresh failed')
-    const next = { accessToken: token.access_token, refreshToken: token.refresh_token ?? current.refreshToken, expiresAt: Date.now() + Number(token.expires_in ?? 3600) * 1_000 }
+    const next = { accessToken: token.access_token, refreshToken: token.refresh_token ?? current.refreshToken, expiresAt: Date.now() + Number(token.expires_in ?? 3600) * 1_000, scope: token.scope ?? current.scope }
     this.data.microsoftTokens[accountId] = next
     this.accessCache.set(accountId, { token: next.accessToken, expiresAt: next.expiresAt })
     this.save()
     return next.accessToken
+  }
+
+  hasMicrosoftCalendarWriteAccess(accountId: string) {
+    let credentials = this.data.microsoftTokens[accountId]
+    if (!credentials) {
+      this.load()
+      credentials = this.data.microsoftTokens[accountId]
+    }
+    return new Set((credentials?.scope ?? '').split(/\s+/).filter(Boolean)).has('Calendars.ReadWrite')
+  }
+
+  hasMicrosoftContactsWriteAccess(accountId: string) {
+    let credentials = this.data.microsoftTokens[accountId]
+    if (!credentials) {
+      this.load()
+      credentials = this.data.microsoftTokens[accountId]
+    }
+    return new Set((credentials?.scope ?? '').split(/\s+/).filter(Boolean)).has('Contacts.ReadWrite')
   }
 
   storeImap(accountId: string, input: ImapAccountInput) {

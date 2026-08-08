@@ -66,7 +66,7 @@ export default function CalendarView({
       ? calendarId
       : state.accounts.find((account) => canWriteCalendar(account.id))?.id
     if (!targetCalendarId) {
-      onToast('Enable Google Calendar editing once, then double-click again')
+      onToast('Enable Calendar editing once, then double-click again')
       return
     }
     setNewDate(date)
@@ -143,7 +143,7 @@ export default function CalendarView({
         </button>
         <>
           <button className="button ghost small provider-sync-button" disabled={syncing} onClick={() => void onSync()}><RefreshCw className={syncing ? 'spin' : undefined} size={14} /> {syncing ? 'Syncing…' : 'Sync now'}</button>
-          <p className="provider-source-note" aria-live="polite">{hasWritableCalendar ? sourceMessage : 'Reconnect Google once to grant Calendar editing. Existing events remain available.'}</p>
+          <p className="provider-source-note" aria-live="polite">{hasWritableCalendar ? sourceMessage : 'Reconnect Google or Microsoft once to grant Calendar editing. Existing events remain available.'}</p>
         </>
         <MiniCalendar cursor={cursor} selected={cursor} onSelect={setCursor} onCreate={createOn} onContextDate={showDateMenu} />
         <div className="sidebar-group">
@@ -321,6 +321,7 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
   const [description, setDescription] = useState(event?.description ?? '')
   const [attendees, setAttendees] = useState(event?.attendees.join(', ') ?? '')
   const [recurrence, setRecurrence] = useState<CalendarEvent['recurrence']>(event?.recurrence ?? 'none')
+  const [reminderMinutes, setReminderMinutes] = useState(event?.reminderMinutes ?? 15)
   const [busy, setBusy] = useState<'save' | 'delete'>()
   const color = state.accounts.find((account) => account.id === calendarId)?.color ?? '#6659e8'
   const startTime = Date.parse(start)
@@ -339,6 +340,7 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
           <label className="field-label">Calendar<select value={calendarId} disabled={readOnly || Boolean(event)} onChange={(e) => setCalendarId(e.target.value)}>{state.accounts.filter((account) => writableCalendarIds.has(account.id) || account.id === event?.calendarId).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
           <label className="field-label">Repeat<select value={recurrence} disabled={readOnly} onChange={(e) => setRecurrence(e.target.value as CalendarEvent['recurrence'])}><option value="none">Doesn’t repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>
         </div>
+        <label className="field-label">Reminder<select value={reminderMinutes} disabled={readOnly} onChange={(e) => setReminderMinutes(Number(e.target.value))}><option value={0}>At event time</option><option value={5}>5 minutes before</option><option value={10}>10 minutes before</option><option value={15}>15 minutes before</option><option value={30}>30 minutes before</option><option value={60}>1 hour before</option><option value={1440}>1 day before</option></select></label>
         <label className="field-label"><MapPin size={14} /> Location<input value={location} disabled={readOnly} onChange={(e) => setLocation(e.target.value)} placeholder="Add a place or video link" /></label>
         <label className="field-label"><Users size={14} /> Attendees<input value={attendees} disabled={readOnly} onChange={(e) => setAttendees(e.target.value)} placeholder="Separate email addresses with commas" /></label>
         <label className="field-label">Notes<textarea value={description} disabled={readOnly} onChange={(e) => setDescription(e.target.value)} /></label>
@@ -350,7 +352,7 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
             const next = {
             id: event?.id ?? uid('event'), calendarId, title: title.trim(),
             start: new Date(start).toISOString(), end: new Date(end).toISOString(), location, description, color,
-            attendees: attendees.split(',').map((value) => value.trim()).filter(Boolean), reminderMinutes: event?.reminderMinutes ?? 15, recurrence
+            attendees: attendees.split(',').map((value) => value.trim()).filter(Boolean), reminderMinutes, recurrence
             }
             setBusy('save')
             void Promise.resolve(onSave(next)).finally(() => setBusy(undefined))

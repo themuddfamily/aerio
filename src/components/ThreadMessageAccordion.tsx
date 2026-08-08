@@ -44,18 +44,20 @@ export default function ThreadMessageAccordion({
           <span className="thread-message-copy">
             <span className="thread-message-meta"><strong>{sender}</strong><time dateTime={message.date} title={formatMailArrivalTooltip(message.date)}>{formatMailArrival(message.date)}</time></span>
             <small>{message.fromEmail}</small>
-            {!expanded && <span className="thread-message-preview">{messagePreview(message)}</span>}
+            <span className="thread-message-preview" aria-hidden={expanded}>{messagePreview(message)}</span>
           </span>
           <ChevronDown className="thread-message-chevron" size={17} />
         </button>
-        {expanded && onReply && <button type="button" className="icon-button thread-message-reply" aria-label="Reply" title="Reply" onClick={onReply}><Reply size={16} /></button>}
+        {onReply && <button type="button" className="icon-button thread-message-reply" aria-label="Reply" aria-hidden={!expanded} tabIndex={expanded ? 0 : -1} title="Reply" onClick={onReply}><Reply size={16} /></button>}
       </header>
-      {expanded && <div className="thread-message-content" id={contentId}>
-        {message.sanitizedHtml
-          ? <MessageHtml className="message-body mail-html" html={message.sanitizedHtml} />
-          : <div className="message-body mail-text">{message.text}</div>}
-        {children}
-      </div>}
+      <div className="thread-message-content-shell" aria-hidden={!expanded} inert={!expanded}>
+        <div className="thread-message-content" id={contentId}>
+          {message.sanitizedHtml
+            ? <MessageHtml className="message-body mail-html" html={message.sanitizedHtml} />
+            : <div className="message-body mail-text">{message.text}</div>}
+          {children}
+        </div>
+      </div>
     </section>
   )
 }

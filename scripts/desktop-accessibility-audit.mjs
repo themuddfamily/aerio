@@ -43,7 +43,7 @@ try {
   await page.waitForSelector('.app')
 
   const moduleRail = page.locator('.module-rail')
-  for (const name of ['Mail', 'Calendar', 'Contacts', 'Tasks', 'Notes', 'Chat']) {
+  for (const name of ['Mail', 'Calendar', 'Contacts', 'Tasks', 'Notes']) {
     await moduleRail.getByRole('button', { name, exact: true }).click()
     await page.waitForTimeout(50)
     await audit(page, name)

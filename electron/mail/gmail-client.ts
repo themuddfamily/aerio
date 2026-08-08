@@ -25,6 +25,11 @@ export interface GmailMessageReference {
   threadId: string
 }
 
+export interface GmailDraftReference {
+  id: string
+  message: GmailMessageReference
+}
+
 export interface GmailRawMessage {
   id: string
   threadId: string
@@ -154,17 +159,23 @@ export class GmailClient {
   }
 
   createDraft(raw: string, threadId?: string) {
-    return this.request<{ id: string; message: GmailMessageReference }>('/drafts', {
+    return this.request<GmailDraftReference>('/drafts', {
       method: 'POST',
       body: JSON.stringify({ message: { raw, ...(threadId ? { threadId } : {}) } })
     })
   }
 
   updateDraft(draftId: string, raw: string, threadId?: string) {
-    return this.request<{ id: string; message: GmailMessageReference }>(`/drafts/${encodeURIComponent(draftId)}`, {
+    return this.request<GmailDraftReference>(`/drafts/${encodeURIComponent(draftId)}`, {
       method: 'PUT',
       body: JSON.stringify({ message: { raw, ...(threadId ? { threadId } : {}) } })
     })
+  }
+
+  async draftRevision(draftId: string) {
+    const draft = await this.request<GmailDraftReference>(`/drafts/${encodeURIComponent(draftId)}?format=minimal`)
+    if (!draft.message?.id) throw new Error('Gmail did not expose the current draft revision')
+    return draft.message.id
   }
 
   deleteDraft(draftId: string) {

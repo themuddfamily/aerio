@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -67,6 +67,51 @@ describe('MailDatabase', () => {
     const migrated = new MailDatabase(path, join(directory, 'mail'))
     expect(existsSync(`${path}.v0.1.bak`)).toBe(true)
     migrated.close()
+  })
+
+  it('adds every column introduced by incremental schema migrations', () => {
+    const { database, directory, path } = setup()
+    database.close()
+    const legacy = new DatabaseSync(path)
+    for (const [table, column] of [
+      ['gmail_messages', 'header_message_id'], ['gmail_messages', 'references_json'], ['gmail_messages', 'remote_folder_id'], ['gmail_messages', 'remote_uid'],
+      ['gmail_threads', 'sender_email'], ['gmail_accounts', 'provider'], ['gmail_accounts', 'signature'], ['gmail_accounts', 'notifications'], ['gmail_accounts', 'sync_enabled'],
+      ['gmail_sync_items', 'remote_folder_id'], ['gmail_sync_items', 'remote_uid'], ['gmail_sync_state', 'provider_state_json'], ['gmail_sync_state', 'inventory_complete'],
+      ['gmail_operations', 'before_labels_json'], ['gmail_drafts', 'delivery_at']
+    ]) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`)
+    legacy.close()
+    const migrated = new MailDatabase(path, join(directory, 'mail'))
+    const verify = new DatabaseSync(path)
+    for (const [table, column] of [
+      ['gmail_messages', 'header_message_id'], ['gmail_messages', 'references_json'], ['gmail_messages', 'remote_folder_id'], ['gmail_messages', 'remote_uid'],
+      ['gmail_threads', 'sender_email'], ['gmail_accounts', 'provider'], ['gmail_accounts', 'signature'], ['gmail_accounts', 'notifications'], ['gmail_accounts', 'sync_enabled'],
+      ['gmail_sync_items', 'remote_folder_id'], ['gmail_sync_items', 'remote_uid'], ['gmail_sync_state', 'provider_state_json'], ['gmail_sync_state', 'inventory_complete'],
+      ['gmail_operations', 'before_labels_json'], ['gmail_drafts', 'delivery_at']
+    ]) expect((verify.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((item) => item.name === column)).toBe(true)
+    verify.close()
+    migrated.close()
+  })
+
+  it('matches every rule operator, field-specific equality, match mode, and empty condition', () => {
+    const candidate = message()
+    const matches = (field: 'from' | 'to' | 'subject' | 'body', operator: 'contains' | 'equals' | 'starts-with' | 'ends-with', value: string, match: 'all' | 'any' = 'all') => mailRuleMatches({
+      accountId: 'account-1', name: 'Rule', enabled: true, match, conditions: [{ field, operator, value }], actions: [{ action: 'archive' }]
+    }, candidate)
+    expect(matches('from', 'equals', 'ada@example.com')).toBe(true)
+    expect(matches('from', 'equals', 'Ada Lovelace')).toBe(true)
+    expect(matches('from', 'equals', 'Ada Lovelace ada@example.com')).toBe(true)
+    expect(matches('to', 'equals', 'person@example.com')).toBe(true)
+    expect(matches('subject', 'starts-with', 'aerio')).toBe(true)
+    expect(matches('body', 'ends-with', 'launch.')).toBe(true)
+    expect(matches('subject', 'contains', 'launch')).toBe(true)
+    expect(matches('subject', 'contains', '   ')).toBe(false)
+    expect(mailRuleMatches({ accountId: 'account-1', name: 'None', enabled: true, match: 'all', conditions: [], actions: [] }, candidate)).toBe(false)
+    expect(mailRuleMatches({ accountId: 'account-1', name: 'Any', enabled: true, match: 'any', conditions: [
+      { field: 'subject', operator: 'equals', value: 'missing' }, { field: 'body', operator: 'contains', value: 'offline' }
+    ], actions: [{ action: 'archive' }] }, candidate)).toBe(true)
+    expect(mailRuleMatches({ accountId: 'account-1', name: 'All', enabled: true, match: 'all', conditions: [
+      { field: 'subject', operator: 'contains', value: 'launch' }, { field: 'body', operator: 'contains', value: 'missing' }
+    ], actions: [{ action: 'archive' }] }, candidate)).toBe(false)
   })
 
   it('indexes, pages, searches, and reads normalized messages', () => {
@@ -266,9 +311,32 @@ describe('MailDatabase', () => {
       text: 'First version',
       attachmentPaths: []
     }
-    const created = database.saveDraft(input, { remoteDraftId: 'gmail-draft-1', status: 'synced' })
+    const created = database.saveDraft(input, { remoteDraftId: 'gmail-draft-1', remoteRevision: 'gmail-message-1', status: 'synced' })
     const updated = database.saveDraft({ ...input, id: created.id, text: 'Second version' }, { status: 'syncing' })
     expect(updated.remoteDraftId).toBe('gmail-draft-1')
+    expect(updated.remoteRevision).toBe('gmail-message-1')
+    database.close()
+  })
+
+  it('refuses to overwrite a draft saved from a newer editor revision', () => {
+    const { database } = setup()
+    const input = { id: 'shared-draft', accountId: 'account-1', to: [], cc: [], bcc: [], subject: 'Draft', text: 'First', attachmentPaths: [] }
+    const first = database.saveDraft(input)
+    const second = database.saveDraft({ ...input, expectedUpdatedAt: first.updatedAt, text: 'Second' })
+    expect(database.getDraftRecord(input.id)?.text).toBe('Second')
+    expect(() => database.saveDraft({ ...input, expectedUpdatedAt: first.updatedAt, text: 'Stale editor' })).toThrow(/changed after it was opened/)
+    expect(database.getDraftRecord(input.id)).toMatchObject({ text: 'Second', updatedAt: second.updatedAt })
+    database.close()
+  })
+
+  it('refuses to replace a draft when its stored provider revision has advanced', () => {
+    const { database } = setup()
+    const input = { id: 'provider-shared', accountId: 'account-1', to: [], cc: [], bcc: [], subject: 'Draft', text: 'First', attachmentPaths: [] }
+    const first = database.saveDraft(input, { remoteDraftId: 'remote-1', remoteRevision: 'provider-revision-1', status: 'synced' })
+    const second = database.saveDraft({ ...input, expectedRemoteRevision: first.remoteRevision, text: 'Second' }, { remoteRevision: 'provider-revision-2', status: 'synced' })
+    expect(second.remoteRevision).toBe('provider-revision-2')
+    expect(() => database.saveDraft({ ...input, expectedRemoteRevision: 'provider-revision-1', text: 'Stale provider edit' })).toThrow(/another mail client/)
+    expect(database.getDraftRecord(input.id)).toMatchObject({ text: 'Second', remoteRevision: 'provider-revision-2' })
     database.close()
   })
 
@@ -284,10 +352,11 @@ describe('MailDatabase', () => {
       text: 'Plain body',
       html: '<p><strong>Rich body</strong></p>',
       attachmentPaths: ['staged-file.txt']
-    }, { remoteDraftId: 'remote-1', status: 'synced' })
+    }, { remoteDraftId: 'remote-1', remoteRevision: 'provider-revision-1', status: 'synced' })
     expect(database.listDrafts()).toEqual([expect.objectContaining({
       id: created.id,
       remoteDraftId: 'remote-1',
+      remoteRevision: 'provider-revision-1',
       subject: 'Editable draft',
       html: '<p><strong>Rich body</strong></p>',
       attachmentPaths: ['staged-file.txt']
@@ -508,6 +577,277 @@ describe('MailDatabase', () => {
     expect(updated).toMatchObject({ displayName: 'Aerio Person', color: '#3b6fd8', signature: 'Aerio Person\nStudio', notifications: false, syncEnabled: false })
     database.upsertAccount({ ...updated, displayName: 'Provider profile name', signature: '', notifications: true, syncEnabled: true })
     expect(database.getAccount('account-1')).toMatchObject({ displayName: 'Provider profile name', signature: 'Aerio Person\nStudio', notifications: false, syncEnabled: false })
+    database.close()
+  })
+
+  it('persists account history, provider state, progress checkpoints, and reset state', () => {
+    const { database } = setup()
+    database.setAccountStatus('account-1', 'error', 'offline')
+    expect(database.getAccount('account-1')).toMatchObject({ status: 'error', error: 'offline' })
+    database.setAccountHistory('account-1', 'history-1')
+    expect(database.getAccountHistory('account-1')).toBe('history-1')
+    expect(database.getAccount('account-1')?.status).toBe('syncing')
+    database.setAccountHistory('account-1', 'history-2', true)
+    expect(database.getAccount('account-1')?.status).toBe('ready')
+
+    const updatedAt = new Date(Date.now() - 10_000).toISOString()
+    database.updateSyncProgress({
+      accountId: 'account-1', phase: 'inventory', completed: 2, total: 10,
+      transferredBytes: 2048, updatedAt, message: 'Indexing'
+    }, { pageToken: 'page-2', initialHistoryId: 'initial-1' })
+    expect(database.getSyncProgress('account-1')[0]).toMatchObject({
+      accountId: 'account-1', phase: 'inventory', completed: 2, total: 10,
+      transferredBytes: 2048, estimatedRemainingSeconds: undefined, message: 'Indexing'
+    })
+    expect(database.getSyncCheckpoint('account-1')).toMatchObject({ page_token: 'page-2', initial_history_id: 'initial-1' })
+    database.updateSyncProgress({ accountId: 'account-1', phase: 'paused', completed: 2, total: 10, transferredBytes: 2048, updatedAt, pausedReason: 'user' }, { pageToken: null })
+    expect(database.getSyncCheckpoint('account-1')?.page_token).toBeNull()
+
+    expect(database.getProviderState('account-1', { cursor: 'fallback' })).toEqual({})
+    database.setProviderState('account-1', { cursor: 'delta' })
+    expect(database.getProviderState('account-1', {})).toEqual({ cursor: 'delta' })
+    ;(database as unknown as { db: DatabaseSync }).db.prepare('UPDATE gmail_sync_state SET provider_state_json=? WHERE account_id=?').run('{broken', 'account-1')
+    expect(database.getProviderState('account-1', { recovered: true })).toEqual({ recovered: true })
+    database.resetForFullSync('account-1')
+    expect(database.getAccountHistory('account-1')).toBeUndefined()
+    expect(database.getProviderState('account-1', { reset: true })).toEqual({})
+    expect(() => database.updateAccountSettings({
+      accountId: 'missing', displayName: 'Missing', color: '#000', signature: '', notifications: true, syncEnabled: true
+    })).toThrow('Account not found')
+    database.close()
+  })
+
+  it('replaces and filters labels and suggests normalized recipients', () => {
+    const { database } = setup()
+    database.replaceLabels('account-1', [
+      { accountId: 'account-1', id: 'INBOX', name: 'Inbox', type: 'system' },
+      { accountId: 'account-1', id: 'project', name: 'Project', type: 'user', color: '#123456' }
+    ])
+    expect(database.listLabels()).toHaveLength(2)
+    expect(database.listLabels(['account-1'])).toEqual([
+      expect.objectContaining({ id: 'INBOX', color: undefined }),
+      expect.objectContaining({ id: 'project', color: '#123456' })
+    ])
+    expect(database.listLabels(['missing'])).toEqual([])
+    database.upsertMessage(message({
+      to: ['Grace Hopper <grace@example.com>', 'invalid'],
+      cc: ['team+mail@example.com'],
+      fromName: '', fromEmail: 'ada@example.com'
+    }))
+    expect(database.suggestRecipients('', ['account-1']).map((item) => item.email)).toEqual(expect.arrayContaining(['ada@example.com', 'grace@example.com', 'team+mail@example.com']))
+    expect(database.suggestRecipients('grace%_', ['account-1'])).toEqual([])
+    expect(database.suggestRecipients('grace')).toEqual([expect.objectContaining({ email: 'grace@example.com', name: 'Grace Hopper' })])
+    database.close()
+  })
+
+  it('tracks inventory completion, failures, retries, reconciliation, and remote references', () => {
+    const { database } = setup()
+    database.addInventory('account-1', [
+      { id: 'message-1', threadId: 'thread-1', remoteFolderId: 'inbox', remoteUid: '11' },
+      { id: 'message-2', threadId: 'thread-2' }
+    ])
+    expect(database.pendingMessageIds('account-1', 10)).toEqual([
+      { id: 'message-1', threadId: 'thread-1', remoteFolderId: 'inbox', remoteUid: '11' },
+      { id: 'message-2', threadId: 'thread-2', remoteFolderId: undefined, remoteUid: undefined }
+    ])
+    for (let attempt = 0; attempt < 5; attempt++) database.markSyncItem('account-1', 'message-2', 'failed', 'download failed')
+    expect(database.syncFailureCount('account-1')).toBe(1)
+    expect(database.pendingMessageIds('account-1', 10).map((item) => item.id)).toEqual(['message-1'])
+    database.retryFailedSyncItems('account-1')
+    expect(database.pendingMessageIds('account-1', 10).map((item) => item.id)).toEqual(['message-1', 'message-2'])
+    database.completeInventory('account-1')
+    expect(database.getSyncCheckpoint('account-1')?.inventory_complete).toBe(1)
+
+    database.upsertMessage(message({ remoteFolderId: 'inbox', remoteUid: '11' }))
+    expect(database.hasMessage('account-1', 'message-1')).toBe(true)
+    expect(database.hasMessage('account-1', 'missing')).toBe(false)
+    expect(database.remoteMessagesForThreads('account-1', [])).toEqual([])
+    expect(database.remoteMessagesForThreads('account-1', ['thread-1'])[0]).toMatchObject({ remoteFolderId: 'inbox', remoteUid: '11' })
+    database.resetInventory('account-1')
+    expect(database.pendingMessageIds('account-1', 10)).toEqual([])
+    expect(database.reconcileInventory('account-1')).toBe(1)
+    expect(database.hasMessage('account-1', 'message-1')).toBe(false)
+    database.close()
+  })
+
+  it('updates, reconciles, and deletes remote messages while tolerating missing records', () => {
+    const { database } = setup()
+    database.addInventory('account-1', [
+      { id: 'message-1', threadId: 'thread-1', remoteFolderId: 'folder-a', remoteUid: '1' },
+      { id: 'message-2', threadId: 'thread-2', remoteFolderId: 'folder-a', remoteUid: '2' }
+    ])
+    database.upsertMessage(message({ remoteFolderId: 'folder-a', remoteUid: '1' }))
+    database.upsertMessage(message({ id: 'message-2', threadId: 'thread-2', rawPath: 'missing.eml', remoteFolderId: 'folder-a', remoteUid: '2' }))
+    database.updateMessageLabels('account-1', 'message-1', ['INBOX', 'STARRED'], '101')
+    expect(database.listThreads({ folder: 'starred' }).total).toBe(1)
+    database.updateMessageLabels('account-1', 'missing', ['INBOX'], '102')
+    expect(database.reconcileRemoteFolder('account-1', 'folder-a', new Set(['message-1']))).toBe(1)
+    expect(database.hasMessage('account-1', 'message-2')).toBe(false)
+    database.deleteMessage('account-1', 'message-1')
+    expect(database.listThreads({ folder: 'all' }).total).toBe(0)
+    database.deleteMessage('account-1', 'missing')
+    database.close()
+  })
+
+  it('executes every folder query, account filter, label filter, and cursor branch', () => {
+    const { database } = setup()
+    const rows = [
+      message({ id: 'inbox', threadId: 'inbox', labelIds: ['INBOX', 'STARRED', 'IMPORTANT'] }),
+      message({ id: 'sent', threadId: 'sent', labelIds: ['SENT'] }),
+      message({ id: 'draft', threadId: 'draft', labelIds: ['DRAFT'] }),
+      message({ id: 'archive', threadId: 'archive', labelIds: ['ARCHIVE', 'project'] }),
+      message({ id: 'spam', threadId: 'spam', labelIds: ['SPAM'] }),
+      message({ id: 'trash', threadId: 'trash', labelIds: ['TRASH'] })
+    ]
+    for (const row of rows) database.upsertMessage(row)
+    for (const folder of ['inbox', 'starred', 'important', 'sent', 'drafts', 'scheduled', 'archive', 'spam', 'trash', 'all'] as const) {
+      expect(database.listThreads({ folder }).total).toBeGreaterThanOrEqual(folder === 'scheduled' ? 0 : 1)
+    }
+    expect(database.listThreads({ folder: 'archive', labelId: 'project', accountIds: ['account-1'] }).items[0].id).toBe('archive')
+    const first = database.listThreads({ folder: 'all', pageSize: 1 })
+    expect(first.nextCursor).toBeTruthy()
+    expect(database.listThreads({ folder: 'all', pageSize: 1000, cursor: first.nextCursor }).items.length).toBeGreaterThan(0)
+    expect(() => database.getThread('account-1', 'missing')).toThrow('Thread not found')
+    database.close()
+  })
+
+  it('counts unread conversations across every folder in one mailbox summary', () => {
+    const { database } = setup()
+    for (const row of [
+      message({ id: 'inbox', threadId: 'inbox', labelIds: ['INBOX', 'UNREAD', 'STARRED', 'IMPORTANT'] }),
+      message({ id: 'sent', threadId: 'sent', labelIds: ['SENT', 'UNREAD'] }),
+      message({ id: 'draft', threadId: 'draft', labelIds: ['DRAFT', 'UNREAD'] }),
+      message({ id: 'archive', threadId: 'archive', labelIds: ['ARCHIVE', 'UNREAD'] }),
+      message({ id: 'spam', threadId: 'spam', labelIds: ['SPAM', 'UNREAD'] }),
+      message({ id: 'trash', threadId: 'trash', labelIds: ['TRASH', 'UNREAD'] }),
+      message({ id: 'read', threadId: 'read', labelIds: ['INBOX'] }),
+      message({ id: 'snoozed', threadId: 'snoozed', labelIds: ['INBOX', 'UNREAD'] })
+    ]) database.upsertMessage(row)
+    database.snoozeThreads('account-1', ['snoozed'], new Date(Date.now() + 60_000).toISOString())
+
+    expect(database.folderUnreadCounts()).toEqual({
+      inbox: 1, starred: 1, important: 1, sent: 1, drafts: 1, scheduled: 0,
+      snoozed: 1, archive: 1, spam: 1, trash: 1, all: 4
+    })
+    expect(database.folderUnreadCounts(['missing'])).toEqual({
+      inbox: 0, starred: 0, important: 0, sent: 0, drafts: 0, scheduled: 0,
+      snoozed: 0, archive: 0, spam: 0, trash: 0, all: 0
+    })
+    expect(database.accountUnreadCounts()).toEqual({ 'account-1': 1 })
+    database.close()
+  })
+
+  it('validates actions and exercises every optimistic label transition', () => {
+    const { database } = setup()
+    database.replaceLabels('account-1', [
+      { accountId: 'account-1', id: 'project', name: 'Project', type: 'user' },
+      { accountId: 'account-1', id: 'TRASH', name: 'Trash', type: 'system' }
+    ])
+    database.upsertMessage(message())
+    expect(() => database.applyLocalAction({ accountId: 'missing', threadIds: ['thread-1'], action: 'read' })).toThrow('Account not found')
+    expect(() => database.applyLocalAction({ accountId: 'account-1', threadIds: [], action: 'read' })).toThrow('Select at least one conversation')
+    expect(() => database.applyLocalAction({ accountId: 'account-1', threadIds: ['thread-1'], action: 'label' })).toThrow('Choose a label')
+    expect(() => database.applyLocalAction({ accountId: 'account-1', threadIds: ['thread-1'], action: 'move' })).toThrow('Choose a destination')
+
+    const actions = ['read', 'unread', 'star', 'unstar', 'important', 'unimportant', 'archive', 'unarchive', 'trash', 'untrash'] as const
+    for (const action of actions) database.applyLocalAction({ accountId: 'account-1', threadIds: ['thread-1'], action }, `operation-${action}`, 0)
+    database.applyLocalAction({ accountId: 'account-1', threadIds: ['thread-1'], action: 'label', labelId: 'project' }, 'operation-label', 0)
+    database.applyLocalAction({ accountId: 'account-1', threadIds: ['thread-1'], action: 'unlabel', labelId: 'project' }, 'operation-unlabel', 0)
+    database.applyLocalAction({ accountId: 'account-1', threadIds: ['thread-1'], action: 'move', labelId: 'TRASH' }, 'operation-move', 0)
+    expect(database.listThreads({ folder: 'trash' }).total).toBe(1)
+    expect(database.dueOperations(100)).toHaveLength(13)
+    database.close()
+  })
+
+  it('maps named move destinations and removes old provider folders for non-Gmail accounts', () => {
+    const { database } = setup()
+    database.upsertAccount({
+      id: 'account-2', provider: 'microsoft', email: 'other@example.com', displayName: 'Other', avatarUrl: 'avatar', color: '#123456',
+      status: 'error', archived: true, lastSyncAt: '2026-08-08T10:00:00Z', error: 'offline', signature: 'sig', notifications: false, syncEnabled: false
+    })
+    database.updateAccountSettings({ accountId: 'account-2', displayName: ' Other ', color: '#654321', signature: '', notifications: false, syncEnabled: false })
+    expect(database.listAccounts()).toContainEqual(expect.objectContaining({ id: 'account-2', avatarUrl: 'avatar', archived: true, error: 'offline', notifications: false, syncEnabled: false }))
+    database.replaceLabels('account-2', [
+      { accountId: 'account-2', id: 'deleted', name: 'Deleted Items', type: 'system' },
+      { accountId: 'account-2', id: 'junk', name: 'Junk Email', type: 'system' },
+      { accountId: 'account-2', id: 'stored', name: 'Online Archive', type: 'system' }
+    ])
+    database.upsertMessage(message({ accountId: 'account-2', id: 'other-message', threadId: 'other-thread', labelIds: ['folder:old', 'INBOX'], messageIdHeader: undefined, remoteFolderId: undefined, remoteUid: undefined, attachments: [{ id: 'plain', messageId: 'other-message', filename: 'plain', mimeType: 'text/plain', size: 1 }] }))
+    for (const [labelId, expected] of [['INBOX', 'INBOX'], ['deleted', 'TRASH'], ['junk', 'SPAM'], ['stored', 'ARCHIVE']] as const) {
+      database.applyLocalAction({ accountId: 'account-2', threadIds: ['other-thread'], action: 'move', labelId }, `move-${labelId}`, 0)
+      expect(database.getThread('account-2', 'other-thread').messages[0].labelIds).toContain(expected)
+      expect(database.getThread('account-2', 'other-thread').messages[0].labelIds.some((label) => label.startsWith('folder:'))).toBe(false)
+    }
+    database.setAccountStatus('account-2', 'ready')
+    database.close()
+  })
+
+  it('manages provider operation attempts, rescheduling, recovery, and post-send undo', () => {
+    const { database } = setup()
+    database.upsertMessage(message())
+    const operation = database.applyLocalAction({ accountId: 'account-1', threadIds: ['thread-1'], action: 'archive' }, 'operation-1', 0)
+    expect(database.operationAttempts(operation.id)).toBe(0)
+    database.updateOperation(operation.id, 'running', 'working')
+    expect(database.operationAttempts(operation.id)).toBe(1)
+    database.rescheduleOperation(operation.id, 'retry', 60_000)
+    expect(database.dueOperations()).toEqual([])
+    database.updateOperation(operation.id, 'succeeded')
+    expect(database.undoOperation(operation.id)).toBe(true)
+    expect(database.dueOperations().some((row) => row.kind === 'unarchive')).toBe(true)
+    expect(database.restoreOperationSnapshot('missing', 'failed')).toBe(false)
+    expect(database.undoOperation('missing')).toBe(false)
+
+    const interrupted = database.applyLocalAction({ accountId: 'account-1', threadIds: ['thread-1'], action: 'star' }, 'interrupted', 0)
+    database.updateOperation(interrupted.id, 'running')
+    database.recoverInterruptedWork()
+    expect(database.dueOperations().some((row) => row.id === 'interrupted')).toBe(true)
+    database.restoreOperationSnapshot(interrupted.id, 'failed', 'provider failed')
+    expect(database.undoOperation(interrupted.id)).toBe(false)
+    database.close()
+  })
+
+  it('covers draft selection, update, deletion, missing-record, and delivery-result paths', () => {
+    const { database } = setup()
+    expect(() => database.requestDraftDiscard('missing')).toThrow('Draft not found')
+    expect(() => database.cancelDraftDelivery('missing')).toThrow('queued message was not found')
+    const local = database.saveDraft({ accountId: 'account-1', to: [], cc: [], bcc: [], subject: '', text: '', attachmentPaths: [] }, { status: 'local' })
+    const queued = database.saveDraft({ accountId: 'account-1', to: ['ada@example.com'], cc: [], bcc: [], subject: 'Queued', text: 'Body', attachmentPaths: [] }, { status: 'queued', deliveryAt: new Date(Date.now() - 1000).toISOString() })
+    expect(database.listDrafts(['account-1'])).toHaveLength(2)
+    expect(database.draftsToSync().map((row) => row.id)).toContain(local.id)
+    expect(database.queuedDrafts().map((row) => row.id)).toContain(queued.id)
+    database.updateDraftResult(local.id, { id: local.id, remoteDraftId: 'remote', status: 'synced', deliveryAt: undefined, error: undefined, updatedAt: new Date().toISOString() })
+    expect(database.getDraftRecord(local.id)).toMatchObject({ remoteDraftId: 'remote', status: 'synced' })
+    expect(database.requestDraftDiscard(local.id)).toMatchObject({ status: 'discard-queued', remoteDraftId: 'remote' })
+    expect(database.draftsToDiscard().map((row) => row.id)).toContain(local.id)
+    database.deleteDraftRecord(local.id)
+    expect(database.getDraftRecord(local.id)).toBeUndefined()
+    database.close()
+  })
+
+  it('reports rules, raw paths, attachments, storage usage, and diagnostic health', () => {
+    const { database, directory } = setup()
+    expect(() => database.saveRule({ accountId: 'missing', name: 'Missing', enabled: true, match: 'all', conditions: [], actions: [] })).toThrow('Account not found')
+    const saved = database.saveRule({ accountId: 'account-1', name: 'Rule', enabled: true, match: 'all', conditions: [{ field: 'from', operator: 'contains', value: 'ada' }], actions: [{ action: 'archive' }] })
+    database.recordRuleMatch(saved.id, 0)
+    database.recordRuleMatch(saved.id, 2)
+    expect(database.getRule(saved.id)).toMatchObject({ matchCount: 2, lastMatchedAt: expect.any(String) })
+    database.deleteRule(saved.id)
+    expect(database.getRule(saved.id)).toBeUndefined()
+
+    const rawPath = database.rawPath('account/unsafe', 'ab-message')
+    writeFileSync(rawPath, 'raw')
+    expect(rawPath).toContain(join('account_unsafe', 'ab'))
+    expect(database.rawExists(rawPath)).toBe(true)
+    expect(database.rawExists(join(directory, 'missing'))).toBe(false)
+    database.upsertMessage(message({ rawPath, attachments: [{ id: 'attachment-1', messageId: 'message-1', filename: 'file.txt', mimeType: 'text/plain', size: 3 }] }))
+    expect(database.getMessageRaw('account-1', 'message-1')).toBe(rawPath)
+    expect(database.getMessageRaw('account-1', 'missing')).toBeUndefined()
+    expect(database.getAttachment('account-1', 'message-1', 'attachment-1')).toMatchObject({ filename: 'file.txt' })
+    expect(database.getThread('account-1', 'thread-1').messages[0].attachments).toEqual([
+      expect.objectContaining({ id: 'attachment-1', filename: 'file.txt', mimeType: 'text/plain', size: 3 })
+    ])
+    expect(database.storageStats(1234)).toMatchObject({ totalBytes: 1024, freeBytes: 1234, accounts: [expect.objectContaining({ accountId: 'account-1', messages: 1 })] })
+    expect(database.diagnosticHealth()).toMatchObject({ integrity: 'ok', integrityMessage: 'ok', missingRawFiles: 0, orphanedMessages: 0, orphanedAttachments: 0 })
     database.close()
   })
 })

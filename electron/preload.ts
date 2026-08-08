@@ -8,6 +8,18 @@ const api: AerioDesktopApi = {
   chooseAttachments: () => ipcRenderer.invoke('files:choose'),
   chooseProfileImage: () => ipcRenderer.invoke('profile:image:choose'),
   notify: (title: string, body: string) => ipcRenderer.invoke('notification:show', { title, body }),
+  appLock: {
+    status: () => ipcRenderer.invoke('app-lock:status'),
+    enable: (passphrase) => ipcRenderer.invoke('app-lock:enable', passphrase),
+    disable: (passphrase) => ipcRenderer.invoke('app-lock:disable', passphrase),
+    lock: () => ipcRenderer.invoke('app-lock:lock'),
+    unlock: (passphrase) => ipcRenderer.invoke('app-lock:unlock', passphrase),
+    onStatus: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, status: import('../src/types').AppLockStatus) => callback(status)
+      ipcRenderer.on('app-lock:status-changed', listener)
+      return () => ipcRenderer.removeListener('app-lock:status-changed', listener)
+    }
+  },
   updates: {
     status: () => ipcRenderer.invoke('app:update:status'),
     check: () => ipcRenderer.invoke('app:update:check'),
@@ -25,8 +37,15 @@ const api: AerioDesktopApi = {
     createEvent: (event) => ipcRenderer.invoke('productivity:event-create', event),
     updateEvent: (event) => ipcRenderer.invoke('productivity:event-update', event),
     deleteEvent: (eventId) => ipcRenderer.invoke('productivity:event-delete', eventId),
+    createContact: (accountId, contact) => ipcRenderer.invoke('productivity:contact-create', accountId, contact),
+    updateContact: (contact) => ipcRenderer.invoke('productivity:contact-update', contact),
+    deleteContact: (contactId) => ipcRenderer.invoke('productivity:contact-delete', contactId),
+    chooseNoteAttachments: () => ipcRenderer.invoke('productivity:note-attachments-choose'),
+    openNoteAttachment: (path) => ipcRenderer.invoke('productivity:note-attachment-open', path),
     localSnapshot: () => ipcRenderer.invoke('productivity:local-snapshot'),
-    saveLocal: (snapshot) => ipcRenderer.invoke('productivity:local-save', snapshot)
+    saveLocal: (snapshot) => ipcRenderer.invoke('productivity:local-save', snapshot),
+    exportLocalData: () => ipcRenderer.invoke('productivity:local-export'),
+    importLocalData: () => ipcRenderer.invoke('productivity:local-import')
   },
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
@@ -69,6 +88,8 @@ const api: AerioDesktopApi = {
       labels: (accountIds) => ipcRenderer.invoke('mail:labels:list', accountIds),
       suggestRecipients: (query, accountIds) => ipcRenderer.invoke('mail:recipients:suggest', query, accountIds),
       list: (query: MailQuery) => ipcRenderer.invoke('mail:threads:list', query),
+      unreadCounts: (accountIds) => ipcRenderer.invoke('mail:folders:unread-counts', accountIds),
+      accountUnreadCounts: () => ipcRenderer.invoke('mail:accounts:unread-counts'),
       thread: (accountId, threadId, allowRemoteImages) => ipcRenderer.invoke('mail:threads:get', accountId, threadId, allowRemoteImages),
       source: (accountId, messageId) => ipcRenderer.invoke('mail:message:source', accountId, messageId),
       action: (input: ApplyMailActionInput) => ipcRenderer.invoke('mail:actions:apply', input),

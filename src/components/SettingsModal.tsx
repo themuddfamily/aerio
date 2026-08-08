@@ -1,20 +1,30 @@
 import { useEffect, useState } from 'react'
-import { Bell, Download, Monitor, Palette, RefreshCw, Stethoscope } from 'lucide-react'
-import type { AppPreferences, AppUpdateStatus, DensityPreference, ModuleId, ThemePreference } from '../types'
+import { Bell, DatabaseBackup, Download, LockKeyhole, Monitor, Palette, RefreshCw, Stethoscope, Upload } from 'lucide-react'
+import type { AppLockStatus, AppPreferences, AppUpdateStatus, DensityPreference, ModuleId, ThemePreference } from '../types'
 import type { MailDiagnosticHealth } from '../mail-types'
+import type { LocalModuleSnapshot } from '../productivity-types'
 import Modal from './Modal'
 
 interface SettingsModalProps {
   preferences: AppPreferences
   onChange(next: AppPreferences): void
   onClose(): void
+  onLocalDataRestored?(snapshot: LocalModuleSnapshot): void
 }
 
-export default function SettingsModal({ preferences, onChange, onClose }: SettingsModalProps) {
+export default function SettingsModal({ preferences, onChange, onClose, onLocalDataRestored }: SettingsModalProps) {
   const [health, setHealth] = useState<MailDiagnosticHealth>()
   const [diagnosticStatus, setDiagnosticStatus] = useState<'idle' | 'checking' | 'exporting'>('idle')
   const [diagnosticMessage, setDiagnosticMessage] = useState('')
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus>()
+  const [localDataStatus, setLocalDataStatus] = useState<'idle' | 'exporting' | 'importing'>('idle')
+  const [localDataMessage, setLocalDataMessage] = useState('')
+  const [appLockStatus, setAppLockStatus] = useState<AppLockStatus>()
+  const [appLockAction, setAppLockAction] = useState(false)
+  const [appLockPassphrase, setAppLockPassphrase] = useState('')
+  const [appLockConfirmation, setAppLockConfirmation] = useState('')
+  const [appLockMessage, setAppLockMessage] = useState('')
+  const [appLockMessageIsError, setAppLockMessageIsError] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -30,6 +40,15 @@ export default function SettingsModal({ preferences, onChange, onClose }: Settin
       active = false
       unsubscribe()
     }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    void window.aerio.appLock.status().then((status) => { if (active) setAppLockStatus(status) }).catch((error) => {
+      if (active) { setAppLockMessageIsError(true); setAppLockMessage(error instanceof Error ? error.message : 'App-lock status is unavailable.') }
+    })
+    const unsubscribe = window.aerio.appLock.onStatus((status) => { if (active) setAppLockStatus(status) })
+    return () => { active = false; unsubscribe() }
   }, [])
 
   const setSettings = (updates: Partial<AppPreferences['settings']>) => {
@@ -93,9 +112,113 @@ export default function SettingsModal({ preferences, onChange, onClose }: Settin
     }
   }
 
+  const exportLocalData = async () => {
+    setLocalDataStatus('exporting')
+    setLocalDataMessage('')
+    try {
+      const result = await window.aerio.productivity.exportLocalData()
+      if (result.savedPath) setLocalDataMessage('Tasks, Notes, and Contacts backup exported.')
+    } catch (error) {
+      setLocalDataMessage(error instanceof Error ? error.message : 'Local data could not be exported.')
+    } finally {
+      setLocalDataStatus('idle')
+    }
+  }
+
+  const importLocalData = async () => {
+    if (!window.confirm('Restore Tasks and Notes from a backup? This replaces the current local Tasks and Notes.')) return
+    setLocalDataStatus('importing')
+    setLocalDataMessage('')
+    try {
+      const snapshot = await window.aerio.productivity.importLocalData()
+      if (snapshot) {
+        onLocalDataRestored?.(snapshot)
+        const contacts = snapshot.contacts?.length ?? 0
+        setLocalDataMessage(`Restored ${snapshot.tasks.length.toLocaleString()} task${snapshot.tasks.length === 1 ? '' : 's'}, ${snapshot.notes.length.toLocaleString()} note${snapshot.notes.length === 1 ? '' : 's'}, and ${contacts.toLocaleString()} contact${contacts === 1 ? '' : 's'}.`)
+      }
+    } catch (error) {
+      setLocalDataMessage(error instanceof Error ? error.message : 'Local data could not be restored.')
+    } finally {
+      setLocalDataStatus('idle')
+    }
+  }
+
+  const enableAppLock = async () => {
+    if (appLockPassphrase !== appLockConfirmation) { setAppLockMessageIsError(true); return setAppLockMessage('Passphrases do not match.') }
+    setAppLockAction(true)
+    setAppLockMessage('')
+    try {
+      setAppLockStatus(await window.aerio.appLock.enable(appLockPassphrase))
+      setAppLockPassphrase('')
+      setAppLockConfirmation('')
+      setAppLockMessageIsError(false)
+      setAppLockMessage('App lock enabled. Aerio will lock at launch and when sent to the tray.')
+    } catch (error) {
+      setAppLockMessageIsError(true)
+      setAppLockMessage(error instanceof Error ? error.message : 'App lock could not be enabled.')
+    } finally {
+      setAppLockAction(false)
+    }
+  }
+
+  const disableAppLock = async () => {
+    if (!window.confirm('Turn off the Aerio app lock?')) return
+    setAppLockAction(true)
+    setAppLockMessage('')
+    try {
+      setAppLockStatus(await window.aerio.appLock.disable(appLockPassphrase))
+      setAppLockPassphrase('')
+      setAppLockMessageIsError(false)
+      setAppLockMessage('App lock disabled.')
+    } catch (error) {
+      setAppLockMessageIsError(true)
+      setAppLockMessage(error instanceof Error ? error.message : 'App lock could not be disabled.')
+    } finally {
+      setAppLockAction(false)
+    }
+  }
+
   return (
     <Modal title="Aerio settings" subtitle="Make your workspace feel just right." width="medium" onClose={onClose}>
       <div className="settings-sections">
+        <section className="settings-section">
+          <div className="settings-icon"><LockKeyhole size={18} /></div>
+          <div className="settings-content">
+            <h3>App lock</h3>
+            <p>Hide your workspace behind a local passphrase at launch and whenever Aerio is sent to the tray.</p>
+            {!appLockStatus ? <small>Reading app-lock status…</small> : appLockStatus.enabled ? <>
+              <label className="field-label">Current passphrase
+                <input type="password" autoComplete="current-password" value={appLockPassphrase} onChange={(event) => setAppLockPassphrase(event.target.value)} />
+              </label>
+              <div className="settings-actions">
+                <button className="button primary" disabled={appLockAction} onClick={() => void window.aerio.appLock.lock()}><LockKeyhole size={16} /> Lock Aerio now</button>
+                <button className="button danger-subtle" disabled={appLockAction || !appLockPassphrase} onClick={() => void disableAppLock()}>Turn off app lock</button>
+              </div>
+            </> : <>
+              <label className="field-label">New passphrase
+                <input type="password" autoComplete="new-password" value={appLockPassphrase} onChange={(event) => setAppLockPassphrase(event.target.value)} />
+              </label>
+              <label className="field-label">Confirm passphrase
+                <input type="password" autoComplete="new-password" value={appLockConfirmation} onChange={(event) => setAppLockConfirmation(event.target.value)} />
+              </label>
+              <button className="button ghost" disabled={appLockAction || !appLockPassphrase || !appLockConfirmation} onClick={() => void enableAppLock()}><LockKeyhole size={16} /> Enable app lock</button>
+            </>}
+            {appLockMessage && <small className={appLockMessageIsError ? 'diagnostic-error' : 'diagnostic-result'} role="status">{appLockMessage}</small>}
+            <small>This is a privacy screen, not file encryption. A forgotten passphrase requires resetting Aerio’s local app settings.</small>
+          </div>
+        </section>
+        <section className="settings-section">
+          <div className="settings-icon"><DatabaseBackup size={18} /></div>
+          <div className="settings-content">
+            <h3>Local data backup</h3>
+            <p>Export local Tasks, Notes, and Contacts to a portable JSON backup, or restore them on this PC.</p>
+            <div className="settings-actions">
+              <button className="button ghost" disabled={localDataStatus !== 'idle'} onClick={() => void exportLocalData()}><Download size={16} /> {localDataStatus === 'exporting' ? 'Exporting…' : 'Export backup'}</button>
+              <button className="button ghost" disabled={localDataStatus !== 'idle'} onClick={() => void importLocalData()}><Upload size={16} /> {localDataStatus === 'importing' ? 'Restoring…' : 'Restore backup'}</button>
+            </div>
+            {localDataMessage && <small className="diagnostic-result" aria-live="polite">{localDataMessage}</small>}
+          </div>
+        </section>
         <section className="settings-section">
           <div className="settings-icon"><RefreshCw size={18} /></div>
           <div className="settings-content">
@@ -146,8 +269,15 @@ export default function SettingsModal({ preferences, onChange, onClose }: Settin
           <div className="settings-content">
             <h3>Desktop behaviour</h3>
             <label className="toggle-row">
-              <span><strong>Keep Aerio in the tray</strong><small>Closing the window keeps your workspace ready.</small></span>
-              <input type="checkbox" checked={preferences.settings.closeToTray} onChange={(event) => setSettings({ closeToTray: event.target.checked })} />
+              <span><strong>Keep scheduling active in the tray</strong><small>Required for scheduled sending, snooze, mail rules, and background synchronization while the window is closed.</small></span>
+              <input type="checkbox" checked={preferences.settings.closeToTray} onChange={(event) => {
+                setSettings({ closeToTray: event.target.checked })
+              }} />
+            </label>
+            {!preferences.settings.closeToTray && <small className="diagnostic-error">Background actions pause whenever Aerio is fully closed.</small>}
+            <label className="toggle-row">
+              <span><strong>Start Aerio when you sign in</strong><small>Starts minimized to the normal app workspace so scheduled work can resume after a Windows restart.</small></span>
+              <input type="checkbox" checked={Boolean(preferences.settings.launchAtLogin)} onChange={(event) => setSettings({ launchAtLogin: event.target.checked })} />
             </label>
             <label className="field-label">Open Aerio to
               <select value={preferences.settings.startModule} onChange={(event) => setSettings({ startModule: event.target.value as ModuleId })}>
@@ -156,7 +286,6 @@ export default function SettingsModal({ preferences, onChange, onClose }: Settin
                 <option value="contacts">Contacts</option>
                 <option value="tasks">Tasks</option>
                 <option value="notes">Notes</option>
-                <option value="chat">Chat</option>
               </select>
             </label>
           </div>

@@ -273,7 +273,7 @@ try {
     await moduleButton('Contacts').click()
     const connectedContact = page.locator('.contact-row').filter({ hasText: 'Connected Contact' })
     await connectedContact.waitFor()
-    assert.equal(await page.getByRole('button', { name: 'New contact' }).count(), 0)
+    assert.equal(await page.getByRole('button', { name: 'New contact' }).count(), 1)
     await openMenu(connectedContact)
     await expectItems('Email', 'Copy email address', 'Copy phone number')
     await dismiss()

@@ -98,11 +98,13 @@ describe('GmailClient', () => {
     const client = new GmailClient('account', async () => 'token')
     await client.createDraft('raw', 'thread-1')
     await client.updateDraft('draft/1', 'new-raw')
+    await expect(client.draftRevision('draft/1')).resolves.toBe('message-1')
     await client.deleteDraft('draft/1')
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ message: { raw: 'raw', threadId: 'thread-1' } })
     expect(fetchMock.mock.calls[1][0]).toContain('/drafts/draft%2F1')
     expect(fetchMock.mock.calls[1][1].method).toBe('PUT')
-    expect(fetchMock.mock.calls[2][1].method).toBe('DELETE')
+    expect(fetchMock.mock.calls[2][0]).toContain('/drafts/draft%2F1?format=minimal')
+    expect(fetchMock.mock.calls[3][1].method).toBe('DELETE')
   })
 
   it('sends existing drafts with and without replacement MIME', async () => {
@@ -139,5 +141,25 @@ describe('GmailClient', () => {
   it('falls back to HTTP status text when an error body is not JSON', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('not-json', { status: 400, statusText: 'Bad Request' })))
     await expect(new GmailClient('account', async () => 'token').getProfile()).rejects.toMatchObject({ message: '400 Bad Request', status: 400 })
+  })
+
+  it('handles empty labels, empty batches, and non-Error download failures', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response('{}', { status: 200 })).mockRejectedValueOnce('offline'))
+    const client = new GmailClient('account', async () => 'token')
+    await expect(client.listLabels()).resolves.toEqual([])
+    await expect(client.getRawMessages([])).resolves.toEqual([])
+    const failed = await client.getRawMessages(['missing'])
+    expect(failed[0].error).toEqual(new Error('offline'))
+  })
+
+  it('uses exponential backoff and stops retrying after the final attempt', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: {} }), { status: 503, statusText: 'Unavailable' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0)
+    const timer = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void) => { callback(); return 0 }) as typeof setTimeout)
+    await expect(new GmailClient('account', async () => 'token').getProfile()).rejects.toMatchObject({ status: 503, message: '503 Unavailable' })
+    expect(fetchMock).toHaveBeenCalledTimes(7)
+    expect(timer).toHaveBeenCalledWith(expect.any(Function), 1_000)
+    expect(random).toHaveBeenCalled()
   })
 })

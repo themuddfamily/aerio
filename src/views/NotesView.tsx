@@ -1,5 +1,5 @@
 import {
-  Archive, Copy, FileText, Folder, Grid2X2, List, Pin, Plus, Search, Tag, Trash2
+  Archive, Copy, ExternalLink, FileText, Folder, Grid2X2, List, Paperclip, Pin, Plus, Search, Tag, Trash2, X
 } from 'lucide-react'
 import { formatDistanceToNow, parseISO } from 'date-fns'
 import { useMemo, useState } from 'react'
@@ -24,7 +24,7 @@ export default function NotesView({ state, query, onChange, onToast }: NotesView
   const notes = useMemo(() => state.notes
     .filter((note) => folder === 'All notes' ? !note.archived : folder === 'Pinned' ? note.pinned && !note.archived : folder === 'Archive' ? note.archived : note.folder === folder && !note.archived)
     .filter((note) => !tagFilter || note.tags.includes(tagFilter))
-    .filter((note) => !query || `${note.title} ${note.content} ${note.tags.join(' ')}`.toLowerCase().includes(query.toLowerCase()))
+    .filter((note) => !query || `${note.title} ${note.content} ${note.tags.join(' ')} ${(note.attachments ?? []).map((attachment) => attachment.name).join(' ')}`.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt.localeCompare(a.updatedAt)),
   [folder, query, state.notes, tagFilter])
   const selected = notes.find((note) => note.id === selectedId) ?? notes[0]
@@ -64,6 +64,29 @@ export default function NotesView({ state, query, onChange, onToast }: NotesView
     onChange({ ...state, notes: state.notes.filter((item) => item.id !== note.id) })
     if (selectedId === note.id) setSelectedId('')
     onToast('Note deleted')
+  }
+
+  const attachFiles = async () => {
+    if (!selected) return
+    try {
+      const attachments = await window.aerio.productivity.chooseNoteAttachments()
+      if (!attachments.length) return
+      if ((selected.attachments?.length ?? 0) + attachments.length > 50) throw new Error('A note can contain up to 50 attachments')
+      update({ attachments: [...(selected.attachments ?? []), ...attachments] })
+      onToast(`${attachments.length} attachment${attachments.length === 1 ? '' : 's'} added`)
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Attachments could not be added')
+    }
+  }
+
+  const openAttachment = async (path?: string) => {
+    if (!path) return onToast('That attachment is unavailable')
+    try {
+      const result = await window.aerio.productivity.openNoteAttachment(path)
+      if (result.error) throw new Error(result.error)
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Attachment could not be opened')
+    }
   }
 
   const noteMenu = (note: Note): ContextMenuItem[] => [
@@ -133,6 +156,7 @@ export default function NotesView({ state, query, onChange, onToast }: NotesView
               </select>
               <span className="save-state">Saved locally</span>
               <span className="spacer" />
+              <button className="icon-button" title="Attach files" onClick={() => void attachFiles()}><Paperclip size={17} /></button>
               <button className={`icon-button ${selected.pinned ? 'active' : ''}`} title="Pin note" onClick={() => update({ pinned: !selected.pinned })}><Pin size={17} fill={selected.pinned ? 'currentColor' : 'none'} /></button>
               <button className="icon-button" title="Archive" onClick={() => { update({ archived: true }); setSelectedId(''); onToast('Note archived') }}><Archive size={17} /></button>
               <button className="icon-button danger" title="Delete" onClick={() => {
@@ -147,6 +171,16 @@ export default function NotesView({ state, query, onChange, onToast }: NotesView
                 <Tag size={14} /><input value={selected.tags.join(', ')} onChange={(event) => update({ tags: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })} placeholder="Add tags, separated by commas" />
               </div>
               <textarea className="note-content-input" value={selected.content} onChange={(event) => update({ content: event.target.value })} placeholder="Start writing…" />
+              {(selected.attachments?.length ?? 0) > 0 && <section className="note-attachments" aria-label="Note attachments">
+                <header><Paperclip size={14} /><strong>Attachments</strong><span>{selected.attachments!.length}</span></header>
+                {selected.attachments!.map((attachment) => <div className="note-attachment" key={attachment.id} onContextMenu={(event) => showContextMenu(event, [
+                  { label: 'Open attachment', icon: ExternalLink, action: () => void openAttachment(attachment.path) },
+                  { label: 'Remove from note', icon: Trash2, danger: true, separatorBefore: true, action: () => update({ attachments: selected.attachments?.filter((item) => item.id !== attachment.id) }) }
+                ], attachment.name)}>
+                  <button onClick={() => void openAttachment(attachment.path)}><FileText size={16} /><span><strong>{attachment.name}</strong><small>{attachment.size < 1024 ? `${attachment.size} B` : `${(attachment.size / 1024).toFixed(1)} KB`}</small></span></button>
+                  <button className="icon-button" aria-label={`Remove ${attachment.name}`} title="Remove attachment" onClick={() => update({ attachments: selected.attachments?.filter((item) => item.id !== attachment.id) })}><X size={15} /></button>
+                </div>)}
+              </section>}
               <footer><span>{selected.content.trim().split(/\s+/).filter(Boolean).length} words</span><span>Edited {formatDistanceToNow(parseISO(selected.updatedAt), { addSuffix: true })}</span></footer>
             </div>
           </>

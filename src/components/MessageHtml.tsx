@@ -14,7 +14,7 @@ export default function MessageHtml({ className = '', html }: MessageHtmlProps) 
       const destination = link.getAttribute('href')?.trim()
       if (destination) link.title = destination
     })
-  }, [html])
+  })
 
   return <div ref={bodyRef} className={className} dangerouslySetInnerHTML={{ __html: html }} />
 }

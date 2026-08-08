@@ -1,4 +1,4 @@
-import type { CalendarEvent, Contact, Note, Task } from './types'
+import type { Attachment, CalendarEvent, Contact, Note, Task } from './types'
 
 export type ProductivityProvider = 'gmail' | 'microsoft'
 export type ProductivityModule = 'calendar' | 'contacts'
@@ -27,6 +27,9 @@ export interface SyncedContact extends Contact {
   accountId: string
   provider: ProductivityProvider
   readOnly: boolean
+  revision?: string
+  sourceId?: string
+  folderId?: string
 }
 
 export interface ProductivitySyncState {
@@ -50,9 +53,23 @@ export interface ProviderProductivityData {
   contacts: SyncedContact[]
 }
 
+export interface ProviderProductivitySyncResult extends ProviderProductivityData {
+  checkpoints: Record<string, string>
+}
+
 export interface LocalModuleSnapshot {
   tasks: Task[]
   notes: Note[]
+  contacts?: Contact[]
+}
+
+export interface LocalDataBackupResult {
+  savedPath?: string
+}
+
+export interface ProductivityContactWriteResult {
+  contact: SyncedContact
+  snapshot: ProductivitySnapshot
 }
 
 export interface ProductivityDesktopApi {
@@ -61,6 +78,13 @@ export interface ProductivityDesktopApi {
   createEvent(event: CalendarEvent): Promise<ProductivitySnapshot>
   updateEvent(event: CalendarEvent): Promise<ProductivitySnapshot>
   deleteEvent(eventId: string): Promise<ProductivitySnapshot>
+  createContact(accountId: string, contact: Contact): Promise<ProductivityContactWriteResult>
+  updateContact(contact: Contact): Promise<ProductivityContactWriteResult>
+  deleteContact(contactId: string): Promise<ProductivitySnapshot>
+  chooseNoteAttachments(): Promise<Attachment[]>
+  openNoteAttachment(path: string): Promise<{ error?: string }>
   localSnapshot(): Promise<LocalModuleSnapshot>
   saveLocal(snapshot: LocalModuleSnapshot): Promise<void>
+  exportLocalData(): Promise<LocalDataBackupResult>
+  importLocalData(): Promise<LocalModuleSnapshot | undefined>
 }
