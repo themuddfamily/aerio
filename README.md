@@ -1,6 +1,6 @@
 # Aerio
 
-Aerio is a calm, modern desktop communications client for Windows. It supports multi-provider mail, writable Google and Microsoft Calendar synchronization, cached provider Contacts, and local Contacts, Tasks, and Notes.
+Aerio is a calm, modern desktop communications client for Windows. It supports multi-provider mail, writable Google and Microsoft Calendar and Contacts synchronization, and local Contacts, Tasks, and Notes.
 
 ## Real-mail alpha
 
@@ -21,7 +21,7 @@ Aerio is a calm, modern desktop communications client for Windows. It supports m
 - Dedicated message windows for provider mail; double-click a conversation to open or focus its window
 - Read-only local archive or complete local deletion when disconnecting an account
 - Google and Microsoft Calendar synchronization with event creation, editing, deletion, recurrence, and configurable reminders
-- Cached read-only provider Contacts plus editable local Contacts, with portable backup and restore for local Contacts, Tasks, and Notes
+- Writable Google and Microsoft provider Contacts plus editable local Contacts, with portable backup and restore for local Contacts, Tasks, and Notes
 
 Tasks, Notes, and local Contacts are production local modules. Chat is outside the v1 navigation until a secure transport is selected. Provider Calendar and Contacts data refreshes automatically every 15 minutes and can also be refreshed with **Sync now**. Calendar events can be created by double-clicking a day or time slot and edited after granting the event scope once.
 
@@ -39,7 +39,7 @@ Aerio includes its public Google Desktop client ID and compiles its client secre
 4. Put its `client_secret` into `.env.local` as `MAIN_VITE_GOOGLE_CLIENT_SECRET`, then rebuild Aerio. The matching public client ID is already Aerio's default; `MAIN_VITE_GOOGLE_CLIENT_ID` can override it for a different registration.
 5. Choose Gmail and select **Connect Gmail**. Your normal browser completes Google sign-in and returns to Aerio through a temporary `127.0.0.1` callback.
 
-Aerio requests Gmail modify access, read-only Calendar-list access, Google Calendar event read/write access, and read-only Contacts access. It does not request permission to create or share calendars, permanently delete Gmail messages, or edit Contacts. Existing accounts connected by an older Aerio build must choose **Enable event editing** in Calendar (or **Account settings → Reconnect**) once to approve the added event scope.
+Aerio requests Gmail modify access, read-only Calendar-list access, Google Calendar event read/write access, and Contacts read/write access. It does not request permission to create or share calendars or permanently delete Gmail messages. Existing accounts connected by an older Aerio build must choose **Enable editing** in Calendar or Contacts (or **Account settings → Reconnect**) once to approve the added write scopes.
 
 The first download is quota-bound. A mailbox with 100,000 messages can take roughly seven hours or more, depending on message size, retries, and Google’s per-user quota. Progress is persistent; quitting, losing connectivity, or pausing does not discard completed work.
 
@@ -47,7 +47,7 @@ The first download is quota-bound. A mailbox with 100,000 messages can take roug
 
 1. Create an app registration in [Microsoft Entra](https://entra.microsoft.com/).
 2. Enable public client flows and add the **Mobile and desktop applications** redirect URI `http://localhost`.
-3. Aerio's public Application (client) ID is already included. Choose Microsoft and sign in. The browser requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite`, and `Contacts.Read` access. Existing connections must reconnect once to grant Calendar editing.
+3. Aerio's public Application (client) ID is already included. Choose Microsoft and sign in. The browser requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite`, and `Contacts.ReadWrite` access. Existing connections must reconnect once to grant Calendar and Contacts editing.
 
 Aerio includes its Microsoft public-client application ID by default, because desktop application IDs are public identifiers rather than secrets. `MAIN_VITE_MICROSOFT_CLIENT_ID` can override it for a separate development registration.
 
@@ -143,6 +143,6 @@ The longer-term provider boundaries and the reasoning behind local productivity 
 - IMAP can store multiple physical copies of the same message, but Aerio presents them as one logical conversation and keeps every location available for folder actions.
 - Scheduled delivery, Undo Send, snooze, and rules are coordinated locally by Aerio. If Aerio is fully quit at a due time, the action resumes when it next starts; keeping it in the tray allows on-time processing, and Settings can start Aerio automatically after Windows sign-in.
 - Offline drafts are queued until connectivity returns. Aerio detects and preserves simultaneous edits from two Aerio editors; provider-side revision conflict detection for edits made in another mail client remains future work.
-- Google and Microsoft Calendar events are writable after reconnection. Provider Contacts remain read-only, while contacts created in Aerio are editable local records. The initial Calendar window covers one year in the past through two years in the future; incremental provider checkpoints are still planned.
+- Google and Microsoft Calendar events and provider Contacts are writable after reconnection. New contacts remain local by default and can explicitly target a connected provider account. The initial Calendar window covers one year in the past through two years in the future; incremental provider checkpoints are still planned.
 - Google Keep and consumer Google Chat do not expose suitable general synchronization APIs. Aerio Notes remain local, and Chat stays out of the v1 navigation until a transport and security model are defined.
 - Windows is the tested packaging target; macOS and Linux packaging are not configured.

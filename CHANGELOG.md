@@ -10,6 +10,7 @@
 - Configurable Calendar reminders and Microsoft Calendar event creation, editing, and deletion.
 - Automatic Calendar and Contacts refresh every 15 minutes.
 - Editable local Contacts alongside cached provider contacts.
+- Create, edit, and delete Google and Microsoft provider contacts after reconnecting for write access.
 - Validated export and restore for local Contacts, Tasks, and Notes.
 - Real Help and What’s New panels, and Ctrl-K searches that reach the Mail view.
 

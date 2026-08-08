@@ -118,6 +118,17 @@ export class ProductivityStore {
     this.db.prepare('DELETE FROM productivity_events WHERE id=?').run(eventId)
   }
 
+  upsertContact(contact: SyncedContact) {
+    this.db.prepare(`
+      INSERT INTO productivity_contacts(id,account_id,provider,payload_json,updated_at) VALUES(?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id,provider=excluded.provider,payload_json=excluded.payload_json,updated_at=excluded.updated_at
+    `).run(contact.id, contact.accountId, contact.provider, JSON.stringify(contact), new Date().toISOString())
+  }
+
+  deleteContact(contactId: string) {
+    this.db.prepare('DELETE FROM productivity_contacts WHERE id=?').run(contactId)
+  }
+
   snapshot(): ProductivitySnapshot {
     const read = <T>(table: string) => (this.db.prepare(`SELECT payload_json FROM ${table} ORDER BY updated_at DESC`).all() as unknown as PayloadRow[])
       .map((row) => JSON.parse(row.payload_json) as T)

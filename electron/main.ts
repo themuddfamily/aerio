@@ -7,7 +7,7 @@ import { arch, platform, release, tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createDefaultPreferences, defaultSettings } from '../src/preferences'
-import type { AppPreferences, Attachment, CalendarEvent, MessageWindowRequest, ModuleId, Settings } from '../src/types'
+import type { AppPreferences, Attachment, CalendarEvent, Contact, MessageWindowRequest, ModuleId, Settings } from '../src/types'
 import type {
   ApplyMailActionInput,
   MailAccountSummary,
@@ -287,12 +287,14 @@ async function syncProductivity(accountId: string): Promise<ProductivitySnapshot
     ? new GoogleProductivityConnector(
       accountId,
       () => requireVault().accessToken(accountId),
-      requireVault().hasGoogleCalendarWriteAccess(accountId)
+      requireVault().hasGoogleCalendarWriteAccess(accountId),
+      requireVault().hasGoogleContactsWriteAccess(accountId)
     )
     : new MicrosoftProductivityConnector(
       accountId,
       () => requireVault().microsoftAccessToken(accountId),
-      requireVault().hasMicrosoftCalendarWriteAccess(accountId)
+      requireVault().hasMicrosoftCalendarWriteAccess(accountId),
+      requireVault().hasMicrosoftContactsWriteAccess(accountId)
     )
   try {
     const data = await connector.sync()
@@ -326,6 +328,15 @@ function validCalendarEvent(value: unknown): value is CalendarEvent {
   return event.recurrence === undefined || event.recurrence === 'none' || event.recurrence === 'daily' || event.recurrence === 'weekly' || event.recurrence === 'monthly'
 }
 
+function validContact(value: unknown): value is Contact {
+  if (!value || typeof value !== 'object') return false
+  const contact = value as Partial<Contact>
+  const validText = (input: unknown, max: number, required = false) => typeof input === 'string' && input.length <= max && (!required || Boolean(input.trim()))
+  return validText(contact.id, 500, true) && validText(contact.name, 10_000, true) && validText(contact.email, 10_000) &&
+    validText(contact.group, 300, true) && validText(contact.color, 100, true) && typeof contact.favorite === 'boolean' &&
+    [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || validText(field, 100_000))
+}
+
 function googleCalendarConnector(accountId: string) {
   return new GoogleProductivityConnector(
     accountId,
@@ -339,6 +350,24 @@ function microsoftCalendarConnector(accountId: string) {
     accountId,
     () => requireVault().microsoftAccessToken(accountId),
     requireVault().hasMicrosoftCalendarWriteAccess(accountId)
+  )
+}
+
+function googleContactsConnector(accountId: string) {
+  return new GoogleProductivityConnector(
+    accountId,
+    () => requireVault().accessToken(accountId),
+    requireVault().hasGoogleCalendarWriteAccess(accountId),
+    requireVault().hasGoogleContactsWriteAccess(accountId)
+  )
+}
+
+function microsoftContactsConnector(accountId: string) {
+  return new MicrosoftProductivityConnector(
+    accountId,
+    () => requireVault().microsoftAccessToken(accountId),
+    requireVault().hasMicrosoftCalendarWriteAccess(accountId),
+    requireVault().hasMicrosoftContactsWriteAccess(accountId)
   )
 }
 
@@ -387,6 +416,42 @@ async function deleteProductivityEvent(eventId: string) {
   await writableCalendarConnector(calendar).deleteEvent(calendar, current)
   store.deleteEvent(current.id)
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-deleted', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
+  return store.snapshot()
+}
+
+function writableContactsConnector(accountId: string, provider: 'gmail' | 'microsoft') {
+  return provider === 'gmail' ? googleContactsConnector(accountId) : microsoftContactsConnector(accountId)
+}
+
+async function createProductivityContact(accountId: string, input: Contact) {
+  const provider = accountProviders.get(accountId)
+  if (provider !== 'gmail' && provider !== 'microsoft') throw new Error('Choose a connected Google or Microsoft account')
+  const store = requireProductivityStore()
+  const saved = await writableContactsConnector(accountId, provider).createContact(input)
+  store.upsertContact(saved)
+  diagnostic({ level: 'info', component: 'provider', event: 'contact-created', accountId, details: { provider } })
+  return { contact: saved, snapshot: store.snapshot() }
+}
+
+async function updateProductivityContact(input: Contact) {
+  const store = requireProductivityStore()
+  const current = store.snapshot().contacts.find((contact) => contact.id === input.id)
+  if (!current) throw new Error('That contact is no longer available')
+  if (current.readOnly) throw new Error('Reconnect this account once to enable Contacts editing')
+  const saved = await writableContactsConnector(current.accountId, current.provider).updateContact(current, input)
+  store.upsertContact(saved)
+  diagnostic({ level: 'info', component: 'provider', event: 'contact-updated', accountId: current.accountId, details: { provider: current.provider } })
+  return { contact: saved, snapshot: store.snapshot() }
+}
+
+async function deleteProductivityContact(contactId: string) {
+  const store = requireProductivityStore()
+  const current = store.snapshot().contacts.find((contact) => contact.id === contactId)
+  if (!current) throw new Error('That contact is no longer available')
+  if (current.readOnly) throw new Error('Reconnect this account once to enable Contacts editing')
+  await writableContactsConnector(current.accountId, current.provider).deleteContact(current)
+  store.deleteContact(current.id)
+  diagnostic({ level: 'info', component: 'provider', event: 'contact-deleted', accountId: current.accountId, details: { provider: current.provider } })
   return store.snapshot()
 }
 
@@ -913,6 +978,19 @@ function registerIpc() {
   ipcMain.handle('productivity:event-delete', (_event, eventId: unknown) => {
     if (typeof eventId !== 'string' || !eventId || eventId.length > 500) throw new Error('Choose a valid event')
     return deleteProductivityEvent(eventId)
+  })
+  ipcMain.handle('productivity:contact-create', (_event, accountId: unknown, input: unknown) => {
+    if (typeof accountId !== 'string' || !accountId || accountId.length > 200) throw new Error('Choose a valid provider account')
+    if (!validContact(input)) throw new Error('Enter valid contact details')
+    return createProductivityContact(accountId, input)
+  })
+  ipcMain.handle('productivity:contact-update', (_event, input: unknown) => {
+    if (!validContact(input)) throw new Error('Enter valid contact details')
+    return updateProductivityContact(input)
+  })
+  ipcMain.handle('productivity:contact-delete', (_event, contactId: unknown) => {
+    if (typeof contactId !== 'string' || !contactId || contactId.length > 500) throw new Error('Choose a valid contact')
+    return deleteProductivityContact(contactId)
   })
   ipcMain.handle('app:update:status', () => updates?.status() ?? ({
     phase: 'unsupported',

@@ -56,6 +56,17 @@ describe('ProductivityStore', () => {
     store.close()
   })
 
+  it('updates the cache after provider contact writes', () => {
+    const store = new ProductivityStore(':memory:')
+    store.replaceAccount('account', 'gmail', data)
+    const updated = { ...data.contacts[0], name: 'Ada King', revision: 'revision-2' }
+    store.upsertContact(updated)
+    expect(store.snapshot().contacts).toEqual([updated])
+    store.deleteContact(updated.id)
+    expect(store.snapshot().contacts).toEqual([])
+    store.close()
+  })
+
   it('keeps production local Tasks and Notes outside provider snapshots', () => {
     const store = new ProductivityStore(':memory:')
     expect(store.localSnapshot()).toEqual({ tasks: [], notes: [], contacts: [] })

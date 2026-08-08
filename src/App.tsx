@@ -12,7 +12,7 @@ import ContactsView from './views/ContactsView'
 import TasksView from './views/TasksView'
 import NotesView from './views/NotesView'
 import ConnectedMailView from './views/ConnectedMailView'
-import type { AppPreferences, AppState, CalendarEvent, ModuleId } from './types'
+import type { AppPreferences, AppState, CalendarEvent, Contact, ModuleId } from './types'
 import type { MailAccountSummary } from './mail-types'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from './productivity-types'
 import { unreadCount } from './lib/domain'
@@ -163,6 +163,37 @@ export default function App() {
 
   const deleteProviderEvent = useCallback(async (event: CalendarEvent) => {
     setProductivity(await window.aerio.productivity.deleteEvent(event.id))
+  }, [])
+
+  const enableContactEditing = useCallback(async (accountId?: string) => {
+    setProductivitySyncing(true)
+    try {
+      const accounts = (await window.aerio.mail.accounts.list()).filter((account) => !account.archived)
+      setConnectedAccounts(accounts)
+      const supported = accounts.filter((account) => account.provider === 'gmail' || account.provider === 'microsoft')
+      const target = supported.find((account) => account.id === accountId) ??
+        supported.find((account) => productivity.contacts.some((contact) => contact.accountId === account.id && contact.readOnly)) ?? supported[0]
+      if (!target) throw new Error('Connect Google or Microsoft to enable Contacts editing')
+      await window.aerio.mail.accounts.reconnect(target.id)
+      setProductivity(await window.aerio.productivity.sync(target.id))
+      showToast(`${target.provider === 'gmail' ? 'Google' : 'Microsoft'} Contacts editing enabled`)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Contacts editing could not be enabled')
+    } finally {
+      setProductivitySyncing(false)
+    }
+  }, [productivity.contacts, showToast])
+
+  const saveProviderContact = useCallback(async (accountId: string, contact: Contact, exists: boolean) => {
+    const result = exists
+      ? await window.aerio.productivity.updateContact(contact)
+      : await window.aerio.productivity.createContact(accountId, contact)
+    setProductivity(result.snapshot)
+    return result.contact
+  }, [])
+
+  const deleteProviderContact = useCallback(async (contactId: string) => {
+    setProductivity(await window.aerio.productivity.deleteContact(contactId))
   }, [])
 
   useEffect(() => {
@@ -358,7 +389,22 @@ export default function App() {
               syncing={productivitySyncing}
               sourceMessage={productivityMessage}
             />}
-            {activeModule === 'contacts' && <ContactsView state={connectedState} query={query} onCompose={startCompose} onToast={showToast} onSync={syncProductivity} onLocalContactsChange={(contacts) => setLocalModules((current) => ({ ...current, contacts }))} syncing={productivitySyncing} sourceMessage={productivityMessage} />}
+            {activeModule === 'contacts' && <ContactsView
+              state={connectedState}
+              query={query}
+              onCompose={startCompose}
+              onToast={showToast}
+              onSync={syncProductivity}
+              onEnableEditing={enableContactEditing}
+              onLocalContactsChange={(contacts) => setLocalModules((current) => ({ ...current, contacts }))}
+              onSaveProviderContact={saveProviderContact}
+              onDeleteProviderContact={deleteProviderContact}
+              providerAccounts={connectedAccounts.flatMap((account) => !account.archived && (account.provider === 'gmail' || account.provider === 'microsoft')
+                ? [{ id: account.id, email: account.email, provider: account.provider }]
+                : [])}
+              syncing={productivitySyncing}
+              sourceMessage={productivityMessage}
+            />}
             {activeModule === 'tasks' && <TasksView state={connectedState} query={query} onChange={updateConnectedLocal} onToast={showToast} />}
             {activeModule === 'notes' && <NotesView state={connectedState} query={query} onChange={updateConnectedLocal} onToast={showToast} />}
           </div>

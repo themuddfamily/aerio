@@ -80,7 +80,8 @@ const mocks = vi.hoisted(() => {
     authorizeMicrosoft: vi.fn(async () => ({ accountId: '123456', email: 'ms@example.test', displayName: 'Microsoft Person' })),
     credential: vi.fn(() => ({ type: 'oauth', accessToken: 'token' })), accessToken: vi.fn(async () => 'google-token'),
     microsoftAccessToken: vi.fn(async () => 'microsoft-token'), hasGoogleCalendarWriteAccess: vi.fn(() => true),
-    hasMicrosoftCalendarWriteAccess: vi.fn(() => true),
+    hasMicrosoftCalendarWriteAccess: vi.fn(() => true), hasGoogleContactsWriteAccess: vi.fn(() => true),
+    hasMicrosoftContactsWriteAccess: vi.fn(() => true),
     remove: vi.fn(async () => undefined), imapSettings: vi.fn(() => ({ imapHost: 'imap.example.test' })),
     imapCredential: vi.fn(() => ({ provider: 'imap', email: 'imap@example.test', username: 'imap@example.test', password: 'old' })),
     storeImap: vi.fn()
@@ -109,19 +110,25 @@ const mocks = vi.hoisted(() => {
     snapshot: vi.fn(() => storeSnapshot), localSnapshot: vi.fn(() => ({ tasks: [], notes: [] })), saveLocal: vi.fn(),
     setSyncing: vi.fn(), setError: vi.fn(), replaceAccount: vi.fn((_id: string, _provider: string, data: any) => {
       storeSnapshot = { ...storeSnapshot, ...data }
-    }), removeAccount: vi.fn(), upsertEvent: vi.fn(), deleteEvent: vi.fn(), close: vi.fn()
+    }), removeAccount: vi.fn(), upsertEvent: vi.fn(), deleteEvent: vi.fn(), upsertContact: vi.fn(), deleteContact: vi.fn(), close: vi.fn()
   }
   const google = {
     sync: vi.fn(async () => ({ calendars: [], events: [], contacts: [] })),
     createEvent: vi.fn(async (_calendar: any, input: any) => ({ ...input, accountId: 'a1b2', provider: 'gmail', remoteId: 'remote', readOnly: false })),
     updateEvent: vi.fn(async (_calendar: any, _current: any, input: any) => ({ ...input, accountId: 'a1b2', provider: 'gmail', remoteId: 'remote', readOnly: false })),
-    deleteEvent: vi.fn(async () => undefined)
+    deleteEvent: vi.fn(async () => undefined),
+    createContact: vi.fn(async (input: any) => ({ ...input, id: 'a1b2:google-contact:people/new', accountId: 'a1b2', provider: 'gmail', remoteId: 'people/new', readOnly: false })),
+    updateContact: vi.fn(async (_current: any, input: any) => ({ ...input, accountId: 'a1b2', provider: 'gmail', remoteId: 'people/existing', readOnly: false })),
+    deleteContact: vi.fn(async () => undefined)
   }
   const microsoft = {
     sync: vi.fn(async () => ({ calendars: [], events: [], contacts: [] })),
     createEvent: vi.fn(async (_calendar: any, input: any) => ({ ...input, accountId: '123456', provider: 'microsoft', remoteId: 'remote', readOnly: false })),
     updateEvent: vi.fn(async (_calendar: any, _current: any, input: any) => ({ ...input, accountId: '123456', provider: 'microsoft', remoteId: 'remote', readOnly: false })),
-    deleteEvent: vi.fn(async () => undefined)
+    deleteEvent: vi.fn(async () => undefined),
+    createContact: vi.fn(async (input: any) => ({ ...input, id: '123456:microsoft-contact:new', accountId: '123456', provider: 'microsoft', remoteId: 'new', readOnly: false })),
+    updateContact: vi.fn(async (_current: any, input: any) => ({ ...input, accountId: '123456', provider: 'microsoft', remoteId: 'existing', readOnly: false })),
+    deleteContact: vi.fn(async () => undefined)
   }
   const updateManager = {
     status: vi.fn(() => ({ phase: 'idle', currentVersion: '0.4.0' })), check: vi.fn(async () => ({ phase: 'current' })),
@@ -534,6 +541,36 @@ describe.sequential('Electron main process', () => {
     await expect(invoke('productivity:event-create', eventInput)).rejects.toThrow(/cannot be edited/)
     await expect(invoke('productivity:event-update', eventInput)).rejects.toThrow(/cannot be edited/)
     await expect(invoke('productivity:event-delete', 'event')).rejects.toThrow(/cannot be deleted/)
+  })
+
+  it('creates, updates, and deletes writable provider contacts', async () => {
+    const input = { id: 'contact', name: 'Ada Lovelace', email: 'ada@example.test', phone: '+44', company: 'Analytical', title: 'Programmer', group: 'Google', notes: 'Notes', favorite: false, color: '#4d8f78' }
+    await invoke('mail:accounts:connect')
+    mocks.setStoreSnapshot({ calendars: [], events: [], contacts: [], sync: [] })
+    await expect(invoke('productivity:contact-create', 'abcdef', input)).resolves.toMatchObject({ contact: expect.objectContaining({ remoteId: 'people/new' }) })
+    expect(mocks.google.createContact).toHaveBeenCalledWith(input)
+
+    const current = { ...input, id: 'abcdef:google-contact:people/existing', remoteId: 'people/existing', accountId: 'abcdef', provider: 'gmail', readOnly: false }
+    mocks.setStoreSnapshot({ calendars: [], events: [], contacts: [current], sync: [] })
+    await expect(invoke('productivity:contact-update', { ...input, id: current.id, name: 'Ada King' })).resolves.toBeDefined()
+    await expect(invoke('productivity:contact-delete', current.id)).resolves.toBeDefined()
+    expect(mocks.google.updateContact).toHaveBeenCalled()
+    expect(mocks.google.deleteContact).toHaveBeenCalledWith(current)
+  })
+
+  it('validates provider contact writes and protects unavailable or read-only records', async () => {
+    const valid = { id: 'contact', name: 'Ada', email: '', group: 'Google', favorite: false, color: '#4d8f78' }
+    for (const [accountId, input] of [[3, valid], ['', valid], ['a1b2', { ...valid, name: '' }], ['a1b2', { ...valid, favorite: 'yes' }]]) {
+      expect(() => invoke('productivity:contact-create', accountId as any, input)).toThrow()
+    }
+    expect(() => invoke('productivity:contact-delete', '')).toThrow(/valid contact/)
+    mocks.setStoreSnapshot({ calendars: [], events: [], contacts: [], sync: [] })
+    await expect(invoke('productivity:contact-update', valid)).rejects.toThrow(/no longer available/)
+    await expect(invoke('productivity:contact-delete', 'missing')).rejects.toThrow(/no longer available/)
+    const readOnly = { ...valid, remoteId: 'remote', accountId: 'a1b2', provider: 'gmail', readOnly: true }
+    mocks.setStoreSnapshot({ calendars: [], events: [], contacts: [readOnly], sync: [] })
+    await expect(invoke('productivity:contact-update', readOnly)).rejects.toThrow(/enable Contacts editing/)
+    await expect(invoke('productivity:contact-delete', readOnly.id)).rejects.toThrow(/enable Contacts editing/)
   })
 
   it('exposes update controls and validates valid rule actions', async () => {

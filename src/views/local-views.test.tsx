@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ContextMenuProvider } from '../components/ContextMenu'
 import type { AppState } from '../types'
+import type { SyncedContact } from '../productivity-types'
 import ContactsView from './ContactsView'
 import NotesView from './NotesView'
 import TasksView, { toggleTaskWithRecurrence } from './TasksView'
@@ -123,6 +124,42 @@ describe('ContactsView', () => {
 
     rerender(<ContextMenuProvider><ContactsView state={state({ contacts: [] })} query="" onCompose={onCompose} onToast={onToast} onSync={vi.fn()} /></ContextMenuProvider>)
     expect(screen.getByText('Select a contact')).toBeInTheDocument()
+  })
+
+  it('enables, creates, updates, and deletes provider contacts', async () => {
+    const user = userEvent.setup()
+    const onEnableEditing = vi.fn(async () => undefined)
+    const onSaveProviderContact = vi.fn(async (_accountId: string, contact: any) => ({ ...contact, remoteId: 'people/1', accountId: 'google', provider: 'gmail', readOnly: false }))
+    const onDeleteProviderContact = vi.fn(async () => undefined)
+    const provider = {
+      id: 'google:google-contact:people/1', remoteId: 'people/1', accountId: 'google', provider: 'gmail', readOnly: true,
+      name: 'Provider Person', email: 'provider@example.test', group: 'Google', favorite: false, color: '#4d8f78'
+    } satisfies SyncedContact
+    const props = {
+      query: '', onCompose: vi.fn(), onToast: vi.fn(), onSync: vi.fn(), onEnableEditing, onSaveProviderContact, onDeleteProviderContact,
+      providerAccounts: [{ id: 'google', email: 'google@example.test', provider: 'gmail' as const }]
+    }
+    const { rerender } = renderInMenu(<ContactsView state={state({ contacts: [provider] })} {...props} />)
+    await user.click(screen.getByRole('button', { name: 'Enable editing' }))
+    expect(onEnableEditing).toHaveBeenCalled()
+
+    const writable = { ...provider, readOnly: false }
+    rerender(<ContextMenuProvider><ContactsView state={state({ contacts: [writable] })} {...props} /></ContextMenuProvider>)
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.clear(screen.getByLabelText('Name')); await user.type(screen.getByLabelText('Name'), 'Updated Provider')
+    await user.click(screen.getByRole('button', { name: 'Save contact' }))
+    await waitFor(() => expect(onSaveProviderContact).toHaveBeenCalledWith('google', expect.objectContaining({ id: writable.id, name: 'Updated Provider' }), true))
+
+    await user.click(screen.getByRole('button', { name: 'New contact' }))
+    await user.selectOptions(screen.getByLabelText('Save to'), 'google')
+    await user.type(screen.getByLabelText('Name'), 'New Provider')
+    await user.click(screen.getByRole('button', { name: 'Save contact' }))
+    await waitFor(() => expect(onSaveProviderContact).toHaveBeenLastCalledWith('google', expect.objectContaining({ name: 'New Provider' }), false))
+
+    rerender(<ContextMenuProvider><ContactsView state={state({ contacts: [writable] })} {...props} /></ContextMenuProvider>)
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(onDeleteProviderContact).toHaveBeenCalledWith(writable.id))
   })
 })
 

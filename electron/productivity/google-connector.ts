@@ -1,4 +1,4 @@
-import type { CalendarEvent } from '../../src/types'
+import type { CalendarEvent, Contact } from '../../src/types'
 import type { ProviderProductivityData, SyncedCalendar, SyncedCalendarEvent, SyncedContact } from '../../src/productivity-types'
 import { retryingJson, type ProductivityConnector } from './connector'
 
@@ -18,12 +18,29 @@ interface GoogleEvent {
 }
 interface GooglePerson {
   resourceName: string
+  metadata?: { sources?: { type?: string; id?: string; etag?: string }[] }
   names?: { displayName?: string }[]
   emailAddresses?: { value?: string }[]
   phoneNumbers?: { value?: string }[]
   organizations?: { name?: string; title?: string }[]
   biographies?: { value?: string }[]
   memberships?: { contactGroupMembership?: { contactGroupResourceName?: string } }[]
+}
+
+const googleContactFields = 'names,emailAddresses,phoneNumbers,organizations,biographies,memberships,metadata'
+
+export const googleContactBody = (contact: Contact, revision?: string, remoteId?: string) => {
+  const parts = contact.name.trim().split(/\s+/)
+  const familyName = parts.length > 1 ? parts.pop() : undefined
+  const givenName = parts.join(' ') || contact.name.trim()
+  return {
+    metadata: revision && remoteId ? { sources: [{ type: 'CONTACT', id: remoteId.split('/').at(-1), etag: revision }] } : undefined,
+    names: [{ givenName, familyName }],
+    emailAddresses: contact.email ? [{ value: contact.email }] : [],
+    phoneNumbers: contact.phone ? [{ value: contact.phone }] : [],
+    organizations: contact.company || contact.title ? [{ name: contact.company, title: contact.title }] : [],
+    biographies: contact.notes ? [{ value: contact.notes, contentType: 'TEXT_PLAIN' }] : []
+  }
 }
 
 const recurrence = (rules?: string[]) => {
@@ -71,7 +88,7 @@ export function mapGoogleEvent(accountId: string, calendar: SyncedCalendar, even
   }
 }
 
-export function mapGoogleContact(accountId: string, person: GooglePerson): SyncedContact | undefined {
+export function mapGoogleContact(accountId: string, person: GooglePerson, readOnly = false): SyncedContact | undefined {
   const name = person.names?.[0]?.displayName?.trim()
   if (!name) return
   const groupResource = person.memberships?.map((membership) => membership.contactGroupMembership?.contactGroupResourceName).find(Boolean)
@@ -80,6 +97,7 @@ export function mapGoogleContact(accountId: string, person: GooglePerson): Synce
     remoteId: person.resourceName,
     accountId,
     provider: 'gmail',
+    revision: person.metadata?.sources?.find((source) => source.type === 'CONTACT')?.etag,
     name,
     email: person.emailAddresses?.[0]?.value ?? '',
     phone: person.phoneNumbers?.[0]?.value,
@@ -89,7 +107,7 @@ export function mapGoogleContact(accountId: string, person: GooglePerson): Synce
     notes: person.biographies?.[0]?.value,
     favorite: groupResource === 'contactGroups/starred',
     color: '#4d8f78',
-    readOnly: false
+    readOnly
   }
 }
 
@@ -99,7 +117,8 @@ export class GoogleProductivityConnector implements ProductivityConnector {
   constructor(
     private readonly accountId: string,
     private readonly token: () => Promise<string>,
-    private readonly calendarWriteAuthorized = false
+    private readonly calendarWriteAuthorized = false,
+    private readonly contactsWriteAuthorized = false
   ) {}
 
   async sync(): Promise<ProviderProductivityData> {
@@ -125,9 +144,8 @@ export class GoogleProductivityConnector implements ProductivityConnector {
         return mapped ? [mapped] : []
       }))
     }
-    const personFields = 'names,emailAddresses,phoneNumbers,organizations,biographies,memberships'
-    const people = await this.pages<GooglePerson>(`https://people.googleapis.com/v1/people/me/connections?personFields=${personFields}&pageSize=1000`, 'connections')
-    return { calendars, events, contacts: people.flatMap((person) => { const mapped = mapGoogleContact(this.accountId, person); return mapped ? [mapped] : [] }) }
+    const people = await this.pages<GooglePerson>(`https://people.googleapis.com/v1/people/me/connections?personFields=${googleContactFields}&pageSize=1000`, 'connections')
+    return { calendars, events, contacts: people.flatMap((person) => { const mapped = mapGoogleContact(this.accountId, person, !this.contactsWriteAuthorized); return mapped ? [mapped] : [] }) }
   }
 
   async createEvent(calendar: SyncedCalendar, event: CalendarEvent) {
@@ -155,6 +173,32 @@ export class GoogleProductivityConnector implements ProductivityConnector {
     await retryingJson<void>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(event.remoteId)}`, this.token, { method: 'DELETE' })
   }
 
+  async createContact(contact: Contact) {
+    this.assertContactsWritable()
+    const remote = await retryingJson<GooglePerson>(this.provider, `https://people.googleapis.com/v1/people:createContact?personFields=${googleContactFields}`, this.token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(googleContactBody(contact))
+    })
+    return this.mapWrittenContact(remote)
+  }
+
+  async updateContact(current: SyncedContact, contact: Contact) {
+    this.assertContactsWritable(current)
+    const resource = this.contactResource(current.remoteId)
+    const revision = current.revision ?? (await retryingJson<GooglePerson>(this.provider, `${resource}?personFields=${googleContactFields}`, this.token))
+      .metadata?.sources?.find((source) => source.type === 'CONTACT')?.etag
+    if (!revision) throw new Error('Google did not return a contact revision; synchronize Contacts before editing again')
+    const query = new URLSearchParams({ updatePersonFields: 'names,emailAddresses,phoneNumbers,organizations,biographies', personFields: googleContactFields })
+    const remote = await retryingJson<GooglePerson>(this.provider, `${resource}:updateContact?${query}`, this.token, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(googleContactBody(contact, revision, current.remoteId))
+    })
+    return this.mapWrittenContact(remote)
+  }
+
+  async deleteContact(contact: SyncedContact) {
+    this.assertContactsWritable(contact)
+    await retryingJson<void>(this.provider, `${this.contactResource(contact.remoteId)}:deleteContact`, this.token, { method: 'DELETE' })
+  }
+
   private eventsUrl(calendar: SyncedCalendar) {
     return `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendar.remoteId)}/events`
   }
@@ -168,6 +212,22 @@ export class GoogleProductivityConnector implements ProductivityConnector {
   private mapWrittenEvent(calendar: SyncedCalendar, remote: GoogleEvent) {
     const mapped = mapGoogleEvent(this.accountId, calendar, remote)
     if (!mapped) throw new Error('Google saved the event but did not return valid event details')
+    return mapped
+  }
+
+  private assertContactsWritable(contact?: SyncedContact) {
+    if (!this.contactsWriteAuthorized || (contact && (contact.accountId !== this.accountId || contact.provider !== this.provider || contact.readOnly))) {
+      throw new Error('Reconnect this Google account once to enable Contacts editing')
+    }
+  }
+
+  private contactResource(remoteId: string) {
+    return `https://people.googleapis.com/v1/${remoteId.split('/').map(encodeURIComponent).join('/')}`
+  }
+
+  private mapWrittenContact(remote: GooglePerson) {
+    const mapped = mapGoogleContact(this.accountId, remote, false)
+    if (!mapped) throw new Error('Google saved the contact but did not return valid contact details')
     return mapped
   }
 

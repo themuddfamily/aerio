@@ -27,6 +27,7 @@ export interface SyncedContact extends Contact {
   accountId: string
   provider: ProductivityProvider
   readOnly: boolean
+  revision?: string
 }
 
 export interface ProductivitySyncState {
@@ -60,12 +61,20 @@ export interface LocalDataBackupResult {
   savedPath?: string
 }
 
+export interface ProductivityContactWriteResult {
+  contact: SyncedContact
+  snapshot: ProductivitySnapshot
+}
+
 export interface ProductivityDesktopApi {
   snapshot(): Promise<ProductivitySnapshot>
   sync(accountId: string): Promise<ProductivitySnapshot>
   createEvent(event: CalendarEvent): Promise<ProductivitySnapshot>
   updateEvent(event: CalendarEvent): Promise<ProductivitySnapshot>
   deleteEvent(eventId: string): Promise<ProductivitySnapshot>
+  createContact(accountId: string, contact: Contact): Promise<ProductivityContactWriteResult>
+  updateContact(contact: Contact): Promise<ProductivityContactWriteResult>
+  deleteContact(contactId: string): Promise<ProductivitySnapshot>
   localSnapshot(): Promise<LocalModuleSnapshot>
   saveLocal(snapshot: LocalModuleSnapshot): Promise<void>
   exportLocalData(): Promise<LocalDataBackupResult>

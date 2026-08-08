@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { SyncedCalendar, SyncedCalendarEvent } from '../../src/productivity-types'
-import { GoogleProductivityConnector, googleEventBody, mapGoogleContact, mapGoogleEvent } from './google-connector'
-import { MicrosoftProductivityConnector, mapMicrosoftContact, mapMicrosoftEvent, microsoftEventBody } from './microsoft-connector'
+import type { SyncedCalendar, SyncedCalendarEvent, SyncedContact } from '../../src/productivity-types'
+import { GoogleProductivityConnector, googleContactBody, googleEventBody, mapGoogleContact, mapGoogleEvent } from './google-connector'
+import { MicrosoftProductivityConnector, mapMicrosoftContact, mapMicrosoftEvent, microsoftContactBody, microsoftEventBody } from './microsoft-connector'
 import { ProductivityApiError, retryingJson } from './connector'
 
 const googleCalendar: SyncedCalendar = {
@@ -174,6 +174,62 @@ describe('productivity connector mapping', () => {
       ['https://graph.microsoft.com/v1.0/me/calendars/main/events/remote-event', 'PATCH'],
       ['https://graph.microsoft.com/v1.0/me/calendars/main/events/remote-event', 'DELETE']
     ])
+  })
+
+  it('creates, updates, and deletes Google contacts with revision protection', async () => {
+    const input = { id: 'local', name: 'Ada Lovelace', email: 'ada@example.test', phone: '+44', company: 'Analytical', title: 'Programmer', group: 'Contacts', notes: 'First programmer', favorite: false, color: '#4d8f78' }
+    expect(googleContactBody(input, 'revision-1', 'people/ada')).toMatchObject({
+      metadata: { sources: [{ type: 'CONTACT', id: 'ada', etag: 'revision-1' }] },
+      names: [{ givenName: 'Ada', familyName: 'Lovelace' }], emailAddresses: [{ value: 'ada@example.test' }]
+    })
+    const remote = { resourceName: 'people/ada', metadata: { sources: [{ type: 'CONTACT', id: 'ada', etag: 'revision-1' }] }, names: [{ displayName: 'Ada Lovelace' }], emailAddresses: [{ value: input.email }] }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => remote })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ...remote, metadata: { sources: [{ type: 'CONTACT', id: 'ada', etag: 'revision-2' }] } }) })
+      .mockResolvedValueOnce({ ok: true, status: 204 })
+    vi.stubGlobal('fetch', fetchMock)
+    const connector = new GoogleProductivityConnector('a', async () => 'token', true, true)
+    const created = await connector.createContact(input)
+    expect(created).toMatchObject({ id: 'a:google-contact:people/ada', revision: 'revision-1', readOnly: false })
+    const updated = await connector.updateContact(created, { ...input, id: created.id, name: 'Ada King' })
+    expect(updated.revision).toBe('revision-2')
+    await connector.deleteContact(updated)
+    expect(fetchMock.mock.calls.map(([url, init]) => [String(url).split('?')[0], init.method])).toEqual([
+      ['https://people.googleapis.com/v1/people:createContact', 'POST'],
+      ['https://people.googleapis.com/v1/people/ada:updateContact', 'PATCH'],
+      ['https://people.googleapis.com/v1/people/ada:deleteContact', 'DELETE']
+    ])
+  })
+
+  it('creates, updates, and deletes Microsoft contacts with change-key conflict checks', async () => {
+    const input = { id: 'local', name: 'Grace Hopper', email: 'grace@example.test', phone: '+1', company: 'Navy', title: 'Rear admiral', group: 'Friends', notes: 'COBOL', favorite: false, color: '#3b6fd8' }
+    expect(microsoftContactBody(input)).toMatchObject({ givenName: 'Grace', surname: 'Hopper', categories: ['Friends'], businessPhones: ['+1'] })
+    const remote = { id: 'grace', displayName: input.name, changeKey: 'revision-1', emailAddresses: [{ address: input.email }] }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => remote })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => remote })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ...remote, changeKey: 'revision-2' }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ...remote, changeKey: 'revision-2' }) })
+      .mockResolvedValueOnce({ ok: true, status: 204 })
+    vi.stubGlobal('fetch', fetchMock)
+    const connector = new MicrosoftProductivityConnector('b', async () => 'token', true, true)
+    const created = await connector.createContact(input)
+    const updated = await connector.updateContact(created, { ...input, id: created.id, title: 'Admiral' })
+    await connector.deleteContact(updated)
+    expect(fetchMock.mock.calls.map(([url, init]) => [String(url).split('?')[0], init.method])).toEqual([
+      ['https://graph.microsoft.com/v1.0/me/contacts', 'POST'],
+      ['https://graph.microsoft.com/v1.0/me/contacts/grace', undefined],
+      ['https://graph.microsoft.com/v1.0/me/contacts/grace', 'PATCH'],
+      ['https://graph.microsoft.com/v1.0/me/contacts/grace', undefined],
+      ['https://graph.microsoft.com/v1.0/me/contacts/grace', 'DELETE']
+    ])
+  })
+
+  it('rejects unauthorized or foreign provider contact writes', async () => {
+    const contact = { id: 'a:google-contact:people/1', remoteId: 'people/1', accountId: 'other', provider: 'gmail', readOnly: false, name: 'Ada', email: '', group: 'Google', favorite: false, color: '#4d8f78' } satisfies SyncedContact
+    const google = new GoogleProductivityConnector('a', async () => 'token', true, true)
+    await expect(google.updateContact(contact, contact)).rejects.toThrow('Reconnect this Google account')
+    await expect(new MicrosoftProductivityConnector('b', async () => 'token').createContact(contact)).rejects.toThrow('Reconnect this Microsoft account')
   })
 })
 

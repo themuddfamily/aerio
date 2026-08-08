@@ -318,6 +318,22 @@ describe('OAuthVault access tokens', () => {
     expect(vault.hasGoogleCalendarWriteAccess('missing')).toBe(false)
   })
 
+  it('recognizes provider Contacts write scopes without treating read-only access as writable', () => {
+    const vault = new OAuthVault(vaultPath)
+    privateData(vault).googleTokens = {
+      write: { scope: 'https://www.googleapis.com/auth/contacts' },
+      readonly: { scope: 'https://www.googleapis.com/auth/contacts.readonly' }
+    }
+    privateData(vault).microsoftTokens = {
+      write: { accessToken: 'a', refreshToken: 'r', expiresAt: 0, scope: 'Mail.ReadWrite Contacts.ReadWrite' },
+      readonly: { accessToken: 'a', refreshToken: 'r', expiresAt: 0, scope: 'Contacts.Read' }
+    }
+    expect(vault.hasGoogleContactsWriteAccess('write')).toBe(true)
+    expect(vault.hasGoogleContactsWriteAccess('readonly')).toBe(false)
+    expect(vault.hasMicrosoftContactsWriteAccess('write')).toBe(true)
+    expect(vault.hasMicrosoftContactsWriteAccess('readonly')).toBe(false)
+  })
+
   it('returns a sufficiently fresh Microsoft token from memory', async () => {
     const vault = new OAuthVault(vaultPath, { microsoftClientId })
     privateCache(vault).set('microsoft-1', { token: 'cached', expiresAt: Date.now() + 120_000 })
@@ -413,7 +429,8 @@ describe('OAuthVault interactive authorization', () => {
     expect(account).toEqual({ accountId: expect.stringMatching(/^[0-9a-f]{24}$/), email: 'Person@Example.test' })
     expect(authorizationClient.generateAuthUrl).toHaveBeenCalledWith(expect.objectContaining({
       access_type: 'offline', prompt: 'consent', code_challenge: 'challenge',
-      code_challenge_method: 'S256', redirect_uri: 'http://127.0.0.1:43123/oauth/callback'
+      code_challenge_method: 'S256', redirect_uri: 'http://127.0.0.1:43123/oauth/callback',
+      scope: expect.arrayContaining(['https://www.googleapis.com/auth/contacts'])
     }))
     expect(mocks.oauthInstances[1].args).toEqual([googleConfig.clientId, googleConfig.clientSecret, 'http://127.0.0.1:43123/oauth/callback'])
     expect(exchangeClient.getToken).toHaveBeenCalledWith({ code: 'authorization-code', codeVerifier: 'verifier', redirect_uri: 'http://127.0.0.1:43123/oauth/callback' })
@@ -491,6 +508,7 @@ describe('OAuthVault interactive authorization', () => {
     expect(opened.origin + opened.pathname).toBe('https://login.microsoftonline.com/common/oauth2/v2.0/authorize')
     expect(opened.searchParams.get('code_challenge_method')).toBe('S256')
     expect(opened.searchParams.get('scope')).toContain('Mail.Send')
+    expect(opened.searchParams.get('scope')).toContain('Contacts.ReadWrite')
     expect(privateData(vault).microsoftTokens[account.accountId]).toMatchObject({ accessToken: 'access', refreshToken: 'refresh' })
     expect(mocks.servers[0].close).toHaveBeenCalledOnce()
   })

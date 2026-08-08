@@ -2,6 +2,7 @@ import { Building2, Copy, Edit3, Mail, MapPin, Phone, Plus, RefreshCw, Search, S
 import { useMemo, useState } from 'react'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import type { AppState, Contact } from '../types'
+import type { SyncedContact } from '../productivity-types'
 import Modal from '../components/Modal'
 import { uid } from '../lib/domain'
 
@@ -11,12 +12,22 @@ interface ContactsViewProps {
   onCompose(contactEmail?: string): void
   onToast(message: string): void
   onSync(): Promise<void> | void
+  onEnableEditing?(accountId?: string): Promise<void> | void
   onLocalContactsChange?(contacts: Contact[]): void
+  onSaveProviderContact?(accountId: string, contact: Contact, exists: boolean): Promise<Contact>
+  onDeleteProviderContact?(contactId: string): Promise<void>
+  providerAccounts?: { id: string; email: string; provider: 'gmail' | 'microsoft' }[]
   syncing?: boolean
   sourceMessage?: string
 }
 
-export default function ContactsView({ state, query, onCompose, onToast, onSync, onLocalContactsChange, syncing = false, sourceMessage }: ContactsViewProps) {
+const isSyncedContact = (contact: Contact): contact is SyncedContact =>
+  'remoteId' in contact && 'accountId' in contact && 'provider' in contact && 'readOnly' in contact
+
+export default function ContactsView({
+  state, query, onCompose, onToast, onSync, onEnableEditing, onLocalContactsChange,
+  onSaveProviderContact, onDeleteProviderContact, providerAccounts = [], syncing = false, sourceMessage
+}: ContactsViewProps) {
   const { showContextMenu } = useContextMenu()
   const [group, setGroup] = useState('All contacts')
   const [selectedId, setSelectedId] = useState(state.contacts[0]?.id ?? '')
@@ -29,29 +40,53 @@ export default function ContactsView({ state, query, onCompose, onToast, onSync,
   const selected = contacts.find((contact) => contact.id === selectedId) ?? contacts[0]
   const localContacts = state.contacts.filter((contact) => contact.source === 'local')
 
-  const saveLocalContact = (contact: Contact) => {
-    const exists = localContacts.some((item) => item.id === contact.id)
-    onLocalContactsChange?.(exists ? localContacts.map((item) => item.id === contact.id ? contact : item) : [contact, ...localContacts])
-    setSelectedId(contact.id)
-    setEditing(null)
-    onToast(exists ? 'Contact updated' : 'Contact created')
+  const saveContact = async (contact: Contact, accountId?: string) => {
+    try {
+      if (!accountId) {
+        const exists = localContacts.some((item) => item.id === contact.id)
+        onLocalContactsChange?.(exists ? localContacts.map((item) => item.id === contact.id ? contact : item) : [contact, ...localContacts])
+        setSelectedId(contact.id)
+        setEditing(null)
+        onToast(exists ? 'Contact updated' : 'Contact created')
+        return
+      }
+      if (!onSaveProviderContact) throw new Error('Provider contact editing is unavailable')
+      const providerExists = editing !== null && editing !== 'new' && isSyncedContact(editing)
+      const saved = await onSaveProviderContact(accountId, contact, providerExists)
+      setSelectedId(saved.id)
+      setEditing(null)
+      onToast(providerExists ? 'Provider contact updated' : 'Provider contact created')
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Contact could not be saved')
+    }
   }
 
-  const deleteLocalContact = (contact: Contact) => {
+  const deleteContact = async (contact: Contact) => {
     if (!window.confirm(`Delete “${contact.name}”?`)) return
-    onLocalContactsChange?.(localContacts.filter((item) => item.id !== contact.id))
-    setSelectedId('')
-    setEditing(null)
-    onToast('Contact deleted')
+    try {
+      if (isSyncedContact(contact)) {
+        if (!onDeleteProviderContact) throw new Error('Provider contact editing is unavailable')
+        await onDeleteProviderContact(contact.id)
+      } else {
+        onLocalContactsChange?.(localContacts.filter((item) => item.id !== contact.id))
+      }
+      setSelectedId('')
+      setEditing(null)
+      onToast(isSyncedContact(contact) ? 'Provider contact deleted' : 'Contact deleted')
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Contact could not be deleted')
+    }
   }
 
   const contactMenu = (contact: Contact): ContextMenuItem[] => [
     { label: 'Email', icon: Mail, disabled: !contact.email, action: () => onCompose(contact.email) },
     { label: 'Copy email address', icon: Copy, separatorBefore: true, disabled: !contact.email, action: () => copyText(contact.email) },
     ...(contact.phone ? [{ label: 'Copy phone number', icon: Phone, action: () => copyText(contact.phone!) }] satisfies ContextMenuItem[] : []),
-    ...(contact.source === 'local' ? [
+    ...(contact.source === 'local' || (isSyncedContact(contact) && !contact.readOnly) ? [
       { label: 'Edit contact', icon: Edit3, separatorBefore: true, action: () => setEditing(contact) },
-      { label: 'Delete contact', icon: Trash2, danger: true, action: () => deleteLocalContact(contact) }
+      { label: 'Delete contact', icon: Trash2, danger: true, action: () => void deleteContact(contact) }
+    ] satisfies ContextMenuItem[] : isSyncedContact(contact) && onEnableEditing ? [
+      { label: 'Enable provider editing', icon: Edit3, separatorBefore: true, action: () => void onEnableEditing(contact.accountId) }
     ] satisfies ContextMenuItem[] : [])
   ]
 
@@ -62,6 +97,7 @@ export default function ContactsView({ state, query, onCompose, onToast, onSync,
       <aside className="context-sidebar">
         <button className="compose-button" onClick={() => setEditing('new')}><Plus size={18} /> New contact</button>
         <button className="button ghost small sidebar-sync" title="Synchronize provider contacts" disabled={syncing} onClick={() => void onSync()}><RefreshCw className={syncing ? 'spin' : undefined} size={15} /> {syncing ? 'Syncing…' : 'Sync now'}</button>
+        {providerAccounts.length > 0 && <button className="button ghost small sidebar-sync" title="Reconnect an account with permission to edit provider contacts" disabled={syncing} onClick={() => void onEnableEditing?.()}><Edit3 size={15} /> Enable editing</button>}
         <p className="provider-source-note" aria-live="polite">{sourceMessage}</p>
         <div className="sidebar-group">
           <span className="sidebar-label">Contacts</span>
@@ -98,7 +134,7 @@ export default function ContactsView({ state, query, onCompose, onToast, onSync,
           <div className="contact-actions">
             <button disabled={!selected.email} onClick={() => onCompose(selected.email)}><span><Mail size={19} /></span>Email</button>
             <button onClick={() => onToast(selected.phone ? `Call ${selected.phone}` : 'No phone number saved')}><span><Phone size={19} /></span>Call</button>
-            {selected.source === 'local' && <button onClick={() => setEditing(selected)}><span><Edit3 size={19} /></span>Edit</button>}
+            {(selected.source === 'local' || (isSyncedContact(selected) && !selected.readOnly)) && <button onClick={() => setEditing(selected)}><span><Edit3 size={19} /></span>Edit</button>}
           </div>
           <div className="contact-detail-grid">
             <section className="detail-card">
@@ -116,12 +152,26 @@ export default function ContactsView({ state, query, onCompose, onToast, onSync,
           </div>
         </> : <div className="empty-state grow"><Users size={32} /><h3>Select a contact</h3></div>}
       </section>
-      {editing && <ContactEditor contact={editing === 'new' ? undefined : editing} onClose={() => setEditing(null)} onSave={saveLocalContact} onDelete={editing === 'new' ? undefined : () => deleteLocalContact(editing)} />}
+      {editing && <ContactEditor
+        contact={editing === 'new' ? undefined : editing}
+        providerAccounts={providerAccounts}
+        onClose={() => setEditing(null)}
+        onSave={saveContact}
+        onDelete={editing === 'new' ? undefined : () => void deleteContact(editing)}
+      />}
     </div>
   )
 }
 
-function ContactEditor({ contact, onClose, onSave, onDelete }: { contact?: Contact; onClose(): void; onSave(contact: Contact): void; onDelete?(): void }) {
+function ContactEditor({
+  contact, providerAccounts, onClose, onSave, onDelete
+}: {
+  contact?: Contact
+  providerAccounts: { id: string; email: string; provider: 'gmail' | 'microsoft' }[]
+  onClose(): void
+  onSave(contact: Contact, accountId?: string): Promise<void> | void
+  onDelete?(): void
+}) {
   const [name, setName] = useState(contact?.name ?? '')
   const [email, setEmail] = useState(contact?.email ?? '')
   const [phone, setPhone] = useState(contact?.phone ?? '')
@@ -130,9 +180,22 @@ function ContactEditor({ contact, onClose, onSave, onDelete }: { contact?: Conta
   const [group, setGroup] = useState(contact?.group ?? 'Personal')
   const [notes, setNotes] = useState(contact?.notes ?? '')
   const [favorite, setFavorite] = useState(contact?.favorite ?? false)
+  const [target, setTarget] = useState(contact && isSyncedContact(contact) ? contact.accountId : 'local')
+  const [saving, setSaving] = useState(false)
+  const providerTarget = providerAccounts.find((account) => account.id === target)
   return (
-    <Modal title={contact ? 'Edit contact' : 'New contact'} subtitle="Stored locally on this PC." onClose={onClose}>
+    <Modal
+      title={contact ? 'Edit contact' : 'New contact'}
+      subtitle={providerTarget ? `Saved to ${providerTarget.email} through ${providerTarget.provider === 'gmail' ? 'Google Contacts' : 'Microsoft People'}.` : 'Stored locally on this PC.'}
+      onClose={onClose}
+    >
       <div className="form-stack">
+        <label className="field-label">Save to
+          <select value={target} disabled={Boolean(contact)} onChange={(event) => setTarget(event.target.value)}>
+            <option value="local">Local contacts on this PC</option>
+            {providerAccounts.map((account) => <option key={account.id} value={account.id}>{account.email} · {account.provider === 'gmail' ? 'Google' : 'Microsoft'}</option>)}
+          </select>
+        </label>
         <label className="field-label">Name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label>
         <div className="form-grid-2">
           <label className="field-label">Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
@@ -140,17 +203,24 @@ function ContactEditor({ contact, onClose, onSave, onDelete }: { contact?: Conta
           <label className="field-label">Company<input value={company} onChange={(event) => setCompany(event.target.value)} /></label>
           <label className="field-label">Job title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <label className="field-label">Group<input value={group} onChange={(event) => setGroup(event.target.value)} /></label>
-          <label className="check-label"><input type="checkbox" checked={favorite} onChange={(event) => setFavorite(event.target.checked)} /> Favourite</label>
+          <label className="check-label"><input type="checkbox" checked={favorite} disabled={target !== 'local'} onChange={(event) => setFavorite(event.target.checked)} /> Favourite {target !== 'local' && '(local contacts only)'}</label>
         </div>
+        {target !== 'local' && <small>Provider support for contact groups varies; core name, email, phone, company, title, and notes fields are synchronized.</small>}
         <label className="field-label">Notes<textarea value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
         <footer className="modal-footer">
           {onDelete && <button className="button danger-subtle" onClick={onDelete}><Trash2 size={16} /> Delete</button>}
           <span className="spacer" /><button className="button ghost" onClick={onClose}>Cancel</button>
-          <button className="button primary" disabled={!name.trim()} onClick={() => onSave({
-            id: contact?.id ?? uid('contact'), name: name.trim(), email: email.trim(), phone: phone.trim() || undefined,
-            company: company.trim() || undefined, title: title.trim() || undefined, group: group.trim() || 'Personal',
-            notes: notes.trim() || undefined, favorite, color: contact?.color ?? '#4d8f78', source: 'local'
-          })}>Save contact</button>
+          <button className="button primary" disabled={!name.trim() || saving} onClick={() => {
+            setSaving(true)
+            const next: Contact = {
+              id: contact?.id ?? uid('contact'), name: name.trim(), email: email.trim(), phone: phone.trim() || undefined,
+              company: company.trim() || undefined, title: title.trim() || undefined, group: group.trim() || (target === 'local' ? 'Personal' : 'Contacts'),
+              notes: notes.trim() || undefined, favorite: target === 'local' ? favorite : false,
+              color: contact?.color ?? (providerTarget?.provider === 'microsoft' ? '#3b6fd8' : '#4d8f78'),
+              ...(target === 'local' ? { source: 'local' as const } : {})
+            }
+            void Promise.resolve(onSave(next, target === 'local' ? undefined : target)).finally(() => setSaving(false))
+          }}>{saving ? 'Saving…' : 'Save contact'}</button>
         </footer>
       </div>
     </Modal>

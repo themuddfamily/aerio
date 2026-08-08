@@ -32,9 +32,9 @@ const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
   'https://www.googleapis.com/auth/calendar.events',
-  'https://www.googleapis.com/auth/contacts.readonly'
+  'https://www.googleapis.com/auth/contacts'
 ]
-const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.ReadWrite', 'Contacts.Read']
+const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.ReadWrite', 'Contacts.ReadWrite']
 
 export class OAuthVault {
   private data: StoredOAuthData = { googleTokens: {}, googleCalendarWrite: {}, microsoftTokens: {}, imapAccounts: {} }
@@ -238,6 +238,16 @@ export class OAuthVault {
       scopes.has('https://www.googleapis.com/auth/calendar.events')
   }
 
+  hasGoogleContactsWriteAccess(accountId: string) {
+    let credentials = this.data.googleTokens[accountId]
+    if (!credentials) {
+      this.load()
+      credentials = this.data.googleTokens[accountId]
+    }
+    const scopes = new Set((credentials?.scope ?? '').split(/\s+/).filter(Boolean))
+    return scopes.has('https://www.googleapis.com/auth/contacts')
+  }
+
   microsoftStatus(): MailCredentialStatus {
     const clientId = this.microsoftClientId()
     return {
@@ -357,6 +367,15 @@ export class OAuthVault {
       credentials = this.data.microsoftTokens[accountId]
     }
     return new Set((credentials?.scope ?? '').split(/\s+/).filter(Boolean)).has('Calendars.ReadWrite')
+  }
+
+  hasMicrosoftContactsWriteAccess(accountId: string) {
+    let credentials = this.data.microsoftTokens[accountId]
+    if (!credentials) {
+      this.load()
+      credentials = this.data.microsoftTokens[accountId]
+    }
+    return new Set((credentials?.scope ?? '').split(/\s+/).filter(Boolean)).has('Contacts.ReadWrite')
   }
 
   storeImap(accountId: string, input: ImapAccountInput) {

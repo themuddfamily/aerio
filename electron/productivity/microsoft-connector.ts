@@ -1,4 +1,4 @@
-import type { CalendarEvent } from '../../src/types'
+import type { CalendarEvent, Contact } from '../../src/types'
 import type { ProviderProductivityData, SyncedCalendar, SyncedCalendarEvent, SyncedContact } from '../../src/productivity-types'
 import { retryingJson, type ProductivityConnector } from './connector'
 
@@ -19,6 +19,7 @@ interface GraphEvent {
 }
 interface GraphContact {
   id: string
+  changeKey?: string
   displayName?: string
   givenName?: string
   surname?: string
@@ -29,6 +30,23 @@ interface GraphContact {
   jobTitle?: string
   personalNotes?: string
   categories?: string[]
+}
+
+export const microsoftContactBody = (contact: Contact) => {
+  const parts = contact.name.trim().split(/\s+/)
+  const surname = parts.length > 1 ? parts.pop() : undefined
+  const givenName = parts.join(' ') || contact.name.trim()
+  return {
+    displayName: contact.name,
+    givenName,
+    surname,
+    emailAddresses: contact.email ? [{ address: contact.email, name: contact.name }] : [],
+    businessPhones: contact.phone ? [contact.phone] : [],
+    companyName: contact.company ?? '',
+    jobTitle: contact.title ?? '',
+    personalNotes: contact.notes ?? '',
+    categories: contact.group && contact.group !== 'Outlook' ? [contact.group] : []
+  }
 }
 
 const utc = (value?: string) => !value ? undefined : /(?:Z|[+-]\d\d:\d\d)$/.test(value) ? value : `${value}Z`
@@ -82,7 +100,7 @@ export function mapMicrosoftEvent(accountId: string, calendar: SyncedCalendar, e
   }
 }
 
-export function mapMicrosoftContact(accountId: string, contact: GraphContact): SyncedContact | undefined {
+export function mapMicrosoftContact(accountId: string, contact: GraphContact, readOnly = false): SyncedContact | undefined {
   const name = contact.displayName?.trim() || `${contact.givenName ?? ''} ${contact.surname ?? ''}`.trim()
   if (!name) return
   return {
@@ -90,6 +108,7 @@ export function mapMicrosoftContact(accountId: string, contact: GraphContact): S
     remoteId: contact.id,
     accountId,
     provider: 'microsoft',
+    revision: contact.changeKey,
     name,
     email: contact.emailAddresses?.[0]?.address ?? '',
     phone: contact.mobilePhone ?? contact.businessPhones?.[0],
@@ -99,14 +118,19 @@ export function mapMicrosoftContact(accountId: string, contact: GraphContact): S
     notes: contact.personalNotes,
     favorite: false,
     color: '#3b6fd8',
-    readOnly: false
+    readOnly
   }
 }
 
 export class MicrosoftProductivityConnector implements ProductivityConnector {
   readonly provider = 'microsoft' as const
 
-  constructor(private readonly accountId: string, private readonly token: () => Promise<string>, private readonly calendarWriteAuthorized = false) {}
+  constructor(
+    private readonly accountId: string,
+    private readonly token: () => Promise<string>,
+    private readonly calendarWriteAuthorized = false,
+    private readonly contactsWriteAuthorized = false
+  ) {}
 
   async sync(): Promise<ProviderProductivityData> {
     const remoteCalendars = await this.pages<GraphCalendar>('https://graph.microsoft.com/v1.0/me/calendars?$select=id,name,color,isDefaultCalendar,canEdit')
@@ -128,8 +152,8 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
       const remoteEvents = await this.pages<GraphEvent>(`https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(calendar.remoteId)}/calendarView?${query}`)
       events.push(...remoteEvents.flatMap((event) => { const mapped = mapMicrosoftEvent(this.accountId, calendar, event); return mapped ? [mapped] : [] }))
     }
-    const contacts = await this.pages<GraphContact>('https://graph.microsoft.com/v1.0/me/contacts?$top=1000&$select=id,displayName,givenName,surname,emailAddresses,businessPhones,mobilePhone,companyName,jobTitle,personalNotes,categories')
-    return { calendars, events, contacts: contacts.flatMap((contact) => { const mapped = mapMicrosoftContact(this.accountId, contact); return mapped ? [mapped] : [] }) }
+    const contacts = await this.pages<GraphContact>('https://graph.microsoft.com/v1.0/me/contacts?$top=1000&$select=id,changeKey,displayName,givenName,surname,emailAddresses,businessPhones,mobilePhone,companyName,jobTitle,personalNotes,categories')
+    return { calendars, events, contacts: contacts.flatMap((contact) => { const mapped = mapMicrosoftContact(this.accountId, contact, !this.contactsWriteAuthorized); return mapped ? [mapped] : [] }) }
   }
 
   async createEvent(calendar: SyncedCalendar, event: CalendarEvent) {
@@ -153,6 +177,31 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
     await retryingJson<void>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(event.remoteId)}`, this.token, { method: 'DELETE' })
   }
 
+  async createContact(contact: Contact) {
+    this.assertContactsWritable()
+    const remote = await retryingJson<GraphContact>(this.provider, this.contactsUrl(), this.token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(microsoftContactBody(contact))
+    })
+    return this.mapWrittenContact(remote)
+  }
+
+  async updateContact(current: SyncedContact, contact: Contact) {
+    this.assertContactsWritable(current)
+    await this.assertCurrentContactRevision(current)
+    const remote = await retryingJson<GraphContact>(this.provider, `${this.contactsUrl()}/${encodeURIComponent(current.remoteId)}`, this.token, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(microsoftContactBody(contact))
+    })
+    return this.mapWrittenContact(remote)
+  }
+
+  async deleteContact(contact: SyncedContact) {
+    this.assertContactsWritable(contact)
+    await this.assertCurrentContactRevision(contact)
+    await retryingJson<void>(this.provider, `${this.contactsUrl()}/${encodeURIComponent(contact.remoteId)}`, this.token, { method: 'DELETE' })
+  }
+
   private eventsUrl(calendar: SyncedCalendar) {
     return `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(calendar.remoteId)}/events`
   }
@@ -166,6 +215,30 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
   private mapWrittenEvent(calendar: SyncedCalendar, remote: GraphEvent) {
     const mapped = mapMicrosoftEvent(this.accountId, calendar, remote)
     if (!mapped) throw new Error('Microsoft saved the event but did not return valid event details')
+    return mapped
+  }
+
+  private contactsUrl() {
+    return 'https://graph.microsoft.com/v1.0/me/contacts'
+  }
+
+  private assertContactsWritable(contact?: SyncedContact) {
+    if (!this.contactsWriteAuthorized || (contact && (contact.accountId !== this.accountId || contact.provider !== this.provider || contact.readOnly))) {
+      throw new Error('Reconnect this Microsoft account once to enable Contacts editing')
+    }
+  }
+
+  private async assertCurrentContactRevision(contact: SyncedContact) {
+    if (!contact.revision) throw new Error('Synchronize Contacts before editing this Microsoft contact')
+    const latest = await retryingJson<GraphContact>(this.provider, `${this.contactsUrl()}/${encodeURIComponent(contact.remoteId)}?$select=id,changeKey`, this.token)
+    if (!latest.changeKey || latest.changeKey !== contact.revision) {
+      throw new Error('This Microsoft contact changed elsewhere; synchronize Contacts and merge your changes')
+    }
+  }
+
+  private mapWrittenContact(remote: GraphContact) {
+    const mapped = mapMicrosoftContact(this.accountId, remote, false)
+    if (!mapped) throw new Error('Microsoft saved the contact but did not return valid contact details')
     return mapped
   }
 

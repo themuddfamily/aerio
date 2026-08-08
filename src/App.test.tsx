@@ -13,7 +13,7 @@ vi.mock('./components/SettingsModal', () => ({ default: (props: any) => <div rol
 vi.mock('./components/ProfileModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Profile mock"><span>{props.profile.displayName}</span><button onClick={() => props.onSave({ displayName: 'Saved Person', email: 'saved@example.test' })}>Save profile</button><button onClick={props.onClose}>Close profile</button></div> }))
 vi.mock('./views/ConnectedMailView', () => ({ default: (props: any) => <section aria-label="Mail mock"><span>Compose {props.composeRequest.id}:{props.composeRequest.initialTo ?? ''}</span><button onClick={() => props.onToast('Mail says hello')}>Mail toast</button></section> }))
 vi.mock('./views/CalendarView', () => ({ default: (props: any) => <section aria-label="Calendar mock"><span>Calendar query:{props.query}</span><span>{props.sourceMessage}</span><span>Writable:{[...props.writableCalendarIds].join(',')}</span><button onClick={() => void props.onSync()}>Sync calendar</button><button onClick={() => void props.onEnableEditing()}>Enable editing</button><button onClick={() => void props.onSaveProviderEvent(providerEvent, false)}>Create provider event</button><button onClick={() => void props.onSaveProviderEvent(providerEvent, true)}>Update provider event</button><button onClick={() => void props.onDeleteProviderEvent(providerEvent)}>Delete provider event</button></section> }))
-vi.mock('./views/ContactsView', () => ({ default: (props: any) => <section aria-label="Contacts mock"><span>Contacts query:{props.query}</span><button onClick={() => props.onCompose('ada@example.test')}>Email Ada</button><button onClick={() => void props.onSync()}>Sync contacts</button></section> }))
+vi.mock('./views/ContactsView', () => ({ default: (props: any) => <section aria-label="Contacts mock"><span>Contacts query:{props.query}</span><button onClick={() => props.onCompose('ada@example.test')}>Email Ada</button><button onClick={() => void props.onSync()}>Sync contacts</button><button onClick={() => void props.onEnableEditing()}>Enable contact editing</button><button onClick={() => void props.onSaveProviderContact(props.providerAccounts[0].id, productivity.contacts[0], false)}>Create provider contact</button><button onClick={() => void props.onSaveProviderContact(props.providerAccounts[0].id, productivity.contacts[0], true)}>Update provider contact</button><button onClick={() => void props.onDeleteProviderContact(productivity.contacts[0].id)}>Delete provider contact</button></section> }))
 vi.mock('./views/TasksView', () => ({ default: (props: any) => <section aria-label="Tasks mock"><button onClick={() => props.onChange({ ...props.state, tasks: [...props.state.tasks, { id: 'task-2', listId: 'inbox', title: 'Added task', priority: 'normal', completed: false, subtasks: [] }] })}>Change tasks</button><button onClick={() => props.onToast('Task toast')}>Task toast</button></section> }))
 vi.mock('./views/NotesView', () => ({ default: (props: any) => <section aria-label="Notes mock"><button onClick={() => props.onChange({ ...props.state, notes: [...props.state.notes, { id: 'note-2', folder: 'Notes', title: 'Added note', content: '', tags: [], pinned: false, archived: false, updatedAt: '2026-08-08T10:00:00Z' }] })}>Change notes</button></section> }))
 
@@ -50,6 +50,9 @@ const api = {
     createEvent: vi.fn(async () => productivity),
     updateEvent: vi.fn(async () => productivity),
     deleteEvent: vi.fn(async () => productivity),
+    createContact: vi.fn(async (_accountId: string, contact: any) => ({ contact, snapshot: productivity })),
+    updateContact: vi.fn(async (contact: any) => ({ contact, snapshot: productivity })),
+    deleteContact: vi.fn(async () => productivity),
     localSnapshot: vi.fn(async () => localModules),
     saveLocal: vi.fn(async () => undefined)
   }
@@ -70,6 +73,9 @@ beforeEach(() => {
   api.productivity.createEvent.mockResolvedValue(productivity)
   api.productivity.updateEvent.mockResolvedValue(productivity)
   api.productivity.deleteEvent.mockResolvedValue(productivity)
+  api.productivity.createContact.mockImplementation(async (_accountId: string, contact: any) => ({ contact, snapshot: productivity }))
+  api.productivity.updateContact.mockImplementation(async (contact: any) => ({ contact, snapshot: productivity }))
+  api.productivity.deleteContact.mockResolvedValue(productivity)
   api.productivity.localSnapshot.mockResolvedValue(localModules)
   api.productivity.saveLocal.mockResolvedValue(undefined)
   Object.defineProperty(window, 'aerio', { configurable: true, value: api })
@@ -160,6 +166,22 @@ describe('App', () => {
     await waitFor(() => expect(api.productivity.createEvent).toHaveBeenCalledWith(providerEvent))
     expect(api.productivity.updateEvent).toHaveBeenCalledWith(providerEvent)
     expect(api.productivity.deleteEvent).toHaveBeenCalledWith('event-1')
+  })
+
+  it('reconnects provider Contacts and routes provider contact writes', async () => {
+    const user = userEvent.setup()
+    renderApp(); await screen.findByRole('region', { name: 'Mail mock' })
+    await user.click(screen.getByRole('button', { name: 'Contacts' }))
+    await user.click(screen.getByRole('button', { name: 'Enable contact editing' }))
+    await waitFor(() => expect(api.mail.accounts.reconnect).toHaveBeenCalledWith('gmail'))
+    expect(screen.getByRole('status')).toHaveTextContent('Google Contacts editing enabled')
+
+    await user.click(screen.getByRole('button', { name: 'Create provider contact' }))
+    await user.click(screen.getByRole('button', { name: 'Update provider contact' }))
+    await user.click(screen.getByRole('button', { name: 'Delete provider contact' }))
+    await waitFor(() => expect(api.productivity.createContact).toHaveBeenCalledWith('gmail', productivity.contacts[0]))
+    expect(api.productivity.updateContact).toHaveBeenCalledWith(productivity.contacts[0])
+    expect(api.productivity.deleteContact).toHaveBeenCalledWith('contact-1')
   })
 
   it('reports unsupported and partially failed provider synchronization and missing Google editing', async () => {
