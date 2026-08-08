@@ -44,4 +44,17 @@ describe('sanitizeMessageHtml', () => {
     expect(blocked).toContain('href="#"')
     expect(blocked).toContain('title="#"')
   })
+
+  it('handles partial, tracking, local, and missing image attributes', () => {
+    const partial = sanitizeMessageHtml('<img src="https://images.example/wide.png" width="200"><img src="https://images.example/tall.png" height="300">')
+    const tracker = sanitizeMessageHtml('<img src="https://images.example/pixel.gif" width="1" height="1">')
+    const local = sanitizeMessageHtml('<img src="cid:logo"><img><a>Empty</a><a href="mailto:ada@example.com">Mail</a>', true)
+
+    expect(partial).toContain('--blocked-image-width:200px')
+    expect(partial).toContain('--blocked-image-height:300px')
+    expect(tracker).toContain('remote-image-tracker')
+    expect(local).toContain('src="cid:logo"')
+    expect(local).toContain('href="#"')
+    expect(local).toContain('href="mailto:ada@example.com"')
+  })
 })

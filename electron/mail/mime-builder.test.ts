@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import PostalMime from 'postal-mime'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createMimeBuffer } from './mime-builder'
+import { createMime, createMimeBuffer } from './mime-builder'
 
 const directories: string[] = []
 const input = (attachmentPaths: string[] = []) => ({
@@ -35,5 +35,22 @@ describe('outgoing MIME builder', () => {
     const content = parsed.attachments[0].content
     const bytes = content instanceof ArrayBuffer ? new Uint8Array(content) : content
     expect(Buffer.from(bytes).toString()).toBe('attachment body')
+  })
+
+  it('provides the base64url representation used by provider APIs', () => {
+    const encoded = createMime({ ...input(), html: undefined }, 'sender@example.com')
+    expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/)
+    expect(Buffer.from(encoded, 'base64url').toString()).toContain('Plain body')
+  })
+
+  it('emits optional recipient and reply headers only when supplied', () => {
+    const raw = createMimeBuffer({
+      ...input(), cc: ['copy@example.com'], inReplyTo: '<parent@example.com>', references: ['<one@example.com>', '<two@example.com>']
+    }).toString()
+    expect(raw).not.toMatch(/^From:/m)
+    expect(raw).toContain('Cc: copy@example.com')
+    expect(raw).toContain('Bcc: hidden@example.com')
+    expect(raw).toContain('In-Reply-To: <parent@example.com>')
+    expect(raw).toContain('References: <one@example.com> <two@example.com>')
   })
 })

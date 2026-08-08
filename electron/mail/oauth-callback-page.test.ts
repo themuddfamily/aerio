@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { OAUTH_CALLBACK_HEADERS, oauthCallbackPage } from './oauth-callback-page'
+import { describe, expect, it, vi } from 'vitest'
+import { OAUTH_CALLBACK_HEADERS, oauthCallbackPage, sendOAuthCallbackPage } from './oauth-callback-page'
 
 describe('oauthCallbackPage', () => {
   it('renders a self-contained branded success page', () => {
@@ -25,5 +25,14 @@ describe('oauthCallbackPage', () => {
     expect(OAUTH_CALLBACK_HEADERS['Cache-Control']).toBe('no-store')
     expect(OAUTH_CALLBACK_HEADERS['Content-Security-Policy']).toContain("default-src 'none'")
     expect(OAUTH_CALLBACK_HEADERS['Referrer-Policy']).toBe('no-referrer')
+  })
+
+  it('renders the neutral fallback and sends pages through an HTTP response', () => {
+    expect(oauthCallbackPage({ kind: 'not-found' })).toContain('Nothing to see here')
+    const end = vi.fn()
+    const writeHead = vi.fn(() => ({ end }))
+    sendOAuthCallbackPage({ writeHead } as never, 404, { kind: 'not-found' })
+    expect(writeHead).toHaveBeenCalledWith(404, OAUTH_CALLBACK_HEADERS)
+    expect(end).toHaveBeenCalledWith(expect.stringContaining('Nothing to see here'))
   })
 })

@@ -19,12 +19,19 @@ export default defineConfig({
     }
   },
   test: {
+    setupFiles: ['./test/setup.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary', 'html'],
       reportsDirectory: 'coverage',
       include: ['src/**/*.{ts,tsx}', 'electron/**/*.ts'],
       exclude: ['**/*.test.ts', '**/*.d.ts'],
+      thresholds: {
+        statements: 90,
+        branches: 90,
+        functions: 90,
+        lines: 90
+      },
       clean: true
     }
   }
