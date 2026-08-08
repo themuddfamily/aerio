@@ -1,11 +1,12 @@
 import {
   CalendarDays, CheckCircle2, ChevronRight, Command, ContactRound, HelpCircle, Mail,
-  MessageCircle, Moon, NotebookPen, Plus, Search, Settings, Sparkles, Sun, UserRound, X
+  Moon, NotebookPen, Plus, Search, Settings, Sparkles, Sun, UserRound, X
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TitleBar from './components/TitleBar'
 import SettingsModal from './components/SettingsModal'
 import ProfileModal from './components/ProfileModal'
+import AppInfoModal from './components/AppInfoModal'
 import CalendarView from './views/CalendarView'
 import ContactsView from './views/ContactsView'
 import TasksView from './views/TasksView'
@@ -23,12 +24,11 @@ const modules: { id: ModuleId; label: string; icon: typeof Mail; shortcut: strin
   { id: 'calendar', label: 'Calendar', icon: CalendarDays, shortcut: '2' },
   { id: 'contacts', label: 'Contacts', icon: ContactRound, shortcut: '3' },
   { id: 'tasks', label: 'Tasks', icon: CheckCircle2, shortcut: '4' },
-  { id: 'notes', label: 'Notes', icon: NotebookPen, shortcut: '5' },
-  { id: 'chat', label: 'Chat', icon: MessageCircle, shortcut: '6' }
+  { id: 'notes', label: 'Notes', icon: NotebookPen, shortcut: '5' }
 ]
 
 const emptyProductivity: ProductivitySnapshot = { calendars: [], events: [], contacts: [], sync: [] }
-const emptyLocalModules: LocalModuleSnapshot = { tasks: [], notes: [] }
+const emptyLocalModules: LocalModuleSnapshot = { tasks: [], notes: [], contacts: [] }
 
 interface ComposeRequest {
   id: number
@@ -43,9 +43,11 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [commandsOpen, setCommandsOpen] = useState(false)
+  const [infoOpen, setInfoOpen] = useState<'help' | 'whats-new'>()
   const [toast, setToast] = useState('')
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved')
   const [composeRequest, setComposeRequest] = useState<ComposeRequest>({ id: 0 })
+  const [mailSearchRequest, setMailSearchRequest] = useState({ id: 0, query: '' })
   const [connectedAccounts, setConnectedAccounts] = useState<MailAccountSummary[]>([])
   const [productivity, setProductivity] = useState<ProductivitySnapshot>(emptyProductivity)
   const [localModules, setLocalModules] = useState<LocalModuleSnapshot>(emptyLocalModules)
@@ -53,6 +55,7 @@ export default function App() {
   const [commandIndex, setCommandIndex] = useState(0)
   const hydrated = useRef(false)
   const localModulesHydrated = useRef(false)
+  const productivitySyncingRef = useRef(false)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const commandDialogRef = useDialogFocus<HTMLElement>(() => {
     setQuery('')
@@ -68,7 +71,7 @@ export default function App() {
   useEffect(() => {
     void window.aerio.loadPreferences().then((loaded) => {
       setPreferences(loaded)
-      setActiveModule(loaded.settings.startModule)
+      setActiveModule(modules.some((module) => module.id === loaded.settings.startModule) ? loaded.settings.startModule : 'mail')
       queueMicrotask(() => { hydrated.current = true })
     }).catch(() => showToast('Aerio could not open its local data'))
     void window.aerio.mail.accounts.list().then(setConnectedAccounts).catch(() => showToast('Mail accounts could not be loaded'))
@@ -89,14 +92,16 @@ export default function App() {
     return () => clearTimeout(timer)
   }, [localModules, showToast])
 
-  const syncProductivity = useCallback(async () => {
+  const syncProductivity = useCallback(async (options?: { quiet?: boolean }) => {
+    if (productivitySyncingRef.current) return
+    productivitySyncingRef.current = true
     setProductivitySyncing(true)
     try {
       const accounts = (await window.aerio.mail.accounts.list()).filter((account) => !account.archived)
       setConnectedAccounts(accounts)
       const supported = accounts.filter((account) => account.provider === 'gmail' || account.provider === 'microsoft')
       if (!supported.length) {
-        showToast('Connect Google or Microsoft to synchronize Calendar and Contacts')
+        if (!options?.quiet) showToast('Connect Google or Microsoft to synchronize Calendar and Contacts')
         return
       }
       let latest = await window.aerio.productivity.snapshot()
@@ -107,29 +112,47 @@ export default function App() {
       }
       if (failures.length) latest = await window.aerio.productivity.snapshot()
       setProductivity(latest)
-      showToast(failures.length ? `Some provider data could not synchronize: ${failures[0]}` : 'Calendar and Contacts synchronized')
+      if (!options?.quiet) showToast(failures.length ? `Some provider data could not synchronize: ${failures[0]}` : 'Calendar and Contacts synchronized')
     } finally {
+      productivitySyncingRef.current = false
       setProductivitySyncing(false)
     }
   }, [showToast])
+
+  const supportedProductivityAccounts = connectedAccounts
+    .filter((account) => !account.archived && (account.provider === 'gmail' || account.provider === 'microsoft'))
+    .map((account) => account.id)
+    .sort()
+    .join(',')
+
+  useEffect(() => {
+    if (!supportedProductivityAccounts) return
+    const initial = setTimeout(() => void syncProductivity({ quiet: true }), 30_000)
+    const interval = setInterval(() => void syncProductivity({ quiet: true }), 15 * 60_000)
+    return () => {
+      clearTimeout(initial)
+      clearInterval(interval)
+    }
+  }, [supportedProductivityAccounts, syncProductivity])
 
   const enableCalendarEditing = useCallback(async () => {
     setProductivitySyncing(true)
     try {
       const accounts = (await window.aerio.mail.accounts.list()).filter((account) => !account.archived)
       setConnectedAccounts(accounts)
-      const google = accounts.find((account) => account.provider === 'gmail')
-      if (!google) throw new Error('Connect a Google account to enable Calendar editing')
-      await window.aerio.mail.accounts.reconnect(google.id)
-      const latest = await window.aerio.productivity.sync(google.id)
+      const supported = accounts.filter((account) => account.provider === 'gmail' || account.provider === 'microsoft')
+      const target = supported.find((account) => productivity.calendars.some((calendar) => calendar.accountId === account.id && !calendar.canWrite)) ?? supported[0]
+      if (!target) throw new Error('Connect Google or Microsoft to enable Calendar editing')
+      await window.aerio.mail.accounts.reconnect(target.id)
+      const latest = await window.aerio.productivity.sync(target.id)
       setProductivity(latest)
-      showToast('Google Calendar editing enabled')
+      showToast(`${target.provider === 'gmail' ? 'Google' : 'Microsoft'} Calendar editing enabled`)
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Calendar editing could not be enabled')
     } finally {
       setProductivitySyncing(false)
     }
-  }, [showToast])
+  }, [productivity.calendars, showToast])
 
   const saveProviderEvent = useCallback(async (event: CalendarEvent, exists: boolean) => {
     const latest = exists
@@ -181,7 +204,7 @@ export default function App() {
         event.preventDefault()
         startCompose()
       }
-      if (modifier && ['1', '2', '3', '4', '5', '6'].includes(event.key)) {
+      if (modifier && ['1', '2', '3', '4', '5'].includes(event.key)) {
         event.preventDefault()
         setActiveModule(modules[Number(event.key) - 1].id)
       }
@@ -206,7 +229,9 @@ export default function App() {
       { label: 'Open settings', detail: '', icon: Settings, action: () => setSettingsOpen(true), preserveQuery: false }
     ].filter((item) => !query || item.label.toLowerCase().includes(query.toLowerCase()))
     return query.trim()
-      ? [{ label: `Search ${modules.find((item) => item.id === activeModule)?.label ?? 'Aerio'} for “${query.trim()}”`, detail: 'Enter', icon: Search, action: () => undefined, preserveQuery: true }, ...quick]
+      ? [{ label: `Search ${modules.find((item) => item.id === activeModule)?.label ?? 'Aerio'} for “${query.trim()}”`, detail: 'Enter', icon: Search, action: () => {
+        if (activeModule === 'mail') setMailSearchRequest((current) => ({ id: current.id + 1, query: query.trim() }))
+      }, preserveQuery: true }, ...quick]
       : quick
   }, [activeModule, query, startCompose])
 
@@ -247,12 +272,12 @@ export default function App() {
       }
     }),
     events: productivity.events,
-    contacts: productivity.contacts,
+    contacts: [...(localModules.contacts ?? []), ...productivity.contacts],
     tasks: localModules.tasks,
     notes: localModules.notes
   }
   const writableCalendarIds = new Set(productivity.calendars.filter((calendar) => calendar.canWrite).map((calendar) => calendar.id))
-  const updateConnectedLocal = (next: AppState) => setLocalModules({ tasks: next.tasks, notes: next.notes })
+  const updateConnectedLocal = (next: AppState) => setLocalModules((current) => ({ ...current, tasks: next.tasks, notes: next.notes }))
   const productivityMessage = productivity.sync.some((item) => item.phase === 'error')
     ? productivity.sync.find((item) => item.phase === 'error')?.error ?? 'A provider needs attention.'
     : productivity.sync.some((item) => item.lastSyncedAt)
@@ -285,8 +310,8 @@ export default function App() {
             })}
           </div>
           <div className="rail-bottom">
-            <button aria-label="What’s new" title="What’s new" onClick={() => showToast('Welcome to the first Aerio preview')}><Sparkles size={20} /></button>
-            <button aria-label="Help" title="Keyboard shortcuts: Ctrl K" onClick={() => setCommandsOpen(true)}><HelpCircle size={20} /></button>
+            <button aria-label="What’s new" title="What’s new" onClick={() => setInfoOpen('whats-new')}><Sparkles size={20} /></button>
+            <button aria-label="Help" title="Help and keyboard shortcuts" onClick={() => setInfoOpen('help')}><HelpCircle size={20} /></button>
             <button aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)} onContextMenu={(event) => showContextMenu(event, [{ label: 'Open settings', icon: Settings, action: () => setSettingsOpen(true) }], 'Settings')}><Settings size={20} /></button>
             <button className="profile-button" aria-label={`Profile: ${profile.displayName}`} title="Your Aerio profile" onClick={() => setProfileOpen(true)} onContextMenu={(event) => showContextMenu(event, [
               { label: 'Open profile', icon: UserRound, action: () => setProfileOpen(true) }
@@ -320,7 +345,7 @@ export default function App() {
             </button>
           </header>
           <div className="module-content">
-            {activeModule === 'mail' && <ConnectedMailView onToast={showToast} composeRequest={composeRequest} />}
+            {activeModule === 'mail' && <ConnectedMailView onToast={showToast} composeRequest={composeRequest} searchRequest={mailSearchRequest} />}
             {activeModule === 'calendar' && <CalendarView
               state={connectedState}
               query={query}
@@ -333,16 +358,16 @@ export default function App() {
               syncing={productivitySyncing}
               sourceMessage={productivityMessage}
             />}
-            {activeModule === 'contacts' && <ContactsView state={connectedState} query={query} onCompose={startCompose} onToast={showToast} onSync={syncProductivity} syncing={productivitySyncing} sourceMessage={productivityMessage} />}
+            {activeModule === 'contacts' && <ContactsView state={connectedState} query={query} onCompose={startCompose} onToast={showToast} onSync={syncProductivity} onLocalContactsChange={(contacts) => setLocalModules((current) => ({ ...current, contacts }))} syncing={productivitySyncing} sourceMessage={productivityMessage} />}
             {activeModule === 'tasks' && <TasksView state={connectedState} query={query} onChange={updateConnectedLocal} onToast={showToast} />}
             {activeModule === 'notes' && <NotesView state={connectedState} query={query} onChange={updateConnectedLocal} onToast={showToast} />}
-            {activeModule === 'chat' && <div className="connected-module-placeholder"><MessageCircle size={38} /><h1>No chat service connected</h1><p>Mail providers do not automatically provide a compatible chat API. Aerio will keep Chat separate until a secure transport is selected and implemented.</p></div>}
           </div>
         </main>
       </div>
 
       {profileOpen && <ProfileModal profile={profile} onSave={(nextProfile) => setPreferences({ ...preferences, settings: { ...preferences.settings, profile: nextProfile } })} onClose={() => setProfileOpen(false)} onToast={showToast} />}
-      {settingsOpen && <SettingsModal preferences={preferences} onChange={setPreferences} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsModal preferences={preferences} onChange={setPreferences} onLocalDataRestored={setLocalModules} onClose={() => setSettingsOpen(false)} />}
+      {infoOpen && <AppInfoModal kind={infoOpen} onClose={() => setInfoOpen(undefined)} />}
       {commandsOpen && (
         <div className="command-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) setCommandsOpen(false) }}>
           <section ref={commandDialogRef} className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" tabIndex={-1}>

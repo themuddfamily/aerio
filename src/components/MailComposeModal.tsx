@@ -68,7 +68,7 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
   const initialText = draft?.text ?? `${signature ? `\n\n-- \n${signature}` : ''}${forwardedText}`
   const initialHtml = draft?.html ?? `${signature ? `<div><br></div><div>-- <br>${escapeHtml(signature)}</div>` : ''}${forwardedText ? `<div>${escapeHtml(forwardedText)}</div>` : ''}`
   const [accountId, setAccountId] = useState(initialAccountId)
-  const [draftId] = useState(() => draft?.id ?? crypto.randomUUID())
+  const [draftId, setDraftId] = useState(() => draft?.id ?? crypto.randomUUID())
   const [to, setTo] = useState(draft?.to.join(', ') ?? (forward ? '' : replyRecipients.join(', ') || initialTo || ''))
   const [cc, setCc] = useState(draft?.cc.join(', ') ?? replyCc.join(', '))
   const [bcc, setBcc] = useState(draft?.bcc.join(', ') ?? '')
@@ -80,12 +80,14 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
   const [scheduledFor, setScheduledFor] = useState(() => localDateTimeValue(draft?.status === 'scheduled' ? draft.deliveryAt : undefined))
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'sending' | 'closing' | 'failed'>(draft?.status === 'failed' ? 'failed' : draft ? 'saved' : 'idle')
   const [saveError, setSaveError] = useState(draft?.error)
+  const [conflict, setConflict] = useState(false)
   const [recipientField, setRecipientField] = useState<'to' | 'cc' | 'bcc'>()
   const [recipientSuggestions, setRecipientSuggestions] = useState<MailRecipientSuggestion[]>([])
   const editorRef = useRef<HTMLDivElement>(null)
   const editorHtmlRef = useRef(initialHtml)
   const firstRender = useRef(true)
   const lastSaved = useRef('')
+  const revision = useRef(draft?.updatedAt)
   const stagedForwardAttachments = useRef(false)
 
   const input = useMemo<MailDraftInput>(() => ({
@@ -134,12 +136,13 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
     }).catch((error) => onToast(error instanceof Error ? error.message : 'Forwarded attachments could not be prepared'))
   }, [draft, draftId, forward, onToast, replyMessage])
 
-  const saveNow = async (value = input, notify = false) => {
+  const saveNow = async (value = input, notify = false, preserveRevision = true) => {
     const valueFingerprint = JSON.stringify(value)
     if (!value.accountId || !hasContent || valueFingerprint === lastSaved.current) return true
     setStatus('saving')
     try {
-      const result = await window.aerio.mail.drafts.save(value)
+      const result = await window.aerio.mail.drafts.save({ ...value, expectedUpdatedAt: preserveRevision ? revision.current : undefined })
+      revision.current = result.updatedAt
       if (result.status === 'failed') {
         const message = result.error ?? 'Draft could not be saved'
         setStatus('failed')
@@ -148,6 +151,7 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
         return false
       }
       lastSaved.current = valueFingerprint
+      setConflict(false)
       setSaveError(undefined)
       setStatus('saved')
       return true
@@ -155,8 +159,19 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
       const message = friendlyError(error, 'Draft could not be saved')
       setStatus('failed')
       setSaveError(message)
+      setConflict(/draft changed after it was opened/i.test(message))
       if (notify) onToast(message)
       return false
+    }
+  }
+
+  const saveAsCopy = async () => {
+    const nextId = crypto.randomUUID()
+    revision.current = undefined
+    const saved = await saveNow({ ...input, id: nextId }, true, false)
+    if (saved) {
+      setDraftId(nextId)
+      onToast('Draft saved as a separate copy')
     }
   }
 
@@ -262,8 +277,8 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
     setStatus('sending')
     try {
       const result = deliveryAt
-        ? await window.aerio.mail.drafts.schedule(input, deliveryAt.toISOString())
-        : await window.aerio.mail.drafts.send(input)
+        ? await window.aerio.mail.drafts.schedule({ ...input, expectedUpdatedAt: revision.current }, deliveryAt.toISOString())
+        : await window.aerio.mail.drafts.send({ ...input, expectedUpdatedAt: revision.current })
       if (result.status === 'scheduled') {
         onToast(`Message scheduled for ${deliveryAt!.toLocaleString()}`)
         onSent(result)
@@ -337,6 +352,7 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
         <footer className="compose-footer">
           <button className="icon-button" title="Attach files" onClick={() => void chooseAttachments()}><Paperclip size={18} /></button>
           <button className="button ghost small" disabled={status === 'saving' || status === 'sending'} onClick={() => void saveNow(input, true)}><Save size={15} /> Save draft</button>
+          {conflict && <button className="button ghost small" disabled={status === 'saving' || status === 'sending'} onClick={() => void saveAsCopy()}><Copy size={15} /> Save as copy</button>}
           <button className="button ghost small danger-subtle" disabled={status === 'sending'} onClick={() => void discard()}><Trash2 size={15} /> Discard</button>
           <span className="spacer" />
           <label className="mail-schedule-field" title="Schedule delivery"><CalendarClock size={15} /><input aria-label="Scheduled delivery time" type="datetime-local" min={localDateTimeValue(new Date(Date.now() + 60_000).toISOString())} value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} />{scheduledFor && <button type="button" aria-label="Clear scheduled delivery" onClick={() => setScheduledFor('')}><X size={13} /></button>}</label>

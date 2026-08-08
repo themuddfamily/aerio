@@ -2,7 +2,7 @@ import {
   CalendarClock, Check, CheckCircle2, ChevronDown, Circle, Copy, Edit3, GripVertical, ListTodo,
   Plus, Repeat2, Search, Trash2
 } from 'lucide-react'
-import { format, isBefore, isToday, parseISO } from 'date-fns'
+import { addDays, addMonths, addWeeks, format, isBefore, isToday, parseISO } from 'date-fns'
 import { useMemo, useState } from 'react'
 import Modal from '../components/Modal'
 import { uid } from '../lib/domain'
@@ -16,12 +16,44 @@ interface TasksViewProps {
   onToast(message: string): void
 }
 
+const builtInLists = ['Today', 'This week', 'Someday']
+
+function nextOccurrence(task: Task, now = new Date()) {
+  const base = task.due ? parseISO(task.due) : now
+  if (Number.isNaN(base.getTime())) return undefined
+  if (task.recurrence === 'daily') return addDays(base, 1).toISOString()
+  if (task.recurrence === 'weekly') return addWeeks(base, 1).toISOString()
+  if (task.recurrence === 'monthly') return addMonths(base, 1).toISOString()
+  return undefined
+}
+
+export function toggleTaskWithRecurrence(task: Task, now = new Date()): Task[] {
+  if (task.completed) return [{ ...task, completed: false }]
+  const completed = { ...task, completed: true }
+  if (!task.recurrence || task.recurrence === 'none') return [completed]
+  return [completed, {
+    ...task,
+    id: uid('task'),
+    completed: false,
+    due: nextOccurrence(task, now),
+    subtasks: task.subtasks.map((subtask) => ({ ...subtask, id: uid('subtask'), completed: false }))
+  }]
+}
+
 export default function TasksView({ state, query, onChange, onToast }: TasksViewProps) {
   const { showContextMenu } = useContextMenu()
   const [list, setList] = useState('Today')
   const [showCompleted, setShowCompleted] = useState(true)
   const [editing, setEditing] = useState<Task | 'new' | null>(null)
-  const lists = ['Today', 'This week', 'Someday']
+  const [newTaskList, setNewTaskList] = useState<string>()
+  const lists = useMemo(() => [...builtInLists, ...Array.from(new Set(state.tasks
+    .map((task) => task.listId.trim())
+    .filter((item) => item && !builtInLists.includes(item))))].sort((a, b) => {
+      const aBuiltIn = builtInLists.indexOf(a)
+      const bBuiltIn = builtInLists.indexOf(b)
+      if (aBuiltIn >= 0 || bBuiltIn >= 0) return aBuiltIn >= 0 && bBuiltIn >= 0 ? aBuiltIn - bBuiltIn : aBuiltIn >= 0 ? -1 : 1
+      return a.localeCompare(b)
+    }), [state.tasks])
   const completedPercent = state.tasks.length ? Math.round(state.tasks.filter((task) => task.completed).length / state.tasks.length * 100) : 0
   const tasks = useMemo(() => state.tasks
     .filter((task) => list === 'All tasks' || task.listId === list)
@@ -31,7 +63,10 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
   [list, query, showCompleted, state.tasks])
 
   const toggleTask = (id: string) => {
-    onChange({ ...state, tasks: state.tasks.map((task) => task.id === id ? { ...task, completed: !task.completed } : task) })
+    const task = state.tasks.find((item) => item.id === id)
+    if (!task) return
+    onChange({ ...state, tasks: state.tasks.flatMap((item) => item.id === id ? toggleTaskWithRecurrence(item) : [item]) })
+    if (!task.completed && task.recurrence && task.recurrence !== 'none') onToast('Task completed and the next occurrence was scheduled')
   }
 
   const changeTask = (task: Task, updates: Partial<Task>) => onChange({
@@ -53,12 +88,12 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
 
   const taskMenu = (task: Task): ContextMenuItem[] => [
     { label: 'Edit task', icon: Edit3, action: () => setEditing(task) },
-    { label: task.completed ? 'Reopen task' : 'Complete task', icon: CheckCircle2, checked: task.completed, action: () => changeTask(task, { completed: !task.completed }) },
+    { label: task.completed ? 'Reopen task' : 'Complete task', icon: CheckCircle2, checked: task.completed, action: () => toggleTask(task.id) },
     ...(['high', 'normal', 'low'] as Task['priority'][]).map((priority, index) => ({
       label: `${priority[0].toUpperCase()}${priority.slice(1)} priority`, icon: Circle,
       separatorBefore: index === 0, checked: task.priority === priority, action: () => changeTask(task, { priority })
     })),
-    ...(['Today', 'This week', 'Someday'] as const).map((target, index) => ({
+    ...lists.map((target, index) => ({
       label: `Move to ${target}`, icon: ListTodo, separatorBefore: index === 0, checked: task.listId === target, action: () => changeTask(task, { listId: target })
     })),
     { label: 'Duplicate task', icon: Copy, separatorBefore: true, action: () => duplicateTask(task) },
@@ -72,7 +107,7 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
       { label: `Open ${target}`, icon: ListTodo, action: () => setList(target) },
       { label: `New task in ${target === 'All tasks' ? 'Today' : target}`, icon: Plus, separatorBefore: true, action: () => { setList(target === 'All tasks' ? 'Today' : target); setEditing('new') } },
       { label: `Complete all open tasks${open ? ` (${open})` : ''}`, icon: CheckCircle2, disabled: open === 0, action: () => {
-        onChange({ ...state, tasks: state.tasks.map((task) => target === 'All tasks' || task.listId === target ? { ...task, completed: true } : task) })
+        onChange({ ...state, tasks: state.tasks.flatMap((task) => (target === 'All tasks' || task.listId === target) && !task.completed ? toggleTaskWithRecurrence(task) : [task]) })
         onToast(`${target} completed`)
       } }
     ], target)
@@ -101,6 +136,13 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
               <span>{item}</span><em>{state.tasks.filter((task) => task.listId === item && !task.completed).length}</em>
             </button>
           ))}
+          <button className="sidebar-item" onClick={() => {
+            const name = window.prompt('Name this task list')?.trim()
+            if (!name) return
+            setList(name)
+            setNewTaskList(name)
+            setEditing('new')
+          }}><Plus size={17} /><span>New list</span></button>
         </div>
         <div className="task-progress-card">
           <div className="progress-ring" style={{ '--progress': `${completedPercent}%` } as React.CSSProperties}>
@@ -143,11 +185,13 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
       {editing && (
         <TaskEditor
           task={editing === 'new' ? undefined : editing}
-          defaultList={list === 'All tasks' ? 'Today' : list}
-          onClose={() => setEditing(null)}
+          defaultList={newTaskList ?? (list === 'All tasks' ? 'Today' : list)}
+          lists={lists}
+          onClose={() => { setNewTaskList(undefined); setEditing(null) }}
           onSave={(task) => {
             const exists = state.tasks.some((item) => item.id === task.id)
             onChange({ ...state, tasks: exists ? state.tasks.map((item) => item.id === task.id ? task : item) : [task, ...state.tasks] })
+            setNewTaskList(undefined)
             setEditing(null)
             onToast(exists ? 'Task updated' : 'Task created')
           }}
@@ -162,7 +206,7 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
   )
 }
 
-function TaskEditor({ task, defaultList, onClose, onSave, onDelete }: { task?: Task; defaultList: string; onClose(): void; onSave(task: Task): void; onDelete?(): void }) {
+function TaskEditor({ task, defaultList, lists, onClose, onSave, onDelete }: { task?: Task; defaultList: string; lists: string[]; onClose(): void; onSave(task: Task): void; onDelete?(): void }) {
   const [title, setTitle] = useState(task?.title ?? '')
   const [notes, setNotes] = useState(task?.notes ?? '')
   const [listId, setListId] = useState(task?.listId ?? defaultList)
@@ -176,7 +220,7 @@ function TaskEditor({ task, defaultList, onClose, onSave, onDelete }: { task?: T
       <div className="form-stack">
         <label className="field-label">Task<input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What needs doing?" /></label>
         <div className="form-grid-2">
-          <label className="field-label">List<select value={listId} onChange={(e) => setListId(e.target.value)}><option>Today</option><option>This week</option><option>Someday</option></select></label>
+          <label className="field-label">List<select value={listId} onChange={(e) => setListId(e.target.value)}>{Array.from(new Set([...lists, listId])).map((item) => <option key={item}>{item}</option>)}</select></label>
           <label className="field-label">Due<input type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} /></label>
           <label className="field-label">Priority<select value={priority} onChange={(e) => setPriority(e.target.value as Task['priority'])}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option></select></label>
           <label className="field-label">Repeat<select value={recurrence} onChange={(e) => setRecurrence(e.target.value as Task['recurrence'])}><option value="none">Never</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>

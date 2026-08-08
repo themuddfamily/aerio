@@ -1,3 +1,4 @@
+import type { CalendarEvent } from '../../src/types'
 import type { ProviderProductivityData, SyncedCalendar, SyncedCalendarEvent, SyncedContact } from '../../src/productivity-types'
 import { retryingJson, type ProductivityConnector } from './connector'
 
@@ -12,6 +13,7 @@ interface GraphEvent {
   end?: { dateTime?: string; timeZone?: string }
   attendees?: { emailAddress?: { address?: string } }[]
   recurrence?: { pattern?: { type?: string } }
+  reminderMinutesBeforeStart?: number
   isCancelled?: boolean
   isOrganizer?: boolean
 }
@@ -35,6 +37,28 @@ const recurrence = (value?: string) => {
   return normalized.includes('daily') ? 'daily' : normalized.includes('weekly') ? 'weekly' : normalized.includes('monthly') ? 'monthly' : 'none'
 }
 
+const weekDays = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+
+export const microsoftEventBody = (event: CalendarEvent) => {
+  const start = new Date(event.start)
+  const repeat = event.recurrence ?? 'none'
+  const pattern = repeat === 'daily' ? { type: 'daily', interval: 1 }
+    : repeat === 'weekly' ? { type: 'weekly', interval: 1, daysOfWeek: [weekDays[start.getUTCDay()]] }
+      : repeat === 'monthly' ? { type: 'absoluteMonthly', interval: 1, dayOfMonth: start.getUTCDate() }
+        : undefined
+  return {
+    subject: event.title,
+    body: { contentType: 'text', content: event.description ?? '' },
+    start: { dateTime: event.start, timeZone: 'UTC' },
+    end: { dateTime: event.end, timeZone: 'UTC' },
+    location: { displayName: event.location ?? '' },
+    attendees: event.attendees.map((address) => ({ emailAddress: { address }, type: 'required' })),
+    isReminderOn: true,
+    reminderMinutesBeforeStart: event.reminderMinutes,
+    recurrence: pattern ? { pattern, range: { type: 'noEnd', startDate: event.start.slice(0, 10) } } : null
+  }
+}
+
 export function mapMicrosoftEvent(accountId: string, calendar: SyncedCalendar, event: GraphEvent): SyncedCalendarEvent | undefined {
   const start = utc(event.start?.dateTime)
   const end = utc(event.end?.dateTime)
@@ -52,7 +76,7 @@ export function mapMicrosoftEvent(accountId: string, calendar: SyncedCalendar, e
     description: event.bodyPreview,
     color: calendar.color,
     attendees: (event.attendees ?? []).flatMap((attendee) => attendee.emailAddress?.address ? [attendee.emailAddress.address] : []),
-    reminderMinutes: 30,
+    reminderMinutes: event.reminderMinutesBeforeStart ?? 30,
     recurrence: recurrence(event.recurrence?.pattern?.type),
     readOnly: !calendar.canWrite || event.isOrganizer === false
   }
@@ -82,7 +106,7 @@ export function mapMicrosoftContact(accountId: string, contact: GraphContact): S
 export class MicrosoftProductivityConnector implements ProductivityConnector {
   readonly provider = 'microsoft' as const
 
-  constructor(private readonly accountId: string, private readonly token: () => Promise<string>) {}
+  constructor(private readonly accountId: string, private readonly token: () => Promise<string>, private readonly calendarWriteAuthorized = false) {}
 
   async sync(): Promise<ProviderProductivityData> {
     const remoteCalendars = await this.pages<GraphCalendar>('https://graph.microsoft.com/v1.0/me/calendars?$select=id,name,color,isDefaultCalendar,canEdit')
@@ -94,7 +118,7 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
       name: calendar.name?.trim() || 'Calendar',
       color: graphColor(calendar.color),
       primary: Boolean(calendar.isDefaultCalendar),
-      canWrite: false
+      canWrite: this.calendarWriteAuthorized && Boolean(calendar.canEdit)
     }))
     const from = new Date(); from.setUTCFullYear(from.getUTCFullYear() - 1)
     const to = new Date(); to.setUTCFullYear(to.getUTCFullYear() + 2)
@@ -106,6 +130,43 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
     }
     const contacts = await this.pages<GraphContact>('https://graph.microsoft.com/v1.0/me/contacts?$top=1000&$select=id,displayName,givenName,surname,emailAddresses,businessPhones,mobilePhone,companyName,jobTitle,personalNotes,categories')
     return { calendars, events, contacts: contacts.flatMap((contact) => { const mapped = mapMicrosoftContact(this.accountId, contact); return mapped ? [mapped] : [] }) }
+  }
+
+  async createEvent(calendar: SyncedCalendar, event: CalendarEvent) {
+    this.assertWritable(calendar)
+    const remote = await retryingJson<GraphEvent>(this.provider, this.eventsUrl(calendar), this.token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(microsoftEventBody(event))
+    })
+    return this.mapWrittenEvent(calendar, remote)
+  }
+
+  async updateEvent(calendar: SyncedCalendar, current: SyncedCalendarEvent, event: CalendarEvent) {
+    this.assertWritable(calendar)
+    const remote = await retryingJson<GraphEvent>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(current.remoteId)}`, this.token, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(microsoftEventBody(event))
+    })
+    return this.mapWrittenEvent(calendar, remote)
+  }
+
+  async deleteEvent(calendar: SyncedCalendar, event: SyncedCalendarEvent) {
+    this.assertWritable(calendar)
+    await retryingJson<void>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(event.remoteId)}`, this.token, { method: 'DELETE' })
+  }
+
+  private eventsUrl(calendar: SyncedCalendar) {
+    return `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(calendar.remoteId)}/events`
+  }
+
+  private assertWritable(calendar: SyncedCalendar) {
+    if (calendar.accountId !== this.accountId || calendar.provider !== this.provider || !calendar.canWrite || !this.calendarWriteAuthorized) {
+      throw new Error('Reconnect this Microsoft account once to enable Calendar editing')
+    }
+  }
+
+  private mapWrittenEvent(calendar: SyncedCalendar, remote: GraphEvent) {
+    const mapped = mapMicrosoftEvent(this.accountId, calendar, remote)
+    if (!mapped) throw new Error('Microsoft saved the event but did not return valid event details')
+    return mapped
   }
 
   private async pages<T>(initialUrl: string) {

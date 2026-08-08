@@ -1,5 +1,5 @@
 import { FolderInput, Tag, Tags } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { MailAccountSummary, MailLabel, MailThreadSummary } from '../mail-types'
 import Modal from './Modal'
 
@@ -42,6 +42,10 @@ export default function MailOrganizeModal({ mode, items, accounts, labels, onApp
   })), [groups, labels, mode])
   const [selection, setSelection] = useState<Record<string, string>>(() => Object.fromEntries(groups.map((group) => [group.accountId, targets[group.accountId]?.[0]?.id ?? ''])))
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setSelection(Object.fromEntries(groups.map((group) => [group.accountId, targets[group.accountId]?.[0]?.id ?? ''])))
+  }, [groups, targets])
 
   const apply = async (action: OrganizeRequest['action']) => {
     const requests = groups.flatMap((group) => selection[group.accountId]

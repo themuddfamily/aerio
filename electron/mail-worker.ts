@@ -967,6 +967,8 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'labels:list') return database.listLabels(command.payload.accountIds)
   if (command.type === 'recipients:suggest') return database.suggestRecipients(command.payload.query, command.payload.accountIds)
   if (command.type === 'mail:list') return database.listThreads(command.payload)
+  if (command.type === 'mail:unread-counts') return database.folderUnreadCounts(command.payload.accountIds)
+  if (command.type === 'mail:account-unread-counts') return database.accountUnreadCounts()
   if (command.type === 'mail:thread') {
     const thread = database.getThread(command.payload.accountId, command.payload.threadId)
     thread.messages = thread.messages.map((message: MailMessageDetail) => ({

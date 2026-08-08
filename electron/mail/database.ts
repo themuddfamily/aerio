@@ -18,6 +18,8 @@ import type {
   MailAccountSettingsInput,
   MailDiagnosticHealth,
   MailPage,
+  MailFolderUnreadCounts,
+  MailAccountUnreadCounts,
   MailQuery,
   MailRecipientSuggestion,
   MailStorageStats,
@@ -757,6 +759,66 @@ export class MailDatabase {
     return [...grouped.values()].sort((left, right) => String(left.row.internal_date).localeCompare(String(right.row.internal_date)))
   }
 
+  folderUnreadCounts(accountIds?: string[]): MailFolderUnreadCounts {
+    const accountFilter = accountIds?.length
+      ? `AND t.account_id IN (${accountIds.map(() => '?').join(',')})`
+      : ''
+    const row = this.db.prepare(`
+      WITH unread_threads AS (
+        SELECT t.*,
+          EXISTS(
+            SELECT 1 FROM mail_snoozes s
+            WHERE s.account_id=t.account_id AND s.thread_id=t.id AND s.snoozed_until>?
+          ) AS snoozed
+        FROM gmail_threads t
+        JOIN gmail_accounts a ON a.id=t.account_id
+        WHERE t.unread=1 ${accountFilter}
+      )
+      SELECT
+        COALESCE(SUM(CASE WHEN inbox=1 AND trashed=0 AND snoozed=0 THEN 1 ELSE 0 END),0) AS inbox,
+        COALESCE(SUM(CASE WHEN starred=1 AND trashed=0 AND snoozed=0 THEN 1 ELSE 0 END),0) AS starred,
+        COALESCE(SUM(CASE WHEN important=1 AND trashed=0 AND snoozed=0 THEN 1 ELSE 0 END),0) AS important,
+        COALESCE(SUM(CASE WHEN sent=1 AND trashed=0 AND snoozed=0 THEN 1 ELSE 0 END),0) AS sent,
+        COALESCE(SUM(CASE WHEN draft=1 AND trashed=0 AND snoozed=0 THEN 1 ELSE 0 END),0) AS drafts,
+        COALESCE(SUM(CASE WHEN snoozed=1 THEN 1 ELSE 0 END),0) AS snoozed,
+        COALESCE(SUM(CASE WHEN inbox=0 AND trashed=0 AND sent=0 AND draft=0 AND snoozed=0
+          AND NOT EXISTS(SELECT 1 FROM json_each(label_ids_json) WHERE value='SPAM') THEN 1 ELSE 0 END),0) AS archive,
+        COALESCE(SUM(CASE WHEN snoozed=0 AND EXISTS(SELECT 1 FROM json_each(label_ids_json) WHERE value='SPAM') THEN 1 ELSE 0 END),0) AS spam,
+        COALESCE(SUM(CASE WHEN trashed=1 AND snoozed=0 THEN 1 ELSE 0 END),0) AS trash,
+        COALESCE(SUM(CASE WHEN trashed=0 AND snoozed=0
+          AND NOT EXISTS(SELECT 1 FROM json_each(label_ids_json) WHERE value='SPAM') THEN 1 ELSE 0 END),0) AS all_mail
+      FROM unread_threads
+    `).get(nowIso(), ...(accountIds ?? [])) as DatabaseRow
+    return {
+      inbox: Number(row.inbox),
+      starred: Number(row.starred),
+      important: Number(row.important),
+      sent: Number(row.sent),
+      drafts: Number(row.drafts),
+      scheduled: 0,
+      snoozed: Number(row.snoozed),
+      archive: Number(row.archive),
+      spam: Number(row.spam),
+      trash: Number(row.trash),
+      all: Number(row.all_mail)
+    }
+  }
+
+  accountUnreadCounts(): MailAccountUnreadCounts {
+    const rows = this.db.prepare(`
+      SELECT t.account_id,COUNT(*) AS unread
+      FROM gmail_threads t
+      JOIN gmail_accounts a ON a.id=t.account_id
+      WHERE t.unread=1 AND t.inbox=1 AND t.trashed=0
+        AND NOT EXISTS(
+          SELECT 1 FROM mail_snoozes s
+          WHERE s.account_id=t.account_id AND s.thread_id=t.id AND s.snoozed_until>?
+        )
+      GROUP BY t.account_id
+    `).all(nowIso()) as DatabaseRow[]
+    return Object.fromEntries(rows.map((row) => [String(row.account_id), Number(row.unread)]))
+  }
+
   listThreads(query: MailQuery): MailPage {
     const pageSize = Math.min(Math.max(query.pageSize ?? 50, 1), 100)
     const where: string[] = ['1=1']
@@ -922,7 +984,7 @@ export class MailDatabase {
     return inverses[action]
   }
 
-  applyLocalAction(input: ApplyMailActionInput, operationId = crypto.randomUUID(), delayMs = 10_000): PendingOperation {
+  applyLocalAction(input: ApplyMailActionInput, operationId: string = crypto.randomUUID(), delayMs = 10_000): PendingOperation {
     if (!this.getAccount(input.accountId)) throw new Error('Account not found')
     if (!input.threadIds.length) throw new Error('Select at least one conversation')
     if ((input.action === 'label' || input.action === 'unlabel' || input.action === 'move') && !input.labelId) throw new Error(input.action === 'move' ? 'Choose a destination' : 'Choose a label')
@@ -1026,8 +1088,12 @@ export class MailDatabase {
 
   saveDraft(input: MailDraftInput, result: Partial<MailDraftResult> = {}): MailDraftResult {
     const id = input.id ?? crypto.randomUUID()
-    const updatedAt = nowIso()
     const existing = this.getDraft(id)
+    if (existing && input.expectedUpdatedAt && String(existing.updated_at) !== input.expectedUpdatedAt) {
+      throw new Error('This draft changed after it was opened. Your version was not overwritten; save it as a copy to keep both versions.')
+    }
+    const existingUpdatedAt = existing?.updated_at ? Date.parse(String(existing.updated_at)) : 0
+    const updatedAt = new Date(Math.max(Date.now(), Number.isFinite(existingUpdatedAt) ? existingUpdatedAt + 1 : 0)).toISOString()
     const existingStatus = existing?.status ? String(existing.status) as MailDraftResult['status'] : undefined
     const retainedDelivery = existingStatus === 'scheduled' || existingStatus === 'send-pending' || existingStatus === 'queued'
     const status = result.status ?? (retainedDelivery ? existingStatus : 'local') ?? 'local'

@@ -26,6 +26,8 @@ import type {
   MailMessageDetail,
   MailThreadDetail,
   MailActionKind,
+  MailAccountUnreadCounts,
+  MailFolderUnreadCounts,
   MailPage,
   MailQuery,
   MailSearchFilters,
@@ -43,9 +45,14 @@ import { copyText, useContextMenu, type ContextMenuItem } from '../components/Co
 interface ConnectedMailViewProps {
   onToast(message: string): void
   composeRequest?: { id: number; initialTo?: string }
+  searchRequest?: { id: number; query: string }
 }
 
 const emptyPage: MailPage = { items: [], total: 0 }
+const emptyUnreadCounts: MailFolderUnreadCounts = {
+  inbox: 0, starred: 0, important: 0, sent: 0, drafts: 0, scheduled: 0,
+  snoozed: 0, archive: 0, spam: 0, trash: 0, all: 0
+}
 const folderNames: Record<NonNullable<MailQuery['folder']>, string> = {
   inbox: 'Inbox', starred: 'Starred', important: 'Important', sent: 'Sent',
   drafts: 'Drafts', scheduled: 'Scheduled', snoozed: 'Snoozed', archive: 'Archive', spam: 'Spam', trash: 'Trash', all: 'All mail'
@@ -59,12 +66,14 @@ function shortDate(date: string) {
     : new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(value)
 }
 
-export default function ConnectedMailView({ onToast, composeRequest = { id: 0 } }: ConnectedMailViewProps) {
+export default function ConnectedMailView({ onToast, composeRequest = { id: 0 }, searchRequest = { id: 0, query: '' } }: ConnectedMailViewProps) {
   const { showContextMenu } = useContextMenu()
   const mailPanes = useResizableMailPanes()
   const [accounts, setAccounts] = useState<MailAccountSummary[]>([])
   const [labels, setLabels] = useState<MailLabel[]>([])
   const [page, setPage] = useState<MailPage>(emptyPage)
+  const [folderUnreadCounts, setFolderUnreadCounts] = useState<MailFolderUnreadCounts>(emptyUnreadCounts)
+  const [accountUnreadCounts, setAccountUnreadCounts] = useState<MailAccountUnreadCounts>({})
   const [localDrafts, setLocalDrafts] = useState<MailDraftRecord[]>([])
   const [folder, setFolder] = useState<NonNullable<MailQuery['folder']>>('inbox')
   const [labelId, setLabelId] = useState<string>()
@@ -97,9 +106,12 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 } 
   const handledComposeRequest = useRef(0)
   const requestedMessage = useRef<{ threadKey: string; messageId: string } | undefined>(undefined)
   const pageRequest = useRef(0)
+  const unreadCountRequest = useRef(0)
+  const accountUnreadCountRequest = useRef(0)
   const loadingMoreRef = useRef(false)
   const messageListRef = useRef<HTMLDivElement>(null)
   const searchShellRef = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null)
   const selected = page.items.find((item) => `${item.accountId}:${item.id}` === selectedKey)
   const selectedAccount = accounts.find((item) => item.id === selected?.accountId)
@@ -107,11 +119,47 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 } 
   const checkedItems = useMemo(() => page.items.filter((item) => checkedKeys.has(`${item.accountId}:${item.id}`)), [checkedKeys, page.items])
   const activeSearchFilterCount = Object.values(searchFilters).filter((value) => value !== undefined && value !== '').length
 
+  useEffect(() => {
+    if (!searchRequest.id) return
+    setSearch(searchRequest.query)
+    setSearchFiltersOpen(false)
+    requestAnimationFrame(() => searchInputRef.current?.focus())
+  }, [searchRequest.id, searchRequest.query])
+  const accountKeys = accounts.map((item) => item.id).join('\n')
+
   const refreshAccounts = useCallback(async () => {
     const next = await window.aerio.mail.accounts.list()
     setAccounts(next)
     return next
   }, [])
+
+  const loadUnreadCounts = useCallback(async () => {
+    const request = ++unreadCountRequest.current
+    if (!accounts.length) {
+      setFolderUnreadCounts(emptyUnreadCounts)
+      return
+    }
+    try {
+      const counts = await window.aerio.mail.mail.unreadCounts(accountId === 'all' ? undefined : [accountId])
+      if (request === unreadCountRequest.current) setFolderUnreadCounts(counts)
+    } catch (error) {
+      if (request === unreadCountRequest.current) onToast(error instanceof Error ? error.message : 'Unread counts could not be loaded')
+    }
+  }, [accountId, accounts.length, onToast])
+
+  const loadAccountUnreadCounts = useCallback(async () => {
+    const request = ++accountUnreadCountRequest.current
+    if (!accountKeys) {
+      setAccountUnreadCounts({})
+      return
+    }
+    try {
+      const counts = await window.aerio.mail.mail.accountUnreadCounts()
+      if (request === accountUnreadCountRequest.current) setAccountUnreadCounts(counts)
+    } catch (error) {
+      if (request === accountUnreadCountRequest.current) onToast(error instanceof Error ? error.message : 'Account unread counts could not be loaded')
+    }
+  }, [accountKeys, onToast])
 
   const loadDrafts = useCallback(async () => {
     if (!accounts.length) {
@@ -207,7 +255,11 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 } 
         setSync((items) => [...items.filter((item) => item.accountId !== event.payload.accountId), event.payload])
         if (event.payload.phase === 'complete') void window.aerio.mail.mail.labels().then(setLabels).catch(() => undefined)
       }
-      if (event.type === 'mail-changed') void loadPage()
+      if (event.type === 'mail-changed') {
+        void loadPage()
+        void loadUnreadCounts()
+        void loadAccountUnreadCounts()
+      }
       if (event.type === 'operation' && event.payload.status === 'failed') onToast(event.payload.error ?? 'The mail provider rejected the change')
       if (event.type === 'operation' && event.payload.status === 'succeeded') setPending((items) => items.filter((item) => item.id !== event.payload.id))
       if (event.type === 'draft-delivery') {
@@ -219,7 +271,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 } 
       if (event.type === 'connectivity' && !event.payload.online) onToast('Offline — changes will be sent when you reconnect')
     })
     return unsubscribe
-  }, [loadDrafts, loadPage, onToast])
+  }, [loadAccountUnreadCounts, loadDrafts, loadPage, loadUnreadCounts, onToast])
 
   useEffect(() => {
     const undoUntil = pending.map((item) => item.undoUntil).filter(Boolean).sort()[0]
@@ -255,6 +307,10 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 } 
   }, [searchFiltersOpen])
 
   useEffect(() => { void loadPage() }, [loadPage])
+
+  useEffect(() => { void loadUnreadCounts() }, [loadUnreadCounts])
+
+  useEffect(() => { void loadAccountUnreadCounts() }, [loadAccountUnreadCounts])
 
   useEffect(() => {
     const root = messageListRef.current
@@ -746,9 +802,18 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 } 
     { label: 'New message', icon: Plus, separatorBefore: true, disabled: !accounts.some((account) => !account.archived), action: () => setCompose({}) },
     { label: 'Check for mail', icon: RefreshCw, disabled: syncUnavailable, action: () => startSync(accountId === 'all' ? undefined : accountId) }
   ], folderNames[value])
-  const folderButton = (value: typeof folder, icon: React.ReactNode) => (
-    <button className={`sidebar-item ${folder === value && !labelId ? 'active' : ''}`} onClick={() => { setLabelId(undefined); setFolder(value) }} onContextMenu={(event) => showFolderMenu(event, value)}>{icon}<span>{folderNames[value]}</span></button>
-  )
+  const folderButton = (value: typeof folder, icon: React.ReactNode) => {
+    const unread = folderUnreadCounts[value]
+    return (
+      <button aria-label={`${folderNames[value]}${unread > 0 ? ` ${unread.toLocaleString()} unread conversation${unread === 1 ? '' : 's'}` : ''}`} className={`sidebar-item ${folder === value && !labelId ? 'active' : ''}`} onClick={() => { setLabelId(undefined); setFolder(value) }} onContextMenu={(event) => showFolderMenu(event, value)}>
+        {icon}<span>{folderNames[value]}</span>
+        {unread > 0 && <em className="mail-unread-count" aria-hidden="true">{unread.toLocaleString()}</em>}
+      </button>
+    )
+  }
+  const allAccountsUnread = Object.values(accountUnreadCounts).reduce((total, count) => total + count, 0)
+  const accountLabel = (label: string, unread: number) => `${label}${unread > 0 ? ` ${unread.toLocaleString()} unread conversation${unread === 1 ? '' : 's'}` : ''}`
+  const accountBadge = (unread: number) => unread > 0 ? <em className="mail-unread-count" aria-hidden="true">{unread.toLocaleString()}</em> : null
 
   return (
     <div ref={mailPanes.containerRef} className="workspace mail-workspace real-mail" style={mailPanes.style}>
@@ -770,8 +835,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 } 
         </div>
         <div className="sidebar-group">
           <span className="sidebar-label">Accounts</span>
-          <button className={`sidebar-item ${accountId === 'all' ? 'active' : ''}`} onClick={() => selectAccount('all')} onContextMenu={(event) => showAccountMenu(event)}><span className="account-dot multi" /><span>All accounts</span></button>
-          {accounts.map((account) => <button className={`sidebar-item mail-account-row ${accountId === account.id ? 'active' : ''}`} key={account.id} onClick={() => selectAccount(account.id)} onContextMenu={(event) => showAccountMenu(event, account)} title={`${account.email} · ${account.provider}${account.archived ? ' · offline archive' : ''}`}><span className="account-dot" style={{ background: account.color }} /><span>{account.email}{account.archived ? ' · archive' : ''}<small className="provider-name">{account.provider}</small></span><i className={`account-state ${account.status}`} /></button>)}
+          <button aria-label={accountLabel('All accounts', allAccountsUnread)} className={`sidebar-item ${accountId === 'all' ? 'active' : ''}`} onClick={() => selectAccount('all')} onContextMenu={(event) => showAccountMenu(event)}><span className="account-dot multi" /><span>All accounts</span>{accountBadge(allAccountsUnread)}</button>
+          {accounts.map((account) => { const unread = accountUnreadCounts[account.id] ?? 0; return <button aria-label={accountLabel(account.email, unread)} className={`sidebar-item mail-account-row ${accountId === account.id ? 'active' : ''}`} key={account.id} onClick={() => selectAccount(account.id)} onContextMenu={(event) => showAccountMenu(event, account)} title={`${account.email} · ${account.provider}${account.archived ? ' · offline archive' : ''}`}><span className="account-dot" style={{ background: account.color }} /><span>{account.email}{account.archived ? ' · archive' : ''}<small className="provider-name">{account.provider}</small></span>{accountBadge(unread)}<i className={`account-state ${account.status}`} /></button> })}
           <button className="sidebar-item" onClick={addAccount}><UserPlus size={16} /><span>Add mail account</span></button>
         </div>
           {visibleLabels.length > 0 && <div className="sidebar-group"><span className="sidebar-label">Labels</span>{visibleLabels.map((label) => { const selected = labelId === label.id && accountId === label.accountId; return <button className={`sidebar-item ${selected ? 'active' : ''}`} aria-pressed={selected} key={`${label.accountId}:${label.id}`} onClick={() => toggleLabel(label)} onContextMenu={(event) => showContextMenu(event, [
@@ -796,7 +861,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 } 
         <div className="mail-search-shell" ref={searchShellRef}>
           <div className="mail-search">
             <Search size={15} />
-            <input aria-label="Search mail" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search offline mail…" />
+            <input ref={searchInputRef} aria-label="Search mail" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search offline mail…" />
             {(search || activeSearchFilterCount > 0) && <button className="mail-search-clear" aria-label="Clear mail search" title="Clear search and filters" onClick={() => { setSearch(''); setSearchFilters({}); setSearchFiltersOpen(false) }}><X size={14} /></button>}
             <button className={`mail-search-filter-button ${activeSearchFilterCount ? 'active' : ''}`} aria-expanded={searchFiltersOpen} aria-haspopup="dialog" title="Advanced search filters" onClick={() => setSearchFiltersOpen((open) => !open)}><Filter size={14} /><span>{activeSearchFilterCount || 'Filters'}</span></button>
           </div>

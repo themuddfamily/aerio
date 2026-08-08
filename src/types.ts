@@ -50,6 +50,7 @@ export interface Contact {
   notes?: string
   favorite: boolean
   color: string
+  source?: 'local'
 }
 
 export interface Task {
@@ -80,6 +81,7 @@ export interface Settings {
   theme: ThemePreference
   density: DensityPreference
   closeToTray: boolean
+  launchAtLogin?: boolean
   notifications: boolean
   startModule: ModuleId
   profile?: UserProfile

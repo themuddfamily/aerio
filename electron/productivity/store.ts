@@ -53,6 +53,11 @@ export class ProductivityStore {
         payload_json TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS local_contacts (
+        id TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `)
   }
 
@@ -137,7 +142,9 @@ export class ProductivityStore {
     const values = new Map(rows.map((row) => [row.module, JSON.parse(row.payload_json) as unknown[]]))
     return {
       tasks: (values.get('tasks') ?? []) as LocalModuleSnapshot['tasks'],
-      notes: (values.get('notes') ?? []) as LocalModuleSnapshot['notes']
+      notes: (values.get('notes') ?? []) as LocalModuleSnapshot['notes'],
+      contacts: (this.db.prepare('SELECT payload_json FROM local_contacts ORDER BY updated_at DESC').all() as unknown as PayloadRow[])
+        .map((row) => JSON.parse(row.payload_json)) as NonNullable<LocalModuleSnapshot['contacts']>
     }
   }
 
@@ -151,6 +158,9 @@ export class ProductivityStore {
       `)
       save.run('tasks', JSON.stringify(snapshot.tasks), timestamp)
       save.run('notes', JSON.stringify(snapshot.notes), timestamp)
+      this.db.prepare('DELETE FROM local_contacts').run()
+      const saveContact = this.db.prepare('INSERT INTO local_contacts(id,payload_json,updated_at) VALUES(?,?,?)')
+      for (const contact of snapshot.contacts ?? []) saveContact.run(contact.id, JSON.stringify(contact), timestamp)
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')

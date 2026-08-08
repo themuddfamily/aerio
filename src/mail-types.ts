@@ -161,15 +161,20 @@ export interface MailSearchFilters {
   important?: boolean
 }
 
+export type MailFolder = 'inbox' | 'starred' | 'important' | 'sent' | 'drafts' | 'scheduled' | 'snoozed' | 'archive' | 'spam' | 'trash' | 'all'
+
 export interface MailQuery {
   accountIds?: string[]
-  folder?: 'inbox' | 'starred' | 'important' | 'sent' | 'drafts' | 'scheduled' | 'snoozed' | 'archive' | 'spam' | 'trash' | 'all'
+  folder?: MailFolder
   labelId?: string
   search?: string
   filters?: MailSearchFilters
   cursor?: string
   pageSize?: number
 }
+
+export type MailFolderUnreadCounts = Record<MailFolder, number>
+export type MailAccountUnreadCounts = Record<string, number>
 
 export interface MailLabel {
   accountId: string
@@ -197,6 +202,7 @@ export interface PendingOperation {
 
 export interface MailDraftInput {
   id?: string
+  expectedUpdatedAt?: string
   accountId: string
   threadId?: string
   inReplyTo?: string
@@ -340,6 +346,8 @@ export interface MailDesktopApi {
     labels(accountIds?: string[]): Promise<MailLabel[]>
     suggestRecipients(query: string, accountIds?: string[]): Promise<MailRecipientSuggestion[]>
     list(query: MailQuery): Promise<MailPage>
+    unreadCounts(accountIds?: string[]): Promise<MailFolderUnreadCounts>
+    accountUnreadCounts(): Promise<MailAccountUnreadCounts>
     thread(accountId: string, threadId: string, allowRemoteImages?: boolean): Promise<MailThreadDetail>
     source(accountId: string, messageId: string): Promise<MailMessageSource>
     action(input: ApplyMailActionInput): Promise<PendingOperation>

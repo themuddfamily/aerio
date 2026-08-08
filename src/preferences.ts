@@ -4,6 +4,7 @@ export const defaultSettings: Settings = {
   theme: 'system',
   density: 'comfortable',
   closeToTray: true,
+  launchAtLogin: false,
   notifications: true,
   startModule: 'mail'
 }

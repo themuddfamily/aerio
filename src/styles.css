@@ -519,6 +519,12 @@ kbd {
   font-style: normal;
 }
 
+.sidebar-item .mail-unread-count {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 680;
+}
+
 .account-heading {
   height: 29px;
   font-size: 11px;
@@ -1712,10 +1718,12 @@ kbd {
   align-items: center;
   gap: 8px;
   padding: 13px 16px;
+  border-bottom: 1px solid transparent;
+  transition: border-color .18s ease;
 }
 
 .thread-message.expanded .thread-message-header {
-  border-bottom: 1px solid var(--line);
+  border-bottom-color: var(--line);
 }
 
 .thread-message-toggle {
@@ -1776,12 +1784,22 @@ kbd {
 }
 
 .thread-message-preview {
+  max-height: 18px;
   overflow: hidden;
   color: var(--muted);
   font-size: 10.5px;
   line-height: 1.45;
+  opacity: 1;
   text-overflow: ellipsis;
+  transform: translateY(0);
+  transition: max-height .2s ease, opacity .14s ease, transform .2s ease;
   white-space: nowrap;
+}
+
+.thread-message.expanded .thread-message-preview {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
 .thread-message-chevron {
@@ -1803,10 +1821,44 @@ kbd {
   right: 43px;
   width: 30px;
   height: 30px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px) scale(.94);
+  transition: opacity .15s ease, transform .2s ease;
+}
+
+.thread-message.expanded .thread-message-reply {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
+.thread-message-content-shell {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition: grid-template-rows .24s cubic-bezier(.2, .7, .2, 1), opacity .16s ease, visibility 0s linear .24s;
+}
+
+.thread-message.expanded .thread-message-content-shell {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transition: grid-template-rows .26s cubic-bezier(.2, .7, .2, 1), opacity .2s ease .04s, visibility 0s;
 }
 
 .thread-message-content {
-  padding: 0 22px 4px;
+  min-height: 0;
+  padding: 0 22px;
+  overflow: hidden;
+  transform: translateY(-7px);
+  transition: padding-bottom .24s cubic-bezier(.2, .7, .2, 1), transform .22s ease;
+}
+
+.thread-message.expanded .thread-message-content {
+  padding-bottom: 4px;
+  transform: translateY(0);
 }
 
 .reader-panel .thread-message-header {
@@ -1825,6 +1877,28 @@ kbd {
 
 .thread-message.collapsed:hover {
   background: var(--surface-hover);
+}
+
+.thread-message .avatar {
+  transition: width .22s ease, height .22s ease, border-radius .22s ease, font-size .22s ease;
+}
+
+.thread-message .sender-domain-avatar img {
+  transition: padding .22s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-message-header,
+  .thread-message-preview,
+  .thread-message-chevron,
+  .thread-message-reply,
+  .thread-message-content-shell,
+  .thread-message-content,
+  .thread-message .avatar,
+  .thread-message .sender-domain-avatar img {
+    transition-duration: 0.01ms;
+    transition-delay: 0s;
+  }
 }
 
 .mail-message .message-body {
@@ -3635,6 +3709,21 @@ kbd {
 }
 
 /* Chat */
+
+.app-info-content { display: grid; gap: 18px; min-width: min(520px, 70vw); }
+.app-info-hero { display: flex; align-items: flex-start; gap: 13px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-soft); }
+.app-info-hero > svg { flex: 0 0 auto; color: var(--accent); }
+.app-info-hero strong, .app-info-list strong { display: block; color: var(--text); }
+.app-info-hero p, .app-info-list small { display: block; margin: 4px 0 0; color: var(--muted); line-height: 1.45; }
+.app-info-list { display: grid; gap: 8px; padding: 0; margin: 0; list-style: none; }
+.app-info-list li { display: flex; align-items: flex-start; gap: 12px; padding: 10px 4px; }
+.app-info-list li > svg { flex: 0 0 auto; margin-top: 2px; color: var(--accent); }
+.app-info-list.compact { border-top: 1px solid var(--line); padding-top: 8px; }
+.shortcut-list { display: grid; gap: 4px; margin: 0; }
+.shortcut-list > div { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 14px; padding: 9px 4px; }
+.shortcut-list dt, .shortcut-list dd { margin: 0; }
+.shortcut-list kbd { display: inline-block; min-width: 70px; padding: 4px 7px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); box-shadow: 0 1px 0 var(--line-strong); color: var(--text); font: inherit; font-size: 12px; text-align: center; }
+.sidebar-sync { width: 100%; justify-content: center; margin: -2px 0 10px; }
 .chat-sidebar { width: 275px; flex-basis: 275px; padding-left: 8px; padding-right: 8px; }
 .chat-list-item { width: 100%; min-height: 64px; display: flex; align-items: center; gap: 9px; padding: 8px; border-radius: 10px; background: transparent; text-align: left; }
 .chat-list-item:hover { background: var(--surface-hover); }

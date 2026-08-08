@@ -53,6 +53,11 @@ export interface ProviderProductivityData {
 export interface LocalModuleSnapshot {
   tasks: Task[]
   notes: Note[]
+  contacts?: Contact[]
+}
+
+export interface LocalDataBackupResult {
+  savedPath?: string
 }
 
 export interface ProductivityDesktopApi {
@@ -63,4 +68,6 @@ export interface ProductivityDesktopApi {
   deleteEvent(eventId: string): Promise<ProductivitySnapshot>
   localSnapshot(): Promise<LocalModuleSnapshot>
   saveLocal(snapshot: LocalModuleSnapshot): Promise<void>
+  exportLocalData(): Promise<LocalDataBackupResult>
+  importLocalData(): Promise<LocalModuleSnapshot | undefined>
 }

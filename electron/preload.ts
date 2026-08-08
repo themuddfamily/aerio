@@ -26,7 +26,9 @@ const api: AerioDesktopApi = {
     updateEvent: (event) => ipcRenderer.invoke('productivity:event-update', event),
     deleteEvent: (eventId) => ipcRenderer.invoke('productivity:event-delete', eventId),
     localSnapshot: () => ipcRenderer.invoke('productivity:local-snapshot'),
-    saveLocal: (snapshot) => ipcRenderer.invoke('productivity:local-save', snapshot)
+    saveLocal: (snapshot) => ipcRenderer.invoke('productivity:local-save', snapshot),
+    exportLocalData: () => ipcRenderer.invoke('productivity:local-export'),
+    importLocalData: () => ipcRenderer.invoke('productivity:local-import')
   },
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
@@ -69,6 +71,8 @@ const api: AerioDesktopApi = {
       labels: (accountIds) => ipcRenderer.invoke('mail:labels:list', accountIds),
       suggestRecipients: (query, accountIds) => ipcRenderer.invoke('mail:recipients:suggest', query, accountIds),
       list: (query: MailQuery) => ipcRenderer.invoke('mail:threads:list', query),
+      unreadCounts: (accountIds) => ipcRenderer.invoke('mail:folders:unread-counts', accountIds),
+      accountUnreadCounts: () => ipcRenderer.invoke('mail:accounts:unread-counts'),
       thread: (accountId, threadId, allowRemoteImages) => ipcRenderer.invoke('mail:threads:get', accountId, threadId, allowRemoteImages),
       source: (accountId, messageId) => ipcRenderer.invoke('mail:message:source', accountId, messageId),
       action: (input: ApplyMailActionInput) => ipcRenderer.invoke('mail:actions:apply', input),

@@ -1,7 +1,9 @@
-import { Building2, Copy, Mail, MapPin, Phone, RefreshCw, Search, Star, Users } from 'lucide-react'
+import { Building2, Copy, Edit3, Mail, MapPin, Phone, Plus, RefreshCw, Search, Star, Trash2, Users } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import type { AppState, Contact } from '../types'
+import Modal from '../components/Modal'
+import { uid } from '../lib/domain'
 
 interface ContactsViewProps {
   state: AppState
@@ -9,25 +11,48 @@ interface ContactsViewProps {
   onCompose(contactEmail?: string): void
   onToast(message: string): void
   onSync(): Promise<void> | void
+  onLocalContactsChange?(contacts: Contact[]): void
   syncing?: boolean
   sourceMessage?: string
 }
 
-export default function ContactsView({ state, query, onCompose, onToast, onSync, syncing = false, sourceMessage }: ContactsViewProps) {
+export default function ContactsView({ state, query, onCompose, onToast, onSync, onLocalContactsChange, syncing = false, sourceMessage }: ContactsViewProps) {
   const { showContextMenu } = useContextMenu()
   const [group, setGroup] = useState('All contacts')
   const [selectedId, setSelectedId] = useState(state.contacts[0]?.id ?? '')
+  const [editing, setEditing] = useState<Contact | 'new' | null>(null)
   const groups = ['All contacts', 'Favourites', ...Array.from(new Set(state.contacts.map((contact) => contact.group)))]
   const contacts = useMemo(() => state.contacts
     .filter((contact) => group === 'All contacts' || (group === 'Favourites' ? contact.favorite : contact.group === group))
     .filter((contact) => !query || `${contact.name} ${contact.email} ${contact.company ?? ''}`.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name)), [group, query, state.contacts])
   const selected = contacts.find((contact) => contact.id === selectedId) ?? contacts[0]
+  const localContacts = state.contacts.filter((contact) => contact.source === 'local')
+
+  const saveLocalContact = (contact: Contact) => {
+    const exists = localContacts.some((item) => item.id === contact.id)
+    onLocalContactsChange?.(exists ? localContacts.map((item) => item.id === contact.id ? contact : item) : [contact, ...localContacts])
+    setSelectedId(contact.id)
+    setEditing(null)
+    onToast(exists ? 'Contact updated' : 'Contact created')
+  }
+
+  const deleteLocalContact = (contact: Contact) => {
+    if (!window.confirm(`Delete “${contact.name}”?`)) return
+    onLocalContactsChange?.(localContacts.filter((item) => item.id !== contact.id))
+    setSelectedId('')
+    setEditing(null)
+    onToast('Contact deleted')
+  }
 
   const contactMenu = (contact: Contact): ContextMenuItem[] => [
     { label: 'Email', icon: Mail, disabled: !contact.email, action: () => onCompose(contact.email) },
     { label: 'Copy email address', icon: Copy, separatorBefore: true, disabled: !contact.email, action: () => copyText(contact.email) },
-    ...(contact.phone ? [{ label: 'Copy phone number', icon: Phone, action: () => copyText(contact.phone!) }] satisfies ContextMenuItem[] : [])
+    ...(contact.phone ? [{ label: 'Copy phone number', icon: Phone, action: () => copyText(contact.phone!) }] satisfies ContextMenuItem[] : []),
+    ...(contact.source === 'local' ? [
+      { label: 'Edit contact', icon: Edit3, separatorBefore: true, action: () => setEditing(contact) },
+      { label: 'Delete contact', icon: Trash2, danger: true, action: () => deleteLocalContact(contact) }
+    ] satisfies ContextMenuItem[] : [])
   ]
 
   const showContactMenu = (event: React.MouseEvent, contact: Contact) => showContextMenu(event, contactMenu(contact), contact.name)
@@ -35,7 +60,8 @@ export default function ContactsView({ state, query, onCompose, onToast, onSync,
   return (
     <div className="workspace">
       <aside className="context-sidebar">
-        <button className="compose-button" disabled={syncing} onClick={() => void onSync()}><RefreshCw className={syncing ? 'spin' : undefined} size={18} /> {syncing ? 'Syncing…' : 'Sync now'}</button>
+        <button className="compose-button" onClick={() => setEditing('new')}><Plus size={18} /> New contact</button>
+        <button className="button ghost small sidebar-sync" title="Synchronize provider contacts" disabled={syncing} onClick={() => void onSync()}><RefreshCw className={syncing ? 'spin' : undefined} size={15} /> {syncing ? 'Syncing…' : 'Sync now'}</button>
         <p className="provider-source-note" aria-live="polite">{sourceMessage}</p>
         <div className="sidebar-group">
           <span className="sidebar-label">Contacts</span>
@@ -48,7 +74,7 @@ export default function ContactsView({ state, query, onCompose, onToast, onSync,
             </button>
           ))}
         </div>
-        <div className="contact-insight"><span className="insight-number">{state.contacts.length}</span><p>provider contacts</p></div>
+        <div className="contact-insight"><span className="insight-number">{state.contacts.length}</span><p>contacts</p></div>
       </aside>
       <section className="contact-list-panel">
         <header className="panel-heading"><div><h1>{group}</h1><p>{contacts.length} people</p></div></header>
@@ -72,6 +98,7 @@ export default function ContactsView({ state, query, onCompose, onToast, onSync,
           <div className="contact-actions">
             <button disabled={!selected.email} onClick={() => onCompose(selected.email)}><span><Mail size={19} /></span>Email</button>
             <button onClick={() => onToast(selected.phone ? `Call ${selected.phone}` : 'No phone number saved')}><span><Phone size={19} /></span>Call</button>
+            {selected.source === 'local' && <button onClick={() => setEditing(selected)}><span><Edit3 size={19} /></span>Edit</button>}
           </div>
           <div className="contact-detail-grid">
             <section className="detail-card">
@@ -89,6 +116,43 @@ export default function ContactsView({ state, query, onCompose, onToast, onSync,
           </div>
         </> : <div className="empty-state grow"><Users size={32} /><h3>Select a contact</h3></div>}
       </section>
+      {editing && <ContactEditor contact={editing === 'new' ? undefined : editing} onClose={() => setEditing(null)} onSave={saveLocalContact} onDelete={editing === 'new' ? undefined : () => deleteLocalContact(editing)} />}
     </div>
+  )
+}
+
+function ContactEditor({ contact, onClose, onSave, onDelete }: { contact?: Contact; onClose(): void; onSave(contact: Contact): void; onDelete?(): void }) {
+  const [name, setName] = useState(contact?.name ?? '')
+  const [email, setEmail] = useState(contact?.email ?? '')
+  const [phone, setPhone] = useState(contact?.phone ?? '')
+  const [company, setCompany] = useState(contact?.company ?? '')
+  const [title, setTitle] = useState(contact?.title ?? '')
+  const [group, setGroup] = useState(contact?.group ?? 'Personal')
+  const [notes, setNotes] = useState(contact?.notes ?? '')
+  const [favorite, setFavorite] = useState(contact?.favorite ?? false)
+  return (
+    <Modal title={contact ? 'Edit contact' : 'New contact'} subtitle="Stored locally on this PC." onClose={onClose}>
+      <div className="form-stack">
+        <label className="field-label">Name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label>
+        <div className="form-grid-2">
+          <label className="field-label">Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+          <label className="field-label">Phone<input value={phone} onChange={(event) => setPhone(event.target.value)} /></label>
+          <label className="field-label">Company<input value={company} onChange={(event) => setCompany(event.target.value)} /></label>
+          <label className="field-label">Job title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+          <label className="field-label">Group<input value={group} onChange={(event) => setGroup(event.target.value)} /></label>
+          <label className="check-label"><input type="checkbox" checked={favorite} onChange={(event) => setFavorite(event.target.checked)} /> Favourite</label>
+        </div>
+        <label className="field-label">Notes<textarea value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
+        <footer className="modal-footer">
+          {onDelete && <button className="button danger-subtle" onClick={onDelete}><Trash2 size={16} /> Delete</button>}
+          <span className="spacer" /><button className="button ghost" onClick={onClose}>Cancel</button>
+          <button className="button primary" disabled={!name.trim()} onClick={() => onSave({
+            id: contact?.id ?? uid('contact'), name: name.trim(), email: email.trim(), phone: phone.trim() || undefined,
+            company: company.trim() || undefined, title: title.trim() || undefined, group: group.trim() || 'Personal',
+            notes: notes.trim() || undefined, favorite, color: contact?.color ?? '#4d8f78', source: 'local'
+          })}>Save contact</button>
+        </footer>
+      </div>
+    </Modal>
   )
 }
