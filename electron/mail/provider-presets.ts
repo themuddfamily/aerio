@@ -1,4 +1,4 @@
-import type { ImapAccountInput, MailProviderPreset } from '../../src/gmail-types'
+import type { ImapAccountInput, MailProviderPreset } from '../../src/mail-types'
 
 export const PROVIDER_PRESETS: MailProviderPreset[] = [
   { id: 'gmail', name: 'Google Gmail', description: 'Gmail API with labels, drafts, and History sync.', auth: 'google-oauth' },

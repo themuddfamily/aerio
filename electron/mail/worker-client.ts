@@ -1,5 +1,5 @@
 import { Worker } from 'node:worker_threads'
-import type { GmailWorkerEvent } from '../../src/gmail-types'
+import type { MailWorkerEvent } from '../../src/mail-types'
 import type {
   MailWorkerCommand,
   MailWorkerResult,
@@ -18,12 +18,13 @@ export class MailWorkerClient {
   constructor(
     workerPath: string,
     private readonly credentialProvider: (accountId: string) => Promise<AccountCredential>,
-    private readonly eventHandler: (event: GmailWorkerEvent) => void
+    private readonly eventHandler: (event: MailWorkerEvent) => void
   ) {
     this.worker = new Worker(workerPath)
     this.worker.on('message', (message: WorkerMessage) => void this.onMessage(message))
     this.worker.on('error', (error) => {
-      for (const request of this.pending.values()) request.reject(error)
+      const reason = new Error(error instanceof Error ? error.message : String(error), { cause: error })
+      for (const request of this.pending.values()) request.reject(reason)
       this.pending.clear()
     })
     this.worker.on('exit', (code) => {

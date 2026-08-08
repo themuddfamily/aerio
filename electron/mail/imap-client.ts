@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { ImapFlow, type ListResponse } from 'imapflow'
 import nodemailer from 'nodemailer'
-import type { ImapAccountInput, MailActionKind } from '../../src/gmail-types'
+import type { ImapAccountInput, MailActionKind } from '../../src/mail-types'
 
 export interface ImapFolder {
   path: string
@@ -22,7 +22,7 @@ function localId(folder: string, uidValidity: string, uid: number) {
   return createHash('sha256').update(`${folder}\0${uidValidity}\0${uid}`).digest('base64url').slice(0, 32)
 }
 
-function systemLabel(folder: ImapFolder, flags: Set<string>) {
+export function imapMessageLabels(folder: ImapFolder, flags: Set<string>) {
   const labels = [`folder:${folder.path}`]
   const use = folder.specialUse?.toLowerCase()
   if (folder.path.toUpperCase() === 'INBOX' || use === '\\inbox') labels.push('INBOX')
@@ -34,6 +34,10 @@ function systemLabel(folder: ImapFolder, flags: Set<string>) {
   if (!flags.has('\\Seen')) labels.push('UNREAD')
   if (flags.has('\\Flagged')) labels.push('STARRED')
   if (flags.has('$Important') || flags.has('Important')) labels.push('IMPORTANT')
+  for (const flag of flags) {
+    if (flag.startsWith('\\') || flag === '$Important' || flag === 'Important') continue
+    labels.push('keyword:' + flag)
+  }
   return labels
 }
 
@@ -98,7 +102,7 @@ export class ImapSmtpClient {
       for await (const message of client.fetch(uids, { uid: true, envelope: true, threadId: true, flags: true }, { uid: true })) {
         const headerThread = message.envelope?.inReplyTo ?? message.envelope?.messageId
         const threadId = message.threadId ?? createHash('sha256').update(headerThread || `${folder.path}:${message.uid}`).digest('base64url').slice(0, 32)
-        refs.push({ id: localId(folder.path, uidValidity, message.uid), threadId, folder: folder.path, uid: message.uid, uidValidity, labels: systemLabel(folder, message.flags ?? new Set()) })
+        refs.push({ id: localId(folder.path, uidValidity, message.uid), threadId, folder: folder.path, uid: message.uid, uidValidity, labels: imapMessageLabels(folder, message.flags ?? new Set()) })
       }
       return { refs, uidValidity, highestModseq: client.mailbox.highestModseq?.toString(), uidNext: client.mailbox.uidNext }
     } finally {
@@ -114,7 +118,7 @@ export class ImapSmtpClient {
       return {
         raw: message.source,
         internalDate: new Date(message.internalDate ?? Date.now()).toISOString(),
-        labels: systemLabel(folder, message.flags ?? new Set()),
+        labels: imapMessageLabels(folder, message.flags ?? new Set()),
         size: message.size ?? message.source.byteLength
       }
     } finally {

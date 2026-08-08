@@ -1,23 +1,27 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, shell, Tray } from 'electron'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { arch, platform, release, tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import initSqlJs, { type Database } from 'sql.js'
 import { createDemoState } from '../src/demo-data'
 import type { AppState, Attachment, CalendarEvent, MessageWindowRequest } from '../src/types'
 import type {
   ApplyMailActionInput,
-  GmailAccountSummary,
-  GmailDraftInput,
-  GmailDraftRecord,
-  GmailDraftAttachmentFile,
-  GmailDraftResult,
-  GmailLabel,
-  GmailThreadDetail,
+  MailAccountSummary,
+  MailDraftInput,
+  MailDraftRecord,
+  MailDraftAttachmentFile,
+  MailDraftResult,
+  MailLabel,
+  MailRule,
+  MailRuleInput,
+  MailRuleRunResult,
+  MailSnooze,
+  MailMessageSource,
+  MailThreadDetail,
   ImapAccountInput,
   ImapServerSettings,
   ImapServerSettingsUpdate,
@@ -29,7 +33,7 @@ import type {
   MailStorageStats,
   PendingOperation,
   SyncProgress
-} from '../src/gmail-types'
+} from '../src/mail-types'
 import { OAuthVault } from './mail/oauth-vault'
 import { DEFAULT_GOOGLE_CLIENT_ID, DEFAULT_MICROSOFT_CLIENT_ID, parseOAuthEnvironment } from './mail/oauth-config'
 import { ImapSmtpClient } from './mail/imap-client'
@@ -42,6 +46,7 @@ import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
 import { senderDomainFromEmail } from '../src/lib/sender-avatar'
+import { isCompleteMailAddress } from '../src/lib/mail-address'
 import { mailPollingIntervalForWindow } from './mail/polling-policy'
 import { faviconDomainCandidates } from './mail/favicon-domains'
 
@@ -55,6 +60,7 @@ const builtInOAuthClients = parseOAuthEnvironment({
 })
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
+const hideTestWindows = process.env.AERIO_TEST_HIDDEN === '1'
 
 if (!hasSingleInstanceLock) app.quit()
 if (process.platform === 'win32') app.setAppUserModelId('com.aerio.desktop')
@@ -66,11 +72,10 @@ protocol.registerSchemesAsPrivileged([
 let mainWindow: BrowserWindow | null = null
 const messageWindows = new Map<string, BrowserWindow>()
 let tray: Tray | null = null
-let database: Database | null = null
-let databasePath = ''
+let database: DatabaseSync | null = null
 let oauthVault: OAuthVault | null = null
 let mailWorker: MailWorkerClient | null = null
-const accountProviders = new Map<string, GmailAccountSummary['provider']>()
+const accountProviders = new Map<string, MailAccountSummary['provider']>()
 const approvedAttachmentPaths = new Set<string>()
 let quitting = false
 let lastBoundsWrite: NodeJS.Timeout | undefined
@@ -99,18 +104,10 @@ const validState = (value: unknown): value is AppState => {
     Array.isArray(state.conversations)
 }
 
-function persistDatabase() {
-  if (!database) return
-  const data = Buffer.from(database.export())
-  const temporaryPath = `${databasePath}.tmp`
-  writeFileSync(temporaryPath, data)
-  renameSync(temporaryPath, databasePath)
-}
-
 async function initializeDatabase() {
   const userData = app.getPath('userData')
   const legacyPath = join(userData, 'aerio.sqlite')
-  databasePath = join(userData, 'aerio-demo.sqlite')
+  const databasePath = join(userData, 'aerio-demo.sqlite')
   if (!existsSync(databasePath) && existsSync(legacyPath)) {
     const legacy = new DatabaseSync(legacyPath, { readOnly: true })
     const normalized = Boolean(legacy.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'`).get())
@@ -121,14 +118,10 @@ async function initializeDatabase() {
       if (!existsSync(backup)) copyFileSync(legacyPath, backup)
     }
   }
-  const wasmBase = app.isPackaged
-    ? join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'sql.js', 'dist')
-    : join(app.getAppPath(), 'node_modules', 'sql.js', 'dist')
-  const SQL = await initSqlJs({ locateFile: (file) => join(wasmBase, file) })
-  database = existsSync(databasePath)
-    ? new SQL.Database(readFileSync(databasePath))
-    : new SQL.Database()
-  database.run(`
+  database = new DatabaseSync(databasePath)
+  database.exec(`
+    PRAGMA journal_mode=WAL;
+    PRAGMA synchronous=NORMAL;
     CREATE TABLE IF NOT EXISTS app_state (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       schema_version INTEGER NOT NULL,
@@ -136,8 +129,8 @@ async function initializeDatabase() {
       updated_at TEXT NOT NULL
     )
   `)
-  const result = database.exec('SELECT payload FROM app_state WHERE id = 1')
-  if (!result.length) saveState(createDemoState())
+  const result = database.prepare('SELECT payload FROM app_state WHERE id = 1').get()
+  if (!result) saveState(createDemoState())
 }
 
 function requireMailWorker() {
@@ -155,18 +148,15 @@ function safeFilename(value: string) {
   return cleaned || 'attachment'
 }
 
-function validateDraft(input: GmailDraftInput, forSend = false) {
+function validateDraft(input: MailDraftInput, forSend = false) {
   if (!input || typeof input !== 'object' || typeof input.accountId !== 'string' || !input.accountId || input.accountId.length > 200) throw new Error('Choose a valid sending account')
   if (!Array.isArray(input.to) || !Array.isArray(input.cc) || !Array.isArray(input.bcc) || !Array.isArray(input.attachmentPaths)) throw new Error('The draft is invalid')
   if (input.id !== undefined && (typeof input.id !== 'string' || !input.id || input.id.length > 200)) throw new Error('The draft id is invalid')
   const addresses = [...input.to, ...input.cc, ...input.bcc]
   if (addresses.length > 500) throw new Error('A message cannot contain more than 500 recipients')
   if (forSend && !addresses.length) throw new Error('Add at least one recipient')
-  const validAddress = (value: string) => {
-    const candidate = value.match(/<([^<>]+)>\s*$/)?.[1] ?? value
-    return value.length <= 500 && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(candidate.trim())
-  }
-  if (addresses.some((address) => typeof address !== 'string' || !validAddress(address))) throw new Error('Check the recipient email addresses')
+  if (addresses.some((address) => typeof address !== 'string' || address.length > 500)) throw new Error('A recipient entry is too long')
+  if (forSend && addresses.some((address) => !isCompleteMailAddress(address))) throw new Error('Finish or correct the recipient email addresses')
   if (typeof input.subject !== 'string' || input.subject.length > 998) throw new Error('The subject is too long')
   if (typeof input.text !== 'string' || (input.html !== undefined && typeof input.html !== 'string') || input.text.length > 20_000_000 || (input.html?.length ?? 0) > 20_000_000) throw new Error('The message body is too large')
   if (input.attachmentPaths.length > 50) throw new Error('A message cannot contain more than 50 attachments')
@@ -185,6 +175,39 @@ function validateDraft(input: GmailDraftInput, forSend = false) {
   }
   if (attachmentBytes > 20 * 1024 * 1024) throw new Error('Attachments exceed Aerio’s 20 MB sending limit')
   return input
+}
+
+function validateFutureDate(value: unknown, label: string) {
+  if (typeof value !== 'string' || !value || value.length > 100) throw new Error(`Choose a valid ${label.toLowerCase()}`)
+  const timestamp = new Date(value).getTime()
+  if (!Number.isFinite(timestamp) || timestamp <= Date.now()) throw new Error(`${label} must be in the future`)
+  if (timestamp > Date.now() + 366 * 24 * 60 * 60 * 1_000) throw new Error(`${label} cannot be more than one year away`)
+  return new Date(timestamp).toISOString()
+}
+
+function validateRule(input: MailRuleInput): MailRuleInput {
+  if (!input || typeof input !== 'object') throw new Error('The rule is invalid')
+  if (input.id !== undefined && (typeof input.id !== 'string' || !input.id || input.id.length > 200)) throw new Error('The rule id is invalid')
+  if (typeof input.accountId !== 'string' || !input.accountId || input.accountId.length > 200) throw new Error('Choose an account for this rule')
+  if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200) throw new Error('Give this rule a name')
+  if (typeof input.enabled !== 'boolean' || !['all', 'any'].includes(input.match)) throw new Error('Choose how this rule should match')
+  if (!Array.isArray(input.conditions) || input.conditions.length < 1 || input.conditions.length > 10) throw new Error('Add between one and ten conditions')
+  if (!Array.isArray(input.actions) || input.actions.length < 1 || input.actions.length > 10) throw new Error('Add between one and ten actions')
+  const fields = new Set(['from', 'to', 'subject', 'body'])
+  const operators = new Set(['contains', 'equals', 'starts-with', 'ends-with'])
+  const actions = new Set(['archive', 'read', 'star', 'important', 'trash', 'label', 'move'])
+  for (const condition of input.conditions) {
+    if (!condition || !fields.has(condition.field) || !operators.has(condition.operator) || typeof condition.value !== 'string' || !condition.value.trim() || condition.value.length > 500) throw new Error('Finish every rule condition')
+  }
+  for (const action of input.actions) {
+    if (!action || !actions.has(action.action)) throw new Error('Choose a valid rule action')
+    if ((action.action === 'label' || action.action === 'move') && (typeof action.labelId !== 'string' || !action.labelId || action.labelId.length > 500)) throw new Error('Choose a label or folder for the rule')
+  }
+  return {
+    ...input,
+    name: input.name.trim(),
+    conditions: input.conditions.map((condition) => ({ ...condition, value: condition.value.trim() }))
+  }
 }
 
 function requireProductivityStore() {
@@ -309,13 +332,13 @@ function isPrivateAddress(address: string) {
   return true
 }
 
-function showNewMailNotification(payload: Extract<import('../src/gmail-types').GmailWorkerEvent, { type: 'new-mail' }>['payload']) {
-  if (!Notification.isSupported() || !loadState().settings.notifications) return
+function showNewMailNotification(payload: Extract<import('../src/mail-types').MailWorkerEvent, { type: 'new-mail' }>['payload']) {
+  if (hideTestWindows || !Notification.isSupported() || !loadState().settings.notifications) return
   const title = payload.count === 1 ? payload.sender || 'New message' : `${payload.count.toLocaleString()} new messages`
   const notification = new Notification({ title, body: payload.count === 1 ? payload.subject || 'Open Aerio to read it' : 'Open Aerio to view your inbox', icon: iconPath() })
   notification.on('click', () => {
     openMainWindow()
-    if (payload.threadId) createMessageWindow({ source: 'gmail', accountId: payload.accountId, threadId: payload.threadId, title: payload.subject || 'New message' })
+    if (payload.threadId) createMessageWindow({ source: 'connected', accountId: payload.accountId, threadId: payload.threadId, title: payload.subject || 'New message' })
   })
   notification.show()
 }
@@ -336,7 +359,7 @@ async function initializeMail() {
   const userData = app.getPath('userData')
   oauthVault = new OAuthVault(join(userData, 'oauth-vault.dat'), builtInOAuthClients)
   mailWorker = new MailWorkerClient(
-    join(__dirname, 'mail-worker.js'),
+    join(import.meta.dirname, 'mail-worker.js'),
     (accountId) => requireVault().credential(accountId, accountProviders.get(accountId) ?? 'gmail'),
     (event) => {
       diagnostic({
@@ -347,7 +370,8 @@ async function initializeMail() {
         details: event.payload as unknown as Record<string, unknown>
       })
       if (event.type === 'new-mail') showNewMailNotification(event.payload)
-      mainWindow?.webContents.send('gmail:event', event)
+      mainWindow?.webContents.send('mail:event', event)
+      for (const window of messageWindows.values()) if (!window.isDestroyed()) window.webContents.send('mail:event', event)
     }
   )
   await mailWorker.request({
@@ -357,7 +381,7 @@ async function initializeMail() {
       contentPath: join(userData, 'mail')
     }
   })
-  const accounts = await mailWorker.request<GmailAccountSummary[]>({ type: 'accounts:list' })
+  const accounts = await mailWorker.request<MailAccountSummary[]>({ type: 'accounts:list' })
   for (const account of accounts) {
     accountProviders.set(account.id, account.provider)
     if (account.status !== 'needs-auth' || account.archived || !account.syncEnabled) continue
@@ -487,9 +511,9 @@ function registerRemoteImageProtocol() {
 
 function loadState(): AppState {
   if (!database) throw new Error('Aerio database is not ready')
-  const result = database.exec('SELECT payload FROM app_state WHERE id = 1')
-  if (!result.length) return createDemoState()
-  const parsed: unknown = JSON.parse(String(result[0].values[0][0]))
+  const result = database.prepare('SELECT payload FROM app_state WHERE id = 1').get() as { payload?: unknown } | undefined
+  if (!result) return createDemoState()
+  const parsed: unknown = JSON.parse(String(result.payload))
   if (!validState(parsed)) throw new Error('Stored Aerio data is invalid')
   return parsed
 }
@@ -498,16 +522,14 @@ function saveState(state: AppState) {
   if (!database) throw new Error('Aerio database is not ready')
   if (!validState(state)) throw new Error('Refusing to save invalid Aerio data')
   const updatedAt = new Date().toISOString()
-  database.run(
+  database.prepare(
     `INSERT INTO app_state (id, schema_version, payload, updated_at)
      VALUES (1, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        schema_version = excluded.schema_version,
        payload = excluded.payload,
-       updated_at = excluded.updated_at`,
-    [state.schemaVersion, JSON.stringify(state), updatedAt]
-  )
-  persistDatabase()
+        updated_at = excluded.updated_at`
+  ).run(state.schemaVersion, JSON.stringify(state), updatedAt)
   return { savedAt: updatedAt }
 }
 
@@ -554,6 +576,7 @@ function configureRendererWindow(window: BrowserWindow) {
           autoHideMenuBar: true,
           title: 'Aerio',
           backgroundColor: '#f4f5f7',
+          show: !hideTestWindows,
           icon: iconPath(),
           webPreferences: {
             sandbox: true,
@@ -582,7 +605,7 @@ function loadRenderer(window: BrowserWindow, query?: Record<string, string>) {
     for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, value)
     void window.loadURL(url.toString())
   } else {
-    void window.loadFile(join(__dirname, '../../dist/index.html'), query ? { query } : undefined)
+    void window.loadFile(join(import.meta.dirname, '../../dist/index.html'), query ? { query } : undefined)
   }
 }
 
@@ -592,16 +615,18 @@ function validMessageWindowRequest(value: unknown): value is MessageWindowReques
   const validText = (text: unknown) => typeof text === 'string' && text.length > 0 && text.length <= 1_000
   if (!validText(input.title)) return false
   if (input.source === 'demo') return validText(input.messageId)
-  return input.source === 'gmail' && validText(input.accountId) && validText(input.threadId) && (input.messageId === undefined || validText(input.messageId))
+  return input.source === 'connected' && validText(input.accountId) && validText(input.threadId) && (input.messageId === undefined || validText(input.messageId))
 }
 
 function createMessageWindow(input: MessageWindowRequest) {
-  const key = input.source === 'demo' ? `demo:${input.messageId}` : `gmail:${input.accountId}:${input.threadId}:${input.messageId ?? 'thread'}`
+  const key = input.source === 'demo' ? `demo:${input.messageId}` : `mail:${input.accountId}:${input.threadId}:${input.messageId ?? 'thread'}`
   const existing = messageWindows.get(key)
   if (existing && !existing.isDestroyed()) {
     if (existing.isMinimized()) existing.restore()
-    existing.show()
-    existing.focus()
+    if (!hideTestWindows) {
+      existing.show()
+      existing.focus()
+    }
     return
   }
 
@@ -616,7 +641,7 @@ function createMessageWindow(input: MessageWindowRequest) {
     backgroundColor: '#f4f5f7',
     icon: iconPath(),
     webPreferences: {
-      preload: join(__dirname, '../preload/preload.cjs'),
+      preload: join(import.meta.dirname, '../preload/preload.cjs'),
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false
@@ -624,11 +649,11 @@ function createMessageWindow(input: MessageWindowRequest) {
   })
   messageWindows.set(key, messageWindow)
   configureRendererWindow(messageWindow)
-  messageWindow.once('ready-to-show', () => messageWindow.show())
+  messageWindow.once('ready-to-show', () => { if (!hideTestWindows) messageWindow.show() })
   messageWindow.once('closed', () => messageWindows.delete(key))
   loadRenderer(messageWindow, input.source === 'demo'
     ? { view: 'message', source: 'demo', messageId: input.messageId }
-    : { view: 'message', source: 'gmail', accountId: input.accountId, threadId: input.threadId, ...(input.messageId ? { messageId: input.messageId } : {}) })
+    : { view: 'message', source: 'connected', accountId: input.accountId, threadId: input.threadId, ...(input.messageId ? { messageId: input.messageId } : {}) })
 }
 
 function createWindow() {
@@ -642,7 +667,7 @@ function createWindow() {
     backgroundColor: '#f4f5f7',
     icon: iconPath(),
     webPreferences: {
-      preload: join(__dirname, '../preload/preload.cjs'),
+      preload: join(import.meta.dirname, '../preload/preload.cjs'),
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false
@@ -650,7 +675,7 @@ function createWindow() {
   })
 
   mainWindow.on('ready-to-show', () => {
-    mainWindow?.show()
+    if (!hideTestWindows) mainWindow?.show()
     const capturePath = process.env.AERIO_CAPTURE_PATH
     if (capturePath) {
       setTimeout(() => {
@@ -679,7 +704,7 @@ function createWindow() {
   })
   mainWindow.on('closed', () => { mainWindow = null })
   configureRendererWindow(mainWindow)
-  loadRenderer(mainWindow, process.env.AERIO_CAPTURE_PATH ? { workspace: 'gmail' } : undefined)
+  loadRenderer(mainWindow, process.env.AERIO_CAPTURE_PATH ? { workspace: 'connected' } : undefined)
   return mainWindow
 }
 
@@ -690,8 +715,10 @@ function openMainWindow(compose = false) {
     return
   }
   if (mainWindow.isMinimized()) mainWindow.restore()
-  mainWindow.show()
-  mainWindow.focus()
+    if (!hideTestWindows) {
+      mainWindow.show()
+      mainWindow.focus()
+    }
   if (compose) mainWindow.webContents.send('command:compose')
 }
 
@@ -756,7 +783,7 @@ function registerIpc() {
     }).toDataURL()
   })
   ipcMain.handle('notification:show', (_event, input: { title: string; body: string }) => {
-    if (Notification.isSupported()) new Notification({ title: input.title.slice(0, 80), body: input.body.slice(0, 240), icon: iconPath() }).show()
+    if (!hideTestWindows && Notification.isSupported()) new Notification({ title: input.title.slice(0, 80), body: input.body.slice(0, 240), icon: iconPath() }).show()
   })
   ipcMain.handle('productivity:snapshot', () => requireProductivityStore().snapshot())
   ipcMain.handle('productivity:local-snapshot', () => requireProductivityStore().localSnapshot())
@@ -818,19 +845,19 @@ function registerIpc() {
     if (result.canceled || !result.filePaths[0]) return requireVault().status()
     return requireVault().importConfig(result.filePaths[0])
   })
-  ipcMain.handle('gmail:accounts:list', () => requireMailWorker().request<GmailAccountSummary[]>({ type: 'accounts:list' }))
+  ipcMain.handle('mail:accounts:list', () => requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' }))
   ipcMain.handle('mail:accounts:update', (_event, input: MailAccountSettingsInput) => {
     if (!input || typeof input.accountId !== 'string' || typeof input.displayName !== 'string' || !input.displayName.trim() || input.displayName.length > 200) throw new Error('Enter a valid sender name')
     if (!/^#[0-9a-f]{6}$/i.test(input.color)) throw new Error('Choose a valid account colour')
     if (typeof input.signature !== 'string' || input.signature.length > 20_000) throw new Error('The signature is too long')
-    return requireMailWorker().request<GmailAccountSummary>({ type: 'accounts:update', payload: { ...input, displayName: input.displayName.trim() } })
+    return requireMailWorker().request<MailAccountSummary>({ type: 'accounts:update', payload: { ...input, displayName: input.displayName.trim() } })
   })
   ipcMain.handle('mail:accounts:verify', (_event, accountId: string) => {
     if (typeof accountId !== 'string' || !accountId) throw new Error('Invalid account id')
     return requireMailWorker().request({ type: 'accounts:verify', payload: { accountId } })
   })
   ipcMain.handle('mail:accounts:reconnect', async (_event, accountId: string) => {
-    const account = (await requireMailWorker().request<GmailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId)
+    const account = (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId)
     if (!account) throw new Error('Account not found')
     if (account.provider !== 'gmail' && account.provider !== 'microsoft') throw new Error('Update the app password or server credentials by reconnecting this IMAP account')
     if (account.provider === 'gmail') await requireVault().authorize({ accountId: account.id, email: account.email })
@@ -853,9 +880,9 @@ function registerIpc() {
     await requireMailWorker().request({ type: 'sync:start', payload: { accountId } })
     return requireVault().imapSettings(accountId)
   })
-  ipcMain.handle('gmail:accounts:connect', async () => {
+  ipcMain.handle('mail:accounts:connect', async () => {
     const authorized = await requireVault().authorize()
-    const account: GmailAccountSummary = {
+    const account: MailAccountSummary = {
       id: authorized.accountId,
       provider: 'gmail',
       email: authorized.email,
@@ -880,7 +907,7 @@ function registerIpc() {
   })
   ipcMain.handle('mail:accounts:connect-microsoft', async () => {
     const authorized = await requireVault().authorizeMicrosoft()
-    const account: GmailAccountSummary = {
+    const account: MailAccountSummary = {
       id: authorized.accountId,
       provider: 'microsoft',
       email: authorized.email,
@@ -909,7 +936,7 @@ function registerIpc() {
     const input = validateImapAccount(rawInput)
     await new ImapSmtpClient(input).verify()
     const accountId = createHash('sha256').update(`${input.provider}:${input.email}:${input.username}:${input.imapHost}`).digest('hex').slice(0, 24)
-    const account: GmailAccountSummary = {
+    const account: MailAccountSummary = {
       id: accountId,
       provider: input.provider,
       email: input.email,
@@ -934,60 +961,88 @@ function registerIpc() {
       throw error
     }
   })
-  ipcMain.handle('gmail:accounts:disconnect', async (_event, accountId: string, mode: 'archive' | 'delete') => {
+  ipcMain.handle('mail:accounts:disconnect', async (_event, accountId: string, mode: 'archive' | 'delete') => {
     await requireVault().remove(accountId)
     await requireMailWorker().request({ type: 'accounts:disconnect', payload: { accountId, mode } })
     requireProductivityStore().removeAccount(accountId)
     accountProviders.delete(accountId)
   })
-  ipcMain.handle('gmail:labels:list', (_event, accountIds?: string[]) =>
-    requireMailWorker().request<GmailLabel[]>({ type: 'labels:list', payload: { accountIds } }))
+  ipcMain.handle('mail:labels:list', (_event, accountIds?: string[]) =>
+    requireMailWorker().request<MailLabel[]>({ type: 'labels:list', payload: { accountIds } }))
   ipcMain.handle('mail:recipients:suggest', (_event, query: string, accountIds?: string[]) =>
     requireMailWorker().request<MailRecipientSuggestion[]>({ type: 'recipients:suggest', payload: { query: typeof query === 'string' ? query.slice(0, 200) : '', accountIds } }))
-  ipcMain.handle('gmail:mail:list', (_event, query: MailQuery) =>
+  ipcMain.handle('mail:threads:list', (_event, query: MailQuery) =>
     requireMailWorker().request<MailPage>({ type: 'mail:list', payload: query }))
-  ipcMain.handle('gmail:mail:thread', (_event, accountId: string, threadId: string, allowRemoteImages?: boolean) =>
-    requireMailWorker().request<GmailThreadDetail>({ type: 'mail:thread', payload: { accountId, threadId, allowRemoteImages } }))
-  ipcMain.handle('gmail:mail:action', (_event, input: ApplyMailActionInput) =>
+  ipcMain.handle('mail:threads:get', (_event, accountId: string, threadId: string, allowRemoteImages?: boolean) =>
+    requireMailWorker().request<MailThreadDetail>({ type: 'mail:thread', payload: { accountId, threadId, allowRemoteImages } }))
+  ipcMain.handle('mail:message:source', (_event, accountId: string, messageId: string) =>
+    requireMailWorker().request<MailMessageSource>({ type: 'mail:source', payload: { accountId, messageId } }))
+  ipcMain.handle('mail:actions:apply', (_event, input: ApplyMailActionInput) =>
     requireMailWorker().request<PendingOperation>({ type: 'mail:action', payload: input }))
-  ipcMain.handle('gmail:mail:undo', (_event, operationId: string) =>
+  ipcMain.handle('mail:actions:undo', (_event, operationId: string) =>
     requireMailWorker().request<boolean>({ type: 'mail:undo', payload: { operationId } }))
-  ipcMain.handle('gmail:drafts:save', (_event, input: GmailDraftInput) =>
+  ipcMain.handle('mail:snooze', (_event, accountId: string, threadIds: string[], until: string) => {
+    if (typeof accountId !== 'string' || !accountId || accountId.length > 200 || !Array.isArray(threadIds) || !threadIds.length || threadIds.length > 500 || threadIds.some((id) => typeof id !== 'string' || !id || id.length > 500)) throw new Error('Choose valid conversations to snooze')
+    return requireMailWorker().request<MailSnooze[]>({ type: 'mail:snooze', payload: { accountId, threadIds, until: validateFutureDate(until, 'Reminder time') } })
+  })
+  ipcMain.handle('mail:unsnooze', (_event, accountId: string, threadIds: string[]) => {
+    if (typeof accountId !== 'string' || !accountId || !Array.isArray(threadIds) || !threadIds.length || threadIds.some((id) => typeof id !== 'string' || !id)) throw new Error('Choose valid conversations to restore')
+    return requireMailWorker().request<boolean>({ type: 'mail:unsnooze', payload: { accountId, threadIds } })
+  })
+  ipcMain.handle('mail:drafts:save', (_event, input: MailDraftInput) =>
     requireMailWorker().request({ type: 'drafts:save', payload: validateDraft(input) }))
-  ipcMain.handle('gmail:drafts:send', (_event, input: GmailDraftInput) =>
+  ipcMain.handle('mail:drafts:send', (_event, input: MailDraftInput) =>
     requireMailWorker().request({ type: 'drafts:send', payload: validateDraft(input, true) }))
-  ipcMain.handle('gmail:drafts:list', async (_event, accountIds?: string[]) => {
-    const drafts = await requireMailWorker().request<GmailDraftRecord[]>({ type: 'drafts:list', payload: { accountIds } })
+  ipcMain.handle('mail:drafts:schedule', (_event, input: MailDraftInput, deliveryAt: string) =>
+    requireMailWorker().request({ type: 'drafts:schedule', payload: { input: validateDraft(input, true), deliveryAt: validateFutureDate(deliveryAt, 'Scheduled send time') } }))
+  ipcMain.handle('mail:drafts:cancel-send', (_event, id: string) => {
+    if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid queued message id')
+    return requireMailWorker().request<MailDraftResult>({ type: 'drafts:cancel-send', payload: { id } })
+  })
+  ipcMain.handle('mail:drafts:list', async (_event, accountIds?: string[]) => {
+    const drafts = await requireMailWorker().request<MailDraftRecord[]>({ type: 'drafts:list', payload: { accountIds } })
     for (const draft of drafts) for (const path of draft.attachmentPaths) approvedAttachmentPaths.add(path)
     return drafts
   })
-  ipcMain.handle('gmail:drafts:get', async (_event, id: string) => {
+  ipcMain.handle('mail:drafts:get', async (_event, id: string) => {
     if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid draft id')
-    const draft = await requireMailWorker().request<GmailDraftRecord | undefined>({ type: 'drafts:get', payload: { id } })
+    const draft = await requireMailWorker().request<MailDraftRecord | undefined>({ type: 'drafts:get', payload: { id } })
     if (draft) for (const path of draft.attachmentPaths) approvedAttachmentPaths.add(path)
     return draft
   })
-  ipcMain.handle('gmail:drafts:delete', (_event, id: string) => {
+  ipcMain.handle('mail:drafts:delete', (_event, id: string) => {
     if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid draft id')
-    return requireMailWorker().request<GmailDraftResult>({ type: 'drafts:delete', payload: { id } })
+    return requireMailWorker().request<MailDraftResult>({ type: 'drafts:delete', payload: { id } })
   })
-  ipcMain.handle('gmail:drafts:stage-message-attachments', async (_event, draftId: string, accountId: string, messageId: string) => {
+  ipcMain.handle('mail:drafts:stage-message-attachments', async (_event, draftId: string, accountId: string, messageId: string) => {
     if (![draftId, accountId, messageId].every((value) => typeof value === 'string' && value.length > 0 && value.length <= 500)) throw new Error('Invalid attachment staging request')
-    const files = await requireMailWorker().request<GmailDraftAttachmentFile[]>({ type: 'drafts:stage-message-attachments', payload: { draftId, accountId, messageId } })
+    const files = await requireMailWorker().request<MailDraftAttachmentFile[]>({ type: 'drafts:stage-message-attachments', payload: { draftId, accountId, messageId } })
     for (const file of files) approvedAttachmentPaths.add(file.path)
     return files
   })
-  ipcMain.handle('gmail:sync:start', (_event, accountId?: string) =>
+  ipcMain.handle('mail:rules:list', (_event, accountIds?: string[]) =>
+    requireMailWorker().request<MailRule[]>({ type: 'rules:list', payload: { accountIds } }))
+  ipcMain.handle('mail:rules:save', (_event, input: MailRuleInput) =>
+    requireMailWorker().request<MailRule>({ type: 'rules:save', payload: validateRule(input) }))
+  ipcMain.handle('mail:rules:delete', (_event, id: string) => {
+    if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid rule id')
+    return requireMailWorker().request({ type: 'rules:delete', payload: { id } })
+  })
+  ipcMain.handle('mail:rules:run', (_event, id: string) => {
+    if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid rule id')
+    return requireMailWorker().request<MailRuleRunResult>({ type: 'rules:run', payload: { id } })
+  })
+  ipcMain.handle('mail:sync:start', (_event, accountId?: string) =>
     requireMailWorker().request({ type: 'sync:start', payload: { accountId } }))
-  ipcMain.handle('gmail:sync:pause', (_event, accountId: string) =>
+  ipcMain.handle('mail:sync:pause', (_event, accountId: string) =>
     requireMailWorker().request({ type: 'sync:pause', payload: { accountId } }))
-  ipcMain.handle('gmail:sync:resume', (_event, accountId: string) =>
+  ipcMain.handle('mail:sync:resume', (_event, accountId: string) =>
     requireMailWorker().request({ type: 'sync:resume', payload: { accountId } }))
   ipcMain.handle('mail:sync:rebuild', (_event, accountId: string) =>
     requireMailWorker().request({ type: 'sync:rebuild', payload: { accountId } }))
-  ipcMain.handle('gmail:sync:progress', () =>
+  ipcMain.handle('mail:sync:progress', () =>
     requireMailWorker().request<SyncProgress[]>({ type: 'sync:progress' }))
-  ipcMain.handle('gmail:storage', () =>
+  ipcMain.handle('mail:storage', () =>
     requireMailWorker().request<MailStorageStats>({ type: 'storage:stats' }))
   ipcMain.handle('mail:diagnostics:health', () =>
     requireMailWorker().request<MailDiagnosticHealth>({ type: 'diagnostics:health' }))
@@ -1008,9 +1063,9 @@ function registerIpc() {
     diagnostic({ level: 'info', component: 'app', event: 'diagnostics-exported' })
     return { savedPath: result.filePath }
   })
-  ipcMain.handle('gmail:network', (_event, online: boolean) =>
+  ipcMain.handle('mail:network', (_event, online: boolean) =>
     requireMailWorker().request({ type: 'network', payload: { online } }))
-  ipcMain.handle('gmail:attachment:open', async (_event, accountId: string, messageId: string, attachmentId: string, filename: string) => {
+  ipcMain.handle('mail:attachment:open', async (_event, accountId: string, messageId: string, attachmentId: string, filename: string) => {
     const directory = join(tmpdir(), 'aerio-attachments')
     mkdirSync(directory, { recursive: true })
     const targetPath = join(directory, `${crypto.randomUUID()}-${safeFilename(filename)}`)
@@ -1018,7 +1073,7 @@ function registerIpc() {
     const error = await shell.openPath(targetPath)
     return error ? { error } : {}
   })
-  ipcMain.handle('gmail:attachment:save', async (_event, accountId: string, messageId: string, attachmentId: string, filename: string) => {
+  ipcMain.handle('mail:attachment:save', async (_event, accountId: string, messageId: string, attachmentId: string, filename: string) => {
     const options: Electron.SaveDialogOptions = { title: 'Save attachment', defaultPath: safeFilename(filename) }
     const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return {}
@@ -1042,7 +1097,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   registerRemoteImageProtocol()
   readyToOpenWindows = true
   createWindow()
-  createTray()
+  if (!hideTestWindows) createTray()
   updates = new UpdateManager(
     (status) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('app:update:status-changed', status)),
     (event, message, details) => diagnostic({
@@ -1057,7 +1112,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
 
   app.on('activate', () => {
     if (!mainWindow) createWindow()
-    else mainWindow.show()
+    else if (!hideTestWindows) mainWindow.show()
   })
 })
 
@@ -1067,6 +1122,11 @@ app.on('before-quit', () => {
   productivityStore?.close()
   diagnostic({ level: 'info', component: 'app', event: 'shutdown' })
   void mailWorker?.close()
+})
+
+app.on('will-quit', () => {
+  database?.close()
+  database = null
 })
 
 process.on('unhandledRejection', (error) => diagnostic({ level: 'error', component: 'app', event: 'unhandled-rejection', message: error instanceof Error ? error.message : String(error) }))

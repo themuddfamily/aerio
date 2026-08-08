@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import sanitizeHtml from 'sanitize-html'
-import type { GmailDraftInput } from '../../src/gmail-types'
+import type { MailDraftInput } from '../../src/mail-types'
 
 const encodeHeader = (value: string) => value.replaceAll(/[\r\n]+/g, ' ').trim()
 const attachmentName = (path: string) => basename(path).replace(/^\d+(?:-[a-f0-9]{10})?-/, '')
 
-export function createMimeBuffer(input: GmailDraftInput, from?: string, omitBcc = false) {
+export function createMimeBuffer(input: MailDraftInput, from?: string, omitBcc = false) {
   const boundary = `aerio-${crypto.randomUUID()}`
   const alternativeBoundary = `aerio-alt-${crypto.randomUUID()}`
   const headers = [
@@ -39,6 +39,6 @@ export function createMimeBuffer(input: GmailDraftInput, from?: string, omitBcc 
   return Buffer.from(`${headers.join('\r\n')}\r\n\r\n${sections.join('\r\n')}\r\n--${boundary}--\r\n`)
 }
 
-export function createMime(input: GmailDraftInput, from?: string) {
+export function createMime(input: MailDraftInput, from?: string) {
   return createMimeBuffer(input, from).toString('base64url')
 }

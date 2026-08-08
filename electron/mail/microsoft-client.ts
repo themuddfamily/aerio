@@ -1,4 +1,4 @@
-import type { GmailLabel, MailActionKind } from '../../src/gmail-types'
+import type { MailLabel, MailActionKind } from '../../src/mail-types'
 
 interface GraphPage<T> {
   value: T[]
@@ -24,7 +24,25 @@ export interface GraphMessage {
   importance?: string
   flag?: { flagStatus?: string }
   isDraft?: boolean
+  categories?: string[]
   '@removed'?: { reason?: string }
+}
+
+export function microsoftMessageLabels(folder: GraphFolder, message: GraphMessage) {
+  const value = folder.displayName.toLowerCase()
+  const special = folder.specialUse
+  const labels = ['folder:' + folder.id]
+  if (special === 'inbox' || value === 'inbox') labels.push('INBOX')
+  if (special === 'sentitems' || value.includes('sent')) labels.push('SENT')
+  if (special === 'drafts' || value.includes('draft') || message.isDraft) labels.push('DRAFT')
+  if (special === 'junkemail' || value.includes('junk') || value.includes('spam')) labels.push('SPAM')
+  if (special === 'deleteditems' || value.includes('deleted') || value.includes('trash')) labels.push('TRASH')
+  if (special === 'archive' || value.includes('archive')) labels.push('ARCHIVE')
+  if (!message.isRead) labels.push('UNREAD')
+  if (message.flag?.flagStatus === 'flagged') labels.push('STARRED')
+  if (message.importance === 'high') labels.push('IMPORTANT')
+  for (const category of message.categories ?? []) if (category.trim()) labels.push('category:' + category.trim())
+  return [...new Set(labels)]
 }
 
 export class MicrosoftGraphError extends Error {
@@ -105,7 +123,7 @@ export class MicrosoftGraphClient {
 
   async delta(folderId: string, deltaLink?: string) {
     const messages: GraphMessage[] = []
-    let next: string | undefined = deltaLink ?? `/me/mailFolders/${encodeURIComponent(folderId)}/messages/delta?$select=id,conversationId,parentFolderId,receivedDateTime,sentDateTime,isRead,importance,flag,isDraft&$top=100`
+    let next: string | undefined = deltaLink ?? `/me/mailFolders/${encodeURIComponent(folderId)}/messages/delta?$select=id,conversationId,parentFolderId,receivedDateTime,sentDateTime,isRead,importance,flag,isDraft,categories&$top=100`
     let checkpoint: string | undefined
     while (next) {
       const page: GraphPage<GraphMessage> = await this.request(next)
@@ -171,6 +189,6 @@ export class MicrosoftGraphClient {
   }
 }
 
-export function microsoftLabels(accountId: string, folders: GraphFolder[]): GmailLabel[] {
+export function microsoftLabels(accountId: string, folders: GraphFolder[]): MailLabel[] {
   return folders.map((folder) => ({ accountId, id: `folder:${folder.id}`, name: folder.displayName, type: folder.specialUse ? 'system' : 'user' }))
 }

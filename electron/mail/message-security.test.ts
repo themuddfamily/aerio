@@ -33,4 +33,15 @@ describe('sanitizeMessageHtml', () => {
     expect(result).toContain('aerio-image://fetch/')
     expect(result).not.toContain('src="https://')
   })
+
+  it('uses the safe link destination as the hover tooltip', () => {
+    const result = sanitizeMessageHtml('<a href="https://example.com/account?tab=billing" title="Misleading title">Open account</a>')
+    const blocked = sanitizeMessageHtml('<a href="javascript:alert(1)">Bad link</a>')
+
+    expect(result).toContain('href="https://example.com/account?tab=billing"')
+    expect(result).toContain('title="https://example.com/account?tab=billing"')
+    expect(result).not.toContain('Misleading title')
+    expect(blocked).toContain('href="#"')
+    expect(blocked).toContain('title="#"')
+  })
 })

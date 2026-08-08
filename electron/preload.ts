@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AerioDesktopApi, AppState } from '../src/types'
-import type { ApplyMailActionInput, GmailDraftInput, GmailWorkerEvent, ImapAccountInput, MailQuery } from '../src/gmail-types'
+import type { ApplyMailActionInput, MailDraftInput, MailWorkerEvent, ImapAccountInput, MailQuery } from '../src/mail-types'
 
 const api: AerioDesktopApi = {
   loadState: () => ipcRenderer.invoke('state:load'),
@@ -55,8 +55,8 @@ const api: AerioDesktopApi = {
     },
     presets: () => ipcRenderer.invoke('mail:providers:presets'),
     accounts: {
-      list: () => ipcRenderer.invoke('gmail:accounts:list'),
-      connect: () => ipcRenderer.invoke('gmail:accounts:connect'),
+      list: () => ipcRenderer.invoke('mail:accounts:list'),
+      connect: () => ipcRenderer.invoke('mail:accounts:connect'),
       connectMicrosoft: () => ipcRenderer.invoke('mail:accounts:connect-microsoft'),
       connectImap: (input: ImapAccountInput) => ipcRenderer.invoke('mail:accounts:connect-imap', input),
       update: (input) => ipcRenderer.invoke('mail:accounts:update', input),
@@ -64,51 +64,62 @@ const api: AerioDesktopApi = {
       reconnect: (accountId) => ipcRenderer.invoke('mail:accounts:reconnect', accountId),
       imapSettings: (accountId) => ipcRenderer.invoke('mail:accounts:imap-settings', accountId),
       updateImap: (accountId, input) => ipcRenderer.invoke('mail:accounts:imap-update', accountId, input),
-      disconnect: (accountId, mode) => ipcRenderer.invoke('gmail:accounts:disconnect', accountId, mode)
+      disconnect: (accountId, mode) => ipcRenderer.invoke('mail:accounts:disconnect', accountId, mode)
     },
     mail: {
-      labels: (accountIds) => ipcRenderer.invoke('gmail:labels:list', accountIds),
+      labels: (accountIds) => ipcRenderer.invoke('mail:labels:list', accountIds),
       suggestRecipients: (query, accountIds) => ipcRenderer.invoke('mail:recipients:suggest', query, accountIds),
-      list: (query: MailQuery) => ipcRenderer.invoke('gmail:mail:list', query),
-      thread: (accountId, threadId, allowRemoteImages) => ipcRenderer.invoke('gmail:mail:thread', accountId, threadId, allowRemoteImages),
-      action: (input: ApplyMailActionInput) => ipcRenderer.invoke('gmail:mail:action', input),
-      undo: (operationId) => ipcRenderer.invoke('gmail:mail:undo', operationId)
+      list: (query: MailQuery) => ipcRenderer.invoke('mail:threads:list', query),
+      thread: (accountId, threadId, allowRemoteImages) => ipcRenderer.invoke('mail:threads:get', accountId, threadId, allowRemoteImages),
+      source: (accountId, messageId) => ipcRenderer.invoke('mail:message:source', accountId, messageId),
+      action: (input: ApplyMailActionInput) => ipcRenderer.invoke('mail:actions:apply', input),
+      undo: (operationId) => ipcRenderer.invoke('mail:actions:undo', operationId),
+      snooze: (accountId, threadIds, until) => ipcRenderer.invoke('mail:snooze', accountId, threadIds, until),
+      unsnooze: (accountId, threadIds) => ipcRenderer.invoke('mail:unsnooze', accountId, threadIds)
     },
     drafts: {
-      list: (accountIds) => ipcRenderer.invoke('gmail:drafts:list', accountIds),
-      get: (id) => ipcRenderer.invoke('gmail:drafts:get', id),
-      save: (input: GmailDraftInput) => ipcRenderer.invoke('gmail:drafts:save', input),
-      send: (input: GmailDraftInput) => ipcRenderer.invoke('gmail:drafts:send', input),
-      delete: (id) => ipcRenderer.invoke('gmail:drafts:delete', id),
-      stageMessageAttachments: (draftId, accountId, messageId) => ipcRenderer.invoke('gmail:drafts:stage-message-attachments', draftId, accountId, messageId)
+      list: (accountIds) => ipcRenderer.invoke('mail:drafts:list', accountIds),
+      get: (id) => ipcRenderer.invoke('mail:drafts:get', id),
+      save: (input: MailDraftInput) => ipcRenderer.invoke('mail:drafts:save', input),
+      send: (input: MailDraftInput) => ipcRenderer.invoke('mail:drafts:send', input),
+      schedule: (input: MailDraftInput, deliveryAt) => ipcRenderer.invoke('mail:drafts:schedule', input, deliveryAt),
+      cancelSend: (id) => ipcRenderer.invoke('mail:drafts:cancel-send', id),
+      delete: (id) => ipcRenderer.invoke('mail:drafts:delete', id),
+      stageMessageAttachments: (draftId, accountId, messageId) => ipcRenderer.invoke('mail:drafts:stage-message-attachments', draftId, accountId, messageId)
+    },
+    rules: {
+      list: (accountIds) => ipcRenderer.invoke('mail:rules:list', accountIds),
+      save: (input) => ipcRenderer.invoke('mail:rules:save', input),
+      delete: (id) => ipcRenderer.invoke('mail:rules:delete', id),
+      run: (id) => ipcRenderer.invoke('mail:rules:run', id)
     },
     sync: {
-      start: (accountId) => ipcRenderer.invoke('gmail:sync:start', accountId),
-      pause: (accountId) => ipcRenderer.invoke('gmail:sync:pause', accountId),
-      resume: (accountId) => ipcRenderer.invoke('gmail:sync:resume', accountId),
+      start: (accountId) => ipcRenderer.invoke('mail:sync:start', accountId),
+      pause: (accountId) => ipcRenderer.invoke('mail:sync:pause', accountId),
+      resume: (accountId) => ipcRenderer.invoke('mail:sync:resume', accountId),
       rebuild: (accountId) => ipcRenderer.invoke('mail:sync:rebuild', accountId),
-      progress: () => ipcRenderer.invoke('gmail:sync:progress')
+      progress: () => ipcRenderer.invoke('mail:sync:progress')
     },
     attachments: {
-      open: (accountId, messageId, attachmentId, filename) => ipcRenderer.invoke('gmail:attachment:open', accountId, messageId, attachmentId, filename),
-      save: (accountId, messageId, attachmentId, filename) => ipcRenderer.invoke('gmail:attachment:save', accountId, messageId, attachmentId, filename)
+      open: (accountId, messageId, attachmentId, filename) => ipcRenderer.invoke('mail:attachment:open', accountId, messageId, attachmentId, filename),
+      save: (accountId, messageId, attachmentId, filename) => ipcRenderer.invoke('mail:attachment:save', accountId, messageId, attachmentId, filename)
     },
-    storage: () => ipcRenderer.invoke('gmail:storage'),
+    storage: () => ipcRenderer.invoke('mail:storage'),
     diagnostics: {
       health: () => ipcRenderer.invoke('mail:diagnostics:health'),
       export: () => ipcRenderer.invoke('mail:diagnostics:export')
     },
     onEvent: (callback) => {
-      const listener = (_event: Electron.IpcRendererEvent, value: GmailWorkerEvent) => callback(value)
-      ipcRenderer.on('gmail:event', listener)
-      return () => ipcRenderer.removeListener('gmail:event', listener)
+      const listener = (_event: Electron.IpcRendererEvent, value: MailWorkerEvent) => callback(value)
+      ipcRenderer.on('mail:event', listener)
+      return () => ipcRenderer.removeListener('mail:event', listener)
     }
   }
 }
 
 contextBridge.exposeInMainWorld('aerio', api)
 
-const reportConnectivity = () => void ipcRenderer.invoke('gmail:network', navigator.onLine)
+const reportConnectivity = () => void ipcRenderer.invoke('mail:network', navigator.onLine)
 window.addEventListener('online', reportConnectivity)
 window.addEventListener('offline', reportConnectivity)
 queueMicrotask(reportConnectivity)

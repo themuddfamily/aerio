@@ -68,11 +68,13 @@ export function sanitizeMessageHtml(html: string, allowRemoteImages = false) {
     transformTags: {
       a: (_tag, attributes) => {
         const href = attributes.href ?? ''
+        const safeHref = /^https?:\/\//i.test(href) || /^mailto:/i.test(href) ? href : '#'
         return {
           tagName: 'a',
           attribs: {
             ...attributes,
-            href: /^https?:\/\//i.test(href) || /^mailto:/i.test(href) ? href : '#',
+            href: safeHref,
+            title: safeHref,
             target: '_blank',
             rel: 'noreferrer noopener'
           }

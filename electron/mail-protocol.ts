@@ -1,12 +1,17 @@
 import type {
   ApplyMailActionInput,
-  GmailAccountSummary,
-  GmailDraftInput,
-  GmailDraftRecord,
-  GmailDraftAttachmentFile,
-  GmailLabel,
-  GmailThreadDetail,
-  GmailWorkerEvent,
+  MailAccountSummary,
+  MailDraftInput,
+  MailDraftRecord,
+  MailDraftAttachmentFile,
+  MailLabel,
+  MailRule,
+  MailRuleInput,
+  MailRuleRunResult,
+  MailSnooze,
+  MailMessageSource,
+  MailThreadDetail,
+  MailWorkerEvent,
   ImapAccountInput,
   MailPage,
   MailAccountSettingsInput,
@@ -16,12 +21,12 @@ import type {
   MailDiagnosticHealth,
   PendingOperation,
   SyncProgress
-} from '../src/gmail-types'
+} from '../src/mail-types'
 
 export type MailWorkerCommand =
   | { type: 'initialize'; payload: { databasePath: string; contentPath: string } }
   | { type: 'accounts:list' }
-  | { type: 'accounts:upsert'; payload: GmailAccountSummary }
+  | { type: 'accounts:upsert'; payload: MailAccountSummary }
   | { type: 'accounts:verify'; payload: { accountId: string } }
   | { type: 'accounts:update'; payload: MailAccountSettingsInput }
   | { type: 'accounts:disconnect'; payload: { accountId: string; mode: 'archive' | 'delete' } }
@@ -29,14 +34,23 @@ export type MailWorkerCommand =
   | { type: 'recipients:suggest'; payload: { query: string; accountIds?: string[] } }
   | { type: 'mail:list'; payload: MailQuery }
   | { type: 'mail:thread'; payload: { accountId: string; threadId: string; allowRemoteImages?: boolean } }
+  | { type: 'mail:source'; payload: { accountId: string; messageId: string } }
   | { type: 'mail:action'; payload: ApplyMailActionInput }
   | { type: 'mail:undo'; payload: { operationId: string } }
-  | { type: 'drafts:save'; payload: GmailDraftInput }
-  | { type: 'drafts:send'; payload: GmailDraftInput }
+  | { type: 'mail:snooze'; payload: { accountId: string; threadIds: string[]; until: string } }
+  | { type: 'mail:unsnooze'; payload: { accountId: string; threadIds: string[] } }
+  | { type: 'drafts:save'; payload: MailDraftInput }
+  | { type: 'drafts:send'; payload: MailDraftInput }
+  | { type: 'drafts:schedule'; payload: { input: MailDraftInput; deliveryAt: string } }
+  | { type: 'drafts:cancel-send'; payload: { id: string } }
   | { type: 'drafts:list'; payload: { accountIds?: string[] } }
   | { type: 'drafts:get'; payload: { id: string } }
   | { type: 'drafts:delete'; payload: { id: string } }
   | { type: 'drafts:stage-message-attachments'; payload: { draftId: string; accountId: string; messageId: string } }
+  | { type: 'rules:list'; payload: { accountIds?: string[] } }
+  | { type: 'rules:save'; payload: MailRuleInput }
+  | { type: 'rules:delete'; payload: { id: string } }
+  | { type: 'rules:run'; payload: { id: string } }
   | { type: 'sync:start'; payload: { accountId?: string } }
   | { type: 'sync:pause'; payload: { accountId: string } }
   | { type: 'sync:resume'; payload: { accountId: string } }
@@ -52,20 +66,25 @@ export type MailWorkerCommand =
 export type MailWorkerResult =
   | void
   | boolean
-  | GmailAccountSummary
-  | GmailAccountSummary[]
-  | GmailLabel[]
+  | MailAccountSummary
+  | MailAccountSummary[]
+  | MailLabel[]
+  | MailRule
+  | MailRule[]
+  | MailRuleRunResult
+  | MailSnooze[]
   | MailRecipientSuggestion[]
-  | GmailThreadDetail
+  | MailThreadDetail
+  | MailMessageSource
   | MailPage
   | PendingOperation
   | SyncProgress[]
   | MailStorageStats
   | MailDiagnosticHealth
-  | import('../src/gmail-types').GmailDraftResult
-  | GmailDraftRecord
-  | GmailDraftRecord[]
-  | GmailDraftAttachmentFile[]
+  | import('../src/mail-types').MailDraftResult
+  | MailDraftRecord
+  | MailDraftRecord[]
+  | MailDraftAttachmentFile[]
 
 export interface WorkerRequest {
   kind: 'request'
@@ -99,5 +118,5 @@ export interface WorkerCredentialResponse {
 
 export interface WorkerEventMessage {
   kind: 'event'
-  event: GmailWorkerEvent
+  event: MailWorkerEvent
 }

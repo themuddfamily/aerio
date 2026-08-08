@@ -1,4 +1,4 @@
-import type { MailProviderId } from '../../src/gmail-types'
+import type { MailProviderId } from '../../src/mail-types'
 
 export const ACTIVE_MAIL_POLL_INTERVAL_MS = 15_000
 export const BACKGROUND_MAIL_POLL_INTERVAL_MS = 60_000

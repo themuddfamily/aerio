@@ -5,14 +5,15 @@ import { basename } from 'node:path'
 import { join, sep } from 'node:path'
 import PostalMime, { type Address, type Attachment as ParsedAttachment } from 'postal-mime'
 import type {
-  GmailDraftInput,
-  GmailDraftResult,
-  GmailMessageDetail,
-  GmailWorkerEvent,
+  MailDraftInput,
+  MailDraftResult,
+  MailRule,
+  MailMessageDetail,
+  MailWorkerEvent,
   MailActionKind,
   PendingOperation,
   SyncProgress
-} from '../src/gmail-types'
+} from '../src/mail-types'
 import type {
   MailWorkerCommand,
   MailWorkerResult,
@@ -25,9 +26,11 @@ import type {
 import { MailDatabase, type ParsedMailMessage } from './mail/database'
 import { GmailApiError, GmailClient, type GmailRawMessage } from './mail/gmail-client'
 import { ImapSmtpClient, labelsForImapFolders, type ImapFolder } from './mail/imap-client'
-import { MicrosoftGraphClient, MicrosoftGraphError, microsoftLabels, type GraphFolder, type GraphMessage } from './mail/microsoft-client'
+import { MicrosoftGraphClient, MicrosoftGraphError, microsoftLabels, microsoftMessageLabels } from './mail/microsoft-client'
 import { sanitizeMessageHtml } from './mail/message-security'
 import { buildNewMailNotification } from './mail/new-mail'
+import { parseMessageSource } from './mail/message-source'
+import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createMime, createMimeBuffer } from './mail/mime-builder'
 import {
   BACKGROUND_MAIL_POLL_INTERVAL_MS,
@@ -51,8 +54,9 @@ const nextRequestAt = new Map<string, number>()
 const draftQueues = new Map<string, Promise<unknown>>()
 const lastAutomaticSyncAt = new Map<string, number>()
 let pollingIntervalMs = BACKGROUND_MAIL_POLL_INTERVAL_MS
+const UNDO_SEND_DELAY_MS = 10_000
 
-const emit = (event: GmailWorkerEvent) => port.postMessage({ kind: 'event', event } satisfies WorkerEventMessage)
+const emit = (event: MailWorkerEvent) => port.postMessage({ kind: 'event', event } satisfies WorkerEventMessage)
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 
 function pollAccounts() {
@@ -390,6 +394,7 @@ async function incrementalSync(accountId: string) {
   if (!database) throw new Error('Database is not initialized')
   const startHistoryId = database.getAccountHistory(accountId)
   if (!startHistoryId) return downloadInventory(accountId)
+  database.replaceLabels(accountId, await clientFor(accountId).listLabels())
   progress(accountId, 'incremental', 'Checking for changes')
   try {
     const result = await applyGmailHistory(accountId, startHistoryId)
@@ -494,22 +499,6 @@ interface MicrosoftProviderState {
   specialFolders?: Record<string, string>
 }
 
-function microsoftSystemLabels(folder: GraphFolder, message: GraphMessage) {
-  const value = folder.displayName.toLowerCase()
-  const special = folder.specialUse
-  const labels = [`folder:${folder.id}`]
-  if (special === 'inbox' || value === 'inbox') labels.push('INBOX')
-  if (special === 'sentitems' || value.includes('sent')) labels.push('SENT')
-  if (special === 'drafts' || value.includes('draft') || message.isDraft) labels.push('DRAFT')
-  if (special === 'junkemail' || value.includes('junk') || value.includes('spam')) labels.push('SPAM')
-  if (special === 'deleteditems' || value.includes('deleted') || value.includes('trash')) labels.push('TRASH')
-  if (special === 'archive' || value.includes('archive')) labels.push('ARCHIVE')
-  if (!message.isRead) labels.push('UNREAD')
-  if (message.flag?.flagStatus === 'flagged') labels.push('STARRED')
-  if (message.importance === 'high') labels.push('IMPORTANT')
-  return labels
-}
-
 async function syncMicrosoftAccount(accountId: string) {
   if (!database) throw new Error('Database is not initialized')
   const client = microsoftClientFor(accountId)
@@ -550,7 +539,7 @@ async function syncMicrosoftAccount(accountId: string) {
       }
       active.add(message.id)
       currentFolderMessages.add(message.id)
-      const labels = microsoftSystemLabels(folder, message)
+      const labels = microsoftMessageLabels(folder, message)
       const threadId = message.conversationId ?? message.id
       database.addInventory(accountId, [{ id: message.id, threadId, remoteFolderId: folder.id, remoteUid: message.id }])
       if (database.hasMessage(accountId, message.id) && !fullAccountInventory) {
@@ -642,7 +631,17 @@ function labelsForAction(action: MailActionKind, labelId?: string) {
 }
 
 async function processOperations() {
-  if (!database || !online) return
+  if (!database) return
+  for (const snooze of database.releaseDueSnoozes()) {
+    try {
+      const operation = database.applyLocalAction({ accountId: snooze.accountId, threadIds: [snooze.threadId], action: 'unarchive' }, crypto.randomUUID(), 0)
+      emit({ type: 'operation', payload: operation })
+      emit({ type: 'mail-changed', payload: { accountId: snooze.accountId, threadIds: [snooze.threadId] } })
+    } catch {
+      // The thread may have been deleted remotely while it was snoozed.
+    }
+  }
+  if (!online) return
   for (const row of database.dueOperations()) {
     const id = String(row.id)
     const accountId = String(row.account_id)
@@ -695,7 +694,7 @@ function safeDraftPart(value: string) {
   return value.replaceAll(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'file'
 }
 
-function stageDraftAttachments(input: GmailDraftInput): GmailDraftInput {
+function stageDraftAttachments(input: MailDraftInput): MailDraftInput {
   const id = input.id ?? crypto.randomUUID()
   const directory = join(contentPath, 'drafts', safeDraftPart(id))
   mkdirSync(directory, { recursive: true })
@@ -730,7 +729,7 @@ function serializeDraft<T>(id: string, action: () => Promise<T>) {
   return current
 }
 
-function draftInputFromRow(row: Record<string, string | number | bigint | null>): GmailDraftInput {
+function draftInputFromRow(row: Record<string, string | number | bigint | null>): MailDraftInput {
   return {
     id: String(row.id),
     accountId: String(row.account_id),
@@ -747,11 +746,12 @@ function draftInputFromRow(row: Record<string, string | number | bigint | null>)
   }
 }
 
-async function saveDraft(input: GmailDraftInput) {
+async function saveDraft(input: MailDraftInput) {
   if (!database) throw new Error('Database is not initialized')
   input = stageDraftAttachments(input)
-  let result = database.saveDraft(input, { status: online ? 'syncing' : 'local' })
-  if (!online) return result
+  const canSync = online && draftRecipientsAreSyncable(input.to, input.cc, input.bcc)
+  let result = database.saveDraft(input, { status: canSync ? 'syncing' : 'local' })
+  if (!canSync) return result
   try {
     const row = database.getDraft(result.id)
     const provider = database.getAccount(input.accountId)?.provider ?? 'gmail'
@@ -769,7 +769,7 @@ async function saveDraft(input: GmailDraftInput) {
     } else {
       remoteId = await (await imapClientFor(input.accountId)).saveDraft(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined)
     }
-    result = { ...result, gmailDraftId: remoteId, status: 'synced', updatedAt: new Date().toISOString() }
+    result = { ...result, remoteDraftId: remoteId, status: 'synced', updatedAt: new Date().toISOString() }
   } catch (error) {
     result = { ...result, status: 'failed', error: error instanceof Error ? error.message : String(error), updatedAt: new Date().toISOString() }
   }
@@ -777,7 +777,7 @@ async function saveDraft(input: GmailDraftInput) {
   return result
 }
 
-async function sendDraft(input: GmailDraftInput) {
+async function deliverDraft(input: MailDraftInput) {
   if (!database) throw new Error('Database is not initialized')
   input = stageDraftAttachments(input)
   let result = database.saveDraft(input, { status: online ? 'syncing' : 'queued' })
@@ -804,7 +804,18 @@ async function sendDraft(input: GmailDraftInput) {
     result = { ...result, status: 'failed', error: error instanceof Error ? error.message : String(error), updatedAt: new Date().toISOString() }
   }
   database.updateDraftResult(result.id, result)
+  emit({ type: 'draft-delivery', payload: result })
+  if (result.status === 'sent') {
+    emit({ type: 'mail-changed', payload: { accountId: input.accountId } })
+    void syncAccount(input.accountId)
+  }
   return result
+}
+
+function queueDraftDelivery(input: MailDraftInput, deliveryAt: string, status: 'send-pending' | 'scheduled') {
+  if (!database) throw new Error('Database is not initialized')
+  input = stageDraftAttachments(input)
+  return database.saveDraft(input, { status, deliveryAt })
 }
 
 async function discardDraft(id: string) {
@@ -817,7 +828,7 @@ async function discardDraft(id: string) {
   const remoteId = row.gmail_draft_id ? String(row.gmail_draft_id) : undefined
   const accountId = String(row.account_id)
   const provider = database.getAccount(accountId)?.provider ?? 'gmail'
-  let result: GmailDraftResult = { id, gmailDraftId: remoteId, status: 'discarding', updatedAt: new Date().toISOString() }
+  let result: MailDraftResult = { id, remoteDraftId: remoteId, status: 'discarding', updatedAt: new Date().toISOString() }
   database.updateDraftResult(id, result)
   try {
     if (remoteId) {
@@ -838,8 +849,11 @@ async function discardDraft(id: string) {
 async function processQueuedDrafts() {
   if (!database || !online) return
   for (const row of database.draftsToDiscard()) await serializeDraft(String(row.id), () => discardDraft(String(row.id)))
-  for (const row of database.draftsToSync()) await serializeDraft(String(row.id), () => saveDraft(draftInputFromRow(row)))
-  for (const row of database.queuedDrafts()) await serializeDraft(String(row.id), () => sendDraft(draftInputFromRow(row)))
+  for (const row of database.draftsToSync()) {
+    const input = draftInputFromRow(row)
+    if (draftRecipientsAreSyncable(input.to, input.cc, input.bcc)) await serializeDraft(String(row.id), () => saveDraft(input))
+  }
+  for (const row of database.queuedDrafts()) await serializeDraft(String(row.id), () => deliverDraft(draftInputFromRow(row)))
 }
 
 async function extractAttachment(accountId: string, messageId: string, attachmentIdValue: string, targetPath: string) {
@@ -873,9 +887,49 @@ async function stageMessageAttachments(draftId: string, accountId: string, messa
   })
 }
 
+function applyRuleActions(rule: MailRule, threadIds: string[]) {
+  if (!database || !threadIds.length) return 0
+  let operations = 0
+  for (const action of rule.actions) {
+    for (let index = 0; index < threadIds.length; index += 20) {
+      const batch = threadIds.slice(index, index + 20)
+      try {
+        const operation = database.applyLocalAction({ accountId: rule.accountId, threadIds: batch, action: action.action, labelId: action.labelId }, crypto.randomUUID(), 0)
+        emit({ type: 'operation', payload: operation })
+        operations += 1
+      } catch {
+        // A stale destination or removed thread should not stop later rules.
+      }
+    }
+  }
+  if (operations) emit({ type: 'mail-changed', payload: { accountId: rule.accountId, threadIds } })
+  return operations
+}
+
+function applyRulesToIncoming(records: ParsedMailMessage[]) {
+  if (!database) return new Set<string>()
+  const silenced = new Set<string>()
+  const matches = new Map<string, { rule: MailRule; threadIds: Set<string> }>()
+  for (const record of records) {
+    for (const rule of database.matchingRulesForMessage(record)) {
+      const entry = matches.get(rule.id) ?? { rule, threadIds: new Set<string>() }
+      entry.threadIds.add(record.threadId)
+      matches.set(rule.id, entry)
+      if (rule.actions.some((action) => ['archive', 'move', 'trash'].includes(action.action))) silenced.add(record.id)
+    }
+  }
+  for (const { rule, threadIds } of matches.values()) {
+    const ids = [...threadIds]
+    applyRuleActions(rule, ids)
+    database.recordRuleMatch(rule.id, ids.length)
+  }
+  return silenced
+}
+
 function emitNewMail(accountId: string, records: ParsedMailMessage[]) {
+  const silenced = applyRulesToIncoming(records)
   if (!database?.getAccount(accountId)?.notifications) return
-  const payload = buildNewMailNotification(accountId, records)
+  const payload = buildNewMailNotification(accountId, records.filter((record) => !silenced.has(record.id)))
   if (payload) emit({ type: 'new-mail', payload })
 }
 
@@ -915,11 +969,16 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'mail:list') return database.listThreads(command.payload)
   if (command.type === 'mail:thread') {
     const thread = database.getThread(command.payload.accountId, command.payload.threadId)
-    thread.messages = thread.messages.map((message: GmailMessageDetail) => ({
+    thread.messages = thread.messages.map((message: MailMessageDetail) => ({
       ...message,
       sanitizedHtml: sanitizeMessageHtml(message.html, command.payload.allowRemoteImages)
     }))
     return thread
+  }
+  if (command.type === 'mail:source') {
+    const rawPath = database.getMessageRaw(command.payload.accountId, command.payload.messageId)
+    if (!rawPath) throw new Error('The original message is not available offline')
+    return parseMessageSource(readFileSync(rawPath))
   }
   if (command.type === 'mail:action') {
     const operation = database.applyLocalAction(command.payload)
@@ -938,6 +997,22 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     const id = command.payload.id ?? crypto.randomUUID()
     return serializeDraft(id, () => saveDraft({ ...command.payload, id }))
   }
+  if (command.type === 'mail:snooze') {
+    const snoozes = database.snoozeThreads(command.payload.accountId, command.payload.threadIds, command.payload.until)
+    const operation = database.applyLocalAction({ accountId: command.payload.accountId, threadIds: command.payload.threadIds, action: 'archive' }, crypto.randomUUID(), 0)
+    emit({ type: 'operation', payload: operation })
+    emit({ type: 'mail-changed', payload: { accountId: command.payload.accountId, threadIds: command.payload.threadIds } })
+    return snoozes
+  }
+  if (command.type === 'mail:unsnooze') {
+    const changed = database.unsnoozeThreads(command.payload.accountId, command.payload.threadIds)
+    if (changed) {
+      const operation = database.applyLocalAction({ accountId: command.payload.accountId, threadIds: command.payload.threadIds, action: 'unarchive' }, crypto.randomUUID(), 0)
+      emit({ type: 'operation', payload: operation })
+      emit({ type: 'mail-changed', payload: { accountId: command.payload.accountId, threadIds: command.payload.threadIds } })
+    }
+    return changed
+  }
   if (command.type === 'accounts:update') {
     const updated = database.updateAccountSettings(command.payload)
     if (updated.syncEnabled) {
@@ -955,7 +1030,15 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   }
   if (command.type === 'drafts:send') {
     const id = command.payload.id ?? crypto.randomUUID()
-    return serializeDraft(id, () => sendDraft({ ...command.payload, id }))
+    const deliveryAt = new Date(Date.now() + UNDO_SEND_DELAY_MS).toISOString()
+    return serializeDraft(id, async () => queueDraftDelivery({ ...command.payload, id }, deliveryAt, 'send-pending'))
+  }
+  if (command.type === 'drafts:schedule') {
+    const id = command.payload.input.id ?? crypto.randomUUID()
+    return serializeDraft(id, async () => queueDraftDelivery({ ...command.payload.input, id }, command.payload.deliveryAt, 'scheduled'))
+  }
+  if (command.type === 'drafts:cancel-send') {
+    return serializeDraft(command.payload.id, async () => database!.cancelDraftDelivery(command.payload.id))
   }
   if (command.type === 'drafts:delete') {
     if (!database.getDraft(command.payload.id)) return discardDraft(command.payload.id)
@@ -963,6 +1046,17 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     return online ? serializeDraft(command.payload.id, () => discardDraft(command.payload.id)) : queued
   }
   if (command.type === 'drafts:stage-message-attachments') return stageMessageAttachments(command.payload.draftId, command.payload.accountId, command.payload.messageId)
+  if (command.type === 'rules:list') return database.listRules(command.payload.accountIds)
+  if (command.type === 'rules:save') return database.saveRule(command.payload)
+  if (command.type === 'rules:delete') return database.deleteRule(command.payload.id)
+  if (command.type === 'rules:run') {
+    const rule = database.getRule(command.payload.id)
+    if (!rule) throw new Error('Rule not found')
+    const threadIds = database.matchingThreadIdsForRule(rule)
+    const operations = applyRuleActions(rule, threadIds)
+    database.recordRuleMatch(rule.id, threadIds.length)
+    return { matched: threadIds.length, operations }
+  }
   if (command.type === 'sync:start') {
     const accounts = command.payload.accountId
       ? database.listAccounts().filter((item) => item.id === command.payload.accountId)

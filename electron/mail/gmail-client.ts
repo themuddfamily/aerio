@@ -1,4 +1,4 @@
-import type { GmailLabel } from '../../src/gmail-types'
+import type { MailLabel } from '../../src/mail-types'
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me'
 
@@ -90,13 +90,13 @@ export class GmailClient {
     return this.request<GmailProfile>('/profile')
   }
 
-  async listLabels(): Promise<GmailLabel[]> {
+  async listLabels(): Promise<MailLabel[]> {
     const result = await this.request<{ labels?: { id: string; name: string; type: 'system' | 'user'; color?: { backgroundColor?: string } }[] }>('/labels')
     return (result.labels ?? []).map((label) => ({
       accountId: this.accountId,
       id: label.id,
       name: label.name,
-      type: label.type.toLowerCase() as GmailLabel['type'],
+      type: label.type.toLowerCase() as MailLabel['type'],
       color: label.color?.backgroundColor
     }))
   }

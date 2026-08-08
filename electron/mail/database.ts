@@ -3,14 +3,17 @@ import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type {
   ApplyMailActionInput,
-  GmailAccountSummary,
-  GmailAttachment,
-  GmailDraftInput,
-  GmailDraftRecord,
-  GmailDraftResult,
-  GmailLabel,
-  GmailMessageDetail,
-  GmailThreadDetail,
+  MailAccountSummary,
+  MailAttachment,
+  MailDraftInput,
+  MailDraftRecord,
+  MailDraftResult,
+  MailLabel,
+  MailRule,
+  MailRuleInput,
+  MailSnooze,
+  MailMessageDetail,
+  MailThreadDetail,
   MailActionKind,
   MailAccountSettingsInput,
   MailDiagnosticHealth,
@@ -20,7 +23,7 @@ import type {
   MailStorageStats,
   PendingOperation,
   SyncProgress
-} from '../../src/gmail-types'
+} from '../../src/mail-types'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -43,7 +46,7 @@ export interface ParsedMailMessage {
   rawPath: string
   remoteFolderId?: string
   remoteUid?: string
-  attachments: GmailAttachment[]
+  attachments: MailAttachment[]
 }
 
 interface DatabaseRow {
@@ -61,6 +64,31 @@ const json = <T>(value: string | null | undefined, fallback: T): T => {
   } catch {
     return fallback
   }
+}
+const containsPattern = (value: string) => `%${value.trim().replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`
+
+type MailRuleMessage = Pick<ParsedMailMessage, 'accountId' | 'threadId' | 'fromName' | 'fromEmail' | 'to' | 'cc' | 'subject' | 'text'>
+
+export function mailRuleMatches(rule: MailRuleInput, message: MailRuleMessage) {
+  const values: Record<MailRuleInput['conditions'][number]['field'], string> = {
+    from: `${message.fromName} ${message.fromEmail}`,
+    to: [...message.to, ...message.cc].join(' '),
+    subject: message.subject,
+    body: message.text
+  }
+  const matches = rule.conditions.map((condition) => {
+    const haystack = values[condition.field].trim().toLocaleLowerCase()
+    const needle = condition.value.trim().toLocaleLowerCase()
+    if (!needle) return false
+    if (condition.operator === 'equals') {
+      const exactValues = condition.field === 'from' ? [message.fromEmail, message.fromName, values.from] : [haystack]
+      return exactValues.some((value) => value.trim().toLocaleLowerCase() === needle)
+    }
+    if (condition.operator === 'starts-with') return haystack.startsWith(needle)
+    if (condition.operator === 'ends-with') return haystack.endsWith(needle)
+    return haystack.includes(needle)
+  })
+  return matches.length > 0 && (rule.match === 'all' ? matches.every(Boolean) : matches.some(Boolean))
 }
 
 export class MailDatabase {
@@ -270,9 +298,35 @@ export class MailDatabase {
         body_html TEXT,
         attachment_paths_json TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL DEFAULT 'local',
+        delivery_at TEXT,
         error TEXT,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS mail_snoozes (
+        account_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        snoozed_until TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (account_id, thread_id),
+        FOREIGN KEY (account_id, thread_id) REFERENCES gmail_threads(account_id, id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS mail_snoozes_due ON mail_snoozes(snoozed_until);
+
+      CREATE TABLE IF NOT EXISTS mail_rules (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES gmail_accounts(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        match_mode TEXT NOT NULL DEFAULT 'all',
+        conditions_json TEXT NOT NULL DEFAULT '[]',
+        actions_json TEXT NOT NULL DEFAULT '[]',
+        match_count INTEGER NOT NULL DEFAULT 0,
+        last_matched_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS mail_rules_account ON mail_rules(account_id, enabled);
 
       CREATE VIRTUAL TABLE IF NOT EXISTS gmail_fts USING fts5(
         account_id UNINDEXED,
@@ -311,20 +365,23 @@ export class MailDatabase {
     if (!syncColumns.has('inventory_complete')) this.db.exec(`ALTER TABLE gmail_sync_state ADD COLUMN inventory_complete INTEGER NOT NULL DEFAULT 0`)
     const operationColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_operations)').all() as { name: string }[]).map((column) => column.name))
     if (!operationColumns.has('before_labels_json')) this.db.exec(`ALTER TABLE gmail_operations ADD COLUMN before_labels_json TEXT NOT NULL DEFAULT '{}'`)
+    const draftColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_drafts)').all() as { name: string }[]).map((column) => column.name))
+    if (!draftColumns.has('delivery_at')) this.db.exec('ALTER TABLE gmail_drafts ADD COLUMN delivery_at TEXT')
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(4, ?)').run(nowIso())
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(5, ?)').run(nowIso())
+    this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(6, ?)').run(nowIso())
     this.recoverInterruptedWork()
   }
 
-  listAccounts(): GmailAccountSummary[] {
+  listAccounts(): MailAccountSummary[] {
     return (this.stmt('SELECT * FROM gmail_accounts ORDER BY archived, created_at').all() as DatabaseRow[]).map((row) => ({
       id: String(row.id),
-      provider: String(row.provider ?? 'gmail') as GmailAccountSummary['provider'],
+      provider: String(row.provider ?? 'gmail') as MailAccountSummary['provider'],
       email: String(row.email),
       displayName: String(row.display_name),
       avatarUrl: row.avatar_url ? String(row.avatar_url) : undefined,
       color: String(row.color),
-      status: String(row.status) as GmailAccountSummary['status'],
+      status: String(row.status) as MailAccountSummary['status'],
       archived: Boolean(row.archived),
       lastSyncAt: row.last_sync_at ? String(row.last_sync_at) : undefined,
       error: row.error ? String(row.error) : undefined,
@@ -334,7 +391,7 @@ export class MailDatabase {
     }))
   }
 
-  upsertAccount(account: GmailAccountSummary) {
+  upsertAccount(account: MailAccountSummary) {
     const timestamp = nowIso()
     this.stmt(`
       INSERT INTO gmail_accounts(id,provider,email,display_name,avatar_url,color,status,archived,last_sync_at,error,signature,notifications,sync_enabled,created_at,updated_at)
@@ -349,7 +406,7 @@ export class MailDatabase {
     return this.listAccounts().find((account) => account.id === accountId)
   }
 
-  setAccountStatus(accountId: string, status: GmailAccountSummary['status'], error?: string) {
+  setAccountStatus(accountId: string, status: MailAccountSummary['status'], error?: string) {
     this.stmt('UPDATE gmail_accounts SET status=?,error=?,updated_at=? WHERE id=?').run(status, error ?? null, nowIso(), accountId)
   }
 
@@ -393,7 +450,7 @@ export class MailDatabase {
     try { rmSync(join(this.contentPath, safeAccount), { recursive: true, force: true }) } catch { /* Best effort. */ }
   }
 
-  replaceLabels(accountId: string, labels: GmailLabel[]) {
+  replaceLabels(accountId: string, labels: MailLabel[]) {
     this.transaction(() => {
       this.stmt('DELETE FROM gmail_labels WHERE account_id=?').run(accountId)
       const insert = this.stmt('INSERT INTO gmail_labels(account_id,id,name,type,color) VALUES(?,?,?,?,?)')
@@ -401,7 +458,7 @@ export class MailDatabase {
     })
   }
 
-  listLabels(accountIds?: string[]): GmailLabel[] {
+  listLabels(accountIds?: string[]): MailLabel[] {
     const rows = accountIds?.length
       ? this.db.prepare(`SELECT * FROM gmail_labels WHERE account_id IN (${accountIds.map(() => '?').join(',')}) ORDER BY type,name`).all(...accountIds) as DatabaseRow[]
       : this.stmt('SELECT * FROM gmail_labels ORDER BY account_id,type,name').all() as DatabaseRow[]
@@ -409,7 +466,7 @@ export class MailDatabase {
       accountId: String(row.account_id),
       id: String(row.id),
       name: String(row.name),
-      type: String(row.type) as GmailLabel['type'],
+      type: String(row.type) as MailLabel['type'],
       color: row.color ? String(row.color) : undefined
     }))
   }
@@ -714,13 +771,58 @@ export class MailDatabase {
     if (folder === 'important') where.push('t.important=1 AND t.trashed=0')
     if (folder === 'sent') where.push('t.sent=1 AND t.trashed=0')
     if (folder === 'drafts') where.push('t.draft=1 AND t.trashed=0')
+    if (folder === 'scheduled') where.push('0=1')
+    if (folder === 'snoozed') where.push(`EXISTS(SELECT 1 FROM mail_snoozes s WHERE s.account_id=t.account_id AND s.thread_id=t.id AND s.snoozed_until>?)`)
     if (folder === 'archive') where.push(`t.inbox=0 AND t.trashed=0 AND t.sent=0 AND t.draft=0 AND NOT EXISTS(SELECT 1 FROM json_each(t.label_ids_json) WHERE value='SPAM')`)
     if (folder === 'spam') where.push(`EXISTS(SELECT 1 FROM json_each(t.label_ids_json) WHERE value='SPAM')`)
     if (folder === 'trash') where.push('t.trashed=1')
     if (folder === 'all') where.push(`t.trashed=0 AND NOT EXISTS(SELECT 1 FROM json_each(t.label_ids_json) WHERE value='SPAM')`)
+    if (folder === 'snoozed') params.push(nowIso())
+    else where.push(`NOT EXISTS(SELECT 1 FROM mail_snoozes s WHERE s.account_id=t.account_id AND s.thread_id=t.id AND s.snoozed_until>?)`), params.push(nowIso())
     if (query.labelId) {
       where.push(`EXISTS(SELECT 1 FROM json_each(t.label_ids_json) WHERE value=?)`)
       params.push(query.labelId)
+    }
+    const filters = query.filters
+    if (filters?.from?.trim()) {
+      where.push(`EXISTS(SELECT 1 FROM gmail_messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id AND lower(m.from_name||' '||m.from_email) LIKE lower(?) ESCAPE '\\')`)
+      params.push(containsPattern(filters.from))
+    }
+    if (filters?.to?.trim()) {
+      where.push(`EXISTS(SELECT 1 FROM gmail_messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id AND lower(m.to_json||' '||m.cc_json) LIKE lower(?) ESCAPE '\\')`)
+      params.push(containsPattern(filters.to))
+    }
+    if (filters?.subject?.trim()) {
+      where.push(`EXISTS(SELECT 1 FROM gmail_messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id AND lower(m.subject) LIKE lower(?) ESCAPE '\\')`)
+      params.push(containsPattern(filters.subject))
+    }
+    if (filters?.attachmentName?.trim()) {
+      where.push(`EXISTS(SELECT 1 FROM gmail_attachments x JOIN gmail_messages m ON m.account_id=x.account_id AND m.id=x.message_id WHERE m.account_id=t.account_id AND m.thread_id=t.id AND lower(x.filename) LIKE lower(?) ESCAPE '\\')`)
+      params.push(containsPattern(filters.attachmentName))
+    }
+    if (filters?.dateFrom?.trim()) {
+      where.push('datetime(t.last_date)>=datetime(?)')
+      params.push(filters.dateFrom.trim())
+    }
+    if (filters?.dateTo?.trim()) {
+      where.push(`datetime(t.last_date)<datetime(?, '+1 day')`)
+      params.push(filters.dateTo.trim())
+    }
+    if (typeof filters?.hasAttachments === 'boolean') {
+      where.push('t.has_attachments=?')
+      params.push(filters.hasAttachments ? 1 : 0)
+    }
+    if (typeof filters?.unread === 'boolean') {
+      where.push('t.unread=?')
+      params.push(filters.unread ? 1 : 0)
+    }
+    if (typeof filters?.starred === 'boolean') {
+      where.push('t.starred=?')
+      params.push(filters.starred ? 1 : 0)
+    }
+    if (typeof filters?.important === 'boolean') {
+      where.push('t.important=?')
+      params.push(filters.important ? 1 : 0)
     }
     let join = ''
     if (query.search?.trim()) {
@@ -732,7 +834,7 @@ export class MailDatabase {
       where.push('(t.last_date < ? OR (t.last_date=? AND (t.id<? OR (t.id=? AND t.account_id<?))))')
       params.push(cursor.date, cursor.date, cursor.id, cursor.id, cursor.accountId)
     }
-    const sql = `SELECT t.* FROM gmail_threads t JOIN gmail_accounts a ON a.id=t.account_id ${join} WHERE ${where.join(' AND ')} ORDER BY t.last_date DESC,t.id DESC,t.account_id DESC LIMIT ?`
+    const sql = `SELECT t.*,(SELECT snoozed_until FROM mail_snoozes s WHERE s.account_id=t.account_id AND s.thread_id=t.id) snoozed_until FROM gmail_threads t JOIN gmail_accounts a ON a.id=t.account_id ${join} WHERE ${where.join(' AND ')} ORDER BY t.last_date DESC,t.id DESC,t.account_id DESC LIMIT ?`
     const rows = this.db.prepare(sql).all(...params, pageSize + 1) as DatabaseRow[]
     const hasMore = rows.length > pageSize
     const visible = rows.slice(0, pageSize)
@@ -754,7 +856,8 @@ export class MailDatabase {
       draft: Boolean(row.draft),
       hasAttachments: Boolean(row.has_attachments),
       messageCount: Number(row.message_count),
-      labelIds: json<string[]>(String(row.label_ids_json), [])
+      labelIds: json<string[]>(String(row.label_ids_json), []),
+      snoozedUntil: row.snoozed_until ? String(row.snoozed_until) : undefined
     }))
     const last = items.at(-1)
     return {
@@ -764,10 +867,10 @@ export class MailDatabase {
     }
   }
 
-  getThread(accountId: string, threadId: string): GmailThreadDetail {
+  getThread(accountId: string, threadId: string): MailThreadDetail {
     const rows = this.stmt('SELECT * FROM gmail_messages WHERE account_id=? AND thread_id=? ORDER BY internal_date').all(accountId, threadId) as DatabaseRow[]
     if (!rows.length) throw new Error('Thread not found')
-    const messages: GmailMessageDetail[] = this.logicalMessages(rows).map(({ row, labels }) => ({
+    const messages: MailMessageDetail[] = this.logicalMessages(rows).map(({ row, labels }) => ({
       accountId,
       id: String(row.id),
       threadId,
@@ -921,35 +1024,47 @@ export class MailDatabase {
     this.stmt(`UPDATE gmail_drafts SET status='failed',error='Aerio closed while this draft was being saved or sent. Review it before retrying.',updated_at=? WHERE status='syncing'`).run(timestamp)
   }
 
-  saveDraft(input: GmailDraftInput, result: Partial<GmailDraftResult> = {}): GmailDraftResult {
+  saveDraft(input: MailDraftInput, result: Partial<MailDraftResult> = {}): MailDraftResult {
     const id = input.id ?? crypto.randomUUID()
     const updatedAt = nowIso()
-    const status = result.status ?? 'local'
+    const existing = this.getDraft(id)
+    const existingStatus = existing?.status ? String(existing.status) as MailDraftResult['status'] : undefined
+    const retainedDelivery = existingStatus === 'scheduled' || existingStatus === 'send-pending' || existingStatus === 'queued'
+    const status = result.status ?? (retainedDelivery ? existingStatus : 'local') ?? 'local'
+    const deliveryAt = result.deliveryAt ?? (retainedDelivery && existing?.delivery_at ? String(existing.delivery_at) : undefined)
     this.stmt(`
-      INSERT INTO gmail_drafts(id,account_id,gmail_draft_id,thread_id,in_reply_to,references_json,to_json,cc_json,bcc_json,subject,body_text,body_html,attachment_paths_json,status,error,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO gmail_drafts(id,account_id,gmail_draft_id,thread_id,in_reply_to,references_json,to_json,cc_json,bcc_json,subject,body_text,body_html,attachment_paths_json,status,delivery_at,error,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET gmail_draft_id=COALESCE(excluded.gmail_draft_id,gmail_drafts.gmail_draft_id),thread_id=excluded.thread_id,in_reply_to=excluded.in_reply_to,
         references_json=excluded.references_json,to_json=excluded.to_json,cc_json=excluded.cc_json,bcc_json=excluded.bcc_json,
         subject=excluded.subject,body_text=excluded.body_text,body_html=excluded.body_html,attachment_paths_json=excluded.attachment_paths_json,
-        status=excluded.status,error=excluded.error,updated_at=excluded.updated_at
+        status=excluded.status,delivery_at=excluded.delivery_at,error=excluded.error,updated_at=excluded.updated_at
     `).run(
-      id, input.accountId, result.gmailDraftId ?? null, input.threadId ?? null, input.inReplyTo ?? null,
+      id, input.accountId, result.remoteDraftId ?? null, input.threadId ?? null, input.inReplyTo ?? null,
       JSON.stringify(input.references ?? []), JSON.stringify(input.to), JSON.stringify(input.cc), JSON.stringify(input.bcc),
-      input.subject, input.text, input.html ?? null, JSON.stringify(input.attachmentPaths), status, result.error ?? null, updatedAt
+      input.subject, input.text, input.html ?? null, JSON.stringify(input.attachmentPaths), status, deliveryAt ?? null, result.error ?? null, updatedAt
     )
     const stored = this.getDraft(id)
-    return { id, gmailDraftId: stored?.gmail_draft_id ? String(stored.gmail_draft_id) : result.gmailDraftId, status, updatedAt, error: result.error }
+    return {
+      id,
+      remoteDraftId: stored?.gmail_draft_id ? String(stored.gmail_draft_id) : result.remoteDraftId,
+      status,
+      updatedAt,
+      deliveryAt,
+      undoUntil: status === 'send-pending' ? deliveryAt : undefined,
+      error: result.error
+    }
   }
 
   getDraft(id: string) {
     return this.stmt('SELECT * FROM gmail_drafts WHERE id=?').get(id) as DatabaseRow | undefined
   }
 
-  private draftRecord(row: DatabaseRow): GmailDraftRecord {
+  private draftRecord(row: DatabaseRow): MailDraftRecord {
     return {
       id: String(row.id),
       accountId: String(row.account_id),
-      gmailDraftId: row.gmail_draft_id ? String(row.gmail_draft_id) : undefined,
+      remoteDraftId: row.gmail_draft_id ? String(row.gmail_draft_id) : undefined,
       threadId: row.thread_id ? String(row.thread_id) : undefined,
       inReplyTo: row.in_reply_to ? String(row.in_reply_to) : undefined,
       references: json<string[]>(String(row.references_json), []),
@@ -960,8 +1075,10 @@ export class MailDatabase {
       text: String(row.body_text),
       html: row.body_html ? String(row.body_html) : undefined,
       attachmentPaths: json<string[]>(String(row.attachment_paths_json), []),
-      status: String(row.status) as GmailDraftRecord['status'],
+      status: String(row.status) as MailDraftRecord['status'],
       updatedAt: String(row.updated_at),
+      deliveryAt: row.delivery_at ? String(row.delivery_at) : undefined,
+      undoUntil: String(row.status) === 'send-pending' && row.delivery_at ? String(row.delivery_at) : undefined,
       error: row.error ? String(row.error) : undefined
     }
   }
@@ -981,12 +1098,12 @@ export class MailDatabase {
     return (this.db.prepare(`SELECT * FROM gmail_drafts WHERE ${where.join(' AND ')} ORDER BY updated_at DESC`).all(...params) as DatabaseRow[]).map((row) => this.draftRecord(row))
   }
 
-  requestDraftDiscard(id: string): GmailDraftResult {
+  requestDraftDiscard(id: string): MailDraftResult {
     const row = this.getDraft(id)
     if (!row) throw new Error('Draft not found')
     const updatedAt = nowIso()
     this.stmt(`UPDATE gmail_drafts SET status='discard-queued',error=NULL,updated_at=? WHERE id=?`).run(updatedAt, id)
-    return { id, gmailDraftId: row.gmail_draft_id ? String(row.gmail_draft_id) : undefined, status: 'discard-queued', updatedAt }
+    return { id, remoteDraftId: row.gmail_draft_id ? String(row.gmail_draft_id) : undefined, status: 'discard-queued', updatedAt }
   }
 
   draftsToDiscard() {
@@ -998,16 +1115,125 @@ export class MailDatabase {
   }
 
   queuedDrafts() {
-    return this.stmt(`SELECT * FROM gmail_drafts WHERE status='queued' ORDER BY updated_at LIMIT 20`).all() as DatabaseRow[]
+    return this.stmt(`SELECT * FROM gmail_drafts WHERE status IN ('queued','send-pending','scheduled') AND COALESCE(delivery_at,updated_at)<=? ORDER BY COALESCE(delivery_at,updated_at) LIMIT 20`).all(nowIso()) as DatabaseRow[]
   }
 
   draftsToSync() {
     return this.stmt(`SELECT * FROM gmail_drafts WHERE status='local' ORDER BY updated_at LIMIT 20`).all() as DatabaseRow[]
   }
 
-  updateDraftResult(id: string, result: GmailDraftResult) {
-    this.stmt('UPDATE gmail_drafts SET gmail_draft_id=?,status=?,error=?,updated_at=? WHERE id=?')
-      .run(result.gmailDraftId ?? null, result.status, result.error ?? null, result.updatedAt, id)
+  updateDraftResult(id: string, result: MailDraftResult) {
+    this.stmt('UPDATE gmail_drafts SET gmail_draft_id=?,status=?,delivery_at=?,error=?,updated_at=? WHERE id=?')
+      .run(result.remoteDraftId ?? null, result.status, result.deliveryAt ?? null, result.error ?? null, result.updatedAt, id)
+  }
+
+  cancelDraftDelivery(id: string): MailDraftResult {
+    const row = this.getDraft(id)
+    if (!row) throw new Error('The queued message was not found')
+    if (!['send-pending', 'scheduled', 'queued'].includes(String(row.status))) throw new Error('This message can no longer be cancelled')
+    const status: MailDraftResult['status'] = row.gmail_draft_id ? 'synced' : 'local'
+    const updatedAt = nowIso()
+    this.stmt('UPDATE gmail_drafts SET status=?,delivery_at=NULL,error=NULL,updated_at=? WHERE id=?').run(status, updatedAt, id)
+    return { id, remoteDraftId: row.gmail_draft_id ? String(row.gmail_draft_id) : undefined, status, updatedAt }
+  }
+
+  snoozeThreads(accountId: string, threadIds: string[], until: string): MailSnooze[] {
+    const createdAt = nowIso()
+    const insert = this.stmt(`INSERT INTO mail_snoozes(account_id,thread_id,snoozed_until,created_at) VALUES(?,?,?,?)
+      ON CONFLICT(account_id,thread_id) DO UPDATE SET snoozed_until=excluded.snoozed_until,created_at=excluded.created_at`)
+    this.transaction(() => {
+      for (const threadId of threadIds) {
+        if (!this.stmt('SELECT 1 found FROM gmail_threads WHERE account_id=? AND id=?').get(accountId, threadId)) throw new Error(`Conversation ${threadId} was not found`)
+        insert.run(accountId, threadId, until, createdAt)
+      }
+    })
+    return threadIds.map((threadId) => ({ accountId, threadId, snoozedUntil: until }))
+  }
+
+  unsnoozeThreads(accountId: string, threadIds: string[]) {
+    if (!threadIds.length) return false
+    const result = this.db.prepare(`DELETE FROM mail_snoozes WHERE account_id=? AND thread_id IN (${threadIds.map(() => '?').join(',')})`).run(accountId, ...threadIds)
+    return Number(result.changes) > 0
+  }
+
+  releaseDueSnoozes() {
+    const rows = this.stmt('SELECT account_id,thread_id,snoozed_until FROM mail_snoozes WHERE snoozed_until<=? ORDER BY snoozed_until LIMIT 100').all(nowIso()) as DatabaseRow[]
+    if (!rows.length) return [] as MailSnooze[]
+    this.transaction(() => {
+      const remove = this.stmt('DELETE FROM mail_snoozes WHERE account_id=? AND thread_id=?')
+      for (const row of rows) remove.run(String(row.account_id), String(row.thread_id))
+    })
+    return rows.map((row) => ({ accountId: String(row.account_id), threadId: String(row.thread_id), snoozedUntil: String(row.snoozed_until) }))
+  }
+
+  private ruleRecord(row: DatabaseRow): MailRule {
+    return {
+      id: String(row.id),
+      accountId: String(row.account_id),
+      name: String(row.name),
+      enabled: Boolean(row.enabled),
+      match: String(row.match_mode) as MailRule['match'],
+      conditions: json<MailRule['conditions']>(String(row.conditions_json), []),
+      actions: json<MailRule['actions']>(String(row.actions_json), []),
+      matchCount: Number(row.match_count),
+      lastMatchedAt: row.last_matched_at ? String(row.last_matched_at) : undefined,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at)
+    }
+  }
+
+  listRules(accountIds?: string[]) {
+    const rows = accountIds?.length
+      ? this.db.prepare(`SELECT * FROM mail_rules WHERE account_id IN (${accountIds.map(() => '?').join(',')}) ORDER BY enabled DESC,name`).all(...accountIds) as DatabaseRow[]
+      : this.stmt('SELECT * FROM mail_rules ORDER BY enabled DESC,name').all() as DatabaseRow[]
+    return rows.map((row) => this.ruleRecord(row))
+  }
+
+  getRule(id: string) {
+    const row = this.stmt('SELECT * FROM mail_rules WHERE id=?').get(id) as DatabaseRow | undefined
+    return row ? this.ruleRecord(row) : undefined
+  }
+
+  saveRule(input: MailRuleInput): MailRule {
+    if (!this.getAccount(input.accountId)) throw new Error('Account not found')
+    const id = input.id ?? crypto.randomUUID()
+    const timestamp = nowIso()
+    this.stmt(`INSERT INTO mail_rules(id,account_id,name,enabled,match_mode,conditions_json,actions_json,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id,name=excluded.name,enabled=excluded.enabled,
+      match_mode=excluded.match_mode,conditions_json=excluded.conditions_json,actions_json=excluded.actions_json,updated_at=excluded.updated_at`)
+      .run(id, input.accountId, input.name, input.enabled ? 1 : 0, input.match, JSON.stringify(input.conditions), JSON.stringify(input.actions), timestamp, timestamp)
+    return this.getRule(id)!
+  }
+
+  deleteRule(id: string) {
+    this.stmt('DELETE FROM mail_rules WHERE id=?').run(id)
+  }
+
+  matchingRulesForMessage(message: MailRuleMessage) {
+    return this.listRules([message.accountId]).filter((rule) => rule.enabled && mailRuleMatches(rule, message))
+  }
+
+  matchingThreadIdsForRule(rule: MailRule) {
+    const rows = this.stmt(`SELECT m.* FROM gmail_messages m JOIN (
+      SELECT account_id,thread_id,MAX(internal_date) internal_date FROM gmail_messages WHERE account_id=? GROUP BY account_id,thread_id
+    ) newest ON newest.account_id=m.account_id AND newest.thread_id=m.thread_id AND newest.internal_date=m.internal_date
+      WHERE m.account_id=? AND EXISTS(SELECT 1 FROM gmail_messages inbox,json_each(inbox.label_ids_json)
+        WHERE inbox.account_id=m.account_id AND inbox.thread_id=m.thread_id AND value='INBOX')`).all(rule.accountId, rule.accountId) as DatabaseRow[]
+    return [...new Set(rows.filter((row) => mailRuleMatches(rule, {
+      accountId: rule.accountId,
+      threadId: String(row.thread_id),
+      fromName: String(row.from_name),
+      fromEmail: String(row.from_email),
+      to: json<string[]>(String(row.to_json), []),
+      cc: json<string[]>(String(row.cc_json), []),
+      subject: String(row.subject),
+      text: String(row.body_text)
+    })).map((row) => String(row.thread_id)))]
+  }
+
+  recordRuleMatch(id: string, count = 1) {
+    if (count <= 0) return
+    this.stmt('UPDATE mail_rules SET match_count=match_count+?,last_matched_at=?,updated_at=? WHERE id=?').run(count, nowIso(), nowIso(), id)
   }
 
   getMessageRaw(accountId: string, messageId: string) {

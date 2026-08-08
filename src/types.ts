@@ -162,7 +162,7 @@ export interface DraftInput {
 
 export type MessageWindowRequest =
   | { source: 'demo'; messageId: string; title: string }
-  | { source: 'gmail'; accountId: string; threadId: string; messageId?: string; title: string }
+  | { source: 'connected'; accountId: string; threadId: string; messageId?: string; title: string }
 
 export interface WindowControls {
   minimize(): Promise<void>
@@ -203,5 +203,5 @@ export interface AerioDesktopApi {
   window: WindowControls
   onWindowState(callback: (maximized: boolean) => void): () => void
   onComposeCommand(callback: () => void): () => void
-  mail: import('./gmail-types').MailDesktopApi
+  mail: import('./mail-types').MailDesktopApi
 }

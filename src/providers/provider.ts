@@ -1,4 +1,4 @@
-import type { MailProviderId } from '../gmail-types'
+import type { MailProviderId } from '../mail-types'
 import type { ModuleId } from '../types'
 
 export type ProviderId = MailProviderId | 'demo' | 'local'

@@ -3,7 +3,7 @@ import { createServer } from 'node:http'
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { OAuth2Client, CodeChallengeMethod, type Credentials } from 'google-auth-library'
 import { safeStorage, shell } from 'electron'
-import type { GmailCredentialStatus, ImapAccountInput, ImapServerSettings, MailProviderId } from '../../src/gmail-types'
+import type { MailCredentialStatus, ImapAccountInput, ImapServerSettings, MailProviderId } from '../../src/mail-types'
 import {
   parseDesktopOAuthConfig,
   parseMicrosoftClientId,
@@ -76,7 +76,7 @@ export class OAuthVault {
     renameSync(temporary, this.path)
   }
 
-  status(): GmailCredentialStatus {
+  status(): MailCredentialStatus {
     const clientId = this.googleConfig()?.clientId
     return {
       configured: Boolean(clientId),
@@ -237,7 +237,7 @@ export class OAuthVault {
       scopes.has('https://www.googleapis.com/auth/calendar.events')
   }
 
-  microsoftStatus(): GmailCredentialStatus {
+  microsoftStatus(): MailCredentialStatus {
     const clientId = this.microsoftClientId()
     return {
       configured: Boolean(clientId),

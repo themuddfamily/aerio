@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MicrosoftGraphClient } from './microsoft-client'
+import { MicrosoftGraphClient, microsoftMessageLabels } from './microsoft-client'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -16,7 +16,15 @@ describe('Microsoft Graph mail client', () => {
       deltaLink: 'https://graph.microsoft.com/delta-token'
     })
     expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[0][0]).toContain('categories')
     expect(fetchMock.mock.calls[0][1].headers).toMatchObject({ Authorization: 'Bearer token', Prefer: 'IdType="ImmutableId"' })
+  })
+
+  it('preserves Outlook categories as visible mail labels', () => {
+    expect(microsoftMessageLabels(
+      { id: 'inbox-id', displayName: 'Inbox', specialUse: 'inbox' },
+      { id: 'message-1', isRead: true, categories: ['Avast: Scanned', 'Customer'] }
+    )).toEqual(expect.arrayContaining(['INBOX', 'category:Avast: Scanned', 'category:Customer']))
   })
 
   it('sends RFC 822 MIME as base64 through Graph', async () => {
