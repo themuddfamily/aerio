@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => {
   const protocolHandlers = new Map<string, (request: { url: string }) => Promise<Response>>()
   const windows: any[] = []
   let preferencesPayload: string | undefined
+  let appLockRecord: { salt: string; verifier: string } | undefined
   let accounts: any[] = [{
     id: 'a1b2', provider: 'gmail', email: 'person@example.test', displayName: 'Person', color: '#123456',
     status: 'ready', archived: false, signature: '', notifications: true, syncEnabled: true
@@ -69,8 +70,12 @@ const mocks = vi.hoisted(() => {
     exec = vi.fn()
     close = vi.fn()
     prepare = vi.fn((sql: string) => ({
-      get: vi.fn(() => sql.includes('SELECT payload') && preferencesPayload ? { payload: preferencesPayload } : undefined),
-      run: vi.fn((_schema: number, payload: string) => { if (sql.includes('INSERT INTO app_preferences')) preferencesPayload = payload })
+      get: vi.fn(() => sql.includes('SELECT payload') && preferencesPayload ? { payload: preferencesPayload } : sql.includes('SELECT salt, verifier') ? appLockRecord : undefined),
+      run: vi.fn((...args: any[]) => {
+        if (sql.includes('INSERT INTO app_preferences')) preferencesPayload = args[1]
+        if (sql.includes('INSERT INTO app_lock')) appLockRecord = { salt: args[0], verifier: args[1] }
+        if (sql.includes('DELETE FROM app_lock')) appLockRecord = undefined
+      })
     }))
   }
 
@@ -248,6 +253,23 @@ describe.sequential('Electron main process', () => {
     expect(mocks.store.replaceAccount).toHaveBeenCalledWith('a1b2', 'gmail', expect.any(Object), { contacts: 'google-token' })
     expect(invoke('productivity:snapshot')).toBe(mocks.store.snapshot())
     expect(invoke('productivity:local-snapshot')).toEqual({ tasks: [], notes: [] })
+  })
+
+  it('enables, locks, unlocks, and disables the local app lock', () => {
+    expect(invoke('app-lock:status')).toEqual({ enabled: false, locked: false })
+    expect(() => invoke('app-lock:enable', 'short')).toThrow(/8 to 256/)
+    expect(invoke('app-lock:enable', 'correct horse battery staple')).toEqual({ enabled: true, locked: false })
+    expect(invoke('app-lock:lock')).toEqual({ enabled: true, locked: true })
+    expect(mocks.windows[0].webContents.send).toHaveBeenCalledWith('app-lock:status-changed', { enabled: true, locked: true })
+    expect(() => invoke('window:open-message', { source: 'connected', accountId: 'a1b2', threadId: 'thread', title: 'Locked' })).toThrow(/Unlock Aerio/)
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    for (let attempt = 0; attempt < 5; attempt += 1) expect(() => invoke('app-lock:unlock', 'wrong passphrase')).toThrow(/incorrect/)
+    expect(() => invoke('app-lock:unlock', 'correct horse battery staple')).toThrow(/Too many attempts/)
+    clock.mockReturnValue(1_030_001)
+    expect(invoke('app-lock:unlock', 'correct horse battery staple')).toEqual({ enabled: true, locked: false })
+    clock.mockRestore()
+    expect(() => invoke('app-lock:disable', 'wrong passphrase')).toThrow(/incorrect/)
+    expect(invoke('app-lock:disable', 'correct horse battery staple')).toEqual({ enabled: false, locked: false })
   })
 
   it('rejects every unsafe preference and local-data shape while preserving valid profile fields', () => {

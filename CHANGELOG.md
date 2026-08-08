@@ -14,6 +14,7 @@
 - Incremental Google Calendar/People sync tokens and Microsoft Calendar/Contacts delta links with expired-cursor recovery.
 - Validated export and restore for local Contacts, Tasks, and Notes.
 - Managed Notes attachments with safe local copies, open/remove controls, search, cleanup, and portable backup/restore.
+- An optional local passphrase app lock at launch, on tray close, or on demand with Ctrl-L.
 - Real Help and What’s New panels, and Ctrl-K searches that reach the Mail view.
 
 ### Changed

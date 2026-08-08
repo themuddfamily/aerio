@@ -18,7 +18,16 @@ const health = {
 }
 
 let emitStatus: ((status: AppUpdateStatus) => void) | undefined
+let emitLockStatus: ((status: { enabled: boolean; locked: boolean }) => void) | undefined
 const api = {
+  appLock: {
+    status: vi.fn(async () => ({ enabled: false, locked: false })),
+    enable: vi.fn(async () => ({ enabled: true, locked: false })),
+    disable: vi.fn(async () => ({ enabled: false, locked: false })),
+    lock: vi.fn(async () => ({ enabled: true, locked: true })),
+    unlock: vi.fn(async () => ({ enabled: true, locked: false })),
+    onStatus: vi.fn((callback: (status: { enabled: boolean; locked: boolean }) => void) => { emitLockStatus = callback; return vi.fn() })
+  },
   updates: {
     status: vi.fn(async () => ({ phase: 'idle', currentVersion: '0.4.0', message: 'Ready' })),
     check: vi.fn(async () => ({ phase: 'current', currentVersion: '0.4.0' })),
@@ -36,8 +45,13 @@ const api = {
 beforeEach(() => {
   vi.clearAllMocks()
   emitStatus = undefined
+  emitLockStatus = undefined
   Object.defineProperty(window, 'aerio', { configurable: true, value: api })
   api.updates.status.mockResolvedValue({ phase: 'idle', currentVersion: '0.4.0', message: 'Ready' })
+  api.appLock.status.mockResolvedValue({ enabled: false, locked: false })
+  api.appLock.enable.mockResolvedValue({ enabled: true, locked: false })
+  api.appLock.disable.mockResolvedValue({ enabled: false, locked: false })
+  api.appLock.lock.mockResolvedValue({ enabled: true, locked: true })
   api.mail.diagnostics.health.mockResolvedValue(health)
   api.mail.diagnostics.export.mockResolvedValue({ savedPath: 'diagnostics.json' })
   api.productivity.exportLocalData.mockResolvedValue({ savedPath: 'backup.json' })
@@ -46,6 +60,29 @@ beforeEach(() => {
 })
 
 describe('SettingsModal', () => {
+  it('enables, immediately locks, and disables the privacy app lock', async () => {
+    const user = userEvent.setup()
+    render(<SettingsModal preferences={preferences} onChange={vi.fn()} onClose={vi.fn()} />)
+    await screen.findByText(/privacy screen, not file encryption/i)
+    expect(emitLockStatus).toBeDefined()
+    await user.type(screen.getByLabelText('New passphrase'), 'long passphrase')
+    await user.type(screen.getByLabelText('Confirm passphrase'), 'different passphrase')
+    await user.click(screen.getByRole('button', { name: 'Enable app lock' }))
+    expect(await screen.findByText('Passphrases do not match.')).toBeInTheDocument()
+    await user.clear(screen.getByLabelText('Confirm passphrase'))
+    await user.type(screen.getByLabelText('Confirm passphrase'), 'long passphrase')
+    await user.click(screen.getByRole('button', { name: 'Enable app lock' }))
+    expect(api.appLock.enable).toHaveBeenCalledWith('long passphrase')
+    expect(await screen.findByText(/App lock enabled/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Lock Aerio now/ }))
+    expect(api.appLock.lock).toHaveBeenCalled()
+    await user.type(screen.getByLabelText('Current passphrase'), 'long passphrase')
+    await user.click(screen.getByRole('button', { name: 'Turn off app lock' }))
+    expect(window.confirm).toHaveBeenCalled()
+    expect(api.appLock.disable).toHaveBeenCalledWith('long passphrase')
+    expect(await screen.findByText('App lock disabled.')).toBeInTheDocument()
+  })
+
   it('exports and restores local Tasks, Notes, and Contacts', async () => {
     const user = userEvent.setup(), onRestored = vi.fn()
     render(<SettingsModal preferences={preferences} onChange={vi.fn()} onClose={vi.fn()} onLocalDataRestored={onRestored} />)

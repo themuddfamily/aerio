@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Bell, DatabaseBackup, Download, Monitor, Palette, RefreshCw, Stethoscope, Upload } from 'lucide-react'
-import type { AppPreferences, AppUpdateStatus, DensityPreference, ModuleId, ThemePreference } from '../types'
+import { Bell, DatabaseBackup, Download, LockKeyhole, Monitor, Palette, RefreshCw, Stethoscope, Upload } from 'lucide-react'
+import type { AppLockStatus, AppPreferences, AppUpdateStatus, DensityPreference, ModuleId, ThemePreference } from '../types'
 import type { MailDiagnosticHealth } from '../mail-types'
 import type { LocalModuleSnapshot } from '../productivity-types'
 import Modal from './Modal'
@@ -19,6 +19,12 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus>()
   const [localDataStatus, setLocalDataStatus] = useState<'idle' | 'exporting' | 'importing'>('idle')
   const [localDataMessage, setLocalDataMessage] = useState('')
+  const [appLockStatus, setAppLockStatus] = useState<AppLockStatus>()
+  const [appLockAction, setAppLockAction] = useState(false)
+  const [appLockPassphrase, setAppLockPassphrase] = useState('')
+  const [appLockConfirmation, setAppLockConfirmation] = useState('')
+  const [appLockMessage, setAppLockMessage] = useState('')
+  const [appLockMessageIsError, setAppLockMessageIsError] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -34,6 +40,15 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
       active = false
       unsubscribe()
     }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    void window.aerio.appLock.status().then((status) => { if (active) setAppLockStatus(status) }).catch((error) => {
+      if (active) { setAppLockMessageIsError(true); setAppLockMessage(error instanceof Error ? error.message : 'App-lock status is unavailable.') }
+    })
+    const unsubscribe = window.aerio.appLock.onStatus((status) => { if (active) setAppLockStatus(status) })
+    return () => { active = false; unsubscribe() }
   }, [])
 
   const setSettings = (updates: Partial<AppPreferences['settings']>) => {
@@ -128,9 +143,70 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
     }
   }
 
+  const enableAppLock = async () => {
+    if (appLockPassphrase !== appLockConfirmation) { setAppLockMessageIsError(true); return setAppLockMessage('Passphrases do not match.') }
+    setAppLockAction(true)
+    setAppLockMessage('')
+    try {
+      setAppLockStatus(await window.aerio.appLock.enable(appLockPassphrase))
+      setAppLockPassphrase('')
+      setAppLockConfirmation('')
+      setAppLockMessageIsError(false)
+      setAppLockMessage('App lock enabled. Aerio will lock at launch and when sent to the tray.')
+    } catch (error) {
+      setAppLockMessageIsError(true)
+      setAppLockMessage(error instanceof Error ? error.message : 'App lock could not be enabled.')
+    } finally {
+      setAppLockAction(false)
+    }
+  }
+
+  const disableAppLock = async () => {
+    if (!window.confirm('Turn off the Aerio app lock?')) return
+    setAppLockAction(true)
+    setAppLockMessage('')
+    try {
+      setAppLockStatus(await window.aerio.appLock.disable(appLockPassphrase))
+      setAppLockPassphrase('')
+      setAppLockMessageIsError(false)
+      setAppLockMessage('App lock disabled.')
+    } catch (error) {
+      setAppLockMessageIsError(true)
+      setAppLockMessage(error instanceof Error ? error.message : 'App lock could not be disabled.')
+    } finally {
+      setAppLockAction(false)
+    }
+  }
+
   return (
     <Modal title="Aerio settings" subtitle="Make your workspace feel just right." width="medium" onClose={onClose}>
       <div className="settings-sections">
+        <section className="settings-section">
+          <div className="settings-icon"><LockKeyhole size={18} /></div>
+          <div className="settings-content">
+            <h3>App lock</h3>
+            <p>Hide your workspace behind a local passphrase at launch and whenever Aerio is sent to the tray.</p>
+            {!appLockStatus ? <small>Reading app-lock status…</small> : appLockStatus.enabled ? <>
+              <label className="field-label">Current passphrase
+                <input type="password" autoComplete="current-password" value={appLockPassphrase} onChange={(event) => setAppLockPassphrase(event.target.value)} />
+              </label>
+              <div className="settings-actions">
+                <button className="button primary" disabled={appLockAction} onClick={() => void window.aerio.appLock.lock()}><LockKeyhole size={16} /> Lock Aerio now</button>
+                <button className="button danger-subtle" disabled={appLockAction || !appLockPassphrase} onClick={() => void disableAppLock()}>Turn off app lock</button>
+              </div>
+            </> : <>
+              <label className="field-label">New passphrase
+                <input type="password" autoComplete="new-password" value={appLockPassphrase} onChange={(event) => setAppLockPassphrase(event.target.value)} />
+              </label>
+              <label className="field-label">Confirm passphrase
+                <input type="password" autoComplete="new-password" value={appLockConfirmation} onChange={(event) => setAppLockConfirmation(event.target.value)} />
+              </label>
+              <button className="button ghost" disabled={appLockAction || !appLockPassphrase || !appLockConfirmation} onClick={() => void enableAppLock()}><LockKeyhole size={16} /> Enable app lock</button>
+            </>}
+            {appLockMessage && <small className={appLockMessageIsError ? 'diagnostic-error' : 'diagnostic-result'} role="status">{appLockMessage}</small>}
+            <small>This is a privacy screen, not file encryption. A forgotten passphrase requires resetting Aerio’s local app settings.</small>
+          </div>
+        </section>
         <section className="settings-section">
           <div className="settings-icon"><DatabaseBackup size={18} /></div>
           <div className="settings-content">

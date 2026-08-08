@@ -22,6 +22,7 @@ Aerio is a calm, modern desktop communications client for Windows. It supports m
 - Read-only local archive or complete local deletion when disconnecting an account
 - Google and Microsoft Calendar synchronization with event creation, editing, deletion, recurrence, and configurable reminders
 - Writable Google and Microsoft provider Contacts plus editable local Contacts, with portable backup and restore for local Contacts, Tasks, Notes, and managed note attachments
+- Optional local passphrase privacy lock at launch, when Aerio is sent to the tray, or on demand
 
 Tasks, Notes, and local Contacts are production local modules. Chat is outside the v1 navigation until a secure transport is selected. Provider Calendar and Contacts data refreshes automatically every 15 minutes and can also be refreshed with **Sync now**. Refreshes use persisted Google sync tokens and Microsoft delta links, with an automatic full refresh when a provider expires a checkpoint. Calendar events can be created by double-clicking a day or time slot and edited after granting the event scope once.
 
@@ -74,6 +75,7 @@ Proton Mail connects through the local [Proton Mail Bridge](https://proton.me/su
 - Remote message images are represented by an isolated `aerio-image:` protocol and are fetched only after an explicit per-conversation choice.
 - External HTTP(S) and `mailto:` links open in the system browser/mail handler rather than navigating Aerio.
 - Mailbox files are protected by the Windows user account and disk encryption. Enable BitLocker if the device may be lost or shared.
+- Settings can enable a scrypt-verified local app-lock passphrase. The privacy screen blocks workspace loading at launch, closes message windows when locked, and rate-limits failed attempts; it does not encrypt Aerio’s files.
 - Notes can copy attachments up to 25 MB each into Aerio-managed storage, search them by filename, open or remove them, and clean up unreferenced copies.
 - Settings can export and restore local Contacts, Tasks, Notes, and managed note attachments as a validated JSON backup (up to 100 MB of attachment data). Provider mail and cached provider data are intentionally excluded because they can be synchronized again.
 
@@ -132,6 +134,7 @@ The longer-term provider boundaries and the reasoning behind local productivity 
 | `Ctrl+K` | Search and command palette |
 | `Ctrl+N` | New message, or account setup when real mail has no account |
 | `Ctrl+1`…`Ctrl+5` | Switch between Mail, Calendar, Contacts, Tasks, and Notes |
+| `Ctrl+L` | Lock Aerio when app lock is enabled |
 | `Shift+F10` | Open the context menu for the focused item |
 | `Shift+Enter` | Open the focused message in a separate window |
 | `Esc` | Close the active overlay |

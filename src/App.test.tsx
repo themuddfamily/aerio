@@ -37,11 +37,20 @@ const localModules: LocalModuleSnapshot = {
 const gmailAccount = { id: 'gmail', provider: 'gmail', email: 'me@gmail.test', displayName: 'Google User', color: '#6558e8', status: 'ready', archived: false, signature: '', notifications: true, syncEnabled: true }
 const microsoftAccount = { ...gmailAccount, id: 'microsoft', provider: 'microsoft', email: 'me@microsoft.test', displayName: 'Microsoft User' }
 let composeCommand: (() => void) | undefined
+let appLockListener: ((status: { enabled: boolean; locked: boolean }) => void) | undefined
 let accountResults: any[]
 
 const api = {
   loadPreferences: vi.fn(async () => preferences),
   savePreferences: vi.fn(async () => ({ savedAt: new Date().toISOString() })),
+  appLock: {
+    status: vi.fn(async () => ({ enabled: false, locked: false })),
+    enable: vi.fn(async () => ({ enabled: true, locked: false })),
+    disable: vi.fn(async () => ({ enabled: false, locked: false })),
+    lock: vi.fn(async () => ({ enabled: true, locked: true })),
+    unlock: vi.fn(async () => ({ enabled: true, locked: false })),
+    onStatus: vi.fn((callback: (status: { enabled: boolean; locked: boolean }) => void) => { appLockListener = callback; return vi.fn() })
+  },
   onComposeCommand: vi.fn((callback: () => void) => { composeCommand = callback; return vi.fn() }),
   mail: { accounts: { list: vi.fn(async () => accountResults), reconnect: vi.fn(async () => gmailAccount) } },
   productivity: {
@@ -65,9 +74,13 @@ const renderApp = () => render(<ContextMenuProvider><App /></ContextMenuProvider
 beforeEach(() => {
   vi.clearAllMocks()
   composeCommand = undefined
+  appLockListener = undefined
   accountResults = [gmailAccount, microsoftAccount]
   api.loadPreferences.mockResolvedValue(preferences)
   api.savePreferences.mockResolvedValue({ savedAt: new Date().toISOString() })
+  api.appLock.status.mockResolvedValue({ enabled: false, locked: false })
+  api.appLock.lock.mockResolvedValue({ enabled: true, locked: true })
+  api.appLock.unlock.mockResolvedValue({ enabled: true, locked: false })
   api.mail.accounts.list.mockImplementation(async () => accountResults)
   api.mail.accounts.reconnect.mockResolvedValue(gmailAccount)
   api.productivity.snapshot.mockResolvedValue(productivity)
@@ -85,6 +98,28 @@ beforeEach(() => {
 })
 
 describe('App', () => {
+  it('defers workspace data until the local app lock is unlocked', async () => {
+    api.appLock.status.mockResolvedValueOnce({ enabled: true, locked: true })
+    const user = userEvent.setup()
+    renderApp()
+    expect(await screen.findByRole('heading', { name: 'Unlock Aerio' })).toBeInTheDocument()
+    expect(api.loadPreferences).not.toHaveBeenCalled()
+    await user.type(screen.getByLabelText('Passphrase'), 'correct horse battery staple')
+    await user.click(screen.getByRole('button', { name: 'Unlock Aerio' }))
+    expect(api.appLock.unlock).toHaveBeenCalledWith('correct horse battery staple')
+    expect(await screen.findByRole('region', { name: 'Mail mock' })).toBeInTheDocument()
+  })
+
+  it('locks an enabled workspace with Ctrl+L and lock-state events', async () => {
+    api.appLock.status.mockResolvedValueOnce({ enabled: true, locked: false })
+    renderApp()
+    expect(await screen.findByRole('region', { name: 'Mail mock' })).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'l', ctrlKey: true })
+    expect(api.appLock.lock).toHaveBeenCalled()
+    appLockListener?.({ enabled: true, locked: true })
+    expect(await screen.findByRole('heading', { name: 'Unlock Aerio' })).toBeInTheDocument()
+  })
+
   it('hydrates the shell, changes theme/settings/profile, navigates, and persists local modules', async () => {
     const user = userEvent.setup()
     renderApp()

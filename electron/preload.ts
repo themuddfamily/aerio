@@ -8,6 +8,18 @@ const api: AerioDesktopApi = {
   chooseAttachments: () => ipcRenderer.invoke('files:choose'),
   chooseProfileImage: () => ipcRenderer.invoke('profile:image:choose'),
   notify: (title: string, body: string) => ipcRenderer.invoke('notification:show', { title, body }),
+  appLock: {
+    status: () => ipcRenderer.invoke('app-lock:status'),
+    enable: (passphrase) => ipcRenderer.invoke('app-lock:enable', passphrase),
+    disable: (passphrase) => ipcRenderer.invoke('app-lock:disable', passphrase),
+    lock: () => ipcRenderer.invoke('app-lock:lock'),
+    unlock: (passphrase) => ipcRenderer.invoke('app-lock:unlock', passphrase),
+    onStatus: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, status: import('../src/types').AppLockStatus) => callback(status)
+      ipcRenderer.on('app-lock:status-changed', listener)
+      return () => ipcRenderer.removeListener('app-lock:status-changed', listener)
+    }
+  },
   updates: {
     status: () => ipcRenderer.invoke('app:update:status'),
     check: () => ipcRenderer.invoke('app:update:check'),

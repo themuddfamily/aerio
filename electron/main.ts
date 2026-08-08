@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, shell, Tray } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { arch, platform, release, tmpdir } from 'node:os'
@@ -75,6 +75,9 @@ let mainWindow: BrowserWindow | null = null
 const messageWindows = new Map<string, BrowserWindow>()
 let tray: Tray | null = null
 let database: DatabaseSync | null = null
+let applicationLocked = false
+let failedUnlockAttempts = 0
+let unlockBlockedUntil = 0
 let oauthVault: OAuthVault | null = null
 let mailWorker: MailWorkerClient | null = null
 const accountProviders = new Map<string, MailAccountSummary['provider']>()
@@ -156,10 +159,17 @@ async function initializePreferencesDatabase() {
       schema_version INTEGER NOT NULL,
       payload TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS app_lock (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      salt TEXT NOT NULL,
+      verifier TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     )
   `)
   const result = database.prepare('SELECT payload FROM app_preferences WHERE id = 1').get()
   if (!result) savePreferences(readLegacyPreferences(userData) ?? createDefaultPreferences())
+  applicationLocked = Boolean(loadAppLockRecord())
 }
 
 function requireMailWorker() {
@@ -578,7 +588,7 @@ function showNewMailNotification(payload: Extract<import('../src/mail-types').Ma
   const notification = new Notification({ title, body: payload.count === 1 ? payload.subject || 'Open Aerio to read it' : 'Open Aerio to view your inbox', icon: iconPath() })
   notification.on('click', () => {
     openMainWindow()
-    if (payload.threadId) createMessageWindow({ source: 'connected', accountId: payload.accountId, threadId: payload.threadId, title: payload.subject || 'New message' })
+    if (payload.threadId && !appLockStatus().locked) createMessageWindow({ source: 'connected', accountId: payload.accountId, threadId: payload.threadId, title: payload.subject || 'New message' })
   })
   notification.show()
 }
@@ -776,6 +786,99 @@ function savePreferences(preferences: AppPreferences) {
   return { savedAt: updatedAt }
 }
 
+interface AppLockRecord {
+  salt: string
+  verifier: string
+}
+
+function loadAppLockRecord(): AppLockRecord | undefined {
+  if (!database) throw new Error('Aerio database is not ready')
+  const result = database.prepare('SELECT salt, verifier FROM app_lock WHERE id = 1').get() as Partial<AppLockRecord> | undefined
+  if (!result) return
+  if (typeof result.salt !== 'string' || typeof result.verifier !== 'string' ||
+      !/^[A-Za-z0-9+/]{22}==$/.test(result.salt) || !/^[A-Za-z0-9+/]{43}=$/.test(result.verifier)) {
+    throw new Error('Stored Aerio app-lock data is invalid')
+  }
+  return { salt: result.salt, verifier: result.verifier }
+}
+
+function appLockStatus() {
+  const enabled = Boolean(loadAppLockRecord())
+  return { enabled, locked: enabled && applicationLocked }
+}
+
+function validAppLockPassphrase(value: unknown): value is string {
+  return typeof value === 'string' && value.length >= 8 && value.length <= 256 && value.trim().length >= 8
+}
+
+function appLockVerifier(passphrase: string, salt: Buffer) {
+  return scryptSync(passphrase, salt, 32)
+}
+
+function verifyAppLockPassphrase(passphrase: unknown, record = loadAppLockRecord()) {
+  if (!record) throw new Error('Aerio app lock is not enabled')
+  if (typeof passphrase !== 'string' || passphrase.length > 256) throw new Error('Enter the app-lock passphrase')
+  const wait = unlockBlockedUntil - Date.now()
+  if (wait > 0) throw new Error(`Too many attempts. Try again in ${Math.ceil(wait / 1_000)} seconds`)
+  const actual = appLockVerifier(passphrase, Buffer.from(record.salt, 'base64'))
+  const expected = Buffer.from(record.verifier, 'base64')
+  if (!timingSafeEqual(actual, expected)) {
+    failedUnlockAttempts += 1
+    if (failedUnlockAttempts >= 5) {
+      unlockBlockedUntil = Date.now() + 30_000
+      failedUnlockAttempts = 0
+    }
+    throw new Error('The app-lock passphrase is incorrect')
+  }
+  failedUnlockAttempts = 0
+  unlockBlockedUntil = 0
+}
+
+function publishAppLockStatus() {
+  const status = appLockStatus()
+  BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('app-lock:status-changed', status))
+  return status
+}
+
+function enableAppLock(passphrase: unknown) {
+  if (loadAppLockRecord()) throw new Error('Aerio app lock is already enabled')
+  if (!validAppLockPassphrase(passphrase)) throw new Error('Use a passphrase of 8 to 256 characters')
+  const salt = randomBytes(16)
+  const verifier = appLockVerifier(passphrase, salt)
+  const updatedAt = new Date().toISOString()
+  database!.prepare(
+    `INSERT INTO app_lock (id, salt, verifier, updated_at) VALUES (1, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET salt = excluded.salt, verifier = excluded.verifier, updated_at = excluded.updated_at`
+  ).run(salt.toString('base64'), verifier.toString('base64'), updatedAt)
+  applicationLocked = false
+  return publishAppLockStatus()
+}
+
+function disableAppLock(passphrase: unknown) {
+  verifyAppLockPassphrase(passphrase)
+  database!.prepare('DELETE FROM app_lock WHERE id = 1').run()
+  applicationLocked = false
+  return publishAppLockStatus()
+}
+
+function lockApplication() {
+  if (!loadAppLockRecord()) return appLockStatus()
+  applicationLocked = true
+  for (const window of messageWindows.values()) window.close()
+  return publishAppLockStatus()
+}
+
+function unlockApplication(passphrase: unknown) {
+  const record = loadAppLockRecord()
+  if (!record) {
+    applicationLocked = false
+    return appLockStatus()
+  }
+  verifyAppLockPassphrase(passphrase, record)
+  applicationLocked = false
+  return publishAppLockStatus()
+}
+
 function boundsPath() {
   return join(app.getPath('userData'), 'window-bounds.json')
 }
@@ -861,6 +964,7 @@ function validMessageWindowRequest(value: unknown): value is MessageWindowReques
 }
 
 function createMessageWindow(input: MessageWindowRequest) {
+  if (appLockStatus().locked) throw new Error('Unlock Aerio before opening a message window')
   const key = `mail:${input.accountId}:${input.threadId}:${input.messageId ?? 'thread'}`
   const existing = messageWindows.get(key)
   if (existing && !existing.isDestroyed()) {
@@ -932,7 +1036,7 @@ function createWindow() {
   mainWindow.on('show', () => updateMailPolling(true))
   mainWindow.on('focus', () => updateMailPolling(true))
   mainWindow.on('restore', () => updateMailPolling(true))
-  mainWindow.on('hide', () => updateMailPolling())
+  mainWindow.on('hide', () => { updateMailPolling(); lockApplication() })
   mainWindow.on('blur', () => updateMailPolling())
   mainWindow.on('minimize', () => updateMailPolling())
   mainWindow.on('close', (event) => {
@@ -951,7 +1055,7 @@ function createWindow() {
 function openMainWindow(compose = false) {
   if (!mainWindow) {
     const window = createWindow()
-    if (compose) window.webContents.once('did-finish-load', () => window.webContents.send('command:compose'))
+    if (compose && !appLockStatus().locked) window.webContents.once('did-finish-load', () => window.webContents.send('command:compose'))
     return
   }
   if (mainWindow.isMinimized()) mainWindow.restore()
@@ -959,7 +1063,7 @@ function openMainWindow(compose = false) {
       mainWindow.show()
       mainWindow.focus()
     }
-  if (compose) mainWindow.webContents.send('command:compose')
+  if (compose && !appLockStatus().locked) mainWindow.webContents.send('command:compose')
 }
 
 function createTray() {
@@ -980,6 +1084,11 @@ function createTray() {
 function registerIpc() {
   ipcMain.handle('preferences:load', () => loadPreferences())
   ipcMain.handle('preferences:save', (_event, preferences: AppPreferences) => savePreferences(preferences))
+  ipcMain.handle('app-lock:status', () => appLockStatus())
+  ipcMain.handle('app-lock:enable', (_event, passphrase: unknown) => enableAppLock(passphrase))
+  ipcMain.handle('app-lock:disable', (_event, passphrase: unknown) => disableAppLock(passphrase))
+  ipcMain.handle('app-lock:lock', () => lockApplication())
+  ipcMain.handle('app-lock:unlock', (_event, passphrase: unknown) => unlockApplication(passphrase))
   ipcMain.handle('files:choose', async (): Promise<Attachment[]> => {
     const options: Electron.OpenDialogOptions = { properties: ['openFile', 'multiSelections'] }
     const result = mainWindow

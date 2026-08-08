@@ -1,5 +1,5 @@
 import {
-  CalendarDays, CheckCircle2, ChevronRight, Command, ContactRound, HelpCircle, Mail,
+  CalendarDays, CheckCircle2, ChevronRight, Command, ContactRound, HelpCircle, LockKeyhole, Mail,
   Moon, NotebookPen, Plus, Search, Settings, Sparkles, Sun, UserRound, X
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -7,12 +7,13 @@ import TitleBar from './components/TitleBar'
 import SettingsModal from './components/SettingsModal'
 import ProfileModal from './components/ProfileModal'
 import AppInfoModal from './components/AppInfoModal'
+import AppLockScreen from './components/AppLockScreen'
 import CalendarView from './views/CalendarView'
 import ContactsView from './views/ContactsView'
 import TasksView from './views/TasksView'
 import NotesView from './views/NotesView'
 import ConnectedMailView from './views/ConnectedMailView'
-import type { AppPreferences, AppState, CalendarEvent, Contact, ModuleId } from './types'
+import type { AppLockStatus, AppPreferences, AppState, CalendarEvent, Contact, ModuleId } from './types'
 import type { MailAccountSummary } from './mail-types'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from './productivity-types'
 import { unreadCount } from './lib/domain'
@@ -38,6 +39,8 @@ interface ComposeRequest {
 export default function App() {
   const { showContextMenu } = useContextMenu()
   const [preferences, setPreferences] = useState<AppPreferences | null>(null)
+  const [appLock, setAppLock] = useState<AppLockStatus>()
+  const [appLockError, setAppLockError] = useState('')
   const [activeModule, setActiveModule] = useState<ModuleId>('mail')
   const [query, setQuery] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -54,6 +57,7 @@ export default function App() {
   const [productivitySyncing, setProductivitySyncing] = useState(false)
   const [commandIndex, setCommandIndex] = useState(0)
   const hydrated = useRef(false)
+  const workspaceLoadStarted = useRef(false)
   const localModulesHydrated = useRef(false)
   const productivitySyncingRef = useRef(false)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -68,7 +72,9 @@ export default function App() {
     toastTimer.current = setTimeout(() => setToast(''), 2600)
   }, [])
 
-  useEffect(() => {
+  const loadWorkspace = useCallback(() => {
+    if (workspaceLoadStarted.current) return
+    workspaceLoadStarted.current = true
     void window.aerio.loadPreferences().then((loaded) => {
       setPreferences(loaded)
       setActiveModule(modules.some((module) => module.id === loaded.settings.startModule) ? loaded.settings.startModule : 'mail')
@@ -83,6 +89,22 @@ export default function App() {
       queueMicrotask(() => { localModulesHydrated.current = true })
     }).catch(() => showToast('Local Tasks and Notes could not be opened'))
   }, [showToast])
+
+  const applyAppLockStatus = useCallback((status: AppLockStatus) => {
+    setAppLock(status)
+    if (!status.locked) loadWorkspace()
+  }, [loadWorkspace])
+
+  useEffect(() => {
+    let active = true
+    const handleStatus = (status: AppLockStatus) => {
+      if (!active) return
+      applyAppLockStatus(status)
+    }
+    const unsubscribe = window.aerio.appLock.onStatus(handleStatus)
+    void window.aerio.appLock.status().then(handleStatus).catch(() => setAppLockError('Aerio could not read its app-lock status. Restart Aerio and try again.'))
+    return () => { active = false; unsubscribe() }
+  }, [applyAppLockStatus])
 
   useEffect(() => {
     if (!localModulesHydrated.current) return
@@ -244,6 +266,10 @@ export default function App() {
         setSettingsOpen(false)
         setProfileOpen(false)
       }
+      if (modifier && event.key.toLowerCase() === 'l' && appLock?.enabled) {
+        event.preventDefault()
+        void window.aerio.appLock.lock()
+      }
     }
     window.addEventListener('keydown', onKeyDown)
     const unsubscribe = window.aerio.onComposeCommand(() => startCompose())
@@ -251,12 +277,13 @@ export default function App() {
       window.removeEventListener('keydown', onKeyDown)
       unsubscribe()
     }
-  }, [startCompose])
+  }, [appLock?.enabled, startCompose])
 
   const commandItems = useMemo(() => {
     const quick = [
       { label: 'Compose a new message', detail: 'Ctrl N', icon: Plus, action: () => startCompose(), preserveQuery: false },
       ...modules.map((item) => ({ label: `Open ${item.label}`, detail: `Ctrl ${item.shortcut}`, icon: item.icon, action: () => setActiveModule(item.id), preserveQuery: false })),
+      ...(appLock?.enabled ? [{ label: 'Lock Aerio', detail: 'Ctrl L', icon: LockKeyhole, action: () => { void window.aerio.appLock.lock() }, preserveQuery: false }] : []),
       { label: 'Open settings', detail: '', icon: Settings, action: () => setSettingsOpen(true), preserveQuery: false }
     ].filter((item) => !query || item.label.toLowerCase().includes(query.toLowerCase()))
     return query.trim()
@@ -264,17 +291,19 @@ export default function App() {
         if (activeModule === 'mail') setMailSearchRequest((current) => ({ id: current.id + 1, query: query.trim() }))
       }, preserveQuery: true }, ...quick]
       : quick
-  }, [activeModule, query, startCompose])
+  }, [activeModule, appLock?.enabled, query, startCompose])
 
   useEffect(() => setCommandIndex(0), [commandsOpen, query])
 
-  if (!preferences) {
+  if (appLock?.locked) return <AppLockScreen onUnlocked={applyAppLockStatus} />
+
+  if (!appLock || !preferences) {
     return (
       <div className="loading-screen">
         <div className="loading-mark">A</div>
         <h1>Aerio</h1>
-        <p>Bringing your day into focus…</p>
-        <span className="loading-line"><i /></span>
+        <p>{appLockError || 'Bringing your day into focus…'}</p>
+        {!appLockError && <span className="loading-line"><i /></span>}
       </div>
     )
   }
@@ -343,6 +372,7 @@ export default function App() {
           <div className="rail-bottom">
             <button aria-label="What’s new" title="What’s new" onClick={() => setInfoOpen('whats-new')}><Sparkles size={20} /></button>
             <button aria-label="Help" title="Help and keyboard shortcuts" onClick={() => setInfoOpen('help')}><HelpCircle size={20} /></button>
+            {appLock.enabled && <button aria-label="Lock Aerio" title="Lock Aerio · Ctrl L" onClick={() => void window.aerio.appLock.lock()}><LockKeyhole size={20} /></button>}
             <button aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)} onContextMenu={(event) => showContextMenu(event, [{ label: 'Open settings', icon: Settings, action: () => setSettingsOpen(true) }], 'Settings')}><Settings size={20} /></button>
             <button className="profile-button" aria-label={`Profile: ${profile.displayName}`} title="Your Aerio profile" onClick={() => setProfileOpen(true)} onContextMenu={(event) => showContextMenu(event, [
               { label: 'Open profile', icon: UserRound, action: () => setProfileOpen(true) }

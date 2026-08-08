@@ -131,12 +131,27 @@ export interface AppUpdateControls {
   onStatus(callback: (status: AppUpdateStatus) => void): () => void
 }
 
+export interface AppLockStatus {
+  enabled: boolean
+  locked: boolean
+}
+
+export interface AppLockControls {
+  status(): Promise<AppLockStatus>
+  enable(passphrase: string): Promise<AppLockStatus>
+  disable(passphrase: string): Promise<AppLockStatus>
+  lock(): Promise<AppLockStatus>
+  unlock(passphrase: string): Promise<AppLockStatus>
+  onStatus(callback: (status: AppLockStatus) => void): () => void
+}
+
 export interface AerioDesktopApi {
   loadPreferences(): Promise<AppPreferences>
   savePreferences(preferences: AppPreferences): Promise<{ savedAt: string }>
   chooseAttachments(): Promise<Attachment[]>
   chooseProfileImage(): Promise<string | undefined>
   notify(title: string, body: string): Promise<void>
+  appLock: AppLockControls
   updates: AppUpdateControls
   productivity: import('./productivity-types').ProductivityDesktopApi
   window: WindowControls
