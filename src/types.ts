@@ -75,6 +75,7 @@ export interface Note {
   archived: boolean
   updatedAt: string
   color?: string
+  attachments?: Attachment[]
 }
 
 export interface Settings {

@@ -21,7 +21,7 @@ Aerio is a calm, modern desktop communications client for Windows. It supports m
 - Dedicated message windows for provider mail; double-click a conversation to open or focus its window
 - Read-only local archive or complete local deletion when disconnecting an account
 - Google and Microsoft Calendar synchronization with event creation, editing, deletion, recurrence, and configurable reminders
-- Writable Google and Microsoft provider Contacts plus editable local Contacts, with portable backup and restore for local Contacts, Tasks, and Notes
+- Writable Google and Microsoft provider Contacts plus editable local Contacts, with portable backup and restore for local Contacts, Tasks, Notes, and managed note attachments
 
 Tasks, Notes, and local Contacts are production local modules. Chat is outside the v1 navigation until a secure transport is selected. Provider Calendar and Contacts data refreshes automatically every 15 minutes and can also be refreshed with **Sync now**. Refreshes use persisted Google sync tokens and Microsoft delta links, with an automatic full refresh when a provider expires a checkpoint. Calendar events can be created by double-clicking a day or time slot and edited after granting the event scope once.
 
@@ -74,7 +74,8 @@ Proton Mail connects through the local [Proton Mail Bridge](https://proton.me/su
 - Remote message images are represented by an isolated `aerio-image:` protocol and are fetched only after an explicit per-conversation choice.
 - External HTTP(S) and `mailto:` links open in the system browser/mail handler rather than navigating Aerio.
 - Mailbox files are protected by the Windows user account and disk encryption. Enable BitLocker if the device may be lost or shared.
-- Settings can export and restore local Contacts, Tasks, and Notes as a validated JSON backup. Provider mail and cached provider data are intentionally excluded because they can be synchronized again.
+- Notes can copy attachments up to 25 MB each into Aerio-managed storage, search them by filename, open or remove them, and clean up unreferenced copies.
+- Settings can export and restore local Contacts, Tasks, Notes, and managed note attachments as a validated JSON backup (up to 100 MB of attachment data). Provider mail and cached provider data are intentionally excluded because they can be synchronized again.
 
 Application preferences live in `aerio-state.sqlite`. On first launch after this change, Aerio imports only appearance, customized profile, notification, startup, and tray preferences from the former workspace database when available; sample content and the old sample persona are neither loaded nor copied. The legacy database is left untouched.
 

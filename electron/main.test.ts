@@ -19,7 +19,8 @@ const mocks = vi.hoisted(() => {
   let dialogSaveResult: any = { canceled: true }
   let storeSnapshot: any = { calendars: [], events: [], contacts: [], sync: [] }
   let statResult: any = { size: 12, isFile: () => true }
-  let readResult: string | Error = new Error('missing')
+  let readResult: string | Buffer | Error = new Error('missing')
+  let existsResult: boolean | ((path: string) => boolean) = false
 
   class FakeWebContents {
     handlers = new Map<string, (...args: any[]) => any>()
@@ -150,7 +151,8 @@ const mocks = vi.hoisted(() => {
     setOpenResult(value: any) { dialogOpenResult = value }, setSaveResult(value: any) { dialogSaveResult = value },
     setStoreSnapshot(value: any) { storeSnapshot = value },
     setStatResult(value: any) { statResult = value },
-    setReadResult(value: string | Error) { readResult = value },
+    setReadResult(value: string | Buffer | Error) { readResult = value },
+    setExistsResult(value: boolean | ((path: string) => boolean)) { existsResult = value },
     app: {
       isPackaged: false, requestSingleInstanceLock: vi.fn(() => true), quit: vi.fn(), setAppUserModelId: vi.fn(),
       getPath: vi.fn(() => 'C:\\aerio-test'), getAppPath: vi.fn(() => 'C:\\aerio'), getVersion: vi.fn(() => '0.4.0'),
@@ -175,7 +177,9 @@ const mocks = vi.hoisted(() => {
     Menu: { setApplicationMenu: vi.fn(), buildFromTemplate: vi.fn((template: any[]) => template) },
     Tray: class { setToolTip = vi.fn(); setContextMenu = vi.fn(); on = vi.fn() },
     fs: {
-      existsSync: vi.fn(() => false), mkdirSync: vi.fn(), readFileSync: vi.fn(() => { if (readResult instanceof Error) throw readResult; return readResult }),
+      existsSync: vi.fn((path: string) => typeof existsResult === 'function' ? existsResult(path) : existsResult), mkdirSync: vi.fn(),
+      copyFileSync: vi.fn(), unlinkSync: vi.fn(),
+      readFileSync: vi.fn(() => { if (readResult instanceof Error) throw readResult; return readResult }),
       statSync: vi.fn(() => { if (statResult instanceof Error) throw statResult; return statResult }), writeFileSync: vi.fn()
     },
     lookup: vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]),
@@ -375,6 +379,33 @@ describe.sequential('Electron main process', () => {
     expect(mocks.diagnosticLogger.exportBundle).toHaveBeenCalled()
   })
 
+  it('manages note attachments inside Aerio storage and cleans up removed files', async () => {
+    mocks.setOpenResult({ canceled: false, filePaths: ['C:/folder/brief.pdf'] })
+    mocks.setStatResult({ size: 12, isFile: () => true })
+    const attachments = await invoke('productivity:note-attachments-choose')
+    expect(attachments).toEqual([expect.objectContaining({ name: 'brief.pdf', size: 12, mime: 'pdf' })])
+    expect(attachments[0].path).toMatch(/^C:\\aerio-test\\note-attachments\\.+\.pdf$/)
+    expect(mocks.fs.copyFileSync).toHaveBeenCalledWith('C:/folder/brief.pdf', attachments[0].path)
+
+    mocks.setExistsResult(true)
+    await expect(invoke('productivity:note-attachment-open', attachments[0].path)).resolves.toEqual({})
+    expect(mocks.shell.openPath).toHaveBeenCalledWith(attachments[0].path)
+    await expect(invoke('productivity:note-attachment-open', 'C:/outside.txt')).rejects.toThrow(/no longer available/)
+
+    const previous = { tasks: [], notes: [{ id: 'note', folder: 'Notes', title: 'Note', content: '', tags: [], pinned: false, archived: false, updatedAt: '2026-08-08T10:00:00Z', attachments }] }
+    mocks.store.localSnapshot.mockReturnValueOnce(previous as any)
+    await invoke('productivity:local-save', { ...previous, notes: [{ ...previous.notes[0], attachments: [] }] })
+    expect(mocks.fs.unlinkSync).toHaveBeenCalledWith(attachments[0].path)
+
+    mocks.setOpenResult({ canceled: true, filePaths: [] })
+    await expect(invoke('productivity:note-attachments-choose')).resolves.toEqual([])
+    mocks.setOpenResult({ canceled: false, filePaths: ['C:/folder/huge.zip'] })
+    mocks.setStatResult({ size: 26 * 1024 * 1024, isFile: () => true })
+    await expect(invoke('productivity:note-attachments-choose')).rejects.toThrow(/25 MB/)
+    mocks.setStatResult({ size: 12, isFile: () => true })
+    mocks.setExistsResult(false)
+  })
+
   it('handles cancelled and invalid file dialogs without touching mail data', async () => {
     mocks.setOpenResult({ canceled: true, filePaths: [] })
     await expect(invoke('files:choose')).resolves.toEqual([])
@@ -408,6 +439,37 @@ describe.sequential('Electron main process', () => {
     await expect(invoke('productivity:local-import')).rejects.toThrow(/not a readable/)
     mocks.setOpenResult({ canceled: true, filePaths: [] })
     mocks.setSaveResult({ canceled: true })
+  })
+
+  it('embeds managed note attachments in backups and materializes them on restore', async () => {
+    const attachment = { id: 'attachment-1', name: 'brief.txt', size: 5, mime: 'txt', path: 'C:/aerio-test/note-attachments/stored.txt' }
+    const snapshot = {
+      tasks: [], contacts: [],
+      notes: [{ id: 'note', folder: 'Notes', title: 'Note', content: 'Body', tags: [], pinned: false, archived: false, updatedAt: '2026-08-08T10:00:00Z', attachments: [attachment] }]
+    }
+    mocks.store.localSnapshot.mockReturnValueOnce(snapshot as any)
+    mocks.setExistsResult(true)
+    mocks.setReadResult(Buffer.from('hello'))
+    mocks.setSaveResult({ canceled: false, filePath: 'C:/backup-with-files.json' })
+    await invoke('productivity:local-export')
+    const exported = JSON.parse(mocks.fs.writeFileSync.mock.calls.find(([path]) => path === 'C:/backup-with-files.json')![1])
+    expect(exported).toMatchObject({ schemaVersion: 2, attachments: [{ id: 'attachment-1', dataBase64: 'aGVsbG8=' }] })
+
+    mocks.fs.writeFileSync.mockClear()
+    mocks.setOpenResult({ canceled: false, filePaths: ['C:/backup-with-files.json'] })
+    mocks.setStatResult({ size: 2048, isFile: () => true })
+    mocks.setReadResult(JSON.stringify(exported))
+    const restored = await invoke('productivity:local-import')
+    expect(restored.notes[0].attachments[0]).toMatchObject({ id: 'attachment-1', name: 'brief.txt', size: 5 })
+    expect(restored.notes[0].attachments[0].path).toMatch(/^C:\\aerio-test\\note-attachments\\.+\.txt$/)
+    expect(mocks.fs.writeFileSync).toHaveBeenCalledWith(restored.notes[0].attachments[0].path, Buffer.from('hello'), { mode: 0o600 })
+    expect(mocks.store.saveLocal).toHaveBeenCalledWith(restored)
+
+    const unsafeLegacy = { ...exported, schemaVersion: 1, attachments: undefined }
+    mocks.setReadResult(JSON.stringify(unsafeLegacy))
+    await expect(invoke('productivity:local-import')).rejects.toThrow(/invalid|unsupported/)
+    mocks.setExistsResult(false)
+    mocks.setOpenResult({ canceled: true, filePaths: [] })
   })
 
   it('creates and reuses message windows and enforces navigation rules', () => {

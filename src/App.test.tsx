@@ -53,6 +53,8 @@ const api = {
     createContact: vi.fn(async (_accountId: string, contact: any) => ({ contact, snapshot: productivity })),
     updateContact: vi.fn(async (contact: any) => ({ contact, snapshot: productivity })),
     deleteContact: vi.fn(async () => productivity),
+    chooseNoteAttachments: vi.fn(async () => []),
+    openNoteAttachment: vi.fn(async () => ({})),
     localSnapshot: vi.fn(async () => localModules),
     saveLocal: vi.fn(async () => undefined)
   }

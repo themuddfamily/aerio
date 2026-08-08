@@ -1,4 +1,4 @@
-import type { CalendarEvent, Contact, Note, Task } from './types'
+import type { Attachment, CalendarEvent, Contact, Note, Task } from './types'
 
 export type ProductivityProvider = 'gmail' | 'microsoft'
 export type ProductivityModule = 'calendar' | 'contacts'
@@ -81,6 +81,8 @@ export interface ProductivityDesktopApi {
   createContact(accountId: string, contact: Contact): Promise<ProductivityContactWriteResult>
   updateContact(contact: Contact): Promise<ProductivityContactWriteResult>
   deleteContact(contactId: string): Promise<ProductivitySnapshot>
+  chooseNoteAttachments(): Promise<Attachment[]>
+  openNoteAttachment(path: string): Promise<{ error?: string }>
   localSnapshot(): Promise<LocalModuleSnapshot>
   saveLocal(snapshot: LocalModuleSnapshot): Promise<void>
   exportLocalData(): Promise<LocalDataBackupResult>

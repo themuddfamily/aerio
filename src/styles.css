@@ -3746,6 +3746,18 @@ kbd {
   background: var(--surface);
 }
 
+.note-attachments { display: grid; gap: 6px; max-height: 170px; padding: 12px 0; border-top: 1px solid var(--line); overflow: auto; }
+.note-attachments > header { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9px; }
+.note-attachments > header strong { color: var(--text-soft); font-size: 9.5px; }
+.note-attachments > header span { margin-left: auto; }
+.note-attachment { display: flex; align-items: center; gap: 5px; padding: 5px 6px 5px 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }
+.note-attachment > button:first-child { min-width: 0; flex: 1; display: flex; align-items: center; gap: 9px; padding: 2px; text-align: left; }
+.note-attachment > button:first-child > svg { flex: 0 0 auto; color: var(--accent); }
+.note-attachment > button:first-child > span { min-width: 0; display: grid; gap: 2px; }
+.note-attachment strong, .note-attachment small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-attachment strong { color: var(--text); font-size: 9.5px; }
+.note-attachment small { color: var(--muted); font-size: 8px; }
+
 .contact-actions button:disabled {
   cursor: not-allowed;
   opacity: .5;

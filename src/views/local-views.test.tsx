@@ -34,10 +34,18 @@ const state = (overrides: Partial<AppState> = {}): AppState => ({
 
 const renderInMenu = (node: React.ReactNode) => render(<ContextMenuProvider>{node}</ContextMenuProvider>)
 
+const noteProductivity = {
+  chooseNoteAttachments: vi.fn(async () => [] as any[]),
+  openNoteAttachment: vi.fn(async () => ({}))
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   window.confirm = vi.fn(() => true)
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn(async () => undefined) } })
+  noteProductivity.chooseNoteAttachments.mockResolvedValue([])
+  noteProductivity.openNoteAttachment.mockResolvedValue({})
+  Object.defineProperty(window, 'aerio', { configurable: true, value: { productivity: noteProductivity } })
 })
 
 describe('ContactsView', () => {
@@ -177,6 +185,28 @@ describe('NotesView', () => {
     await user.click(Array.from(document.querySelectorAll<HTMLButtonElement>('.sidebar-item')).find((button) => button.querySelector('span')?.textContent === 'Archive')!)
     await user.click(screen.getByRole('button', { name: /Archived thought/ }))
     await user.click(screen.getByTitle('Delete')); expect(onToast).toHaveBeenCalledWith('Note deleted')
+  })
+
+  it('adds, opens, removes, and searches managed attachments', async () => {
+    const user = userEvent.setup(), onChange = vi.fn(), onToast = vi.fn()
+    const attachment = { id: 'attachment-1', name: 'project-brief.pdf', size: 2048, path: 'C:/aerio/note-attachments/brief.pdf', mime: 'pdf' }
+    noteProductivity.chooseNoteAttachments.mockResolvedValueOnce([attachment])
+    const { rerender } = renderInMenu(<NotesView state={state()} query="" onChange={onChange} onToast={onToast} />)
+
+    await user.click(screen.getByTitle('Attach files'))
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ notes: expect.arrayContaining([
+      expect.objectContaining({ id: 'note-1', attachments: [attachment] })
+    ]) })))
+    expect(onToast).toHaveBeenCalledWith('1 attachment added')
+
+    const attachedState = state({ notes: [{ ...state().notes[0], attachments: [attachment] }, state().notes[1]] })
+    rerender(<ContextMenuProvider><NotesView state={attachedState} query="project-brief" onChange={onChange} onToast={onToast} /></ContextMenuProvider>)
+    await user.click(screen.getByRole('button', { name: /^project-brief\.pdf/ }))
+    expect(noteProductivity.openNoteAttachment).toHaveBeenCalledWith(attachment.path)
+    await user.click(screen.getByRole('button', { name: 'Remove project-brief.pdf' }))
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ notes: expect.arrayContaining([
+      expect.objectContaining({ id: 'note-1', attachments: [] })
+    ]) }))
   })
 
   it('creates notes, switches layouts, filters folders and tags, and renders empty searches', async () => {

@@ -31,7 +31,7 @@ The first remote milestone should be one provider end to end, including create, 
 
 Aerio Notes are production local data, not disguised provider notes. Google Keep has no suitable general synchronization API. Microsoft OneNote has an API, but its page/section/HTML model is materially different from Aerio’s current plain note model.
 
-Local-data export/import and full-content search are implemented for Notes. The next Notes milestones are an attachment policy and an optional application lock. A OneNote adapter can be evaluated later as an explicit connector with a documented conversion model; it should not redefine the local format.
+Local-data export/import, full-content search, and managed attachments are implemented for Notes. Attachments are copied into Aerio storage, limited to 25 MB each, included in validated backups, and deleted when no note references them. The next Notes milestone is an optional application lock. A OneNote adapter can be evaluated later as an explicit connector with a documented conversion model; it should not redefine the local format.
 
 ## Chat: choose a transport before building UI promises
 

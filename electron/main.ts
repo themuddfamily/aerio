@@ -1,10 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, shell, Tray } from 'electron'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { arch, platform, release, tmpdir } from 'node:os'
-import { basename, extname, join } from 'node:path'
+import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createDefaultPreferences, defaultSettings } from '../src/preferences'
 import type { AppPreferences, Attachment, CalendarEvent, Contact, MessageWindowRequest, ModuleId, Settings } from '../src/types'
@@ -245,6 +245,33 @@ function requireProductivityStore() {
   return productivityStore
 }
 
+const NOTE_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
+const NOTE_BACKUP_ATTACHMENT_MAX_BYTES = 100 * 1024 * 1024
+
+function noteAttachmentsDirectory() {
+  return join(app.getPath('userData'), 'note-attachments')
+}
+
+function isManagedNoteAttachmentPath(path: string) {
+  const root = resolve(noteAttachmentsDirectory())
+  const candidate = resolve(path)
+  const nested = relative(root, candidate)
+  return Boolean(nested) && !nested.startsWith('..') && !isAbsolute(nested)
+}
+
+function referencedNoteAttachmentPaths(snapshot: LocalModuleSnapshot) {
+  return new Set(snapshot.notes.flatMap((note) => note.attachments ?? []).flatMap((attachment) => attachment.path ? [resolve(attachment.path)] : []))
+}
+
+function cleanupRemovedNoteAttachments(previous: LocalModuleSnapshot, next: LocalModuleSnapshot) {
+  const retained = referencedNoteAttachmentPaths(next)
+  for (const path of referencedNoteAttachmentPaths(previous)) {
+    if (!retained.has(path) && isManagedNoteAttachmentPath(path) && existsSync(path)) {
+      try { unlinkSync(path) } catch { /* The next cleanup pass can retry an in-use file. */ }
+    }
+  }
+}
+
 function validLocalModules(value: unknown): value is LocalModuleSnapshot {
   if (!value || typeof value !== 'object') return false
   const input = value as Partial<LocalModuleSnapshot>
@@ -258,24 +285,99 @@ function validLocalModules(value: unknown): value is LocalModuleSnapshot {
       (task.recurrence === undefined || ['none', 'daily', 'weekly', 'monthly'].includes(task.recurrence))) &&
     input.notes.every((note) => note && text(note.id, 300, true) && text(note.folder, 300, true) && text(note.title, 10_000, true) && text(note.content, 10_000_000) &&
       Array.isArray(note.tags) && note.tags.length <= 1_000 && note.tags.every((tag) => text(tag, 300, true)) && typeof note.pinned === 'boolean' && typeof note.archived === 'boolean' &&
-      text(note.updatedAt, 100) && Number.isFinite(Date.parse(note.updatedAt)) && (note.color === undefined || text(note.color, 100))) &&
+      text(note.updatedAt, 100) && Number.isFinite(Date.parse(note.updatedAt)) && (note.color === undefined || text(note.color, 100)) &&
+      (note.attachments === undefined || (Array.isArray(note.attachments) && note.attachments.length <= 50 && note.attachments.every((attachment) =>
+        attachment && text(attachment.id, 300, true) && text(attachment.name, 1_000, true) && Number.isSafeInteger(attachment.size) && attachment.size >= 0 && attachment.size <= NOTE_ATTACHMENT_MAX_BYTES &&
+        text(attachment.path, 32_767, true) && (attachment.mime === undefined || text(attachment.mime, 300)))))) &&
     (input.contacts ?? []).every((contact) => contact && text(contact.id, 300, true) && text(contact.name, 10_000, true) && text(contact.email, 10_000) &&
       text(contact.group, 300, true) && text(contact.color, 100, true) && typeof contact.favorite === 'boolean' && contact.source === 'local' &&
       [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || text(field, 1_000_000)))
 }
 
+interface ArchivedNoteAttachment {
+  id: string
+  name: string
+  size: number
+  mime?: string
+  dataBase64: string
+}
+
 interface LocalDataBackup {
   format: 'aerio-local-data'
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   exportedAt: string
   data: LocalModuleSnapshot
+  attachments?: ArchivedNoteAttachment[]
 }
 
 function localDataBackupFromUnknown(value: unknown): LocalDataBackup | undefined {
   if (!value || typeof value !== 'object') return
   const backup = value as Partial<LocalDataBackup>
-  if (backup.format !== 'aerio-local-data' || backup.schemaVersion !== 1 || typeof backup.exportedAt !== 'string' || !validLocalModules(backup.data)) return
+  if (backup.format !== 'aerio-local-data' || (backup.schemaVersion !== 1 && backup.schemaVersion !== 2) || typeof backup.exportedAt !== 'string' || !validLocalModules(backup.data)) return
+  if (backup.schemaVersion === 1 && backup.data.notes.some((note) => (note.attachments?.length ?? 0) > 0)) return
+  if (backup.schemaVersion === 2 && (!Array.isArray(backup.attachments) || backup.attachments.length > 5_000 || !backup.attachments.every((attachment) =>
+    attachment && typeof attachment.id === 'string' && Boolean(attachment.id.trim()) && attachment.id.length <= 300 &&
+    typeof attachment.name === 'string' && Boolean(attachment.name.trim()) && attachment.name.length <= 1_000 &&
+    Number.isSafeInteger(attachment.size) && attachment.size >= 0 && attachment.size <= NOTE_ATTACHMENT_MAX_BYTES &&
+    (attachment.mime === undefined || (typeof attachment.mime === 'string' && attachment.mime.length <= 300)) &&
+    typeof attachment.dataBase64 === 'string' && attachment.dataBase64.length <= Math.ceil(NOTE_ATTACHMENT_MAX_BYTES / 3) * 4 + 4 &&
+    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(attachment.dataBase64)))) return
+  if (backup.schemaVersion === 2 && new Set(backup.attachments!.map((attachment) => attachment.id)).size !== backup.attachments!.length) return
   return backup as LocalDataBackup
+}
+
+function createLocalDataBackup(snapshot: LocalModuleSnapshot): LocalDataBackup {
+  const archived = new Map<string, ArchivedNoteAttachment>()
+  let total = 0
+  for (const attachment of snapshot.notes.flatMap((note) => note.attachments ?? [])) {
+    if (archived.has(attachment.id)) continue
+    if (!attachment.path || !isManagedNoteAttachmentPath(attachment.path) || !existsSync(attachment.path)) throw new Error(`The note attachment “${attachment.name}” is unavailable`)
+    const bytes = Buffer.from(readFileSync(attachment.path))
+    if (bytes.byteLength !== attachment.size || bytes.byteLength > NOTE_ATTACHMENT_MAX_BYTES) throw new Error(`The note attachment “${attachment.name}” changed or is too large`)
+    total += bytes.byteLength
+    if (total > NOTE_BACKUP_ATTACHMENT_MAX_BYTES) throw new Error('Note attachments exceed the 100 MB backup limit')
+    archived.set(attachment.id, { id: attachment.id, name: attachment.name, size: bytes.byteLength, mime: attachment.mime, dataBase64: bytes.toString('base64') })
+  }
+  return { format: 'aerio-local-data', schemaVersion: 2, exportedAt: new Date().toISOString(), data: snapshot, attachments: [...archived.values()] }
+}
+
+function materializeLocalDataBackup(backup: LocalDataBackup): { snapshot: LocalModuleSnapshot; createdPaths: string[] } {
+  if (backup.schemaVersion === 1) return { snapshot: backup.data, createdPaths: [] }
+  const archived = new Map((backup.attachments ?? []).map((attachment) => [attachment.id, attachment]))
+  const paths = new Map<string, string>()
+  const createdPaths: string[] = []
+  let total = 0
+  try {
+    const notes = backup.data.notes.map((note) => ({
+      ...note,
+      attachments: note.attachments?.map((attachment) => {
+        const stored = archived.get(attachment.id)
+        if (!stored) throw new Error(`The backup is missing the attachment “${attachment.name}”`)
+        const bytes = Buffer.from(stored.dataBase64, 'base64')
+        if (bytes.byteLength !== stored.size || bytes.toString('base64') !== stored.dataBase64 || bytes.byteLength > NOTE_ATTACHMENT_MAX_BYTES) {
+          throw new Error(`The backup attachment “${attachment.name}” is invalid`)
+        }
+        total += paths.has(attachment.id) ? 0 : bytes.byteLength
+        if (total > NOTE_BACKUP_ATTACHMENT_MAX_BYTES) throw new Error('Note attachments exceed the 100 MB restore limit')
+        let path = paths.get(attachment.id)
+        if (!path) {
+          const extension = extname(stored.name)
+          path = join(noteAttachmentsDirectory(), `${crypto.randomUUID()}${extension.length <= 12 ? extension : ''}`)
+          mkdirSync(noteAttachmentsDirectory(), { recursive: true })
+          writeFileSync(path, bytes, { mode: 0o600 })
+          paths.set(attachment.id, path)
+          createdPaths.push(path)
+        }
+        return { id: stored.id, name: stored.name, size: stored.size, mime: stored.mime, path }
+      })
+    }))
+    return { snapshot: { ...backup.data, notes }, createdPaths }
+  } catch (error) {
+    for (const path of createdPaths) {
+      try { if (existsSync(path)) unlinkSync(path) } catch { /* Do not mask the restore validation error. */ }
+    }
+    throw error
+  }
 }
 
 async function syncProductivity(accountId: string): Promise<ProductivitySnapshot> {
@@ -922,7 +1024,42 @@ function registerIpc() {
   ipcMain.handle('productivity:local-snapshot', () => requireProductivityStore().localSnapshot())
   ipcMain.handle('productivity:local-save', (_event, snapshot: unknown) => {
     if (!validLocalModules(snapshot)) throw new Error('Local Tasks or Notes data is invalid')
-    requireProductivityStore().saveLocal(snapshot)
+    const store = requireProductivityStore()
+    const previous = store.localSnapshot()
+    store.saveLocal(snapshot)
+    cleanupRemovedNoteAttachments(previous, snapshot)
+  })
+  ipcMain.handle('productivity:note-attachments-choose', async (event): Promise<Attachment[]> => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    const options: Electron.OpenDialogOptions = { title: 'Attach files to note', properties: ['openFile', 'multiSelections'] }
+    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
+    if (result.canceled) return []
+    if (result.filePaths.length > 50) throw new Error('Attach no more than 50 files to a note')
+    const files = result.filePaths.map((source) => ({ source, file: statSync(source) }))
+    for (const { source, file } of files) {
+      if (!file.isFile() || file.size > NOTE_ATTACHMENT_MAX_BYTES) throw new Error(`“${basename(source)}” must be a file no larger than 25 MB`)
+    }
+    mkdirSync(noteAttachmentsDirectory(), { recursive: true })
+    const copiedPaths: string[] = []
+    try {
+      return files.map(({ source, file }) => {
+        const extension = extname(source)
+        const path = join(noteAttachmentsDirectory(), `${crypto.randomUUID()}${extension.length <= 12 ? extension : ''}`)
+        copyFileSync(source, path)
+        copiedPaths.push(path)
+        return { id: crypto.randomUUID(), name: basename(source), size: file.size, path, mime: extension.slice(1) || undefined }
+      })
+    } catch (error) {
+      for (const path of copiedPaths) {
+        try { if (existsSync(path)) unlinkSync(path) } catch { /* Do not mask the copy error. */ }
+      }
+      throw error
+    }
+  })
+  ipcMain.handle('productivity:note-attachment-open', async (_event, path: unknown) => {
+    if (typeof path !== 'string' || !path || path.length > 32_767 || !isManagedNoteAttachmentPath(path) || !existsSync(path)) throw new Error('That note attachment is no longer available')
+    const error = await shell.openPath(path)
+    return error ? { error } : {}
   })
   ipcMain.handle('productivity:local-export', async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender)
@@ -934,12 +1071,7 @@ function registerIpc() {
     }
     const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return {}
-    const backup: LocalDataBackup = {
-      format: 'aerio-local-data',
-      schemaVersion: 1,
-      exportedAt: new Date().toISOString(),
-      data: requireProductivityStore().localSnapshot()
-    }
+    const backup = createLocalDataBackup(requireProductivityStore().localSnapshot())
     writeFileSync(result.filePath, `${JSON.stringify(backup, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
     return { savedPath: result.filePath }
   })
@@ -954,14 +1086,24 @@ function registerIpc() {
     const path = result.filePaths[0]
     if (result.canceled || !path) return
     const file = statSync(path)
-    if (!file.isFile() || file.size > 50 * 1024 * 1024) throw new Error('Choose an Aerio local-data backup smaller than 50 MB')
+    if (!file.isFile() || file.size > 150 * 1024 * 1024) throw new Error('Choose an Aerio local-data backup smaller than 150 MB')
     let parsed: unknown
     try { parsed = JSON.parse(readFileSync(path, 'utf8')) }
     catch { throw new Error('That file is not a readable Aerio local-data backup') }
     const backup = localDataBackupFromUnknown(parsed)
     if (!backup) throw new Error('That backup is invalid or was created by an unsupported Aerio version')
-    requireProductivityStore().saveLocal(backup.data)
-    return backup.data
+    const { snapshot: restored, createdPaths } = materializeLocalDataBackup(backup)
+    const store = requireProductivityStore()
+    const previous = store.localSnapshot()
+    try { store.saveLocal(restored) }
+    catch (error) {
+      for (const path of createdPaths) {
+        try { if (existsSync(path)) unlinkSync(path) } catch { /* Do not mask the storage error. */ }
+      }
+      throw error
+    }
+    cleanupRemovedNoteAttachments(previous, restored)
+    return restored
   })
   ipcMain.handle('productivity:sync', (_event, accountId: string) => {
     if (typeof accountId !== 'string' || !accountId || accountId.length > 200) throw new Error('Choose a valid account to synchronize')

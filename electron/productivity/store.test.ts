@@ -75,10 +75,12 @@ describe('ProductivityStore', () => {
     expect(store.localSnapshot()).toEqual({ tasks: [], notes: [], contacts: [] })
     store.saveLocal({
       tasks: [{ id: 'task-1', listId: 'Inbox', title: 'Prepare Aerio', priority: 'high', completed: false, subtasks: [] }],
-      notes: [{ id: 'note-1', folder: 'Personal', title: 'Launch notes', content: 'Keep this local.', tags: [], pinned: false, archived: false, updatedAt: '2026-08-01T00:00:00Z' }],
+      notes: [{ id: 'note-1', folder: 'Personal', title: 'Launch notes', content: 'Keep this local.', tags: [], pinned: false, archived: false, updatedAt: '2026-08-01T00:00:00Z', attachments: [
+        { id: 'attachment-1', name: 'brief.txt', size: 5, path: 'C:/aerio/note-attachments/brief.txt', mime: 'txt' }
+      ] }],
       contacts: [{ id: 'contact-local', name: 'Local Person', email: 'local@example.test', group: 'Personal', favorite: false, color: '#4d8f78', source: 'local' }]
     })
-    expect(store.localSnapshot()).toMatchObject({ tasks: [{ title: 'Prepare Aerio' }], notes: [{ title: 'Launch notes' }], contacts: [{ name: 'Local Person' }] })
+    expect(store.localSnapshot()).toMatchObject({ tasks: [{ title: 'Prepare Aerio' }], notes: [{ title: 'Launch notes', attachments: [{ name: 'brief.txt' }] }], contacts: [{ name: 'Local Person' }] })
     expect(store.snapshot()).toEqual({ calendars: [], events: [], contacts: [], sync: [] })
     store.close()
   })
