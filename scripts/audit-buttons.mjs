@@ -1,6 +1,13 @@
-import { readFileSync, readdirSync } from 'node:fs'
+import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import ts from 'typescript'
+import { API } from 'typescript/unstable/sync'
+import {
+  isJsxAttribute,
+  isJsxElement,
+  isJsxOpeningElement,
+  isJsxSelfClosingElement,
+  isStringLiteral
+} from 'typescript/unstable/ast/is'
 
 function sourceFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -14,29 +21,33 @@ let total = 0
 
 function attributesOf(node, source) {
   return new Map(node.attributes.properties
-    .filter(ts.isJsxAttribute)
+    .filter(isJsxAttribute)
     .map((attribute) => [attribute.name.getText(source), attribute]))
 }
 
 function isSubmitButton(attributes) {
   const type = attributes.get('type')
-  return type?.initializer && ts.isStringLiteral(type.initializer) && type.initializer.text === 'submit'
+  return type?.initializer && isStringLiteral(type.initializer) && type.initializer.text === 'submit'
 }
 
 function hasSubmitForm(node, source) {
   for (let parent = node.parent; parent; parent = parent.parent) {
-    if (ts.isJsxElement(parent) && parent.openingElement.tagName.getText(source) === 'form') {
+    if (isJsxElement(parent) && parent.openingElement.tagName.getText(source) === 'form') {
       return attributesOf(parent.openingElement, source).has('onSubmit')
     }
   }
   return false
 }
 
+const api = new API({ cwd: process.cwd() })
+const snapshot = api.updateSnapshot({ openProjects: ['tsconfig.json'] })
+
 for (const file of sourceFiles('src')) {
-  const text = readFileSync(file, 'utf8')
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const project = snapshot.getDefaultProjectForFile(file)
+  const source = project?.program.getSourceFile(file)
+  if (!source) throw new Error(`Could not parse ${file}`)
   const visit = (node) => {
-    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+    if (isJsxOpeningElement(node) || isJsxSelfClosingElement(node)) {
       if (node.tagName.getText(source) === 'button') {
         total += 1
         const attributes = attributesOf(node, source)
@@ -47,10 +58,13 @@ for (const file of sourceFiles('src')) {
         }
       }
     }
-    ts.forEachChild(node, visit)
+    node.forEachChild(visit)
   }
   visit(source)
 }
+
+snapshot.dispose()
+api.close()
 
 if (missing.length) {
   console.error(`Enabled JSX buttons without an action:\n${missing.join('\n')}`)

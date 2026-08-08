@@ -7,6 +7,7 @@ import electronPath from 'electron'
 import { _electron as electron } from 'playwright-core'
 import { MailDatabase } from '../electron/mail/database.ts'
 import { ProductivityStore } from '../electron/productivity/store.ts'
+import { desktopAuditEnvironment } from './electron-audit-environment.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const profile = mkdtempSync(join(tmpdir(), 'aerio-context-menu-audit-'))
@@ -131,7 +132,7 @@ try {
     executablePath: electronPath,
     args: [root, `--user-data-dir=${profile}`],
     cwd: root,
-    env: { ...process.env, NODE_ENV: 'test' }
+    env: desktopAuditEnvironment()
   })
   const page = await application.firstWindow()
   const trackRuntimeErrors = (target) => {
@@ -378,7 +379,7 @@ try {
     await expectItems('Open Inbox', 'New message', 'Check for mail')
     await dismiss()
 
-    const realAccount = page.locator('.gmail-account-row').filter({ hasText: 'audit@aerio.local' })
+    const realAccount = page.locator('.mail-account-row').filter({ hasText: 'audit@aerio.local' })
     await openMenu(realAccount)
     await expectItems('Open audit@aerio.local', 'New message', 'Check for mail', 'Offline storage', 'Account settings…', 'Copy email address', 'Disconnect account…')
     await menuItem('Account settings…').click()
@@ -392,8 +393,31 @@ try {
     await expectItems('Open Release', 'New message', 'Check account for mail')
     await dismiss()
 
+    await page.getByTitle('Advanced search filters').click()
+    let advancedSearch = page.getByRole('dialog', { name: 'Advanced mail search' })
+    await advancedSearch.getByLabel('From', { exact: true }).fill('pilot@aerio.local')
+    await advancedSearch.getByLabel('To or cc').fill('audit@aerio.local')
+    await advancedSearch.getByLabel('Subject').fill('context audit')
+    await advancedSearch.getByLabel('Attachment name').fill('context-audit.txt')
+    await advancedSearch.getByLabel('From date').fill('2026-07-31')
+    await advancedSearch.getByLabel('To date').fill('2026-07-31')
+    await advancedSearch.getByLabel('Read status').selectOption('false')
+    await advancedSearch.getByLabel('Attachments').selectOption('true')
+    await advancedSearch.getByLabel('Star').selectOption('true')
+    await advancedSearch.getByLabel('Importance').selectOption('true')
+    await advancedSearch.getByRole('button', { name: 'Apply filters' }).click()
+    await page.locator('.real-mail .message-row').filter({ hasText: 'Real mail context audit' }).waitFor()
+
+    await page.getByTitle('Advanced search filters').click()
+    advancedSearch = page.getByRole('dialog', { name: 'Advanced mail search' })
+    await advancedSearch.getByLabel('From', { exact: true }).fill('missing@example.com')
+    await advancedSearch.getByRole('button', { name: 'Apply filters' }).click()
+    await page.locator('.mail-list-panel .empty-state').getByText('No conversations here').waitFor()
+    await page.getByRole('button', { name: 'Clear mail search' }).click()
+
     const realMessage = page.locator('.real-mail .message-row').filter({ hasText: 'Real mail context audit' })
     await realMessage.waitFor()
+    await realMessage.getByText('Release', { exact: true }).waitFor()
     const listThreadToggle = realMessage.getByRole('button', { name: 'Expand 2 messages in Real mail context audit' })
     await listThreadToggle.click()
     const listThread = page.getByRole('group', { name: 'Messages in Real mail context audit' })
@@ -420,6 +444,18 @@ try {
     await newestReply.waitFor()
     assert.equal(await earlierReply.getAttribute('aria-expanded'), 'false')
     assert.equal(await newestReply.getAttribute('aria-expanded'), 'true')
+    const expandedHeader = newestReply.locator('xpath=..')
+    const arrivalTime = expandedHeader.locator('time')
+    assert.match(await arrivalTime.innerText(), /^[A-Z][a-z]{2} \d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/)
+    assert.match(await arrivalTime.getAttribute('title'), /^[A-Z][a-z]+ \d{2}\/\d{2}\/\d{4} \d{2}:\d{2}:\d{2}$/)
+    const [timeBox, replyBox, chevronBox] = await Promise.all([
+      arrivalTime.boundingBox(),
+      expandedHeader.locator('.thread-message-reply').boundingBox(),
+      newestReply.locator('.thread-message-chevron').boundingBox()
+    ])
+    assert(timeBox && replyBox && chevronBox)
+    assert(replyBox.y > timeBox.y && chevronBox.y > timeBox.y, 'Reply and expand controls should sit below the received timestamp')
+    assert(replyBox.x < chevronBox.x, 'Reply should appear before the expand control after their positions are swapped')
     await earlierReply.click()
     await page.getByRole('button', { name: 'Collapse message from Earlier Sender' }).waitFor()
     const collapsedNewestReply = page.getByRole('button', { name: 'Expand message from Aerio Test Pilot' })
@@ -464,7 +500,9 @@ try {
     await realWindow.getByRole('button', { name: 'Undo', exact: true }).click()
     await realWindowToolbar.getByRole('button', { name: 'Move to trash' }).waitFor()
     const realWindowClosed = realWindow.waitForEvent('close')
-    await realWindow.getByRole('button', { name: 'Close' }).click()
+    await realWindow.getByRole('button', { name: 'Close' }).click().catch((error) => {
+      if (!realWindow.isClosed()) throw error
+    })
     await realWindowClosed
 
     await openMenu(realMessage)
@@ -475,8 +513,8 @@ try {
     await realCompose.getByRole('heading', { name: 'Forward' }).waitFor()
     await realCompose.getByRole('button', { name: 'Close' }).click()
 
-    await page.locator('.gmail-message').filter({ hasText: 'Aerio Test Pilot' }).waitFor()
-    await openMenu(page.locator('.gmail-message').filter({ hasText: 'Aerio Test Pilot' }))
+    await page.locator('.mail-message').filter({ hasText: 'Aerio Test Pilot' }).waitFor()
+    await openMenu(page.locator('.mail-message').filter({ hasText: 'Aerio Test Pilot' }))
     await expectItems('Reply', 'Forward', 'Copy sender name', 'Copy sender address', 'Copy message text')
     await dismiss()
 

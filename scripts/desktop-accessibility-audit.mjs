@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import AxeBuilder from '@axe-core/playwright'
 import electronPath from 'electron'
 import { _electron as electron } from 'playwright-core'
+import { desktopAuditEnvironment } from './electron-audit-environment.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const profile = mkdtempSync(join(tmpdir(), 'aerio-accessibility-audit-'))
@@ -36,7 +37,7 @@ try {
     executablePath: electronPath,
     args: [root, `--user-data-dir=${profile}`],
     cwd: root,
-    env: { ...process.env, NODE_ENV: 'test' }
+    env: desktopAuditEnvironment()
   })
   const page = await application.firstWindow()
   await page.waitForSelector('.app')

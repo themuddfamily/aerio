@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import electronPath from 'electron'
 import { _electron as electron } from 'playwright-core'
+import { desktopAuditEnvironment, desktopAuditVisible } from './electron-audit-environment.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const profile = mkdtempSync(join(tmpdir(), 'aerio-button-audit-'))
@@ -26,7 +27,7 @@ try {
     executablePath: electronPath,
     args: [root, `--user-data-dir=${profile}`],
     cwd: root,
-    env: { ...process.env, NODE_ENV: 'test' }
+    env: desktopAuditEnvironment()
   })
   const page = await application.firstWindow()
   const trackRuntimeErrors = (target) => {
@@ -85,6 +86,26 @@ try {
     await search.press('ArrowDown')
     await search.press('Enter')
     await page.getByRole('heading', { name: 'All notes' }).waitFor()
+  })
+
+  await step('mail panes resize horizontally with accessible separators', async () => {
+    await moduleButton('Mail').click()
+    const foldersSeparator = page.getByRole('separator', { name: 'Resize mail folders' })
+    const listSeparator = page.getByRole('separator', { name: 'Resize message list' })
+    await foldersSeparator.waitFor()
+    await listSeparator.waitFor()
+    const initial = await page.evaluate(() => ({
+      sidebar: document.querySelector('.mail-workspace .context-sidebar')?.getBoundingClientRect().width ?? 0,
+      list: document.querySelector('.mail-workspace .mail-list-panel')?.getBoundingClientRect().width ?? 0
+    }))
+    await foldersSeparator.press('ArrowRight')
+    await listSeparator.press('ArrowLeft')
+    await page.waitForFunction(({ sidebar, list }) => {
+      const nextSidebar = document.querySelector('.mail-workspace .context-sidebar')?.getBoundingClientRect().width ?? 0
+      const nextList = document.querySelector('.mail-workspace .mail-list-panel')?.getBoundingClientRect().width ?? 0
+      return nextSidebar > sidebar && nextList < list
+    }, initial)
+    await foldersSeparator.dblclick()
   })
 
   await step('demo mail account sections, attachments, reply-all, and drafts work', async () => {
@@ -217,6 +238,7 @@ try {
     await moduleButton('Mail').click()
     const mode = page.locator('.mode-switch')
     if ((await mode.innerText()).includes('Demo')) await mode.click()
+    assert.equal(await moduleButton('Tasks').locator('em').count(), 0, 'Connected Tasks badge should use the connected workspace task count')
     await page.getByRole('button', { name: 'Add your first account' }).click()
     const setup = dialog('Add mail account')
     const setupPopoutPromise = application.waitForEvent('window')
@@ -243,7 +265,10 @@ try {
     await page.getByRole('button', { name: 'Restore' }).waitFor()
     await page.getByRole('button', { name: 'Restore' }).click()
     await page.getByRole('button', { name: 'Minimize' }).click()
-    await browserWindow.evaluate((window) => { window.restore(); window.show() })
+    await browserWindow.evaluate((window, visible) => {
+      window.restore()
+      if (visible) window.show()
+    }, desktopAuditVisible)
     await page.getByRole('button', { name: 'Close' }).first().click()
     assert.equal(await browserWindow.evaluate((window) => window.isVisible()), false)
   })
