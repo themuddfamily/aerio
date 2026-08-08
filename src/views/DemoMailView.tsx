@@ -1,15 +1,19 @@
 import {
   Archive, AtSign, CheckCircle2, ChevronDown, Clock3, ExternalLink, FileText, Flag, Inbox,
-  Copy, Forward, Mail, MailOpen, Paperclip, Plus, RefreshCw, Reply, ReplyAll,
+  Copy, Forward, Mail, MailOpen, MoreVertical, Paperclip, Plus, RefreshCw, Reply, ReplyAll,
   Search, Send, Star, Tag, Trash2, Undo2
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { format, isToday, isYesterday } from 'date-fns'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { formatFileSize, messageMatches, uid, updateMessage } from '../lib/domain'
+import { decodeHtmlEntities } from '../lib/html-entities'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
+import { MailPaneSeparator, useResizableMailPanes } from '../components/MailPaneResizer'
+import MailMessageSourceModal from '../components/MailMessageSourceModal'
+import MessageHtml from '../components/MessageHtml'
+import { formatMailArrival, formatMailArrivalTooltip, formatMailDateHeading, formatMailListTime, mailDateGroupKey } from '../lib/mail-date'
 import type { AppState, Message, ModuleId } from '../types'
 
-interface MailViewProps {
+interface DemoMailViewProps {
   state: AppState
   query: string
   requestedMessageId?: string
@@ -19,20 +23,30 @@ interface MailViewProps {
   onToast(message: string): void
 }
 
-const shortDate = (date: string) => {
-  const value = new Date(date)
-  if (isToday(value)) return format(value, 'HH:mm')
-  if (isYesterday(value)) return 'Yesterday'
-  return format(value, 'd MMM')
+function demoMessageSource(message: Message) {
+  const headers = [
+    `From: ${message.from} <${message.fromEmail}>`,
+    `To: ${message.to.join(', ')}`,
+    ...(message.cc?.length ? [`Cc: ${message.cc.join(', ')}`] : []),
+    `Date: ${new Date(message.date).toUTCString()}`,
+    `Subject: ${message.subject}`,
+    `Message-ID: <${message.id}@demo.aerio.local>`,
+    'Content-Type: text/html; charset=utf-8',
+    ...(message.labels.length ? [`X-Aerio-Tags: ${message.labels.join(', ')}`] : [])
+  ].join('\r\n')
+  return { headers, source: `${headers}\r\n\r\n${message.body}` }
 }
 
-export default function MailView({ state, query, requestedMessageId, onChange, onCompose, onNavigate, onToast }: MailViewProps) {
+export default function DemoMailView({ state, query, requestedMessageId, onChange, onCompose, onNavigate, onToast }: DemoMailViewProps) {
   const { showContextMenu } = useContextMenu()
+  const mailPanes = useResizableMailPanes()
   const [folder, setFolder] = useState('all')
   const [filter, setFilter] = useState<'all' | 'unread' | 'starred' | 'flagged'>('all')
   const [selectedId, setSelectedId] = useState(() => state.messages.find((message) => !message.trashed && !message.draft && !message.sent)?.id ?? '')
   const [sortNewest, setSortNewest] = useState(true)
   const [collapsedAccounts, setCollapsedAccounts] = useState<Set<string>>(() => new Set())
+  const [refreshSpin, setRefreshSpin] = useState(0)
+  const [sourceViewer, setSourceViewer] = useState<{ mode: 'headers' | 'source'; subject: string; content: string }>()
   const handledMessageRequest = useRef<string | undefined>(undefined)
 
   const messages = useMemo(() => state.messages
@@ -105,6 +119,22 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
   const showMessageMenu = (event: React.MouseEvent, message: Message) => {
     if (window.getSelection()?.toString() || (event.target instanceof Element && event.target.closest('a[href], img[src]'))) return
     showContextMenu(event, messageMenuItems(message), message.subject)
+  }
+
+  const showReaderMoreMenu = (event: React.MouseEvent, message: Message) => {
+    const raw = demoMessageSource(message)
+    const view = (mode: 'headers' | 'source') => setSourceViewer({ mode, subject: message.subject, content: raw[mode] })
+    showContextMenu(event, [
+      { label: 'Open in new window', icon: ExternalLink, action: () => openMessageWindow(message) },
+      { label: 'Reply all', icon: ReplyAll, action: () => onCompose(message, true) },
+      { label: 'Forward', icon: Forward, action: () => onCompose(message, false, true) },
+      { label: message.flagged ? 'Remove flag' : 'Flag message', icon: Flag, checked: message.flagged, separatorBefore: true, action: () => changeMessage(message, { flagged: !message.flagged }) },
+      { label: 'Copy tags', icon: Tag, disabled: !message.labels.length, action: () => copyText(message.labels.join(', ')) },
+      { label: 'View message headers', icon: AtSign, separatorBefore: true, action: () => view('headers') },
+      { label: 'View message source', icon: FileText, action: () => view('source') },
+      { label: 'Copy subject', icon: Copy, separatorBefore: true, action: () => copyText(message.subject) },
+      { label: 'Copy sender address', icon: AtSign, action: () => copyText(message.fromEmail) }
+    ], 'More message actions')
   }
 
   const showFolderMenu = (event: React.MouseEvent, id: string, label: string) => {
@@ -182,6 +212,11 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
     return next
   })
 
+  const refreshMail = () => {
+    setRefreshSpin((value) => value + 1)
+    onToast('Everything is up to date')
+  }
+
   const showAccountMenu = (event: React.MouseEvent, account: AppState['accounts'][number]) => {
     const inbox = state.folders.find((item) => item.accountId === account.id && item.system === 'inbox')
     const unread = state.messages.filter((message) => message.accountId === account.id && message.unread).length
@@ -204,7 +239,7 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
   )
 
   return (
-    <div className="workspace mail-workspace">
+    <div ref={mailPanes.containerRef} className="workspace mail-workspace" style={mailPanes.style}>
       <aside className="context-sidebar">
         <button className="compose-button" onClick={() => onCompose()}><Plus size={18} /> New message</button>
         <div className="sidebar-group">
@@ -229,10 +264,12 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
         ))}
       </aside>
 
+      <MailPaneSeparator pane="sidebar" value={mailPanes.widths.sidebar} onPointerDown={mailPanes.startResize} onKeyDown={mailPanes.resizeWithKeyboard} onReset={mailPanes.resetWidths} />
+
       <section className="mail-list-panel">
         <header className="panel-heading">
           <div><h1>{folder === 'all' ? 'Inbox' : folder === 'starred' ? 'Starred' : state.folders.find((item) => item.id === folder)?.name ?? 'Mail'}</h1><p>{messages.length} messages</p></div>
-          <button className="icon-button" title="Check for mail" onClick={() => onToast('Everything is up to date')}><RefreshCw size={17} /></button>
+          <button className="icon-button" title="Check for mail" onClick={refreshMail}><RefreshCw key={refreshSpin} className={refreshSpin ? 'refresh-spin' : undefined} size={17} /></button>
         </header>
         <div className="filterbar">
           <div className="segmented">
@@ -247,13 +284,17 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
           { label: 'Mark visible messages as read', icon: MailOpen, separatorBefore: true, disabled: !messages.some((message) => message.unread), action: () => onChange({ ...state, messages: state.messages.map((message) => messages.some((visible) => visible.id === message.id) ? { ...message, unread: false } : message) }) },
           { label: sortNewest ? 'Sort oldest first' : 'Sort newest first', icon: ChevronDown, action: () => setSortNewest((value) => !value) }
         ], 'Message list')}>
-          {messages.map((message) => (
-            <button key={message.id} className={`message-row ${selected?.id === message.id ? 'selected' : ''} ${message.unread ? 'unread' : ''}`} aria-current={selected?.id === message.id ? 'true' : undefined} onClick={() => selectMessage(message)} onDoubleClick={() => openMessageWindow(message)} onKeyDown={(event) => { if (event.key === 'Enter' && event.shiftKey) { event.preventDefault(); openMessageWindow(message) } }} onContextMenu={(event) => showMessageMenu(event, message)}>
+          {messages.map((message, index) => {
+            const previous = messages[index - 1]
+            const startsDateGroup = !previous || mailDateGroupKey(previous.date) !== mailDateGroupKey(message.date)
+            return <Fragment key={message.id}>
+              {startsDateGroup && <h2 className="mail-date-group"><span>{formatMailDateHeading(message.date)}</span></h2>}
+              <button className={`message-row ${selected?.id === message.id ? 'selected' : ''} ${message.unread ? 'unread' : ''}`} aria-current={selected?.id === message.id ? 'true' : undefined} onClick={() => selectMessage(message)} onDoubleClick={() => openMessageWindow(message)} onKeyDown={(event) => { if (event.key === 'Enter' && event.shiftKey) { event.preventDefault(); openMessageWindow(message) } }} onContextMenu={(event) => showMessageMenu(event, message)}>
               <span className="avatar" style={{ background: state.contacts.find((contact) => contact.email === message.fromEmail)?.color ?? '#8892a6' }}>{message.from.split(' ').map((part) => part[0]).slice(0, 2).join('')}</span>
               <span className="message-copy">
-                <span className="message-meta"><strong>{message.from}</strong><time>{shortDate(message.date)}</time></span>
+                <span className="message-meta"><strong>{message.from}</strong><time dateTime={message.date} title={formatMailArrivalTooltip(message.date)}>{formatMailListTime(message.date)}</time></span>
                 <span className="message-subject">{message.subject}</span>
-                <span className="message-preview">{message.preview}</span>
+                <span className="message-preview">{decodeHtmlEntities(message.preview)}</span>
                 <span className="message-tags">
                   {message.labels.slice(0, 2).map((label) => <em key={label}>{label}</em>)}
                   {message.attachments.length > 0 && <Paperclip size={13} />}
@@ -263,23 +304,28 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
                 {message.flagged && <Flag size={13} fill="currentColor" />}
                 {message.starred && <Star size={13} fill="currentColor" />}
               </span>
-            </button>
-          ))}
+              </button>
+            </Fragment>
+          })}
           {messages.length === 0 && <div className="empty-state"><Search size={28} /><h3>No messages here</h3><p>Try another folder or filter.</p></div>}
         </div>
       </section>
+
+      <MailPaneSeparator pane="list" value={mailPanes.widths.list} onPointerDown={mailPanes.startResize} onKeyDown={mailPanes.resizeWithKeyboard} onReset={mailPanes.resetWidths} />
 
       <section className="reader-panel">
         {selected ? (
           <>
             <div className="reader-toolbar">
-              <button className="icon-button" title={selected.unread ? 'Mark read' : 'Mark unread'} onClick={() => apply({ unread: !selected.unread })}>{selected.unread ? <MailOpen size={18} /> : <Mail size={18} />}</button>
-              <button className="icon-button" title="Archive" onClick={() => apply({ archived: true, folderId: `${selected.accountId}-archive` }, 'Message archived')}><Archive size={18} /></button>
-              <button className="icon-button" title="Delete" onClick={() => apply({ trashed: true, folderId: `${selected.accountId}-trash` }, 'Message moved to Trash')}><Trash2 size={18} /></button>
-              <span className="toolbar-divider" />
-              <button className={`icon-button ${selected.starred ? 'active' : ''}`} title="Star" onClick={() => apply({ starred: !selected.starred })}><Star size={18} fill={selected.starred ? 'currentColor' : 'none'} /></button>
-              <button className={`icon-button ${selected.flagged ? 'active danger' : ''}`} title="Flag" onClick={() => apply({ flagged: !selected.flagged })}><Flag size={18} fill={selected.flagged ? 'currentColor' : 'none'} /></button>
-              <span className="spacer" />
+              <div className="reader-toolbar-primary">
+                <button className="reader-toolbar-action" title="Reply" onClick={() => onCompose(selected)}><Reply size={17} /><span>Reply</span></button>
+                <button className="reader-toolbar-action" title={selected.unread ? 'Mark read' : 'Mark unread'} onClick={() => apply({ unread: !selected.unread })}>{selected.unread ? <MailOpen size={17} /> : <Mail size={17} />}<span>{selected.unread ? 'Read' : 'Unread'}</span></button>
+                <button className="reader-toolbar-action" title="Archive" onClick={() => apply({ archived: true, folderId: `${selected.accountId}-archive` }, 'Message archived')}><Archive size={17} /><span>Archive</span></button>
+                <button className="reader-toolbar-action" title="Delete" onClick={() => apply({ trashed: true, folderId: `${selected.accountId}-trash` }, 'Message moved to Trash')}><Trash2 size={17} /><span>Delete</span></button>
+                <span className="toolbar-divider" />
+                <button className={`reader-toolbar-action ${selected.starred ? 'active' : ''}`} title={selected.starred ? 'Unstar' : 'Star'} onClick={() => apply({ starred: !selected.starred })}><Star size={17} fill={selected.starred ? 'currentColor' : 'none'} /><span>{selected.starred ? 'Unstar' : 'Star'}</span></button>
+              </div>
+              <div className="reader-toolbar-secondary"><button className="icon-button" aria-label="More message actions" title="More" onClick={(event) => showReaderMoreMenu(event, selected)}><MoreVertical size={18} /></button></div>
             </div>
             <article className="message-reader" onContextMenu={(event) => showMessageMenu(event, selected)}>
               <header>
@@ -287,12 +333,12 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
                 <h2>{selected.subject}</h2>
                 <div className="sender-card">
                   <span className="avatar large" style={{ background: state.contacts.find((contact) => contact.email === selected.fromEmail)?.color ?? '#8892a6' }}>{selected.from.split(' ').map((part) => part[0]).slice(0, 2).join('')}</span>
-                  <span><strong>{selected.from}</strong><small>to me · {format(new Date(selected.date), 'd MMM yyyy, HH:mm')}</small></span>
+                  <span><strong>{selected.from}</strong><small>to me · <time dateTime={selected.date} title={formatMailArrivalTooltip(selected.date)}>{formatMailArrival(selected.date)}</time></small></span>
                   <span className="spacer" />
-                  <button className="button ghost small" onClick={() => onCompose(selected)}><Reply size={15} /> Reply</button>
+                  <button className="icon-button" aria-label="Reply" title="Reply" onClick={() => onCompose(selected)}><Reply size={16} /></button>
                 </div>
               </header>
-              <div className="message-body" dangerouslySetInnerHTML={{ __html: selected.body }} />
+              <MessageHtml className="message-body" html={selected.body} />
               {selected.attachments.length > 0 && (
                 <div className="reader-attachments">
                   <h3>{selected.attachments.length} attachment{selected.attachments.length > 1 ? 's' : ''}</h3>
@@ -317,6 +363,7 @@ export default function MailView({ state, query, requestedMessageId, onChange, o
           </>
         ) : <div className="empty-state grow"><Inbox size={34} /><h3>Select a message</h3><p>Choose a conversation to read it here.</p></div>}
       </section>
+      {sourceViewer && <MailMessageSourceModal {...sourceViewer} onClose={() => setSourceViewer(undefined)} />}
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createDemoState } from '../demo-data'
-import { formatFileSize, messageMatches, unreadCount, updateMessage } from './domain'
+import { formatFileSize, messageMatches, unreadCount, updateMessage, workspaceBadgeCount } from './domain'
 
 describe('Aerio domain helpers', () => {
   it('searches across sender, subject, body and labels', () => {
@@ -23,6 +23,13 @@ describe('Aerio domain helpers', () => {
     const state = createDemoState()
     expect(unreadCount(state, 'mail')).toBe(2)
     expect(unreadCount(state, 'chat')).toBe(3)
+  })
+
+  it('computes badges from the active workspace', () => {
+    const demo = createDemoState()
+    const connected = { ...demo, tasks: [], messages: [], conversations: [] }
+    expect(workspaceBadgeCount(demo, connected, 'connected', 'tasks')).toBe(0)
+    expect(workspaceBadgeCount(demo, connected, 'demo', 'tasks')).toBe(unreadCount(demo, 'tasks'))
   })
 
   it('formats file sizes', () => {

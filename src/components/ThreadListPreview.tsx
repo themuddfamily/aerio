@@ -1,18 +1,18 @@
 import { Paperclip } from 'lucide-react'
 import type { MouseEvent } from 'react'
-import type { GmailMessageDetail, GmailThreadDetail } from '../gmail-types'
+import type { MailMessageDetail, MailThreadDetail } from '../mail-types'
 import SenderAvatar from './SenderAvatar'
 
 interface ThreadListPreviewProps {
-  thread: GmailThreadDetail
+  thread: MailThreadDetail
   selectedMessageId?: string
   dateLabel(value: string): string
-  onSelect(message: GmailMessageDetail): void
-  onOpenWindow(message: GmailMessageDetail): void
+  onSelect(message: MailMessageDetail): void
+  onOpenWindow(message: MailMessageDetail): void
   onContextMenu?(event: MouseEvent<HTMLElement>): void
 }
 
-function previewText(message: GmailMessageDetail) {
+function previewText(message: MailMessageDetail) {
   return message.text.replace(/\s+/g, ' ').trim().slice(0, 140) || 'No message preview available'
 }
 

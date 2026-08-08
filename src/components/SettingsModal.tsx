@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Bell, Database, Download, Monitor, Palette, RefreshCw, RotateCcw, Stethoscope } from 'lucide-react'
 import type { AppState, AppUpdateStatus, DensityPreference, ModuleId, ThemePreference } from '../types'
-import type { MailDiagnosticHealth } from '../gmail-types'
+import type { MailDiagnosticHealth } from '../mail-types'
 import Modal from './Modal'
 
 interface SettingsModalProps {

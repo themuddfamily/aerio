@@ -7,17 +7,17 @@ import TitleBar from './components/TitleBar'
 import ComposeModal from './components/ComposeModal'
 import SettingsModal from './components/SettingsModal'
 import ProfileModal from './components/ProfileModal'
-import MailView from './views/MailView'
+import DemoMailView from './views/DemoMailView'
 import CalendarView from './views/CalendarView'
 import ContactsView from './views/ContactsView'
 import TasksView from './views/TasksView'
 import NotesView from './views/NotesView'
 import ChatView from './views/ChatView'
-import GmailView from './views/GmailView'
+import ConnectedMailView from './views/ConnectedMailView'
 import type { AppState, CalendarEvent, Contact, Message, ModuleId } from './types'
-import type { GmailAccountSummary } from './gmail-types'
+import type { MailAccountSummary } from './mail-types'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from './productivity-types'
-import { unreadCount, uid } from './lib/domain'
+import { uid, workspaceBadgeCount } from './lib/domain'
 import { useContextMenu } from './components/ContextMenu'
 import { useDialogFocus } from './lib/dialog-focus'
 
@@ -52,10 +52,12 @@ export default function App() {
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [toast, setToast] = useState('')
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved')
-  const [mailMode, setMailMode] = useState<'gmail' | 'demo'>(() =>
-    new URLSearchParams(window.location.search).get('workspace') === 'gmail' ? 'gmail' : 'demo')
-  const [realComposeRequest, setRealComposeRequest] = useState(0)
-  const [connectedAccounts, setConnectedAccounts] = useState<GmailAccountSummary[]>([])
+  const [mailMode, setMailMode] = useState<'connected' | 'demo'>(() => {
+    const workspace = new URLSearchParams(window.location.search).get('workspace')
+    return workspace === 'connected' || workspace === 'gmail' ? 'connected' : 'demo'
+  })
+  const [connectedComposeRequest, setConnectedComposeRequest] = useState(0)
+  const [connectedAccounts, setConnectedAccounts] = useState<MailAccountSummary[]>([])
   const [productivity, setProductivity] = useState<ProductivitySnapshot>(emptyProductivity)
   const [localModules, setLocalModules] = useState<LocalModuleSnapshot>(emptyLocalModules)
   const [productivitySyncing, setProductivitySyncing] = useState(false)
@@ -84,7 +86,7 @@ export default function App() {
     }).catch(() => showToast('Aerio could not open its local data'))
     void window.aerio.mail.accounts.list().then((accounts) => {
       setConnectedAccounts(accounts)
-      if (accounts.length) setMailMode('gmail')
+      if (accounts.length) setMailMode('connected')
     }).catch(() => {
       // The separate demo workspace remains usable if the mail engine cannot initialize.
     })
@@ -182,9 +184,9 @@ export default function App() {
   }, [state])
 
   const startCompose = useCallback((input: ComposeState = {}) => {
-    if (mailMode === 'gmail') {
+    if (mailMode === 'connected') {
       setActiveModule('mail')
-      setRealComposeRequest((value) => value + 1)
+      setConnectedComposeRequest((value) => value + 1)
     } else {
       setCompose(input)
     }
@@ -309,7 +311,7 @@ export default function App() {
     { label: 'Open on startup', icon: Sparkles, separatorBefore: true, checked: state.settings.startModule === module.id, action: () => setState({ ...state, settings: { ...state.settings, startModule: module.id } }) }
   ], module.label)
 
-  const setWorkspace = (mode: 'demo' | 'gmail') => {
+  const setWorkspace = (mode: 'demo' | 'connected') => {
     setMailMode(mode)
     setActiveModule('mail')
   }
@@ -322,7 +324,7 @@ export default function App() {
           <div className="rail-modules">
             {modules.map((module) => {
               const { id, label, icon: Icon } = module
-              const badge = unreadCount(state, id)
+              const badge = workspaceBadgeCount(state, connectedState, mailMode, id)
               return (
                 <button key={id} className={activeModule === id ? 'active' : ''} aria-label={label} aria-current={activeModule === id ? 'page' : undefined} title={`${label} · Ctrl ${modules.find((item) => item.id === id)?.shortcut}`} onClick={() => navigate(id)} onContextMenu={(event) => showModuleMenu(event, module)}>
                   <Icon size={21} strokeWidth={1.9} />
@@ -351,14 +353,14 @@ export default function App() {
               <span>Search {modules.find((item) => item.id === activeModule)?.label.toLowerCase()} or run a command</span>
               <kbd>Ctrl K</kbd>
             </button>
-            <button className={`local-badge mode-switch ${mailMode === 'gmail' ? 'gmail' : ''}`} onClick={() => setWorkspace(mailMode === 'gmail' ? 'demo' : 'gmail')} onContextMenu={(event) => showContextMenu(event, [
+            <button className={`local-badge mode-switch ${mailMode === 'connected' ? 'connected' : ''}`} onClick={() => setWorkspace(mailMode === 'connected' ? 'demo' : 'connected')} onContextMenu={(event) => showContextMenu(event, [
               { label: 'Demo workspace', icon: WifiOff, checked: mailMode === 'demo', action: () => setWorkspace('demo') },
-              { label: 'Connected workspace', icon: Mail, checked: mailMode === 'gmail', action: () => setWorkspace('gmail') },
+              { label: 'Connected workspace', icon: Mail, checked: mailMode === 'connected', action: () => setWorkspace('connected') },
               { label: 'Sync Calendar and Contacts', icon: CalendarDays, separatorBefore: true, disabled: productivitySyncing, action: () => syncProductivity() },
               { label: 'New message', icon: Plus, separatorBefore: true, action: () => startCompose() }
             ], 'Mail workspace')}>
-              {mailMode === 'gmail' ? <Mail size={14} /> : <WifiOff size={14} />}
-              {mailMode === 'gmail' ? 'Connected workspace' : 'Demo workspace'}
+              {mailMode === 'connected' ? <Mail size={14} /> : <WifiOff size={14} />}
+              {mailMode === 'connected' ? 'Connected workspace' : 'Demo workspace'}
             </button>
             <span className={`save-indicator ${saveStatus}`} aria-live="polite">{saveStatus === 'saved' ? 'All changes saved' : 'Saving…'}</span>
             <button className="theme-quick" aria-label="Toggle theme" title="Toggle theme" onClick={() => setState({ ...state, settings: { ...state.settings, theme: state.settings.theme === 'dark' ? 'light' : 'dark' } })} onContextMenu={(event) => showContextMenu(event, [
@@ -370,15 +372,15 @@ export default function App() {
             </button>
           </header>
           <div className="module-content">
-            {activeModule === 'mail' && mailMode === 'gmail' && <GmailView onToast={showToast} composeRequest={realComposeRequest} />}
-            {activeModule === 'mail' && mailMode === 'demo' && <MailView state={state} query={query} requestedMessageId={requestedDemoMessageId} onChange={setState} onCompose={(replyTo, replyAll, forward, draft) => setCompose({ replyTo, replyAll, forward, draft })} onNavigate={navigate} onToast={showToast} />}
+            {activeModule === 'mail' && mailMode === 'connected' && <ConnectedMailView onToast={showToast} composeRequest={connectedComposeRequest} />}
+            {activeModule === 'mail' && mailMode === 'demo' && <DemoMailView state={state} query={query} requestedMessageId={requestedDemoMessageId} onChange={setState} onCompose={(replyTo, replyAll, forward, draft) => setCompose({ replyTo, replyAll, forward, draft })} onNavigate={navigate} onToast={showToast} />}
             {activeModule === 'calendar' && <CalendarView
-              state={mailMode === 'gmail' ? connectedState : state}
+              state={mailMode === 'connected' ? connectedState : state}
               query={query}
               onChange={setState}
               onToast={showToast}
-              providerBacked={mailMode === 'gmail'}
-              writableCalendarIds={mailMode === 'gmail' ? writableCalendarIds : undefined}
+              providerBacked={mailMode === 'connected'}
+              writableCalendarIds={mailMode === 'connected' ? writableCalendarIds : undefined}
               onSync={syncProductivity}
               onEnableEditing={enableCalendarEditing}
               onSaveProviderEvent={saveProviderEvent}
@@ -386,10 +388,10 @@ export default function App() {
               syncing={productivitySyncing}
               sourceMessage={productivityMessage}
             />}
-            {activeModule === 'contacts' && <ContactsView state={mailMode === 'gmail' ? connectedState : state} query={query} onChange={setState} onCompose={(replyTo, initialTo) => setCompose({ replyTo, initialTo })} onChat={openContactChat} onOpenMessage={openDemoMessage} onToast={showToast} readOnly={mailMode === 'gmail'} onSync={syncProductivity} syncing={productivitySyncing} sourceMessage={productivityMessage} />}
-            {activeModule === 'tasks' && <TasksView state={mailMode === 'gmail' ? connectedState : state} query={query} onChange={mailMode === 'gmail' ? updateConnectedLocal : setState} onToast={showToast} />}
-            {activeModule === 'notes' && <NotesView state={mailMode === 'gmail' ? connectedState : state} query={query} onChange={mailMode === 'gmail' ? updateConnectedLocal : setState} onToast={showToast} />}
-            {activeModule === 'chat' && (mailMode === 'gmail'
+            {activeModule === 'contacts' && <ContactsView state={mailMode === 'connected' ? connectedState : state} query={query} onChange={setState} onCompose={(replyTo, initialTo) => setCompose({ replyTo, initialTo })} onChat={openContactChat} onOpenMessage={openDemoMessage} onToast={showToast} readOnly={mailMode === 'connected'} onSync={syncProductivity} syncing={productivitySyncing} sourceMessage={productivityMessage} />}
+            {activeModule === 'tasks' && <TasksView state={mailMode === 'connected' ? connectedState : state} query={query} onChange={mailMode === 'connected' ? updateConnectedLocal : setState} onToast={showToast} />}
+            {activeModule === 'notes' && <NotesView state={mailMode === 'connected' ? connectedState : state} query={query} onChange={mailMode === 'connected' ? updateConnectedLocal : setState} onToast={showToast} />}
+            {activeModule === 'chat' && (mailMode === 'connected'
               ? <div className="connected-module-placeholder"><MessageCircle size={38} /><h1>No chat service connected</h1><p>Mail providers do not automatically provide a compatible chat API. Aerio will keep Chat separate until a secure transport is selected and implemented.</p><button className="button ghost" onClick={() => setWorkspace('demo')}>Open demo Chat</button></div>
               : <ChatView state={state} query={query} requestedConversationId={requestedConversationId} onChange={setState} onToast={showToast} />)}
           </div>

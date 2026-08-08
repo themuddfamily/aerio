@@ -1,11 +1,11 @@
 import { RefreshCw, RotateCcw, Save, ShieldCheck } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import type { GmailAccountSummary, ImapServerSettings } from '../gmail-types'
+import type { MailAccountSummary, ImapServerSettings } from '../mail-types'
 import Modal from './Modal'
 
 interface MailAccountSettingsModalProps {
-  account: GmailAccountSummary
-  onSaved(account: GmailAccountSummary): void
+  account: MailAccountSummary
+  onSaved(account: MailAccountSummary): void
   onClose(): void
   onToast(message: string): void
 }

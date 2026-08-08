@@ -1,8 +1,5 @@
-import { Mail } from 'lucide-react'
-import { FcGoogle } from 'react-icons/fc'
-import { FaYahoo } from 'react-icons/fa6'
-import { SiIcloud, SiProtonmail } from 'react-icons/si'
-import type { MailProviderId } from '../gmail-types'
+import { Cloud, Mail, Shield } from 'lucide-react'
+import type { MailProviderId } from '../mail-types'
 
 interface Props {
   provider: MailProviderId
@@ -22,12 +19,12 @@ function MicrosoftLogo() {
 
 export default function ProviderLogo({ provider, size = 24 }: Props) {
   let logo
-  if (provider === 'gmail') logo = <FcGoogle />
+  if (provider === 'gmail') logo = <span className="provider-letter-logo google-provider-logo">G</span>
   else if (provider === 'microsoft') logo = <MicrosoftLogo />
-  else if (provider === 'icloud') logo = <SiIcloud color="#3693f3" />
-  else if (provider === 'yahoo') logo = <FaYahoo color="#6001d2" />
+  else if (provider === 'icloud') logo = <Cloud color="#3693f3" />
+  else if (provider === 'yahoo') logo = <span className="provider-letter-logo yahoo-provider-logo">Y!</span>
   else if (provider === 'fastmail') logo = <img className="fastmail-provider-logo" src={FASTMAIL_ICON} alt="" />
-  else if (provider === 'proton-bridge') logo = <SiProtonmail color="#6d4aff" />
+  else if (provider === 'proton-bridge') logo = <Shield color="#6d4aff" fill="#6d4aff22" />
   else logo = <Mail />
   return <span className="provider-logo-art" style={{ width: size, height: size }} aria-hidden="true">{logo}</span>
 }

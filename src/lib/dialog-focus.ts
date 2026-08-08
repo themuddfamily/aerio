@@ -23,13 +23,17 @@ export function useDialogFocus<T extends HTMLElement>(onClose: () => void, activ
     const targetDocument = ownerDocument ?? document
     const targetWindow = targetDocument.defaultView ?? window
     const previousFocus = targetDocument.activeElement instanceof targetWindow.HTMLElement ? targetDocument.activeElement as HTMLElement : undefined
-    const animationFrame = targetWindow.requestAnimationFrame(() => {
+    let cancelled = false
+    const focusDialog = () => {
+      if (cancelled) return
       const dialog = dialogRef.current
       if (!dialog || dialog.contains(targetDocument.activeElement)) return
       dialog.querySelector<HTMLElement>('[autofocus]')?.focus()
       if (!dialog.contains(targetDocument.activeElement)) dialog.querySelector<HTMLElement>(focusableSelector)?.focus()
       if (!dialog.contains(targetDocument.activeElement)) dialog.focus()
-    })
+    }
+    queueMicrotask(focusDialog)
+    const animationFrame = targetWindow.requestAnimationFrame(focusDialog)
 
     const onKeyDown = (event: KeyboardEvent) => {
       const dialog = dialogRef.current
@@ -62,6 +66,7 @@ export function useDialogFocus<T extends HTMLElement>(onClose: () => void, activ
 
     targetDocument.addEventListener('keydown', onKeyDown, true)
     return () => {
+      cancelled = true
       targetWindow.cancelAnimationFrame(animationFrame)
       targetDocument.removeEventListener('keydown', onKeyDown, true)
       if (previousFocus?.isConnected) queueMicrotask(() => previousFocus.focus())

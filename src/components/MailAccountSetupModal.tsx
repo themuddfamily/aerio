@@ -1,6 +1,6 @@
 import { ArrowLeft, Check, ChevronRight, LoaderCircle, Mail, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import type { GmailCredentialStatus, ImapAccountInput, MailProviderId, MailProviderPreset } from '../gmail-types'
+import type { MailCredentialStatus, ImapAccountInput, MailProviderId, MailProviderPreset } from '../mail-types'
 import { ModalShell } from './Modal'
 import ProviderLogo from './ProviderLogo'
 
@@ -10,7 +10,7 @@ interface Props {
   onToast(message: string): void
 }
 
-const emptyStatus: GmailCredentialStatus = { configured: false }
+const emptyStatus: MailCredentialStatus = { configured: false }
 
 const providerPresentation: Record<MailProviderId, { action: string; detail: string }> = {
   gmail: { action: 'Continue with Google', detail: 'Gmail, Calendar and Contacts' },

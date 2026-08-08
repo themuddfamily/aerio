@@ -1,18 +1,19 @@
-import { Bold, Copy, Italic, Link, List, Paperclip, Save, Send, Trash2, Underline, X } from 'lucide-react'
+import { Bold, CalendarClock, Copy, Italic, Link, List, Paperclip, Save, Send, Trash2, Underline, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { GmailAccountSummary, GmailDraftInput, GmailDraftRecord, GmailThreadDetail, MailRecipientSuggestion } from '../gmail-types'
+import type { MailAccountSummary, MailDraftInput, MailDraftRecord, MailThreadDetail, MailRecipientSuggestion } from '../mail-types'
 import { formatFileSize } from '../lib/domain'
+import { isCompleteMailAddress } from '../lib/mail-address'
 import { copyText, useContextMenu } from './ContextMenu'
 import { ModalShell } from './Modal'
 
-interface GmailComposeModalProps {
-  accounts: GmailAccountSummary[]
-  draft?: GmailDraftRecord
-  replyTo?: GmailThreadDetail
+interface MailComposeModalProps {
+  accounts: MailAccountSummary[]
+  draft?: MailDraftRecord
+  replyTo?: MailThreadDetail
   replyAll?: boolean
   forward?: boolean
   onClose(): void
-  onSent(): void
+  onSent(result: import('../mail-types').MailDraftResult): void
   onToast(message: string): void
 }
 
@@ -36,8 +37,18 @@ const splitAddresses = (value: string) => {
 const fileName = (path: string) => (path.split(/[\\/]/).at(-1) || 'attachment').replace(/^\d+(?:-[a-f0-9]{10})?-/, '')
 const escapeHtml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('\n', '<br>')
 const addressEmail = (value: string) => value.trim().match(/<([^<>]+)>$/)?.[1].trim().toLowerCase() ?? value.trim().toLowerCase()
+const friendlyError = (error: unknown, fallback: string) => {
+  if (!(error instanceof Error)) return fallback
+  return error.message.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/, '') || fallback
+}
+const localDateTimeValue = (value?: string) => {
+  if (!value) return ''
+  const date = new Date(value)
+  const offset = date.getTimezoneOffset() * 60_000
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16)
+}
 
-export default function GmailComposeModal({ accounts, draft, replyTo, replyAll, forward, onClose, onSent, onToast }: GmailComposeModalProps) {
+export default function MailComposeModal({ accounts, draft, replyTo, replyAll, forward, onClose, onSent, onToast }: MailComposeModalProps) {
   const { showContextMenu } = useContextMenu()
   const replyMessage = replyTo?.messages.at(-1)
   const forwardedText = replyTo && forward && replyMessage ? `\n\n---------- Forwarded message ----------\nFrom: ${replyMessage.fromName || replyMessage.fromEmail} <${replyMessage.fromEmail}>\nDate: ${new Date(replyMessage.date).toLocaleString()}\nSubject: ${replyMessage.subject}\n\n${replyMessage.text}` : ''
@@ -65,7 +76,9 @@ export default function GmailComposeModal({ accounts, draft, replyTo, replyAll, 
   const [text, setText] = useState(initialText)
   const [html, setHtml] = useState(initialHtml)
   const [attachments, setAttachments] = useState<{ name: string; size: number; path: string }[]>(() => (draft?.attachmentPaths ?? []).map((path) => ({ name: fileName(path), size: 0, path })))
+  const [scheduledFor, setScheduledFor] = useState(() => localDateTimeValue(draft?.status === 'scheduled' ? draft.deliveryAt : undefined))
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'sending' | 'closing' | 'failed'>(draft?.status === 'failed' ? 'failed' : draft ? 'saved' : 'idle')
+  const [saveError, setSaveError] = useState(draft?.error)
   const [recipientField, setRecipientField] = useState<'to' | 'cc' | 'bcc'>()
   const [recipientSuggestions, setRecipientSuggestions] = useState<MailRecipientSuggestion[]>([])
   const editorRef = useRef<HTMLDivElement>(null)
@@ -74,7 +87,7 @@ export default function GmailComposeModal({ accounts, draft, replyTo, replyAll, 
   const lastSaved = useRef('')
   const stagedForwardAttachments = useRef(false)
 
-  const input = useMemo<GmailDraftInput>(() => ({
+  const input = useMemo<MailDraftInput>(() => ({
     id: draftId,
     accountId,
     threadId: draft?.threadId ?? (forward ? undefined : replyTo?.id),
@@ -120,23 +133,28 @@ export default function GmailComposeModal({ accounts, draft, replyTo, replyAll, 
     }).catch((error) => onToast(error instanceof Error ? error.message : 'Forwarded attachments could not be prepared'))
   }, [draft, draftId, forward, onToast, replyMessage])
 
-  const saveNow = async (value = input) => {
+  const saveNow = async (value = input, notify = false) => {
     const valueFingerprint = JSON.stringify(value)
     if (!value.accountId || !hasContent || valueFingerprint === lastSaved.current) return true
     setStatus('saving')
     try {
       const result = await window.aerio.mail.drafts.save(value)
       if (result.status === 'failed') {
+        const message = result.error ?? 'Draft could not be saved'
         setStatus('failed')
-        onToast(result.error ?? 'Draft could not be saved')
+        setSaveError(message)
+        if (notify) onToast(message)
         return false
       }
       lastSaved.current = valueFingerprint
+      setSaveError(undefined)
       setStatus('saved')
       return true
     } catch (error) {
+      const message = friendlyError(error, 'Draft could not be saved')
       setStatus('failed')
-      onToast(error instanceof Error ? error.message : 'Draft could not be saved')
+      setSaveError(message)
+      if (notify) onToast(message)
       return false
     }
   }
@@ -154,7 +172,7 @@ export default function GmailComposeModal({ accounts, draft, replyTo, replyAll, 
   const closeComposer = async () => {
     if (status === 'sending' || status === 'closing') return
     setStatus('closing')
-    if (hasChanges && hasContent && fingerprint !== lastSaved.current) await saveNow(input)
+    if (hasChanges && hasContent && fingerprint !== lastSaved.current) await saveNow(input, true)
     onClose()
   }
   const chooseAttachments = async () => {
@@ -226,19 +244,32 @@ export default function GmailComposeModal({ accounts, draft, replyTo, replyAll, 
   }
 
   const send = async () => {
-    if (![...input.to, ...input.cc, ...input.bcc].length) {
+    const recipients = [...input.to, ...input.cc, ...input.bcc]
+    if (!recipients.length) {
       onToast('Add at least one recipient')
+      return
+    }
+    if (recipients.some((recipient) => !isCompleteMailAddress(recipient))) {
+      onToast('Finish or correct the recipient email addresses before sending')
+      return
+    }
+    const deliveryAt = scheduledFor ? new Date(scheduledFor) : undefined
+    if (deliveryAt && (!Number.isFinite(deliveryAt.getTime()) || deliveryAt.getTime() <= Date.now())) {
+      onToast('Choose a scheduled time in the future')
       return
     }
     setStatus('sending')
     try {
-      const result = await window.aerio.mail.drafts.send(input)
-      if (result.status === 'sent') {
-        onToast('Message sent')
-        onSent()
+      const result = deliveryAt
+        ? await window.aerio.mail.drafts.schedule(input, deliveryAt.toISOString())
+        : await window.aerio.mail.drafts.send(input)
+      if (result.status === 'scheduled') {
+        onToast(`Message scheduled for ${deliveryAt!.toLocaleString()}`)
+        onSent(result)
         onClose()
-      } else if (result.status === 'queued') {
-        onToast('Offline — message added to Outbox')
+      } else if (result.status === 'send-pending') {
+        onToast('Message ready to send — use Undo if you need it back')
+        onSent(result)
         onClose()
       } else {
         setStatus('failed')
@@ -246,7 +277,7 @@ export default function GmailComposeModal({ accounts, draft, replyTo, replyAll, 
       }
     } catch (error) {
       setStatus('failed')
-      onToast(error instanceof Error ? error.message : 'Message could not be sent')
+      onToast(friendlyError(error, 'Message could not be sent'))
     }
   }
 
@@ -254,14 +285,14 @@ export default function GmailComposeModal({ accounts, draft, replyTo, replyAll, 
     : status === 'saved' ? 'Draft saved'
       : status === 'sending' ? 'Sending…'
         : status === 'closing' ? 'Saving before closing…'
-          : status === 'failed' ? draft?.error ?? 'Draft not saved — retry available' : 'Real mail'
+          : status === 'failed' ? saveError ?? 'Draft not saved — retry available' : 'Real mail'
   const composeTitle = draft ? 'Edit draft' : forward ? 'Forward' : replyTo ? replyAll ? 'Reply all' : 'Reply' : 'New message'
 
   return (
     <ModalShell
       title={composeTitle}
       subtitle={statusText}
-      className="gmail-compose"
+      className="mail-compose"
       closeEnabled={status !== 'sending' && status !== 'closing'}
       closeTitle="Save draft and close"
       popoutSize={{ width: 800, height: 820 }}
@@ -297,17 +328,18 @@ export default function GmailComposeModal({ accounts, draft, replyTo, replyAll, 
               updateEditor()
             }}
           />
-          {attachments.length > 0 && <div className="gmail-compose-files">{attachments.map((file, index) => <span key={`${file.path}-${index}`} onContextMenu={(event) => showContextMenu(event, [
+          {attachments.length > 0 && <div className="mail-compose-files">{attachments.map((file, index) => <span key={`${file.path}-${index}`} onContextMenu={(event) => showContextMenu(event, [
             { label: 'Copy filename', icon: Copy, action: () => copyText(file.name) },
             { label: 'Remove attachment', icon: Trash2, separatorBefore: true, danger: true, action: () => setAttachments((items) => items.filter((_, itemIndex) => index !== itemIndex)) }
           ], file.name)}><Paperclip size={14} /><strong>{file.name}</strong>{file.size > 0 && <small>{formatFileSize(file.size)}</small>}<button aria-label={`Remove ${file.name}`} onClick={() => setAttachments((items) => items.filter((_, itemIndex) => index !== itemIndex))}><X size={13} /></button></span>)}</div>}
         </div>
         <footer className="compose-footer">
           <button className="icon-button" title="Attach files" onClick={() => void chooseAttachments()}><Paperclip size={18} /></button>
-          <button className="button ghost small" disabled={status === 'saving' || status === 'sending'} onClick={() => void saveNow()}><Save size={15} /> Save draft</button>
+          <button className="button ghost small" disabled={status === 'saving' || status === 'sending'} onClick={() => void saveNow(input, true)}><Save size={15} /> Save draft</button>
           <button className="button ghost small danger-subtle" disabled={status === 'sending'} onClick={() => void discard()}><Trash2 size={15} /> Discard</button>
           <span className="spacer" />
-          <button className="button primary" disabled={status === 'sending' || status === 'closing'} onClick={() => void send()}><Send size={16} /> {status === 'sending' ? 'Sending…' : 'Send'}</button>
+          <label className="mail-schedule-field" title="Schedule delivery"><CalendarClock size={15} /><input aria-label="Scheduled delivery time" type="datetime-local" min={localDateTimeValue(new Date(Date.now() + 60_000).toISOString())} value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} />{scheduledFor && <button type="button" aria-label="Clear scheduled delivery" onClick={() => setScheduledFor('')}><X size={13} /></button>}</label>
+          <button className="button primary" disabled={status === 'sending' || status === 'closing'} onClick={() => void send()}><Send size={16} /> {status === 'sending' ? scheduledFor ? 'Scheduling…' : 'Queuing…' : scheduledFor ? 'Schedule' : 'Send'}</button>
         </footer>
     </ModalShell>
   )

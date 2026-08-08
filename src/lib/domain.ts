@@ -35,6 +35,10 @@ export function unreadCount(state: AppState, module: ModuleId) {
   return 0
 }
 
+export function workspaceBadgeCount(demoState: AppState, connectedState: AppState, workspace: 'demo' | 'connected', module: ModuleId) {
+  return unreadCount(workspace === 'connected' ? connectedState : demoState, module)
+}
+
 export function formatFileSize(bytes: number) {
   if (!bytes) return 'Local file'
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`

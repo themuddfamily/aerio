@@ -1,6 +1,6 @@
 import { FolderInput, Tag, Tags } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { GmailAccountSummary, GmailLabel, MailThreadSummary } from '../gmail-types'
+import type { MailAccountSummary, MailLabel, MailThreadSummary } from '../mail-types'
 import Modal from './Modal'
 
 export interface OrganizeRequest {
@@ -13,8 +13,8 @@ export interface OrganizeRequest {
 interface MailOrganizeModalProps {
   mode: 'move' | 'label'
   items: MailThreadSummary[]
-  accounts: GmailAccountSummary[]
-  labels: GmailLabel[]
+  accounts: MailAccountSummary[]
+  labels: MailLabel[]
   onApply(requests: OrganizeRequest[]): Promise<void>
   onClose(): void
 }
