@@ -7,6 +7,7 @@ import PostalMime, { type Address, type Attachment as ParsedAttachment } from 'p
 import type {
   MailDraftInput,
   MailDraftResult,
+  MailAccountSummary,
   MailRule,
   MailMessageDetail,
   MailWorkerEvent,
@@ -55,6 +56,11 @@ const draftQueues = new Map<string, Promise<unknown>>()
 const lastAutomaticSyncAt = new Map<string, number>()
 let pollingIntervalMs = BACKGROUND_MAIL_POLL_INTERVAL_MS
 const UNDO_SEND_DELAY_MS = 10_000
+const DRAFT_CONFLICT_MESSAGE = 'This draft changed after it was opened in another mail client. Your version was not overwritten; save it as a copy to keep both versions.'
+
+class DraftConflictError extends Error {
+  constructor() { super(DRAFT_CONFLICT_MESSAGE); this.name = 'DraftConflictError' }
+}
 
 const emit = (event: MailWorkerEvent) => port.postMessage({ kind: 'event', event } satisfies WorkerEventMessage)
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
@@ -746,6 +752,22 @@ function draftInputFromRow(row: Record<string, string | number | bigint | null>)
   }
 }
 
+async function assertRemoteDraftUnchanged(accountId: string, provider: MailAccountSummary['provider'], remoteId?: string, expectedRevision?: string) {
+  if (!remoteId || !expectedRevision || provider === 'imap') return
+  let currentRevision: string
+  try {
+    currentRevision = provider === 'gmail'
+      ? await clientFor(accountId).draftRevision(remoteId)
+      : await microsoftClientFor(accountId).draftRevision(remoteId)
+  } catch (error) {
+    if (((error instanceof GmailApiError || error instanceof MicrosoftGraphError) && error.status === 404) || /no longer available for editing/i.test(error instanceof Error ? error.message : '')) {
+      throw new DraftConflictError()
+    }
+    throw error
+  }
+  if (currentRevision !== expectedRevision) throw new DraftConflictError()
+}
+
 async function saveDraft(input: MailDraftInput) {
   if (!database) throw new Error('Database is not initialized')
   input = stageDraftAttachments(input)
@@ -758,20 +780,29 @@ async function saveDraft(input: MailDraftInput) {
     const account = database.getAccount(input.accountId)
     const from = account ? `${account.displayName} <${account.email}>` : undefined
     let remoteId: string
+    let remoteRevision: string | undefined
     if (provider === 'gmail') {
+      if (row?.gmail_draft_id) await assertRemoteDraftUnchanged(input.accountId, provider, String(row.gmail_draft_id), row.remote_revision ? String(row.remote_revision) : undefined)
       const raw = createMime({ ...input, id: result.id }, from)
       const remote = row?.gmail_draft_id
         ? await clientFor(input.accountId).updateDraft(String(row.gmail_draft_id), raw, input.threadId)
         : await clientFor(input.accountId).createDraft(raw, input.threadId)
       remoteId = remote.id
+      remoteRevision = remote.message?.id
     } else if (provider === 'microsoft') {
-      remoteId = await microsoftClientFor(input.accountId).saveDraft(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined)
+      if (row?.gmail_draft_id) await assertRemoteDraftUnchanged(input.accountId, provider, String(row.gmail_draft_id), row.remote_revision ? String(row.remote_revision) : undefined)
+      const remote = await microsoftClientFor(input.accountId).saveDraft(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined)
+      remoteId = remote.id
+      remoteRevision = remote.revision
     } else {
       remoteId = await (await imapClientFor(input.accountId)).saveDraft(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined)
     }
-    result = { ...result, remoteDraftId: remoteId, status: 'synced', updatedAt: new Date().toISOString() }
+    result = { ...result, remoteDraftId: remoteId, remoteRevision, status: 'synced', updatedAt: new Date().toISOString() }
   } catch (error) {
     result = { ...result, status: 'failed', error: error instanceof Error ? error.message : String(error), updatedAt: new Date().toISOString() }
+    database.updateDraftResult(result.id, result)
+    if (error instanceof DraftConflictError) throw error
+    return result
   }
   database.updateDraftResult(result.id, result)
   return result
@@ -787,6 +818,7 @@ async function deliverDraft(input: MailDraftInput) {
     const provider = database.getAccount(input.accountId)?.provider ?? 'gmail'
     const account = database.getAccount(input.accountId)
     const from = account ? `${account.displayName} <${account.email}>` : undefined
+    if (row?.gmail_draft_id) await assertRemoteDraftUnchanged(input.accountId, provider, String(row.gmail_draft_id), row.remote_revision ? String(row.remote_revision) : undefined)
     if (provider === 'gmail') {
       const raw = createMime({ ...input, id: result.id }, from)
       if (row?.gmail_draft_id) await clientFor(input.accountId).sendDraft(String(row.gmail_draft_id), raw)

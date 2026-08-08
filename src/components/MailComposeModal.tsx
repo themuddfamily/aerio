@@ -88,6 +88,7 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
   const firstRender = useRef(true)
   const lastSaved = useRef('')
   const revision = useRef(draft?.updatedAt)
+  const remoteRevision = useRef(draft?.remoteRevision)
   const stagedForwardAttachments = useRef(false)
 
   const input = useMemo<MailDraftInput>(() => ({
@@ -141,8 +142,13 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
     if (!value.accountId || !hasContent || valueFingerprint === lastSaved.current) return true
     setStatus('saving')
     try {
-      const result = await window.aerio.mail.drafts.save({ ...value, expectedUpdatedAt: preserveRevision ? revision.current : undefined })
+      const result = await window.aerio.mail.drafts.save({
+        ...value,
+        expectedUpdatedAt: preserveRevision ? revision.current : undefined,
+        expectedRemoteRevision: preserveRevision ? remoteRevision.current : undefined
+      })
       revision.current = result.updatedAt
+      remoteRevision.current = result.remoteRevision
       if (result.status === 'failed') {
         const message = result.error ?? 'Draft could not be saved'
         setStatus('failed')
@@ -168,6 +174,7 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
   const saveAsCopy = async () => {
     const nextId = crypto.randomUUID()
     revision.current = undefined
+    remoteRevision.current = undefined
     const saved = await saveNow({ ...input, id: nextId }, true, false)
     if (saved) {
       setDraftId(nextId)
@@ -277,8 +284,8 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
     setStatus('sending')
     try {
       const result = deliveryAt
-        ? await window.aerio.mail.drafts.schedule({ ...input, expectedUpdatedAt: revision.current }, deliveryAt.toISOString())
-        : await window.aerio.mail.drafts.send({ ...input, expectedUpdatedAt: revision.current })
+        ? await window.aerio.mail.drafts.schedule({ ...input, expectedUpdatedAt: revision.current, expectedRemoteRevision: remoteRevision.current }, deliveryAt.toISOString())
+        : await window.aerio.mail.drafts.send({ ...input, expectedUpdatedAt: revision.current, expectedRemoteRevision: remoteRevision.current })
       if (result.status === 'scheduled') {
         onToast(`Message scheduled for ${deliveryAt!.toLocaleString()}`)
         onSent(result)

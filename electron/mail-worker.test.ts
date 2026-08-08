@@ -100,7 +100,9 @@ const mocks = vi.hoisted(() => {
   const gmail = {
     getAccessToken: undefined as undefined | ((id: string) => Promise<string>),
     getProfile: vi.fn().mockResolvedValue({ emailAddress: 'person@example.test', historyId: '1' }),
-    createDraft: vi.fn().mockResolvedValue({ id: 'remote-draft' }), updateDraft: vi.fn().mockResolvedValue({ id: 'remote-draft' }),
+    createDraft: vi.fn().mockResolvedValue({ id: 'remote-draft', message: { id: 'gmail-revision-2' } }),
+    updateDraft: vi.fn().mockResolvedValue({ id: 'remote-draft', message: { id: 'gmail-revision-2' } }),
+    draftRevision: vi.fn().mockResolvedValue('gmail-revision-1'),
     deleteDraft: vi.fn().mockResolvedValue(undefined), sendDraft: vi.fn().mockResolvedValue(undefined), sendMessage: vi.fn().mockResolvedValue(undefined),
     trashThreads: vi.fn().mockResolvedValue(undefined), untrashThreads: vi.fn().mockResolvedValue(undefined), modifyThreads: vi.fn().mockResolvedValue(undefined),
     listLabels: vi.fn().mockResolvedValue([]), inventory: vi.fn().mockResolvedValue({ messages: [], nextPageToken: undefined }),
@@ -112,7 +114,8 @@ const mocks = vi.hoisted(() => {
   const microsoft = {
     getAccessToken: undefined as undefined | (() => Promise<string>),
     listFolders: vi.fn().mockResolvedValue([]), applyAction: vi.fn().mockResolvedValue(undefined),
-    saveDraft: vi.fn().mockResolvedValue('remote-draft'), deleteDraft: vi.fn().mockResolvedValue(undefined), send: vi.fn().mockResolvedValue(undefined),
+    saveDraft: vi.fn().mockResolvedValue({ id: 'remote-draft', revision: 'microsoft-revision-2' }),
+    draftRevision: vi.fn().mockResolvedValue('microsoft-revision-1'), deleteDraft: vi.fn().mockResolvedValue(undefined), send: vi.fn().mockResolvedValue(undefined),
     delta: vi.fn().mockResolvedValue({ messages: [], deltaLink: 'delta' }), messageRaw: vi.fn().mockResolvedValue(Buffer.from('raw'))
   }
   const imap = {
@@ -513,6 +516,38 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.db.getDraft.mockReturnValue({ ...row, id: 'discard-imap' })
     await expect(request({ type: 'drafts:delete', payload: { id: 'discard-imap' } })).resolves.toMatchObject({ result: { status: 'failed', error: 'discard provider failed' } })
     mocks.setCredential({ type: 'oauth', accessToken: 'token' })
+  })
+
+  it('refuses to replace Gmail and Microsoft drafts changed by another client', async () => {
+    const input = { id: 'remote-conflict', accountId: 'account-1', to: ['ada@example.test'], cc: [], bcc: [], subject: 'Shared draft', text: 'Body', references: [], attachmentPaths: [] }
+    const storedDraft = { gmail_draft_id: 'provider-draft', remote_revision: 'provider-revision-1' }
+    mocks.db.updateDraftResult.mockClear()
+    mocks.gmail.updateDraft.mockClear()
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.getDraft.mockReturnValue(storedDraft)
+    mocks.gmail.draftRevision.mockResolvedValueOnce('provider-revision-from-another-client')
+
+    await expect(request({ type: 'drafts:save', payload: input })).resolves.toMatchObject({
+      error: { message: expect.stringMatching(/changed after it was opened in another mail client/) }
+    })
+    expect(mocks.gmail.updateDraft).not.toHaveBeenCalled()
+    expect(mocks.db.updateDraftResult).toHaveBeenCalledWith(input.id, expect.objectContaining({
+      status: 'failed', error: expect.stringMatching(/another mail client/)
+    }))
+
+    mocks.db.updateDraftResult.mockClear()
+    mocks.microsoft.saveDraft.mockClear()
+    mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'microsoft' })
+    mocks.db.getDraft.mockReturnValue(storedDraft)
+    mocks.microsoft.draftRevision.mockResolvedValueOnce('provider-revision-from-another-client')
+    await expect(request({ type: 'drafts:save', payload: { ...input, id: 'microsoft-conflict' } })).resolves.toMatchObject({
+      error: { message: expect.stringMatching(/changed after it was opened in another mail client/) }
+    })
+    expect(mocks.microsoft.saveDraft).not.toHaveBeenCalled()
+    expect(mocks.db.updateDraftResult).toHaveBeenCalledWith('microsoft-conflict', expect.objectContaining({ status: 'failed' }))
+
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.getDraft.mockReturnValue(undefined)
   })
 
   it('stores sparse Gmail messages with parser, address, attachment, and metadata defaults', async () => {

@@ -289,6 +289,7 @@ export class MailDatabase {
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES gmail_accounts(id) ON DELETE CASCADE,
         gmail_draft_id TEXT,
+        remote_revision TEXT,
         thread_id TEXT,
         in_reply_to TEXT,
         references_json TEXT NOT NULL DEFAULT '[]',
@@ -369,9 +370,11 @@ export class MailDatabase {
     if (!operationColumns.has('before_labels_json')) this.db.exec(`ALTER TABLE gmail_operations ADD COLUMN before_labels_json TEXT NOT NULL DEFAULT '{}'`)
     const draftColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_drafts)').all() as { name: string }[]).map((column) => column.name))
     if (!draftColumns.has('delivery_at')) this.db.exec('ALTER TABLE gmail_drafts ADD COLUMN delivery_at TEXT')
+    if (!draftColumns.has('remote_revision')) this.db.exec('ALTER TABLE gmail_drafts ADD COLUMN remote_revision TEXT')
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(4, ?)').run(nowIso())
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(5, ?)').run(nowIso())
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(6, ?)').run(nowIso())
+    this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(7, ?)').run(nowIso())
     this.recoverInterruptedWork()
   }
 
@@ -1092,6 +1095,9 @@ export class MailDatabase {
     if (existing && input.expectedUpdatedAt && String(existing.updated_at) !== input.expectedUpdatedAt) {
       throw new Error('This draft changed after it was opened. Your version was not overwritten; save it as a copy to keep both versions.')
     }
+    if (existing && input.expectedRemoteRevision && String(existing.remote_revision ?? '') !== input.expectedRemoteRevision) {
+      throw new Error('This draft changed after it was opened in another mail client. Your version was not overwritten; save it as a copy to keep both versions.')
+    }
     const existingUpdatedAt = existing?.updated_at ? Date.parse(String(existing.updated_at)) : 0
     const updatedAt = new Date(Math.max(Date.now(), Number.isFinite(existingUpdatedAt) ? existingUpdatedAt + 1 : 0)).toISOString()
     const existingStatus = existing?.status ? String(existing.status) as MailDraftResult['status'] : undefined
@@ -1099,14 +1105,14 @@ export class MailDatabase {
     const status = result.status ?? (retainedDelivery ? existingStatus : 'local') ?? 'local'
     const deliveryAt = result.deliveryAt ?? (retainedDelivery && existing?.delivery_at ? String(existing.delivery_at) : undefined)
     this.stmt(`
-      INSERT INTO gmail_drafts(id,account_id,gmail_draft_id,thread_id,in_reply_to,references_json,to_json,cc_json,bcc_json,subject,body_text,body_html,attachment_paths_json,status,delivery_at,error,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(id) DO UPDATE SET gmail_draft_id=COALESCE(excluded.gmail_draft_id,gmail_drafts.gmail_draft_id),thread_id=excluded.thread_id,in_reply_to=excluded.in_reply_to,
+      INSERT INTO gmail_drafts(id,account_id,gmail_draft_id,remote_revision,thread_id,in_reply_to,references_json,to_json,cc_json,bcc_json,subject,body_text,body_html,attachment_paths_json,status,delivery_at,error,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET gmail_draft_id=COALESCE(excluded.gmail_draft_id,gmail_drafts.gmail_draft_id),remote_revision=COALESCE(excluded.remote_revision,gmail_drafts.remote_revision),thread_id=excluded.thread_id,in_reply_to=excluded.in_reply_to,
         references_json=excluded.references_json,to_json=excluded.to_json,cc_json=excluded.cc_json,bcc_json=excluded.bcc_json,
         subject=excluded.subject,body_text=excluded.body_text,body_html=excluded.body_html,attachment_paths_json=excluded.attachment_paths_json,
         status=excluded.status,delivery_at=excluded.delivery_at,error=excluded.error,updated_at=excluded.updated_at
     `).run(
-      id, input.accountId, result.remoteDraftId ?? null, input.threadId ?? null, input.inReplyTo ?? null,
+      id, input.accountId, result.remoteDraftId ?? null, result.remoteRevision ?? null, input.threadId ?? null, input.inReplyTo ?? null,
       JSON.stringify(input.references ?? []), JSON.stringify(input.to), JSON.stringify(input.cc), JSON.stringify(input.bcc),
       input.subject, input.text, input.html ?? null, JSON.stringify(input.attachmentPaths), status, deliveryAt ?? null, result.error ?? null, updatedAt
     )
@@ -1114,6 +1120,7 @@ export class MailDatabase {
     return {
       id,
       remoteDraftId: stored?.gmail_draft_id ? String(stored.gmail_draft_id) : result.remoteDraftId,
+      remoteRevision: stored?.remote_revision ? String(stored.remote_revision) : result.remoteRevision,
       status,
       updatedAt,
       deliveryAt,
@@ -1131,6 +1138,7 @@ export class MailDatabase {
       id: String(row.id),
       accountId: String(row.account_id),
       remoteDraftId: row.gmail_draft_id ? String(row.gmail_draft_id) : undefined,
+      remoteRevision: row.remote_revision ? String(row.remote_revision) : undefined,
       threadId: row.thread_id ? String(row.thread_id) : undefined,
       inReplyTo: row.in_reply_to ? String(row.in_reply_to) : undefined,
       references: json<string[]>(String(row.references_json), []),
@@ -1189,8 +1197,8 @@ export class MailDatabase {
   }
 
   updateDraftResult(id: string, result: MailDraftResult) {
-    this.stmt('UPDATE gmail_drafts SET gmail_draft_id=?,status=?,delivery_at=?,error=?,updated_at=? WHERE id=?')
-      .run(result.remoteDraftId ?? null, result.status, result.deliveryAt ?? null, result.error ?? null, result.updatedAt, id)
+    this.stmt('UPDATE gmail_drafts SET gmail_draft_id=?,remote_revision=COALESCE(?,remote_revision),status=?,delivery_at=?,error=?,updated_at=? WHERE id=?')
+      .run(result.remoteDraftId ?? null, result.remoteRevision ?? null, result.status, result.deliveryAt ?? null, result.error ?? null, result.updatedAt, id)
   }
 
   cancelDraftDelivery(id: string): MailDraftResult {

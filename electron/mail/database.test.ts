@@ -311,9 +311,10 @@ describe('MailDatabase', () => {
       text: 'First version',
       attachmentPaths: []
     }
-    const created = database.saveDraft(input, { remoteDraftId: 'gmail-draft-1', status: 'synced' })
+    const created = database.saveDraft(input, { remoteDraftId: 'gmail-draft-1', remoteRevision: 'gmail-message-1', status: 'synced' })
     const updated = database.saveDraft({ ...input, id: created.id, text: 'Second version' }, { status: 'syncing' })
     expect(updated.remoteDraftId).toBe('gmail-draft-1')
+    expect(updated.remoteRevision).toBe('gmail-message-1')
     database.close()
   })
 
@@ -325,6 +326,17 @@ describe('MailDatabase', () => {
     expect(database.getDraftRecord(input.id)?.text).toBe('Second')
     expect(() => database.saveDraft({ ...input, expectedUpdatedAt: first.updatedAt, text: 'Stale editor' })).toThrow(/changed after it was opened/)
     expect(database.getDraftRecord(input.id)).toMatchObject({ text: 'Second', updatedAt: second.updatedAt })
+    database.close()
+  })
+
+  it('refuses to replace a draft when its stored provider revision has advanced', () => {
+    const { database } = setup()
+    const input = { id: 'provider-shared', accountId: 'account-1', to: [], cc: [], bcc: [], subject: 'Draft', text: 'First', attachmentPaths: [] }
+    const first = database.saveDraft(input, { remoteDraftId: 'remote-1', remoteRevision: 'provider-revision-1', status: 'synced' })
+    const second = database.saveDraft({ ...input, expectedRemoteRevision: first.remoteRevision, text: 'Second' }, { remoteRevision: 'provider-revision-2', status: 'synced' })
+    expect(second.remoteRevision).toBe('provider-revision-2')
+    expect(() => database.saveDraft({ ...input, expectedRemoteRevision: 'provider-revision-1', text: 'Stale provider edit' })).toThrow(/another mail client/)
+    expect(database.getDraftRecord(input.id)).toMatchObject({ text: 'Second', remoteRevision: 'provider-revision-2' })
     database.close()
   })
 
@@ -340,10 +352,11 @@ describe('MailDatabase', () => {
       text: 'Plain body',
       html: '<p><strong>Rich body</strong></p>',
       attachmentPaths: ['staged-file.txt']
-    }, { remoteDraftId: 'remote-1', status: 'synced' })
+    }, { remoteDraftId: 'remote-1', remoteRevision: 'provider-revision-1', status: 'synced' })
     expect(database.listDrafts()).toEqual([expect.objectContaining({
       id: created.id,
       remoteDraftId: 'remote-1',
+      remoteRevision: 'provider-revision-1',
       subject: 'Editable draft',
       html: '<p><strong>Rich body</strong></p>',
       attachmentPaths: ['staged-file.txt']

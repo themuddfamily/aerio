@@ -21,7 +21,7 @@
 
 - Chat is no longer shown in the v1 module rail while its transport and security model remain undecided.
 - Tray settings now explain their relationship to scheduled sending, snooze, rules, and background synchronization.
-- Draft saves detect stale Aerio editor revisions and offer to preserve the stale edit as a separate copy.
+- Draft saves detect stale Aerio editor revisions and Gmail or Microsoft drafts changed by another client, then offer to preserve the stale edit as a separate copy.
 
 ### Fixed
 

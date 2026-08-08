@@ -192,6 +192,7 @@ function validateDraft(input: MailDraftInput, forSend = false) {
   if (!Array.isArray(input.to) || !Array.isArray(input.cc) || !Array.isArray(input.bcc) || !Array.isArray(input.attachmentPaths)) throw new Error('The draft is invalid')
   if (input.id !== undefined && (typeof input.id !== 'string' || !input.id || input.id.length > 200)) throw new Error('The draft id is invalid')
   if (input.expectedUpdatedAt !== undefined && (typeof input.expectedUpdatedAt !== 'string' || !Number.isFinite(Date.parse(input.expectedUpdatedAt)))) throw new Error('The draft revision is invalid')
+  if (input.expectedRemoteRevision !== undefined && (typeof input.expectedRemoteRevision !== 'string' || !input.expectedRemoteRevision || input.expectedRemoteRevision.length > 1_000)) throw new Error('The provider draft revision is invalid')
   const addresses = [...input.to, ...input.cc, ...input.bcc]
   if (addresses.length > 500) throw new Error('A message cannot contain more than 500 recipients')
   if (forSend && !addresses.length) throw new Error('Add at least one recipient')

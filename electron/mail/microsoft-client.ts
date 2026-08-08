@@ -16,6 +16,7 @@ export interface GraphFolder {
 
 export interface GraphMessage {
   id: string
+  changeKey?: string
   conversationId?: string
   parentFolderId?: string
   receivedDateTime?: string
@@ -165,13 +166,19 @@ export class MicrosoftGraphClient {
 
   async saveDraft(raw: Buffer, existingId?: string) {
     if (existingId) await this.request(`/me/messages/${encodeURIComponent(existingId)}`, { method: 'DELETE' }).catch(() => undefined)
-    const result = await this.request<{ id?: string }>('/me/messages', {
+    const result = await this.request<{ id?: string; changeKey?: string }>('/me/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: raw.toString('base64')
     })
     if (!result?.id) throw new Error('Microsoft could not save the draft')
-    return result.id
+    return { id: result.id, revision: result.changeKey }
+  }
+
+  async draftRevision(id: string) {
+    const result = await this.request<Pick<GraphMessage, 'id' | 'changeKey' | 'isDraft'>>(`/me/messages/${encodeURIComponent(id)}?$select=id,changeKey,isDraft`)
+    if (!result.isDraft || !result.changeKey) throw new Error('The Microsoft draft is no longer available for editing')
+    return result.changeKey
   }
 
   async send(raw: Buffer, draftId?: string) {

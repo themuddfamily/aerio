@@ -203,6 +203,7 @@ export interface PendingOperation {
 export interface MailDraftInput {
   id?: string
   expectedUpdatedAt?: string
+  expectedRemoteRevision?: string
   accountId: string
   threadId?: string
   inReplyTo?: string
@@ -227,6 +228,7 @@ export type MailDraftStatus = 'local' | 'syncing' | 'synced' | 'send-pending' | 
 export interface MailDraftResult {
   id: string
   remoteDraftId?: string
+  remoteRevision?: string
   status: MailDraftStatus
   updatedAt: string
   deliveryAt?: string

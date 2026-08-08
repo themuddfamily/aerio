@@ -98,11 +98,13 @@ describe('GmailClient', () => {
     const client = new GmailClient('account', async () => 'token')
     await client.createDraft('raw', 'thread-1')
     await client.updateDraft('draft/1', 'new-raw')
+    await expect(client.draftRevision('draft/1')).resolves.toBe('message-1')
     await client.deleteDraft('draft/1')
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ message: { raw: 'raw', threadId: 'thread-1' } })
     expect(fetchMock.mock.calls[1][0]).toContain('/drafts/draft%2F1')
     expect(fetchMock.mock.calls[1][1].method).toBe('PUT')
-    expect(fetchMock.mock.calls[2][1].method).toBe('DELETE')
+    expect(fetchMock.mock.calls[2][0]).toContain('/drafts/draft%2F1?format=minimal')
+    expect(fetchMock.mock.calls[3][1].method).toBe('DELETE')
   })
 
   it('sends existing drafts with and without replacement MIME', async () => {

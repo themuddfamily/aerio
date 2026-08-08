@@ -3,7 +3,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { MailAccountSummary, MailDraftRecord, MailThreadDetail } from '../mail-types'
+import type { MailAccountSummary, MailDraftRecord, MailDraftResult, MailThreadDetail } from '../mail-types'
 import { ContextMenuProvider } from './ContextMenu'
 import MailComposeModal from './MailComposeModal'
 
@@ -11,7 +11,7 @@ const accounts: MailAccountSummary[] = [{
   id: 'account', provider: 'gmail', email: 'me@example.test', displayName: 'Me', color: '#123456', status: 'ready', archived: false,
   signature: 'Aerio User', notifications: true, syncEnabled: true
 }]
-const result = (status: 'synced' | 'send-pending' | 'scheduled' | 'failed' | 'discarded' | 'discard-queued' = 'synced') => ({
+const result = (status: 'synced' | 'send-pending' | 'scheduled' | 'failed' | 'discarded' | 'discard-queued' = 'synced'): MailDraftResult => ({
   id: 'draft', status, updatedAt: '2026-08-08T10:00:00Z', ...(status === 'failed' ? { error: 'Provider rejected it' } : {})
 })
 const api = {
@@ -190,6 +190,29 @@ describe('MailComposeModal', () => {
     await user.click(screen.getByTitle('Save draft and close'))
     await waitFor(() => expect(api.mail.drafts.save).toHaveBeenCalled())
     expect(callbacks.onClose).toHaveBeenCalled()
+  })
+
+  it('preserves remote draft revisions and offers a separate copy after another client changes the draft', async () => {
+    const draft: MailDraftRecord = {
+      id: 'shared', accountId: 'account', remoteDraftId: 'remote-draft', remoteRevision: 'provider-revision-1',
+      to: ['reader@example.test'], cc: [], bcc: [], subject: 'Shared draft', text: 'Body', attachmentPaths: [],
+      status: 'synced', updatedAt: '2026-08-08T10:00:00Z'
+    }
+    const user = userEvent.setup(), callbacks = renderCompose({ draft })
+    await user.type(rowInput('Subject'), ' changed')
+    api.mail.drafts.save.mockRejectedValueOnce(new Error('This draft changed after it was opened in another mail client. Your version was not overwritten; save it as a copy to keep both versions.'))
+    await user.click(screen.getByRole('button', { name: /Save draft/ }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /Save as copy/ })).toBeInTheDocument())
+    expect(api.mail.drafts.save).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      id: 'shared', expectedUpdatedAt: draft.updatedAt, expectedRemoteRevision: 'provider-revision-1'
+    }))
+
+    api.mail.drafts.save.mockResolvedValueOnce({ ...result(), id: 'copy', remoteRevision: 'provider-revision-2' })
+    await user.click(screen.getByRole('button', { name: /Save as copy/ }))
+    await waitFor(() => expect(callbacks.onToast).toHaveBeenCalledWith('Draft saved as a separate copy'))
+    expect(api.mail.drafts.save).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      expectedUpdatedAt: undefined, expectedRemoteRevision: undefined
+    }))
   })
 
   it('selects plain suggestions into To, Cc, and Bcc replacement and append paths', async () => {

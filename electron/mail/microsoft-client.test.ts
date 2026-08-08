@@ -105,9 +105,9 @@ describe('Microsoft Graph mail client', () => {
   it('replaces an existing draft and returns the new immutable id', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'new-draft' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'new-draft', changeKey: 'revision-2' }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
-    await expect(new MicrosoftGraphClient(async () => 'token').saveDraft(Buffer.from('mime'), 'old/draft')).resolves.toBe('new-draft')
+    await expect(new MicrosoftGraphClient(async () => 'token').saveDraft(Buffer.from('mime'), 'old/draft')).resolves.toEqual({ id: 'new-draft', revision: 'revision-2' })
     expect(fetchMock.mock.calls[0][0]).toContain('old%2Fdraft')
     expect(fetchMock.mock.calls[1][1].body).toBe(Buffer.from('mime').toString('base64'))
   })
@@ -117,7 +117,14 @@ describe('Microsoft Graph mail client', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'Gone' } }), { status: 404 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'replacement' }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
-    await expect(new MicrosoftGraphClient(async () => 'token').saveDraft(Buffer.from('mime'), 'old')).resolves.toBe('replacement')
+    await expect(new MicrosoftGraphClient(async () => 'token').saveDraft(Buffer.from('mime'), 'old')).resolves.toEqual({ id: 'replacement', revision: undefined })
+  })
+
+  it('reads the current draft change key before replacement', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'draft/1', changeKey: 'revision-1', isDraft: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(new MicrosoftGraphClient(async () => 'token').draftRevision('draft/1')).resolves.toBe('revision-1')
+    expect(fetchMock.mock.calls[0][0]).toContain('/messages/draft%2F1?$select=id,changeKey,isDraft')
   })
 
   it('rejects a draft response without an id', async () => {
