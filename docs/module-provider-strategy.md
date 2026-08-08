@@ -4,12 +4,12 @@ Aerio treats each module as its own capability. Connecting a mail account never 
 
 ## Current data boundaries
 
-- Demo content remains in `aerio-demo.sqlite` and is visible only in the Demo workspace.
+- Application settings and profile preferences live in `aerio-state.sqlite`; no sample workspace is loaded at runtime.
 - Provider Calendar and Contacts snapshots live in `productivity.sqlite`, keyed by account and provider.
 - Production local Tasks and Notes also live in `productivity.sqlite`, but in separate local-module records with no provider identity.
 - Connected Chat has no storage or fake transport. The UI reports that no service is connected.
 
-This split prevents sample records from leaking into a real workspace and gives future connectors a stable boundary.
+This split keeps provider caches, local production data, and application preferences independent and gives future connectors a stable boundary.
 
 ## Tasks: local-first, then provider adapters
 
@@ -47,4 +47,4 @@ Matrix is a plausible open-protocol candidate, while Teams or Google Chat would 
 
 ## Capability rule
 
-`src/providers/provider.ts` is the source of truth for what each connection can do now. UI code should branch on capabilities or workspace source, never infer Calendar, Contacts, Tasks, Notes, or Chat support merely from an email address or an IMAP connection.
+`src/providers/provider.ts` is the source of truth for what each connection can do now. UI code should branch on capabilities, never infer Calendar, Contacts, Tasks, Notes, or Chat support merely from an email address or an IMAP connection.

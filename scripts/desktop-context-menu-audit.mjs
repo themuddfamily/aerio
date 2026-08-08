@@ -113,6 +113,10 @@ function seedRealMailFixture() {
       name: 'Connected Contact', email: 'contact@aerio.local', phone: '+44 20 0000 0000', group: 'Google', favorite: false, color: '#1d7a62'
     }]
   })
+  productivity.saveLocal({
+    tasks: [{ id: 'context-task', listId: 'Today', title: 'Context task', priority: 'normal', completed: false, subtasks: [] }],
+    notes: [{ id: 'context-note', folder: 'Studio', title: 'Context note', content: 'Context note body', tags: ['audit'], pinned: true, archived: false, updatedAt: '2026-08-01T12:00:00.000Z' }]
+  })
   productivity.close()
 }
 
@@ -141,12 +145,6 @@ try {
   }
   trackRuntimeErrors(page)
   await page.waitForSelector('.app')
-
-  const modeSwitch = page.locator('.mode-switch')
-  if ((await modeSwitch.innerText()).includes('Connected workspace')) {
-    await modeSwitch.click()
-    await page.getByText('Demo workspace', { exact: true }).waitFor()
-  }
 
   const popup = page.locator('.context-menu')
   const moduleButton = (name) => page.locator('.module-rail').getByRole('button', { name })
@@ -219,85 +217,6 @@ try {
     await page.evaluate(() => document.querySelector('#context-content-fixture')?.remove())
   })
 
-  await step('demo mail menus cover folders, accounts, messages, forwarding, and attachments', async () => {
-    await moduleButton('Mail').click()
-    await openMenu(page.getByRole('button', { name: /Unified inbox/ }))
-    await expectItems('Open Unified inbox', 'New message')
-    assert.match(await popup.innerText(), /Mark all as read/)
-    await dismiss()
-
-    await openMenu(page.locator('.account-heading').first())
-    assert.match(await popup.innerText(), /folders/)
-    await expectItems('Copy email address')
-    await dismiss()
-
-    await page.getByRole('button', { name: 'New message' }).click()
-    const compose = page.getByRole('dialog', { name: 'New message' })
-    await compose.getByPlaceholder('name@example.com').fill('draft@example.com')
-    await compose.getByPlaceholder('What’s this about?').fill('Context menu draft')
-    await compose.getByRole('button', { name: 'Save draft' }).click()
-    await page.locator('.context-sidebar .sidebar-item').filter({ hasText: 'Drafts' }).first().click()
-    const draft = page.locator('.message-row').filter({ hasText: 'Context menu draft' })
-    await openMenu(draft)
-    await expectItems('Edit draft', 'Duplicate draft', 'Copy subject', 'Move to Trash')
-    await menuItem('Edit draft').click()
-    await page.getByRole('dialog', { name: 'Edit draft' }).waitFor()
-    await page.getByRole('dialog', { name: 'Edit draft' }).getByRole('button', { name: 'Close' }).click()
-    await page.getByRole('button', { name: /Unified inbox/ }).click()
-
-    const message = page.locator('.message-row').filter({ hasText: 'The new identity feels exactly right' })
-    await openMenu(message)
-    await expectItems('Open in new window', 'Reply', 'Reply all', 'Forward', 'Remove star', 'Flag message', 'Archive', 'Move to Trash', 'Add to Tasks', 'Add to Calendar', 'Copy subject')
-    await menuItem('Forward').click()
-    await page.getByRole('dialog', { name: 'Forward' }).waitFor()
-    await page.getByRole('dialog', { name: 'Forward' }).getByRole('button', { name: 'Close' }).click()
-
-    await message.click()
-    const attachment = page.locator('.reader-panel .attachment-card').first()
-    await openMenu(attachment)
-    await expectItems('Show attachment details', 'Copy filename')
-    await dismiss()
-  })
-
-  await step('calendar menus cover calendars, dates, and event operations', async () => {
-    await moduleButton('Calendar').click()
-    await openMenu(page.locator('.calendar-toggle').first())
-    await expectItems('Hide calendar', 'Show only this calendar', 'Show all calendars', 'Copy calendar address')
-    assert.match(await popup.innerText(), /New event in/)
-    await dismiss()
-
-    await openMenu(page.locator('.month-day').first())
-    await expectItems('New event', 'Open day view', 'Copy date')
-    await dismiss()
-
-    const event = page.locator('.up-next-card button').first()
-    await openMenu(event)
-    await expectItems('Open event', 'Duplicate event', 'Copy event details', 'Delete event')
-    await menuItem('Duplicate event').click()
-    await page.getByRole('dialog', { name: 'Edit event' }).waitFor()
-    await page.getByRole('dialog', { name: 'Edit event' }).getByRole('button', { name: 'Close' }).click()
-  })
-
-  await step('contact menus cover communication, editing, copying, and related mail', async () => {
-    await moduleButton('Contacts').click()
-    const contact = page.locator('.contact-row').filter({ hasText: 'Jon Bell' })
-    await openMenu(contact)
-    await expectItems('Email', 'Start chat', 'Edit contact', 'Add to favourites', 'Copy email address', 'Copy phone number', 'Delete contact')
-    await menuItem('Add to favourites').click()
-    await openMenu(contact)
-    await expectItems('Remove from favourites')
-    await dismiss()
-
-    await openMenu(page.locator('.detail-card dl > div').first())
-    await expectItems('Email contact', 'Copy email address')
-    await dismiss()
-
-    const related = page.locator('.related-message').first()
-    await openMenu(related)
-    await expectItems('Open message', 'Reply', 'Copy subject', 'Copy sender address')
-    await dismiss()
-  })
-
   await step('task menus cover completion, priorities, lists, duplication, and deletion', async () => {
     await moduleButton('Tasks').click()
     await openMenu(page.locator('.sidebar-item').filter({ hasText: 'Today' }).first())
@@ -328,32 +247,8 @@ try {
     await page.getByText('Note duplicated').waitFor()
   })
 
-  await step('chat menus cover conversations, mute/search state, messages, reactions, and files', async () => {
-    await moduleButton('Chat').click()
-    const conversation = page.locator('.chat-list-item').filter({ hasText: 'Maya Chen' })
-    await openMenu(conversation)
-    await expectItems('Open conversation', 'Mark as read', 'Mute conversation', 'Search conversation', 'Copy contact name', 'Delete conversation')
-    await menuItem('Mute conversation').click()
-    await openMenu(conversation)
-    await expectItems('Unmute conversation')
-    await dismiss()
-
-    const chatMessage = page.locator('.chat-bubble-row').first()
-    await openMenu(chatMessage)
-    await expectItems('Copy message', '👍 React', '❤️ React', '😂 React', '🎉 React')
-    await menuItem('👍 React').click()
-    await openMenu(chatMessage)
-    assert.equal(await popup.getByText('👍 React', { exact: true }).locator('..').getAttribute('aria-checked'), 'true')
-    await dismiss()
-    const infoPanel = page.locator('.chat-info-panel')
-    if (!(await infoPanel.isVisible())) await page.getByRole('button', { name: 'Conversation details' }).click()
-    await openMenu(infoPanel.locator('.info-person').first())
-    await expectItems('Copy participant name')
-    await dismiss()
-  })
-
-  await step('real mail menus cover accounts, folders, labels, conversations, messages, and attachments', async () => {
-    await modeSwitch.click()
+  await step('connected mail menus cover accounts, folders, labels, conversations, messages, and attachments', async () => {
+    await moduleButton('Mail').click()
     await page.locator('.real-mail').waitFor()
     const productivitySnapshot = await page.evaluate(() => window.aerio.productivity.snapshot())
     assert.equal(productivitySnapshot.events.length, 1, `Unexpected productivity snapshot: ${JSON.stringify(productivitySnapshot)}`)
@@ -367,10 +262,24 @@ try {
     assert.equal(await eventDetails.getByLabel('Event title').isDisabled(), true)
     await eventDetails.getByRole('button', { name: 'Close' }).last().click()
     await page.getByRole('button', { name: 'Sync now' }).waitFor()
+    await openMenu(page.locator('.calendar-toggle').first())
+    await expectItems('Hide calendar', 'Show only this calendar', 'Show all calendars', 'New event in Audit calendar', 'Copy calendar address')
+    await dismiss()
+    await openMenu(page.locator('.calendar-event').filter({ hasText: 'Connected calendar review' }))
+    await expectItems('Open event', 'Copy event details')
+    assert.doesNotMatch(await popup.innerText(), /Delete event|Duplicate event/)
+    await dismiss()
 
     await moduleButton('Contacts').click()
-    await page.getByText('Connected Contact', { exact: true }).first().waitFor()
+    const connectedContact = page.locator('.contact-row').filter({ hasText: 'Connected Contact' })
+    await connectedContact.waitFor()
     assert.equal(await page.getByRole('button', { name: 'New contact' }).count(), 0)
+    await openMenu(connectedContact)
+    await expectItems('Email', 'Copy email address', 'Copy phone number')
+    await dismiss()
+    await openMenu(page.locator('.detail-card dl > div').first())
+    await expectItems('Email contact', 'Copy email address')
+    await dismiss()
 
     await moduleButton('Mail').click()
     await page.locator('.real-mail').waitFor()
@@ -544,9 +453,9 @@ try {
     await page.locator('.real-mail .context-sidebar .sidebar-item').filter({ hasText: 'Inbox' }).first().click()
   })
 
-  await step('workspace and theme controls expose direct choices', async () => {
-    await openMenu(modeSwitch)
-    await expectItems('Demo workspace', 'Connected workspace', 'Sync Calendar and Contacts', 'New message')
+  await step('connected services and theme controls expose direct choices', async () => {
+    await openMenu(page.getByRole('button', { name: 'Connected services' }))
+    await expectItems('Sync Calendar and Contacts', 'New message')
     await dismiss()
 
     await openMenu(page.getByRole('button', { name: 'Settings' }))

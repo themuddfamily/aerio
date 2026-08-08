@@ -14,15 +14,7 @@ export interface Account {
   email: string
   initials: string
   color: string
-  provider: 'demo' | 'gmail' | 'microsoft' | 'outlook' | 'imap'
-}
-
-export interface Folder {
-  id: string
-  accountId: string
-  name: string
-  icon?: string
-  system?: 'inbox' | 'drafts' | 'sent' | 'archive' | 'trash' | 'spam'
+  provider: 'gmail' | 'microsoft' | 'outlook' | 'imap'
 }
 
 export interface Attachment {
@@ -31,30 +23,6 @@ export interface Attachment {
   size: number
   path?: string
   mime?: string
-}
-
-export interface Message {
-  id: string
-  threadId: string
-  accountId: string
-  folderId: string
-  from: string
-  fromEmail: string
-  to: string[]
-  cc?: string[]
-  subject: string
-  preview: string
-  body: string
-  date: string
-  unread: boolean
-  starred: boolean
-  flagged: boolean
-  labels: string[]
-  attachments: Attachment[]
-  draft?: boolean
-  sent?: boolean
-  archived?: boolean
-  trashed?: boolean
 }
 
 export interface CalendarEvent {
@@ -108,61 +76,30 @@ export interface Note {
   color?: string
 }
 
-export interface ChatMessage {
-  id: string
-  sender: 'me' | 'them'
-  text: string
-  time: string
-  reaction?: string
-  attachment?: Attachment
-}
-
-export interface Conversation {
-  id: string
-  name: string
-  participants: string[]
-  color: string
-  online: boolean
-  unread: number
-  messages: ChatMessage[]
-}
-
 export interface Settings {
   theme: ThemePreference
   density: DensityPreference
   closeToTray: boolean
   notifications: boolean
   startModule: ModuleId
-  signature: string
   profile?: UserProfile
 }
 
+export interface AppPreferences {
+  schemaVersion: 1
+  settings: Settings
+}
+
+// A renderer view model for provider Calendar/Contacts and local Tasks/Notes.
 export interface AppState {
-  schemaVersion: number
   accounts: Account[]
-  folders: Folder[]
-  messages: Message[]
   events: CalendarEvent[]
   contacts: Contact[]
   tasks: Task[]
   notes: Note[]
-  conversations: Conversation[]
-  settings: Settings
 }
 
-export interface DraftInput {
-  accountId: string
-  to: string[]
-  cc: string[]
-  subject: string
-  body: string
-  attachments: Attachment[]
-  replyToThreadId?: string
-}
-
-export type MessageWindowRequest =
-  | { source: 'demo'; messageId: string; title: string }
-  | { source: 'connected'; accountId: string; threadId: string; messageId?: string; title: string }
+export type MessageWindowRequest = { source: 'connected'; accountId: string; threadId: string; messageId?: string; title: string }
 
 export interface WindowControls {
   minimize(): Promise<void>
@@ -192,9 +129,8 @@ export interface AppUpdateControls {
 }
 
 export interface AerioDesktopApi {
-  loadState(): Promise<AppState>
-  saveState(state: AppState): Promise<{ savedAt: string }>
-  resetState(): Promise<AppState>
+  loadPreferences(): Promise<AppPreferences>
+  savePreferences(preferences: AppPreferences): Promise<{ savedAt: string }>
   chooseAttachments(): Promise<Attachment[]>
   chooseProfileImage(): Promise<string | undefined>
   notify(title: string, body: string): Promise<void>

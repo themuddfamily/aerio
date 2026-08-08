@@ -1,13 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, shell, Tray } from 'electron'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { arch, platform, release, tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { createDemoState } from '../src/demo-data'
-import type { AppState, Attachment, CalendarEvent, MessageWindowRequest } from '../src/types'
+import { createDefaultPreferences, defaultSettings } from '../src/preferences'
+import type { AppPreferences, Attachment, CalendarEvent, MessageWindowRequest, ModuleId, Settings } from '../src/types'
 import type {
   ApplyMailActionInput,
   MailAccountSummary,
@@ -91,46 +91,72 @@ function diagnostic(record: Omit<DiagnosticRecord, 'timestamp'>) {
   diagnostics?.log(record)
 }
 
-const validState = (value: unknown): value is AppState => {
-  if (!value || typeof value !== 'object') return false
-  const state = value as Partial<AppState>
-  return state.schemaVersion === 1 &&
-    Array.isArray(state.accounts) &&
-    Array.isArray(state.messages) &&
-    Array.isArray(state.events) &&
-    Array.isArray(state.contacts) &&
-    Array.isArray(state.tasks) &&
-    Array.isArray(state.notes) &&
-    Array.isArray(state.conversations)
-}
+const themeValues = new Set<Settings['theme']>(['system', 'light', 'dark'])
+const densityValues = new Set<Settings['density']>(['comfortable', 'compact'])
+const moduleValues = new Set<ModuleId>(['mail', 'calendar', 'contacts', 'tasks', 'notes', 'chat'])
 
-async function initializeDatabase() {
-  const userData = app.getPath('userData')
-  const legacyPath = join(userData, 'aerio.sqlite')
-  const databasePath = join(userData, 'aerio-demo.sqlite')
-  if (!existsSync(databasePath) && existsSync(legacyPath)) {
-    const legacy = new DatabaseSync(legacyPath, { readOnly: true })
-    const normalized = Boolean(legacy.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'`).get())
-    legacy.close()
-    if (!normalized) {
-      copyFileSync(legacyPath, databasePath)
-      const backup = `${legacyPath}.v0.1.bak`
-      if (!existsSync(backup)) copyFileSync(legacyPath, backup)
+function preferencesFromUnknown(value: unknown): AppPreferences | undefined {
+  if (!value || typeof value !== 'object') return
+  const settings = (value as { settings?: unknown }).settings
+  if (!settings || typeof settings !== 'object') return
+  const candidate = settings as Partial<Settings>
+  if (!themeValues.has(candidate.theme as Settings['theme']) ||
+      !densityValues.has(candidate.density as Settings['density']) ||
+      typeof candidate.closeToTray !== 'boolean' ||
+      typeof candidate.notifications !== 'boolean' ||
+      !moduleValues.has(candidate.startModule as ModuleId)) return
+  const profile = candidate.profile
+  if (profile !== undefined && (!profile || typeof profile !== 'object' || typeof profile.displayName !== 'string')) return
+  const isUntouchedSampleProfile = profile?.displayName === 'Alex Avery' && profile.email === 'alex@aerio.app' && !profile.avatarDataUrl
+  return {
+    schemaVersion: 1,
+    settings: {
+      ...defaultSettings,
+      theme: candidate.theme as Settings['theme'],
+      density: candidate.density as Settings['density'],
+      closeToTray: candidate.closeToTray,
+      notifications: candidate.notifications,
+      startModule: candidate.startModule as ModuleId,
+      ...(profile && !isUntouchedSampleProfile ? { profile: {
+        displayName: profile.displayName,
+        ...(typeof profile.email === 'string' ? { email: profile.email } : {}),
+        ...(typeof profile.avatarDataUrl === 'string' ? { avatarDataUrl: profile.avatarDataUrl } : {})
+      } } : {})
     }
   }
+}
+
+function readLegacyPreferences(userData: string) {
+  const legacyPath = join(userData, 'aerio-demo.sqlite')
+  if (!existsSync(legacyPath)) return
+  let legacy: DatabaseSync | undefined
+  try {
+    legacy = new DatabaseSync(legacyPath, { readOnly: true })
+    const result = legacy.prepare('SELECT payload FROM app_state WHERE id = 1').get() as { payload?: unknown } | undefined
+    return result?.payload === undefined ? undefined : preferencesFromUnknown(JSON.parse(String(result.payload)))
+  } catch {
+    return undefined
+  } finally {
+    legacy?.close()
+  }
+}
+
+async function initializePreferencesDatabase() {
+  const userData = app.getPath('userData')
+  const databasePath = join(userData, 'aerio-state.sqlite')
   database = new DatabaseSync(databasePath)
   database.exec(`
     PRAGMA journal_mode=WAL;
     PRAGMA synchronous=NORMAL;
-    CREATE TABLE IF NOT EXISTS app_state (
+    CREATE TABLE IF NOT EXISTS app_preferences (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       schema_version INTEGER NOT NULL,
       payload TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
   `)
-  const result = database.prepare('SELECT payload FROM app_state WHERE id = 1').get()
-  if (!result) saveState(createDemoState())
+  const result = database.prepare('SELECT payload FROM app_preferences WHERE id = 1').get()
+  if (!result) savePreferences(readLegacyPreferences(userData) ?? createDefaultPreferences())
 }
 
 function requireMailWorker() {
@@ -333,7 +359,7 @@ function isPrivateAddress(address: string) {
 }
 
 function showNewMailNotification(payload: Extract<import('../src/mail-types').MailWorkerEvent, { type: 'new-mail' }>['payload']) {
-  if (hideTestWindows || !Notification.isSupported() || !loadState().settings.notifications) return
+  if (hideTestWindows || !Notification.isSupported() || !loadPreferences().settings.notifications) return
   const title = payload.count === 1 ? payload.sender || 'New message' : `${payload.count.toLocaleString()} new messages`
   const notification = new Notification({ title, body: payload.count === 1 ? payload.subject || 'Open Aerio to read it' : 'Open Aerio to view your inbox', icon: iconPath() })
   notification.on('click', () => {
@@ -509,27 +535,29 @@ function registerRemoteImageProtocol() {
   })
 }
 
-function loadState(): AppState {
+function loadPreferences(): AppPreferences {
   if (!database) throw new Error('Aerio database is not ready')
-  const result = database.prepare('SELECT payload FROM app_state WHERE id = 1').get() as { payload?: unknown } | undefined
-  if (!result) return createDemoState()
+  const result = database.prepare('SELECT payload FROM app_preferences WHERE id = 1').get() as { payload?: unknown } | undefined
+  if (!result) return createDefaultPreferences()
   const parsed: unknown = JSON.parse(String(result.payload))
-  if (!validState(parsed)) throw new Error('Stored Aerio data is invalid')
-  return parsed
+  const preferences = preferencesFromUnknown(parsed)
+  if (!preferences) throw new Error('Stored Aerio preferences are invalid')
+  return preferences
 }
 
-function saveState(state: AppState) {
+function savePreferences(preferences: AppPreferences) {
   if (!database) throw new Error('Aerio database is not ready')
-  if (!validState(state)) throw new Error('Refusing to save invalid Aerio data')
+  const normalized = preferencesFromUnknown(preferences)
+  if (!normalized) throw new Error('Refusing to save invalid Aerio preferences')
   const updatedAt = new Date().toISOString()
   database.prepare(
-    `INSERT INTO app_state (id, schema_version, payload, updated_at)
+    `INSERT INTO app_preferences (id, schema_version, payload, updated_at)
      VALUES (1, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        schema_version = excluded.schema_version,
        payload = excluded.payload,
         updated_at = excluded.updated_at`
-  ).run(state.schemaVersion, JSON.stringify(state), updatedAt)
+  ).run(normalized.schemaVersion, JSON.stringify(normalized), updatedAt)
   return { savedAt: updatedAt }
 }
 
@@ -614,12 +642,11 @@ function validMessageWindowRequest(value: unknown): value is MessageWindowReques
   const input = value as Partial<MessageWindowRequest> & { accountId?: unknown; threadId?: unknown; messageId?: unknown }
   const validText = (text: unknown) => typeof text === 'string' && text.length > 0 && text.length <= 1_000
   if (!validText(input.title)) return false
-  if (input.source === 'demo') return validText(input.messageId)
   return input.source === 'connected' && validText(input.accountId) && validText(input.threadId) && (input.messageId === undefined || validText(input.messageId))
 }
 
 function createMessageWindow(input: MessageWindowRequest) {
-  const key = input.source === 'demo' ? `demo:${input.messageId}` : `mail:${input.accountId}:${input.threadId}:${input.messageId ?? 'thread'}`
+  const key = `mail:${input.accountId}:${input.threadId}:${input.messageId ?? 'thread'}`
   const existing = messageWindows.get(key)
   if (existing && !existing.isDestroyed()) {
     if (existing.isMinimized()) existing.restore()
@@ -651,9 +678,7 @@ function createMessageWindow(input: MessageWindowRequest) {
   configureRendererWindow(messageWindow)
   messageWindow.once('ready-to-show', () => { if (!hideTestWindows) messageWindow.show() })
   messageWindow.once('closed', () => messageWindows.delete(key))
-  loadRenderer(messageWindow, input.source === 'demo'
-    ? { view: 'message', source: 'demo', messageId: input.messageId }
-    : { view: 'message', source: 'connected', accountId: input.accountId, threadId: input.threadId, ...(input.messageId ? { messageId: input.messageId } : {}) })
+  loadRenderer(messageWindow, { view: 'message', source: 'connected', accountId: input.accountId, threadId: input.threadId, ...(input.messageId ? { messageId: input.messageId } : {}) })
 }
 
 function createWindow() {
@@ -696,7 +721,7 @@ function createWindow() {
   mainWindow.on('blur', () => updateMailPolling())
   mainWindow.on('minimize', () => updateMailPolling())
   mainWindow.on('close', (event) => {
-    const closeToTray = loadState().settings.closeToTray
+    const closeToTray = loadPreferences().settings.closeToTray
     if (!quitting && closeToTray) {
       event.preventDefault()
       mainWindow?.hide()
@@ -738,13 +763,8 @@ function createTray() {
 }
 
 function registerIpc() {
-  ipcMain.handle('state:load', () => loadState())
-  ipcMain.handle('state:save', (_event, state: AppState) => saveState(state))
-  ipcMain.handle('state:reset', () => {
-    const state = createDemoState()
-    saveState(state)
-    return state
-  })
+  ipcMain.handle('preferences:load', () => loadPreferences())
+  ipcMain.handle('preferences:save', (_event, preferences: AppPreferences) => savePreferences(preferences))
   ipcMain.handle('files:choose', async (): Promise<Attachment[]> => {
     const options: Electron.OpenDialogOptions = { properties: ['openFile', 'multiSelections'] }
     const result = mainWindow
@@ -1090,7 +1110,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   diagnostics = new DiagnosticLogger(join(app.getPath('userData'), 'logs', 'aerio.jsonl'))
   diagnostic({ level: 'info', component: 'app', event: 'startup', details: { version: app.getVersion(), packaged: app.isPackaged } })
   Menu.setApplicationMenu(null)
-  await initializeDatabase()
+  await initializePreferencesDatabase()
   await initializeMail()
   productivityStore = new ProductivityStore(join(app.getPath('userData'), 'productivity.sqlite'))
   registerIpc()
@@ -1133,5 +1153,5 @@ process.on('unhandledRejection', (error) => diagnostic({ level: 'error', compone
 process.on('uncaughtExceptionMonitor', (error) => diagnostic({ level: 'error', component: 'app', event: 'uncaught-exception', message: error.message, details: { stack: error.stack } }))
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin' && !loadState().settings.closeToTray) app.quit()
+  if (process.platform !== 'darwin' && !loadPreferences().settings.closeToTray) app.quit()
 })

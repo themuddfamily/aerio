@@ -12,6 +12,7 @@ interface MailComposeModalProps {
   replyTo?: MailThreadDetail
   replyAll?: boolean
   forward?: boolean
+  initialTo?: string
   onClose(): void
   onSent(result: import('../mail-types').MailDraftResult): void
   onToast(message: string): void
@@ -48,7 +49,7 @@ const localDateTimeValue = (value?: string) => {
   return new Date(date.getTime() - offset).toISOString().slice(0, 16)
 }
 
-export default function MailComposeModal({ accounts, draft, replyTo, replyAll, forward, onClose, onSent, onToast }: MailComposeModalProps) {
+export default function MailComposeModal({ accounts, draft, replyTo, replyAll, forward, initialTo, onClose, onSent, onToast }: MailComposeModalProps) {
   const { showContextMenu } = useContextMenu()
   const replyMessage = replyTo?.messages.at(-1)
   const forwardedText = replyTo && forward && replyMessage ? `\n\n---------- Forwarded message ----------\nFrom: ${replyMessage.fromName || replyMessage.fromEmail} <${replyMessage.fromEmail}>\nDate: ${new Date(replyMessage.date).toLocaleString()}\nSubject: ${replyMessage.subject}\n\n${replyMessage.text}` : ''
@@ -68,7 +69,7 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
   const initialHtml = draft?.html ?? `${signature ? `<div><br></div><div>-- <br>${escapeHtml(signature)}</div>` : ''}${forwardedText ? `<div>${escapeHtml(forwardedText)}</div>` : ''}`
   const [accountId, setAccountId] = useState(initialAccountId)
   const [draftId] = useState(() => draft?.id ?? crypto.randomUUID())
-  const [to, setTo] = useState(draft?.to.join(', ') ?? (forward ? '' : replyRecipients.join(', ')))
+  const [to, setTo] = useState(draft?.to.join(', ') ?? (forward ? '' : replyRecipients.join(', ') || initialTo || ''))
   const [cc, setCc] = useState(draft?.cc.join(', ') ?? replyCc.join(', '))
   const [bcc, setBcc] = useState(draft?.bcc.join(', ') ?? '')
   const [bccVisible, setBccVisible] = useState(Boolean(draft?.bcc.length))

@@ -4,14 +4,11 @@ import { isJsxAttribute, isJsxOpeningElement, isJsxSelfClosingElement } from 'ty
 const required = new Map([
   ['src/App.tsx', 3],
   ['src/components/TitleBar.tsx', 1],
-  ['src/components/ComposeModal.tsx', 1],
   ['src/components/MailComposeModal.tsx', 1],
-  ['src/views/DemoMailView.tsx', 3],
   ['src/views/CalendarView.tsx', 3],
   ['src/views/ContactsView.tsx', 3],
   ['src/views/TasksView.tsx', 3],
   ['src/views/NotesView.tsx', 3],
-  ['src/views/ChatView.tsx', 3],
   ['src/views/ConnectedMailView.tsx', 3]
 ])
 
@@ -37,9 +34,9 @@ for (const [file, minimum] of required) {
 snapshot.dispose()
 api.close()
 
-if (missing.length || total < 40) {
-  console.error(`Context-menu coverage audit failed:\n${[...missing, ...(total < 40 ? [`expected at least 40 right-click targets, found ${total}`] : [])].join('\n')}`)
+if (missing.length || total < 30) {
+  console.error(`Context-menu coverage audit failed:\n${[...missing, ...(total < 30 ? [`expected at least 30 right-click targets, found ${total}`] : [])].join('\n')}`)
   process.exit(1)
 }
 
-console.log(`Context-menu coverage audit passed: ${total} right-click target definitions span global chrome, compose surfaces, and every feature.`)
+console.log(`Context-menu coverage audit passed: ${total} right-click target definitions span global chrome, compose surfaces, and connected features.`)

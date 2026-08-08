@@ -1,6 +1,6 @@
 # Aerio
 
-Aerio is a calm, modern desktop communications client for Windows. The connected workspace supports multi-provider mail, writable Google Calendar synchronization, and read-only Outlook Calendar and provider Contacts alongside the original local demo. The workspaces stay separate, so sample content never mixes with provider data.
+Aerio is a calm, modern desktop communications client for Windows. It supports multi-provider mail, writable Google Calendar synchronization, read-only Outlook Calendar and provider Contacts, plus local Tasks and Notes.
 
 ## Real-mail alpha
 
@@ -18,11 +18,11 @@ Aerio is a calm, modern desktop communications client for Windows. The connected
 - Per-account identity, synchronization, notification, OAuth, IMAP/SMTP, connection-test, and local-rebuild settings
 - Privacy-redacted diagnostics, storage-integrity checks, and native new-mail notifications that open the relevant conversation
 - Sanitized HTML; scripts and unsafe links are removed, and remote images are blocked by default
-- Dedicated message windows for demo and real mail; double-click a conversation to open or focus its window
+- Dedicated message windows for provider mail; double-click a conversation to open or focus its window
 - Read-only local archive or complete local deletion when disconnecting an account
 - Google Calendar synchronization with event creation, editing, and deletion; Google Contacts and Outlook Calendar/Contacts remain read-only and are cached in a separate local database
 
-Tasks, Notes, and Chat remain local/demo modules. Provider Calendar and Contacts data is loaded after **Sync now**. Google events can be created by double-clicking a day or time slot and edited from Aerio after granting the event scope once.
+Tasks and Notes are production local modules. Chat remains visible as an unconfigured module until a secure transport is selected. Provider Calendar and Contacts data is loaded after **Sync now**. Google events can be created by double-clicking a day or time slot and edited from Aerio after granting the event scope once.
 
 ## Connect an account
 
@@ -36,7 +36,7 @@ Aerio includes its public Google Desktop client ID and compiles its client secre
 2. Configure the OAuth consent screen. For durable personal use, publish it as **In production** and add only the Google accounts you intend to use if Google requests test users. Refresh tokens issued while the app is in **Testing** normally expire after seven days.
 3. Create **OAuth client ID → Desktop app** credentials and download the JSON file.
 4. Put its `client_secret` into `.env.local` as `MAIN_VITE_GOOGLE_CLIENT_SECRET`, then rebuild Aerio. The matching public client ID is already Aerio's default; `MAIN_VITE_GOOGLE_CLIENT_ID` can override it for a different registration.
-5. Switch to **Connected workspace**, choose Gmail, and select **Connect Gmail**. Your normal browser completes Google sign-in and returns to Aerio through a temporary `127.0.0.1` callback.
+5. Choose Gmail and select **Connect Gmail**. Your normal browser completes Google sign-in and returns to Aerio through a temporary `127.0.0.1` callback.
 
 Aerio requests Gmail modify access, read-only Calendar-list access, Google Calendar event read/write access, and read-only Contacts access. It does not request permission to create or share calendars, permanently delete Gmail messages, or edit Contacts. Existing accounts connected by an older Aerio build must choose **Enable event editing** in Calendar (or **Account settings → Reconnect**) once to approve the added event scope.
 
@@ -46,7 +46,7 @@ The first download is quota-bound. A mailbox with 100,000 messages can take roug
 
 1. Create an app registration in [Microsoft Entra](https://entra.microsoft.com/).
 2. Enable public client flows and add the **Mobile and desktop applications** redirect URI `http://localhost`.
-3. Aerio's public Application (client) ID is already included. Choose Microsoft in **Connected workspace** and sign in. The browser requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.Read`, and `Contacts.Read` access. Existing connections must reconnect once to grant the added read-only scopes.
+3. Aerio's public Application (client) ID is already included. Choose Microsoft and sign in. The browser requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.Read`, and `Contacts.Read` access. Existing connections must reconnect once to grant the added read-only scopes.
 
 Aerio includes its Microsoft public-client application ID by default, because desktop application IDs are public identifiers rather than secrets. `MAIN_VITE_MICROSOFT_CLIENT_ID` can override it for a separate development registration.
 
@@ -74,7 +74,7 @@ Proton Mail connects through the local [Proton Mail Bridge](https://proton.me/su
 - External HTTP(S) and `mailto:` links open in the system browser/mail handler rather than navigating Aerio.
 - Mailbox files are protected by the Windows user account and disk encryption. Enable BitLocker if the device may be lost or shared.
 
-Before the v0.2 schema is created, an existing v0.1 database is preserved as `aerio.sqlite.v0.1.bak`. Demo state moves to its own `aerio-demo.sqlite` file.
+Application preferences live in `aerio-state.sqlite`. On first launch after this change, Aerio imports only appearance, customized profile, notification, startup, and tray preferences from the former workspace database when available; sample content and the old sample persona are neither loaded nor copied. The legacy database is left untouched.
 
 ## Run from source
 
@@ -114,9 +114,9 @@ The app uses Electron 43, React 19, TypeScript, Vite, and local SQLite databases
 - The main process owns OAuth, OS dialogs, safe storage, external navigation, and a typed IPC boundary.
 - A dedicated Node worker owns the normalized mail database, Gmail/Graph/IMAP synchronization, SMTP delivery, MIME parsing, full-text search, queued mutations, and drafts.
 - Main-process Google and Microsoft productivity connectors normalize Calendar and Contacts into an isolated SQLite cache. Failed refreshes retain the last good snapshot; disconnecting removes that account’s cached productivity data.
-- The demo workspace uses its own `aerio-demo.sqlite` database through Node's built-in SQLite API.
+- Application preferences use their own small SQLite database; provider data and local Tasks/Notes retain their existing dedicated stores.
 
-Automated coverage includes database migration and backup, provider data integrity, productivity connector normalization and atomic cache replacement, logical duplicate suppression, exact-state Undo, editable drafts, outgoing MIME, new-mail notification filtering, Microsoft delta pagination, mocked Gmail behavior, the existing demo domain tests, and pagination over a synthetic 100,000-thread mailbox. Static interaction-contract, WCAG, focus-management, and Playwright-driven Electron passes cover buttons, feature context menus, editing/link/image menus, profile management, dedicated demo/real message windows, cached Calendar/Contacts surfaces, bulk mail organization, account settings, module actions, account onboarding, and native window controls.
+Automated coverage includes provider data integrity, productivity connector normalization and atomic cache replacement, logical duplicate suppression, exact-state Undo, editable drafts, outgoing MIME, new-mail notification filtering, Microsoft delta pagination, mocked Gmail behavior, local-module badge logic, and pagination over a synthetic 100,000-thread mailbox. Static interaction-contract, WCAG, focus-management, and Playwright-driven Electron passes cover buttons, feature context menus, editing/link/image menus, profile management, dedicated message windows, cached Calendar/Contacts surfaces, bulk mail organization, account settings, module actions, account onboarding, and native window controls.
 
 Live provider behavior is release-gated by the disposable-account scenarios in [`docs/live-provider-test-matrix.md`](docs/live-provider-test-matrix.md). Settings → Mail diagnostics checks database integrity and exports a privacy-redacted troubleshooting report; credentials, message bodies, raw mail, HTML, and attachment paths are excluded.
 

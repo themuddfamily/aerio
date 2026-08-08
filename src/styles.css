@@ -375,7 +375,7 @@ kbd {
   white-space: nowrap;
 }
 
-.mode-switch {
+.local-badge.connected {
   height: 28px;
   padding: 0 9px;
   border: 1px solid var(--line);
@@ -383,12 +383,12 @@ kbd {
   background: var(--surface-2);
 }
 
-.mode-switch:hover {
+.local-badge.connected:hover {
   color: var(--text-soft);
   background: var(--surface-hover);
 }
 
-.mode-switch.connected {
+.local-badge.connected {
   border-color: color-mix(in srgb, var(--success) 35%, var(--line));
   color: var(--success);
   background: color-mix(in srgb, var(--success) 10%, var(--surface));
@@ -2625,10 +2625,6 @@ kbd {
 
 .form-stack .modal-footer {
   margin: 4px -22px 0;
-}
-
-.signature-section textarea {
-  min-height: 70px;
 }
 
 .mail-schedule-field {

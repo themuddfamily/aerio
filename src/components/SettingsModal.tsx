@@ -1,17 +1,16 @@
 import { useEffect, useState } from 'react'
-import { Bell, Database, Download, Monitor, Palette, RefreshCw, RotateCcw, Stethoscope } from 'lucide-react'
-import type { AppState, AppUpdateStatus, DensityPreference, ModuleId, ThemePreference } from '../types'
+import { Bell, Download, Monitor, Palette, RefreshCw, Stethoscope } from 'lucide-react'
+import type { AppPreferences, AppUpdateStatus, DensityPreference, ModuleId, ThemePreference } from '../types'
 import type { MailDiagnosticHealth } from '../mail-types'
 import Modal from './Modal'
 
 interface SettingsModalProps {
-  state: AppState
-  onChange(next: AppState): void
-  onReset(): Promise<void>
+  preferences: AppPreferences
+  onChange(next: AppPreferences): void
   onClose(): void
 }
 
-export default function SettingsModal({ state, onChange, onReset, onClose }: SettingsModalProps) {
+export default function SettingsModal({ preferences, onChange, onClose }: SettingsModalProps) {
   const [health, setHealth] = useState<MailDiagnosticHealth>()
   const [diagnosticStatus, setDiagnosticStatus] = useState<'idle' | 'checking' | 'exporting'>('idle')
   const [diagnosticMessage, setDiagnosticMessage] = useState('')
@@ -33,8 +32,8 @@ export default function SettingsModal({ state, onChange, onReset, onClose }: Set
     }
   }, [])
 
-  const setSettings = (updates: Partial<AppState['settings']>) => {
-    onChange({ ...state, settings: { ...state.settings, ...updates } })
+  const setSettings = (updates: Partial<AppPreferences['settings']>) => {
+    onChange({ ...preferences, settings: { ...preferences.settings, ...updates } })
   }
 
   const runUpdateAction = async () => {
@@ -119,12 +118,12 @@ export default function SettingsModal({ state, onChange, onReset, onClose }: Set
             <p>Choose a theme and how much information appears at once.</p>
             <div className="segmented wide">
               {(['system', 'light', 'dark'] as ThemePreference[]).map((theme) => (
-                <button key={theme} className={state.settings.theme === theme ? 'active' : ''} aria-pressed={state.settings.theme === theme} onClick={() => setSettings({ theme })}>{theme}</button>
+                <button key={theme} className={preferences.settings.theme === theme ? 'active' : ''} aria-pressed={preferences.settings.theme === theme} onClick={() => setSettings({ theme })}>{theme}</button>
               ))}
             </div>
             <div className="segmented wide">
               {(['comfortable', 'compact'] as DensityPreference[]).map((density) => (
-                <button key={density} className={state.settings.density === density ? 'active' : ''} aria-pressed={state.settings.density === density} onClick={() => setSettings({ density })}>{density}</button>
+                <button key={density} className={preferences.settings.density === density ? 'active' : ''} aria-pressed={preferences.settings.density === density} onClick={() => setSettings({ density })}>{density}</button>
               ))}
             </div>
           </div>
@@ -148,10 +147,10 @@ export default function SettingsModal({ state, onChange, onReset, onClose }: Set
             <h3>Desktop behaviour</h3>
             <label className="toggle-row">
               <span><strong>Keep Aerio in the tray</strong><small>Closing the window keeps your workspace ready.</small></span>
-              <input type="checkbox" checked={state.settings.closeToTray} onChange={(event) => setSettings({ closeToTray: event.target.checked })} />
+              <input type="checkbox" checked={preferences.settings.closeToTray} onChange={(event) => setSettings({ closeToTray: event.target.checked })} />
             </label>
             <label className="field-label">Open Aerio to
-              <select value={state.settings.startModule} onChange={(event) => setSettings({ startModule: event.target.value as ModuleId })}>
+              <select value={preferences.settings.startModule} onChange={(event) => setSettings({ startModule: event.target.value as ModuleId })}>
                 <option value="mail">Mail</option>
                 <option value="calendar">Calendar</option>
                 <option value="contacts">Contacts</option>
@@ -168,24 +167,7 @@ export default function SettingsModal({ state, onChange, onReset, onClose }: Set
             <h3>Notifications</h3>
             <label className="toggle-row">
               <span><strong>Desktop notifications</strong><small>Use native desktop notifications for new mail, including while Aerio is open.</small></span>
-              <input type="checkbox" checked={state.settings.notifications} onChange={(event) => setSettings({ notifications: event.target.checked })} />
-            </label>
-          </div>
-        </section>
-        <section className="settings-section">
-          <div className="settings-icon"><Database size={18} /></div>
-          <div className="settings-content">
-            <h3>Local demo data</h3>
-            <p>Aerio keeps this release entirely on your computer in a local SQLite database.</p>
-            <button className="button danger-subtle" onClick={() => { if (window.confirm('Reset all demo mail, calendar, contacts, tasks, notes, chats, and settings? Connected workspace data is not affected.')) void onReset() }}><RotateCcw size={16} /> Reset demo data</button>
-          </div>
-        </section>
-        <section className="settings-section signature-section">
-          <div className="settings-icon"><Database size={18} /></div>
-          <div className="settings-content">
-            <h3>Demo workspace signature</h3>
-            <label className="field-label">Signature
-              <textarea value={state.settings.signature} onChange={(event) => setSettings({ signature: event.target.value })} />
+              <input type="checkbox" checked={preferences.settings.notifications} onChange={(event) => setSettings({ notifications: event.target.checked })} />
             </label>
           </div>
         </section>

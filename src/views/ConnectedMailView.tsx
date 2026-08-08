@@ -42,7 +42,7 @@ import { copyText, useContextMenu, type ContextMenuItem } from '../components/Co
 
 interface ConnectedMailViewProps {
   onToast(message: string): void
-  composeRequest?: number
+  composeRequest?: { id: number; initialTo?: string }
 }
 
 const emptyPage: MailPage = { items: [], total: 0 }
@@ -59,7 +59,7 @@ function shortDate(date: string) {
     : new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(value)
 }
 
-export default function ConnectedMailView({ onToast, composeRequest = 0 }: ConnectedMailViewProps) {
+export default function ConnectedMailView({ onToast, composeRequest = { id: 0 } }: ConnectedMailViewProps) {
   const { showContextMenu } = useContextMenu()
   const mailPanes = useResizableMailPanes()
   const [accounts, setAccounts] = useState<MailAccountSummary[]>([])
@@ -83,7 +83,7 @@ export default function ConnectedMailView({ onToast, composeRequest = 0 }: Conne
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadMoreError, setLoadMoreError] = useState(false)
-  const [compose, setCompose] = useState<{ draft?: MailDraftRecord; reply?: MailThreadDetail; replyAll?: boolean; forward?: boolean }>()
+  const [compose, setCompose] = useState<{ draft?: MailDraftRecord; reply?: MailThreadDetail; replyAll?: boolean; forward?: boolean; initialTo?: string }>()
   const [pending, setPending] = useState<PendingOperation[]>([])
   const [pendingSend, setPendingSend] = useState<MailDraftResult>()
   const [checkedKeys, setCheckedKeys] = useState<Set<string>>(new Set())
@@ -304,9 +304,9 @@ export default function ConnectedMailView({ onToast, composeRequest = 0 }: Conne
   }, [selectedKey])
 
   useEffect(() => {
-    if (!composeRequest || handledComposeRequest.current === composeRequest) return
-    handledComposeRequest.current = composeRequest
-    if (accounts.some((account) => !account.archived)) setCompose({})
+    if (!composeRequest.id || handledComposeRequest.current === composeRequest.id) return
+    handledComposeRequest.current = composeRequest.id
+    if (accounts.some((account) => !account.archived)) setCompose({ initialTo: composeRequest.initialTo })
     else setAccountSetup(true)
   }, [accounts, composeRequest])
 
@@ -920,7 +920,7 @@ export default function ConnectedMailView({ onToast, composeRequest = 0 }: Conne
 
       {pending.length > 0 && <div className="undo-toast"><span>{pending.length > 1 ? `${pending.length} mail changes queued` : 'Mail change queued'}</span><button onClick={() => void undo()}><Undo2 size={15} /> Undo</button><button onClick={() => setPending([])}>Dismiss</button></div>}
       {pendingSend && <div className="undo-toast send-undo-toast"><span>Message will send shortly</span><button onClick={() => void undoSend()}><Undo2 size={15} /> Undo Send</button><button onClick={() => setPendingSend(undefined)}>Dismiss</button></div>}
-      {compose && <MailComposeModal accounts={accounts.filter((account) => !account.archived)} draft={compose.draft} replyTo={compose.reply} replyAll={compose.replyAll} forward={compose.forward} onClose={() => { setCompose(undefined); if (folder === 'drafts' || folder === 'scheduled') void loadDrafts() }} onSent={(result) => { if (result.status === 'send-pending') setPendingSend(result); void loadPage(); void loadDrafts() }} onToast={onToast} />}
+      {compose && <MailComposeModal accounts={accounts.filter((account) => !account.archived)} draft={compose.draft} replyTo={compose.reply} replyAll={compose.replyAll} forward={compose.forward} initialTo={compose.initialTo} onClose={() => { setCompose(undefined); if (folder === 'drafts' || folder === 'scheduled') void loadDrafts() }} onSent={(result) => { if (result.status === 'send-pending') setPendingSend(result); void loadPage(); void loadDrafts() }} onToast={onToast} />}
       {accountSetup && <MailAccountSetupModal onClose={() => setAccountSetup(false)} onConnected={accountConnected} onToast={onToast} />}
       {settingsAccount && <MailAccountSettingsModal account={settingsAccount} onSaved={(updated) => { setAccounts((items) => items.map((item) => item.id === updated.id ? updated : item)); setSettingsAccount(updated) }} onClose={() => setSettingsAccount(undefined)} onToast={onToast} />}
       {organizeMode && <MailOrganizeModal mode={organizeMode} items={checkedItems} accounts={accounts} labels={labels} onApply={applyOrganizeRequests} onClose={() => setOrganizeMode(undefined)} />}

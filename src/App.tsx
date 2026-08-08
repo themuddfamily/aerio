@@ -1,23 +1,20 @@
 import {
   CalendarDays, CheckCircle2, ChevronRight, Command, ContactRound, HelpCircle, Mail,
-  MessageCircle, Moon, NotebookPen, Plus, Search, Settings, Sparkles, Sun, UserRound, WifiOff, X
+  MessageCircle, Moon, NotebookPen, Plus, Search, Settings, Sparkles, Sun, UserRound, X
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TitleBar from './components/TitleBar'
-import ComposeModal from './components/ComposeModal'
 import SettingsModal from './components/SettingsModal'
 import ProfileModal from './components/ProfileModal'
-import DemoMailView from './views/DemoMailView'
 import CalendarView from './views/CalendarView'
 import ContactsView from './views/ContactsView'
 import TasksView from './views/TasksView'
 import NotesView from './views/NotesView'
-import ChatView from './views/ChatView'
 import ConnectedMailView from './views/ConnectedMailView'
-import type { AppState, CalendarEvent, Contact, Message, ModuleId } from './types'
+import type { AppPreferences, AppState, CalendarEvent, ModuleId } from './types'
 import type { MailAccountSummary } from './mail-types'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from './productivity-types'
-import { uid, workspaceBadgeCount } from './lib/domain'
+import { unreadCount } from './lib/domain'
 import { useContextMenu } from './components/ContextMenu'
 import { useDialogFocus } from './lib/dialog-focus'
 
@@ -33,36 +30,26 @@ const modules: { id: ModuleId; label: string; icon: typeof Mail; shortcut: strin
 const emptyProductivity: ProductivitySnapshot = { calendars: [], events: [], contacts: [], sync: [] }
 const emptyLocalModules: LocalModuleSnapshot = { tasks: [], notes: [] }
 
-interface ComposeState {
-  replyTo?: Message
+interface ComposeRequest {
+  id: number
   initialTo?: string
-  replyAll?: boolean
-  forward?: boolean
-  draft?: Message
 }
 
 export default function App() {
   const { showContextMenu } = useContextMenu()
-  const [state, setState] = useState<AppState | null>(null)
+  const [preferences, setPreferences] = useState<AppPreferences | null>(null)
   const [activeModule, setActiveModule] = useState<ModuleId>('mail')
   const [query, setQuery] = useState('')
-  const [compose, setCompose] = useState<ComposeState | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [toast, setToast] = useState('')
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved')
-  const [mailMode, setMailMode] = useState<'connected' | 'demo'>(() => {
-    const workspace = new URLSearchParams(window.location.search).get('workspace')
-    return workspace === 'connected' || workspace === 'gmail' ? 'connected' : 'demo'
-  })
-  const [connectedComposeRequest, setConnectedComposeRequest] = useState(0)
+  const [composeRequest, setComposeRequest] = useState<ComposeRequest>({ id: 0 })
   const [connectedAccounts, setConnectedAccounts] = useState<MailAccountSummary[]>([])
   const [productivity, setProductivity] = useState<ProductivitySnapshot>(emptyProductivity)
   const [localModules, setLocalModules] = useState<LocalModuleSnapshot>(emptyLocalModules)
   const [productivitySyncing, setProductivitySyncing] = useState(false)
-  const [requestedDemoMessageId, setRequestedDemoMessageId] = useState<string>()
-  const [requestedConversationId, setRequestedConversationId] = useState<string>()
   const [commandIndex, setCommandIndex] = useState(0)
   const hydrated = useRef(false)
   const localModulesHydrated = useRef(false)
@@ -79,17 +66,12 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    void window.aerio.loadState().then((loaded) => {
-      setState(loaded)
+    void window.aerio.loadPreferences().then((loaded) => {
+      setPreferences(loaded)
       setActiveModule(loaded.settings.startModule)
       queueMicrotask(() => { hydrated.current = true })
     }).catch(() => showToast('Aerio could not open its local data'))
-    void window.aerio.mail.accounts.list().then((accounts) => {
-      setConnectedAccounts(accounts)
-      if (accounts.length) setMailMode('connected')
-    }).catch(() => {
-      // The separate demo workspace remains usable if the mail engine cannot initialize.
-    })
+    void window.aerio.mail.accounts.list().then(setConnectedAccounts).catch(() => showToast('Mail accounts could not be loaded'))
     void window.aerio.productivity.snapshot().then(setProductivity).catch(() => {
       // Cached provider data can be retried from the connected Calendar or Contacts view.
     })
@@ -161,36 +143,32 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!state || !hydrated.current) return
+    if (!preferences || !hydrated.current) return
     setSaveStatus('saving')
     const timer = setTimeout(() => {
-      void window.aerio.saveState(state).then(() => setSaveStatus('saved')).catch(() => showToast('Changes could not be saved'))
+      void window.aerio.savePreferences(preferences).then(() => setSaveStatus('saved')).catch(() => showToast('Preferences could not be saved'))
     }, 350)
     return () => clearTimeout(timer)
-  }, [showToast, state])
+  }, [preferences, showToast])
 
   useEffect(() => {
-    if (!state) return
+    if (!preferences) return
     const media = window.matchMedia('(prefers-color-scheme: dark)')
     const applyTheme = () => {
-      document.documentElement.dataset.theme = state.settings.theme === 'system'
+      document.documentElement.dataset.theme = preferences.settings.theme === 'system'
         ? media.matches ? 'dark' : 'light'
-        : state.settings.theme
+        : preferences.settings.theme
     }
     applyTheme()
-    document.documentElement.dataset.density = state.settings.density
+    document.documentElement.dataset.density = preferences.settings.density
     media.addEventListener('change', applyTheme)
     return () => media.removeEventListener('change', applyTheme)
-  }, [state])
+  }, [preferences])
 
-  const startCompose = useCallback((input: ComposeState = {}) => {
-    if (mailMode === 'connected') {
-      setActiveModule('mail')
-      setConnectedComposeRequest((value) => value + 1)
-    } else {
-      setCompose(input)
-    }
-  }, [mailMode])
+  const startCompose = useCallback((initialTo?: string) => {
+    setActiveModule('mail')
+    setComposeRequest((current) => ({ id: current.id + 1, initialTo }))
+  }, [])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -209,7 +187,6 @@ export default function App() {
       }
       if (event.key === 'Escape') {
         setCommandsOpen(false)
-        setCompose(null)
         setSettingsOpen(false)
         setProfileOpen(false)
       }
@@ -235,7 +212,7 @@ export default function App() {
 
   useEffect(() => setCommandIndex(0), [commandsOpen, query])
 
-  if (!state) {
+  if (!preferences) {
     return (
       <div className="loading-screen">
         <div className="loading-mark">A</div>
@@ -251,14 +228,13 @@ export default function App() {
     setQuery('')
   }
 
-  const profile = state.settings.profile ?? {
-    displayName: state.accounts[0]?.name ?? 'Aerio user',
-    email: state.accounts[0]?.email
+  const profile = preferences.settings.profile ?? {
+    displayName: connectedAccounts[0]?.displayName ?? connectedAccounts[0]?.email ?? 'Aerio user',
+    email: connectedAccounts[0]?.email
   }
   const profileInitials = profile.displayName.trim().split(/\s+/).filter(Boolean).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || 'A'
   const accountById = new Map(connectedAccounts.map((account) => [account.id, account]))
   const connectedState: AppState = {
-    ...state,
     accounts: productivity.calendars.map((calendar) => {
       const account = accountById.get(calendar.accountId)
       return {
@@ -272,10 +248,8 @@ export default function App() {
     }),
     events: productivity.events,
     contacts: productivity.contacts,
-    messages: [],
     tasks: localModules.tasks,
-    notes: localModules.notes,
-    conversations: []
+    notes: localModules.notes
   }
   const writableCalendarIds = new Set(productivity.calendars.filter((calendar) => calendar.canWrite).map((calendar) => calendar.id))
   const updateConnectedLocal = (next: AppState) => setLocalModules({ tasks: next.tasks, notes: next.notes })
@@ -285,36 +259,12 @@ export default function App() {
       ? `Last synchronized ${new Date(Math.max(...productivity.sync.flatMap((item) => item.lastSyncedAt ? [Date.parse(item.lastSyncedAt)] : []))).toLocaleString()}`
       : 'Calendar and Contacts have not been synchronized yet.'
 
-  const openContactChat = (contact: Contact) => {
-    const existing = state.conversations.find((conversation) => conversation.name === contact.name)
-    const conversationId = existing?.id ?? uid('conversation')
-    if (!existing) {
-      setState({
-        ...state,
-        conversations: [{ id: conversationId, name: contact.name, participants: [contact.name], color: contact.color, online: false, unread: 0, messages: [] }, ...state.conversations]
-      })
-    }
-    setRequestedConversationId(conversationId)
-    setActiveModule('chat')
-  }
-
-  const openDemoMessage = (messageId: string) => {
-    setRequestedDemoMessageId(messageId)
-    setMailMode('demo')
-    setActiveModule('mail')
-  }
-
   const showModuleMenu = (event: React.MouseEvent, module: typeof modules[number]) => showContextMenu(event, [
     { label: `Open ${module.label}`, icon: module.icon, action: () => navigate(module.id) },
     ...(module.id === 'mail' ? [{ label: 'New message', icon: Plus, separatorBefore: true, action: () => startCompose() }] : []),
     { label: `Search ${module.label}`, icon: Search, separatorBefore: module.id !== 'mail', action: () => { navigate(module.id); setCommandsOpen(true) } },
-    { label: 'Open on startup', icon: Sparkles, separatorBefore: true, checked: state.settings.startModule === module.id, action: () => setState({ ...state, settings: { ...state.settings, startModule: module.id } }) }
+    { label: 'Open on startup', icon: Sparkles, separatorBefore: true, checked: preferences.settings.startModule === module.id, action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, startModule: module.id } }) }
   ], module.label)
-
-  const setWorkspace = (mode: 'demo' | 'connected') => {
-    setMailMode(mode)
-    setActiveModule('mail')
-  }
 
   return (
     <div className="app">
@@ -324,7 +274,7 @@ export default function App() {
           <div className="rail-modules">
             {modules.map((module) => {
               const { id, label, icon: Icon } = module
-              const badge = workspaceBadgeCount(state, connectedState, mailMode, id)
+              const badge = unreadCount(connectedState, id)
               return (
                 <button key={id} className={activeModule === id ? 'active' : ''} aria-label={label} aria-current={activeModule === id ? 'page' : undefined} title={`${label} · Ctrl ${modules.find((item) => item.id === id)?.shortcut}`} onClick={() => navigate(id)} onContextMenu={(event) => showModuleMenu(event, module)}>
                   <Icon size={21} strokeWidth={1.9} />
@@ -353,34 +303,29 @@ export default function App() {
               <span>Search {modules.find((item) => item.id === activeModule)?.label.toLowerCase()} or run a command</span>
               <kbd>Ctrl K</kbd>
             </button>
-            <button className={`local-badge mode-switch ${mailMode === 'connected' ? 'connected' : ''}`} onClick={() => setWorkspace(mailMode === 'connected' ? 'demo' : 'connected')} onContextMenu={(event) => showContextMenu(event, [
-              { label: 'Demo workspace', icon: WifiOff, checked: mailMode === 'demo', action: () => setWorkspace('demo') },
-              { label: 'Connected workspace', icon: Mail, checked: mailMode === 'connected', action: () => setWorkspace('connected') },
-              { label: 'Sync Calendar and Contacts', icon: CalendarDays, separatorBefore: true, disabled: productivitySyncing, action: () => syncProductivity() },
+            <button className="local-badge connected" onClick={() => void syncProductivity()} onContextMenu={(event) => showContextMenu(event, [
+              { label: 'Sync Calendar and Contacts', icon: CalendarDays, disabled: productivitySyncing, action: () => syncProductivity() },
               { label: 'New message', icon: Plus, separatorBefore: true, action: () => startCompose() }
-            ], 'Mail workspace')}>
-              {mailMode === 'connected' ? <Mail size={14} /> : <WifiOff size={14} />}
-              {mailMode === 'connected' ? 'Connected workspace' : 'Demo workspace'}
+            ], 'Connected services')}>
+              <Mail size={14} />
+              Connected services
             </button>
             <span className={`save-indicator ${saveStatus}`} aria-live="polite">{saveStatus === 'saved' ? 'All changes saved' : 'Saving…'}</span>
-            <button className="theme-quick" aria-label="Toggle theme" title="Toggle theme" onClick={() => setState({ ...state, settings: { ...state.settings, theme: state.settings.theme === 'dark' ? 'light' : 'dark' } })} onContextMenu={(event) => showContextMenu(event, [
-              { label: 'System theme', icon: Settings, checked: state.settings.theme === 'system', action: () => setState({ ...state, settings: { ...state.settings, theme: 'system' } }) },
-              { label: 'Light theme', icon: Sun, checked: state.settings.theme === 'light', action: () => setState({ ...state, settings: { ...state.settings, theme: 'light' } }) },
-              { label: 'Dark theme', icon: Moon, checked: state.settings.theme === 'dark', action: () => setState({ ...state, settings: { ...state.settings, theme: 'dark' } }) }
+            <button className="theme-quick" aria-label="Toggle theme" title="Toggle theme" onClick={() => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: preferences.settings.theme === 'dark' ? 'light' : 'dark' } })} onContextMenu={(event) => showContextMenu(event, [
+              { label: 'System theme', icon: Settings, checked: preferences.settings.theme === 'system', action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: 'system' } }) },
+              { label: 'Light theme', icon: Sun, checked: preferences.settings.theme === 'light', action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: 'light' } }) },
+              { label: 'Dark theme', icon: Moon, checked: preferences.settings.theme === 'dark', action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: 'dark' } }) }
             ], 'Theme')}>
-              {state.settings.theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+              {preferences.settings.theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
             </button>
           </header>
           <div className="module-content">
-            {activeModule === 'mail' && mailMode === 'connected' && <ConnectedMailView onToast={showToast} composeRequest={connectedComposeRequest} />}
-            {activeModule === 'mail' && mailMode === 'demo' && <DemoMailView state={state} query={query} requestedMessageId={requestedDemoMessageId} onChange={setState} onCompose={(replyTo, replyAll, forward, draft) => setCompose({ replyTo, replyAll, forward, draft })} onNavigate={navigate} onToast={showToast} />}
+            {activeModule === 'mail' && <ConnectedMailView onToast={showToast} composeRequest={composeRequest} />}
             {activeModule === 'calendar' && <CalendarView
-              state={mailMode === 'connected' ? connectedState : state}
+              state={connectedState}
               query={query}
-              onChange={setState}
               onToast={showToast}
-              providerBacked={mailMode === 'connected'}
-              writableCalendarIds={mailMode === 'connected' ? writableCalendarIds : undefined}
+              writableCalendarIds={writableCalendarIds}
               onSync={syncProductivity}
               onEnableEditing={enableCalendarEditing}
               onSaveProviderEvent={saveProviderEvent}
@@ -388,31 +333,16 @@ export default function App() {
               syncing={productivitySyncing}
               sourceMessage={productivityMessage}
             />}
-            {activeModule === 'contacts' && <ContactsView state={mailMode === 'connected' ? connectedState : state} query={query} onChange={setState} onCompose={(replyTo, initialTo) => setCompose({ replyTo, initialTo })} onChat={openContactChat} onOpenMessage={openDemoMessage} onToast={showToast} readOnly={mailMode === 'connected'} onSync={syncProductivity} syncing={productivitySyncing} sourceMessage={productivityMessage} />}
-            {activeModule === 'tasks' && <TasksView state={mailMode === 'connected' ? connectedState : state} query={query} onChange={mailMode === 'connected' ? updateConnectedLocal : setState} onToast={showToast} />}
-            {activeModule === 'notes' && <NotesView state={mailMode === 'connected' ? connectedState : state} query={query} onChange={mailMode === 'connected' ? updateConnectedLocal : setState} onToast={showToast} />}
-            {activeModule === 'chat' && (mailMode === 'connected'
-              ? <div className="connected-module-placeholder"><MessageCircle size={38} /><h1>No chat service connected</h1><p>Mail providers do not automatically provide a compatible chat API. Aerio will keep Chat separate until a secure transport is selected and implemented.</p><button className="button ghost" onClick={() => setWorkspace('demo')}>Open demo Chat</button></div>
-              : <ChatView state={state} query={query} requestedConversationId={requestedConversationId} onChange={setState} onToast={showToast} />)}
+            {activeModule === 'contacts' && <ContactsView state={connectedState} query={query} onCompose={startCompose} onToast={showToast} onSync={syncProductivity} syncing={productivitySyncing} sourceMessage={productivityMessage} />}
+            {activeModule === 'tasks' && <TasksView state={connectedState} query={query} onChange={updateConnectedLocal} onToast={showToast} />}
+            {activeModule === 'notes' && <NotesView state={connectedState} query={query} onChange={updateConnectedLocal} onToast={showToast} />}
+            {activeModule === 'chat' && <div className="connected-module-placeholder"><MessageCircle size={38} /><h1>No chat service connected</h1><p>Mail providers do not automatically provide a compatible chat API. Aerio will keep Chat separate until a secure transport is selected and implemented.</p></div>}
           </div>
         </main>
       </div>
 
-      {compose && mailMode === 'demo' && <ComposeModal state={state} replyTo={compose.replyTo} replyAll={compose.replyAll} forward={compose.forward} draft={compose.draft} initialTo={compose.initialTo} onChange={setState} onClose={() => setCompose(null)} onToast={showToast} />}
-      {profileOpen && <ProfileModal profile={profile} onSave={(nextProfile) => setState({ ...state, settings: { ...state.settings, profile: nextProfile } })} onClose={() => setProfileOpen(false)} onToast={showToast} />}
-      {settingsOpen && <SettingsModal state={state} onChange={setState} onClose={() => setSettingsOpen(false)} onReset={async () => {
-        try {
-          const next = await window.aerio.resetState()
-          hydrated.current = false
-          setState(next)
-          setActiveModule(next.settings.startModule)
-          setSettingsOpen(false)
-          showToast('Demo data restored')
-          queueMicrotask(() => { hydrated.current = true })
-        } catch (error) {
-          showToast(error instanceof Error ? error.message : 'Demo data could not be reset')
-        }
-      }} />}
+      {profileOpen && <ProfileModal profile={profile} onSave={(nextProfile) => setPreferences({ ...preferences, settings: { ...preferences.settings, profile: nextProfile } })} onClose={() => setProfileOpen(false)} onToast={showToast} />}
+      {settingsOpen && <SettingsModal preferences={preferences} onChange={setPreferences} onClose={() => setSettingsOpen(false)} />}
       {commandsOpen && (
         <div className="command-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) setCommandsOpen(false) }}>
           <section ref={commandDialogRef} className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" tabIndex={-1}>

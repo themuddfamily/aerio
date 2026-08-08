@@ -1,11 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AerioDesktopApi, AppState } from '../src/types'
+import type { AerioDesktopApi, AppPreferences } from '../src/types'
 import type { ApplyMailActionInput, MailDraftInput, MailWorkerEvent, ImapAccountInput, MailQuery } from '../src/mail-types'
 
 const api: AerioDesktopApi = {
-  loadState: () => ipcRenderer.invoke('state:load'),
-  saveState: (state: AppState) => ipcRenderer.invoke('state:save', state),
-  resetState: () => ipcRenderer.invoke('state:reset'),
+  loadPreferences: () => ipcRenderer.invoke('preferences:load'),
+  savePreferences: (preferences: AppPreferences) => ipcRenderer.invoke('preferences:save', preferences),
   chooseAttachments: () => ipcRenderer.invoke('files:choose'),
   chooseProfileImage: () => ipcRenderer.invoke('profile:image:choose'),
   notify: (title: string, body: string) => ipcRenderer.invoke('notification:show', { title, body }),

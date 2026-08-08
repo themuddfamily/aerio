@@ -1,8 +1,8 @@
 import type { MailProviderId } from '../mail-types'
 import type { ModuleId } from '../types'
 
-export type ProviderId = MailProviderId | 'demo' | 'local'
-export type CapabilityTransport = 'remote' | 'local' | 'demo' | 'none'
+export type ProviderId = MailProviderId | 'local'
+export type CapabilityTransport = 'remote' | 'local' | 'none'
 export type CapabilityStatus = 'ready' | 'planned' | 'unavailable'
 
 export interface ModuleCapability {
@@ -34,11 +34,11 @@ const localReady = (details: string) => capability('local', 'ready', true, true,
 const unavailable = (details: string) => capability('none', 'unavailable', false, false, details)
 
 const localProductivity = {
-  calendar: localReady('Stored on this device; remote calendar sync is not provided by this mail connection.'),
-  contacts: localReady('Stored on this device; remote contact sync is not provided by this mail connection.'),
+  calendar: unavailable('No calendar service is provided by this mail connection.'),
+  contacts: unavailable('No contacts service is provided by this mail connection.'),
   tasks: localReady('Stored privately on this device.'),
   notes: localReady('Stored privately on this device.'),
-  chat: localReady('Local conversations only; no remote chat service is connected.')
+  chat: unavailable('No chat service is connected.')
 } satisfies Omit<Record<ModuleId, ModuleCapability>, 'mail'>
 
 const imapCapabilities = (id: MailProviderId, name: string): ProviderCapabilities => ({
@@ -51,14 +51,6 @@ const imapCapabilities = (id: MailProviderId, name: string): ProviderCapabilitie
 })
 
 export const providerCatalog: Record<ProviderId, ProviderCapabilities> = {
-  demo: {
-    id: 'demo',
-    name: 'Demo workspace',
-    modules: Object.fromEntries((['mail', 'calendar', 'contacts', 'tasks', 'notes', 'chat'] satisfies ModuleId[]).map((module) => [
-      module,
-      capability('demo', 'ready', true, true, 'Sample data for exploring Aerio; it never leaves this device.')
-    ])) as Record<ModuleId, ModuleCapability>
-  },
   local: {
     id: 'local',
     name: 'Local workspace',

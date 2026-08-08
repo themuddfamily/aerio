@@ -12,7 +12,9 @@ describe('provider capabilities', () => {
 
   it('does not pretend that an IMAP mail connection includes unrelated provider APIs', () => {
     expect(capabilitiesFor('imap').modules.mail).toMatchObject({ transport: 'remote', status: 'ready' })
-    expect(capabilitiesFor('imap').modules.calendar).toMatchObject({ transport: 'local', status: 'ready' })
+    expect(capabilitiesFor('imap').modules.calendar).toMatchObject({ transport: 'none', status: 'unavailable' })
+    expect(capabilitiesFor('imap').modules.contacts).toMatchObject({ transport: 'none', status: 'unavailable' })
+    expect(capabilitiesFor('imap').modules.chat).toMatchObject({ transport: 'none', status: 'unavailable' })
     expect(capableProviders('chat', ['gmail', 'microsoft'])).toEqual([])
   })
 })
