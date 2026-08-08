@@ -241,10 +241,10 @@ describe('productivity synchronization', () => {
       if (url.pathname.endsWith('/calendarList')) body = url.searchParams.get('pageToken')
         ? { items: [{ id: 'second', summary: '', accessRole: 'reader' }] }
         : { items: [{ id: 'primary', summary: 'Main', backgroundColor: '#123', primary: true, accessRole: 'owner' }], nextPageToken: 'next calendar' }
-      else if (url.pathname.includes('/calendars/primary/events')) body = { items: [{ id: 'event-1', start: { dateTime: '2026-08-01T10:00:00Z' }, end: { dateTime: '2026-08-01T11:00:00Z' } }] }
-      else if (url.pathname.includes('/calendars/second/events')) body = { items: [{ id: 'cancelled', status: 'cancelled' }] }
+      else if (url.pathname.includes('/calendars/primary/events')) body = { items: [{ id: 'event-1', start: { dateTime: '2026-08-01T10:00:00Z' }, end: { dateTime: '2026-08-01T11:00:00Z' } }], nextSyncToken: 'event-primary' }
+      else if (url.pathname.includes('/calendars/second/events')) body = { items: [{ id: 'cancelled', status: 'cancelled' }], nextSyncToken: 'event-second' }
       else body = url.searchParams.get('pageToken')
-        ? { connections: [{ resourceName: 'people/2', names: [{ displayName: 'Grace' }] }] }
+        ? { connections: [{ resourceName: 'people/2', names: [{ displayName: 'Grace' }] }], nextSyncToken: 'contact-token' }
         : { connections: [{ resourceName: 'people/1' }], nextPageToken: 'next people' }
       return { ok: true, status: 200, json: async () => body }
     })
@@ -255,6 +255,7 @@ describe('productivity synchronization', () => {
     expect(data.calendars[1]).toMatchObject({ name: 'Calendar', color: '#6558e8', canWrite: false })
     expect(data.events).toHaveLength(1)
     expect(data.contacts).toHaveLength(1)
+    expect(data.checkpoints).toEqual({ 'events:primary': 'event-primary', 'events:second': 'event-second', contacts: 'contact-token' })
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('pageToken=next+calendar'))).toBe(true)
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('personFields='))).toBe(true)
   })
@@ -268,11 +269,13 @@ describe('productivity synchronization', () => {
         { id: 'two', name: '', color: 'unknown' }
       ] }
       else if (url.includes('/calendars/one/calendarView')) body = { value: [{ id: 'e1', start: { dateTime: '2026-08-01T10:00:00' }, end: { dateTime: '2026-08-01T11:00:00' } }], '@odata.nextLink': 'https://graph.microsoft.com/next-events' }
-      else if (url.includes('next-events')) body = { value: [{ id: 'cancel', isCancelled: true }] }
-      else if (url.includes('/calendars/two/calendarView')) body = { value: [] }
-      else if (url.includes('/me/contacts?')) body = { value: [{ id: 'c1', displayName: 'Ada' }], '@odata.nextLink': 'https://graph.microsoft.com/next-contacts' }
-      else body = { value: [{ id: 'c2' }] }
-      expect(new Headers(init.headers).get('Prefer')).toBe('outlook.timezone="UTC"')
+      else if (url.includes('next-events')) body = { value: [{ id: 'cancel', isCancelled: true }], '@odata.deltaLink': 'https://graph.microsoft.com/events-delta-one' }
+      else if (url.includes('/calendars/two/calendarView')) body = { value: [], '@odata.deltaLink': 'https://graph.microsoft.com/events-delta-two' }
+      else if (url.includes('/me/contacts?')) body = { value: [{ id: 'probe', parentFolderId: 'default' }] }
+      else if (url.includes('/contactFolders/default/contacts/delta')) body = { value: [{ id: 'c1', parentFolderId: 'default', displayName: 'Ada' }], '@odata.nextLink': 'https://graph.microsoft.com/next-contacts' }
+      else body = { value: [{ id: 'c2' }], '@odata.deltaLink': 'https://graph.microsoft.com/contacts-delta' }
+      const prefer = new Headers(init.headers).get('Prefer')
+      if (prefer) expect(prefer).toContain('outlook.timezone="UTC"')
       return { ok: true, status: 200, json: async () => body }
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -283,6 +286,93 @@ describe('productivity synchronization', () => {
     ])
     expect(data.events).toHaveLength(1)
     expect(data.contacts).toHaveLength(1)
+    expect(data.checkpoints).toEqual({ 'events:one': 'https://graph.microsoft.com/events-delta-one', 'events:two': 'https://graph.microsoft.com/events-delta-two', contacts: 'https://graph.microsoft.com/contacts-delta' })
+  })
+
+  it('applies Google event and contact deltas to the cached snapshot', async () => {
+    const calendar = googleCalendar
+    const oldEvent = mapGoogleEvent('a', calendar, { id: 'old', summary: 'Old', start: { dateTime: '2026-08-01T09:00:00Z' }, end: { dateTime: '2026-08-01T10:00:00Z' } })!
+    const deletedEvent = mapGoogleEvent('a', calendar, { id: 'deleted', summary: 'Delete me', start: { dateTime: '2026-08-01T11:00:00Z' }, end: { dateTime: '2026-08-01T12:00:00Z' } })!
+    const oldContact = mapGoogleContact('a', { resourceName: 'people/1', metadata: { sources: [{ type: 'CONTACT', id: '1', etag: 'old' }] }, names: [{ displayName: 'Old Person' }] })!
+    const deletedContact = mapGoogleContact('a', { resourceName: 'people/2', metadata: { sources: [{ type: 'CONTACT', id: '2', etag: 'old' }] }, names: [{ displayName: 'Delete Person' }] })!
+    const urls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+      const url = String(input); urls.push(url)
+      if (url.includes('calendarList')) return { ok: true, status: 200, json: async () => ({ items: [{ id: 'primary', summary: 'Main', accessRole: 'owner' }] }) }
+      if (url.includes('/events?')) return { ok: true, status: 200, json: async () => ({ items: [
+        { id: 'old', summary: 'Updated', start: { dateTime: '2026-08-01T09:00:00Z' }, end: { dateTime: '2026-08-01T10:00:00Z' } },
+        { id: 'deleted', status: 'cancelled' }
+      ], nextSyncToken: 'event-new' }) }
+      return { ok: true, status: 200, json: async () => ({ connections: [
+        { resourceName: 'people/1', metadata: { sources: [{ type: 'CONTACT', id: '1', etag: 'new' }] }, names: [{ displayName: 'Updated Person' }] },
+        { resourceName: 'people/2', metadata: { deleted: true, sources: [{ type: 'CONTACT', id: '2', etag: 'old' }] } }
+      ], nextSyncToken: 'contact-new' }) }
+    }))
+    const result = await new GoogleProductivityConnector('a', async () => 'token', true, true).sync(
+      { calendars: [calendar], events: [oldEvent, deletedEvent], contacts: [oldContact, deletedContact] },
+      { 'events:primary': 'event-old', contacts: 'contact-old' }
+    )
+    expect(result.events).toEqual([expect.objectContaining({ remoteId: 'old', title: 'Updated' })])
+    expect(result.contacts).toEqual([expect.objectContaining({ remoteId: 'people/1', name: 'Updated Person', revision: 'new' })])
+    expect(result.checkpoints).toEqual({ 'events:primary': 'event-new', contacts: 'contact-new' })
+    expect(urls.find((url) => url.includes('/events?'))).toContain('syncToken=event-old')
+    expect(urls.find((url) => url.includes('/connections?'))).toContain('syncToken=contact-old')
+  })
+
+  it('applies Microsoft delta links without repeating full event or contact reads', async () => {
+    const calendar = microsoftCalendar
+    const oldEvent = mapMicrosoftEvent('b', calendar, { id: 'old', subject: 'Old', start: { dateTime: '2026-08-01T09:00:00Z' }, end: { dateTime: '2026-08-01T10:00:00Z' } })!
+    const deletedEvent = mapMicrosoftEvent('b', calendar, { id: 'deleted', subject: 'Delete', start: { dateTime: '2026-08-01T11:00:00Z' }, end: { dateTime: '2026-08-01T12:00:00Z' } })!
+    const oldContact = mapMicrosoftContact('b', { id: 'old', displayName: 'Old Person', changeKey: 'one', parentFolderId: 'default' })!
+    const deletedContact = mapMicrosoftContact('b', { id: 'deleted', displayName: 'Delete Person', changeKey: 'one', parentFolderId: 'default' })!
+    const urls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+      const url = String(input); urls.push(url)
+      if (url.includes('/me/calendars?')) return { ok: true, status: 200, json: async () => ({ value: [{ id: 'main', name: 'Main', canEdit: true }] }) }
+      if (url === 'https://graph.microsoft.com/event-checkpoint') return { ok: true, status: 200, json: async () => ({ value: [
+        { id: 'old', subject: 'Updated', start: { dateTime: '2026-08-01T09:00:00Z' }, end: { dateTime: '2026-08-01T10:00:00Z' } },
+        { id: 'deleted', '@removed': { reason: 'deleted' } }
+      ], '@odata.deltaLink': 'https://graph.microsoft.com/event-next' }) }
+      return { ok: true, status: 200, json: async () => ({ value: [
+        { id: 'old', displayName: 'Updated Person', changeKey: 'two', parentFolderId: 'default' },
+        { id: 'deleted', '@removed': { reason: 'deleted' } }
+      ], '@odata.deltaLink': 'https://graph.microsoft.com/contact-next' }) }
+    }))
+    const result = await new MicrosoftProductivityConnector('b', async () => 'token', true, true).sync(
+      { calendars: [calendar], events: [oldEvent, deletedEvent], contacts: [oldContact, deletedContact] },
+      { 'events:main': 'https://graph.microsoft.com/event-checkpoint', contacts: 'https://graph.microsoft.com/contact-checkpoint' }
+    )
+    expect(result.events).toEqual([expect.objectContaining({ remoteId: 'old', title: 'Updated' })])
+    expect(result.contacts).toEqual([expect.objectContaining({ remoteId: 'old', name: 'Updated Person', revision: 'two' })])
+    expect(result.checkpoints).toEqual({ 'events:main': 'https://graph.microsoft.com/event-next', contacts: 'https://graph.microsoft.com/contact-next' })
+    expect(urls).not.toEqual(expect.arrayContaining([expect.stringContaining('/calendarView/delta?'), expect.stringContaining('/me/contacts?')]))
+  })
+
+  it('falls back to full synchronization when provider checkpoints expire', async () => {
+    const googleUrls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+      const url = String(input); googleUrls.push(url)
+      if (url.includes('calendarList')) return { ok: true, status: 200, json: async () => ({ items: [{ id: 'primary', accessRole: 'reader' }] }) }
+      if (url.includes('/events?') && url.includes('syncToken=')) return { ok: false, status: 410, headers: new Headers(), json: async () => ({ error: { message: 'Sync token expired' } }) }
+      if (url.includes('/events?')) return { ok: true, status: 200, json: async () => ({ items: [], nextSyncToken: 'fresh-event' }) }
+      return { ok: true, status: 200, json: async () => ({ connections: [], nextSyncToken: 'fresh-contact' }) }
+    }))
+    const google = await new GoogleProductivityConnector('a', async () => 'token').sync(undefined, { 'events:primary': 'expired' })
+    expect(google.checkpoints).toEqual({ 'events:primary': 'fresh-event', contacts: 'fresh-contact' })
+    expect(googleUrls.filter((url) => url.includes('/events?'))).toHaveLength(2)
+    expect(googleUrls.filter((url) => url.includes('/events?')).at(-1)).toContain('timeMin=')
+
+    const microsoftUrls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+      const url = String(input); microsoftUrls.push(url)
+      if (url.includes('/me/calendars?')) return { ok: true, status: 200, json: async () => ({ value: [{ id: 'main' }] }) }
+      if (url === 'https://graph.microsoft.com/expired-event') return { ok: false, status: 410, headers: new Headers(), json: async () => ({ error: { message: 'Gone' } }) }
+      if (url.includes('/calendarView/delta?')) return { ok: true, status: 200, json: async () => ({ value: [], '@odata.deltaLink': 'https://graph.microsoft.com/fresh-event' }) }
+      return { ok: true, status: 200, json: async () => ({ value: [] }) }
+    }))
+    const microsoft = await new MicrosoftProductivityConnector('b', async () => 'token').sync(undefined, { 'events:main': 'https://graph.microsoft.com/expired-event' })
+    expect(microsoft.checkpoints).toEqual({ 'events:main': 'https://graph.microsoft.com/fresh-event' })
+    expect(microsoftUrls).toEqual(expect.arrayContaining(['https://graph.microsoft.com/expired-event', expect.stringContaining('/calendarView/delta?')]))
   })
 })
 

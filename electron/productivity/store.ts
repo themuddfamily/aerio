@@ -48,6 +48,13 @@ export class ProductivityStore {
         error TEXT,
         PRIMARY KEY(account_id, module)
       );
+      CREATE TABLE IF NOT EXISTS productivity_sync_checkpoints (
+        account_id TEXT NOT NULL,
+        checkpoint_key TEXT NOT NULL,
+        checkpoint_value TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(account_id, checkpoint_key)
+      );
       CREATE TABLE IF NOT EXISTS local_module_state (
         module TEXT PRIMARY KEY CHECK(module IN ('tasks','notes')),
         payload_json TEXT NOT NULL,
@@ -76,7 +83,7 @@ export class ProductivityStore {
   removeAccount(accountId: string) {
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      for (const table of ['productivity_calendars', 'productivity_events', 'productivity_contacts', 'productivity_sync_state']) {
+      for (const table of ['productivity_calendars', 'productivity_events', 'productivity_contacts', 'productivity_sync_state', 'productivity_sync_checkpoints']) {
         this.db.prepare(`DELETE FROM ${table} WHERE account_id=?`).run(accountId)
       }
       this.db.exec('COMMIT')
@@ -86,19 +93,22 @@ export class ProductivityStore {
     }
   }
 
-  replaceAccount(accountId: string, provider: ProductivityProvider, data: ProviderProductivityData) {
+  replaceAccount(accountId: string, provider: ProductivityProvider, data: ProviderProductivityData, checkpoints: Record<string, string> = {}) {
     const timestamp = new Date().toISOString()
     this.db.exec('BEGIN IMMEDIATE')
     try {
       for (const table of ['productivity_calendars', 'productivity_events', 'productivity_contacts']) {
         this.db.prepare(`DELETE FROM ${table} WHERE account_id=?`).run(accountId)
       }
+      this.db.prepare('DELETE FROM productivity_sync_checkpoints WHERE account_id=?').run(accountId)
       const insertCalendar = this.db.prepare('INSERT INTO productivity_calendars(id,account_id,provider,payload_json,updated_at) VALUES(?,?,?,?,?)')
       const insertEvent = this.db.prepare('INSERT INTO productivity_events(id,account_id,provider,payload_json,updated_at) VALUES(?,?,?,?,?)')
       const insertContact = this.db.prepare('INSERT INTO productivity_contacts(id,account_id,provider,payload_json,updated_at) VALUES(?,?,?,?,?)')
       for (const calendar of data.calendars) insertCalendar.run(calendar.id, accountId, provider, JSON.stringify(calendar), timestamp)
       for (const event of data.events) insertEvent.run(event.id, accountId, provider, JSON.stringify(event), timestamp)
       for (const contact of data.contacts) insertContact.run(contact.id, accountId, provider, JSON.stringify(contact), timestamp)
+      const insertCheckpoint = this.db.prepare('INSERT INTO productivity_sync_checkpoints(account_id,checkpoint_key,checkpoint_value,updated_at) VALUES(?,?,?,?)')
+      for (const [key, value] of Object.entries(checkpoints)) insertCheckpoint.run(accountId, key, value, timestamp)
       for (const module of ['calendar', 'contacts'] satisfies ProductivityModule[]) this.setState(accountId, module, 'ready', undefined, timestamp)
       this.db.exec('COMMIT')
     } catch (error) {
@@ -127,6 +137,21 @@ export class ProductivityStore {
 
   deleteContact(contactId: string) {
     this.db.prepare('DELETE FROM productivity_contacts WHERE id=?').run(contactId)
+  }
+
+  accountData(accountId: string): ProviderProductivityData {
+    const read = <T>(table: string) => (this.db.prepare(`SELECT payload_json FROM ${table} WHERE account_id=? ORDER BY updated_at DESC`).all(accountId) as unknown as PayloadRow[])
+      .map((row) => JSON.parse(row.payload_json) as T)
+    return {
+      calendars: read<SyncedCalendar>('productivity_calendars'),
+      events: read<SyncedCalendarEvent>('productivity_events'),
+      contacts: read<SyncedContact>('productivity_contacts')
+    }
+  }
+
+  checkpoints(accountId: string) {
+    const rows = this.db.prepare('SELECT checkpoint_key,checkpoint_value FROM productivity_sync_checkpoints WHERE account_id=?').all(accountId) as unknown as { checkpoint_key: string; checkpoint_value: string }[]
+    return Object.fromEntries(rows.map((row) => [row.checkpoint_key, row.checkpoint_value]))
   }
 
   snapshot(): ProductivitySnapshot {

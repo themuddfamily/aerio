@@ -1,8 +1,8 @@
-import type { ProviderProductivityData, ProductivityProvider } from '../../src/productivity-types'
+import type { ProviderProductivityData, ProviderProductivitySyncResult, ProductivityProvider } from '../../src/productivity-types'
 
 export interface ProductivityConnector {
   readonly provider: ProductivityProvider
-  sync(): Promise<ProviderProductivityData>
+  sync(previous?: ProviderProductivityData, checkpoints?: Record<string, string>): Promise<ProviderProductivitySyncResult>
 }
 
 export class ProductivityApiError extends Error {

@@ -7,6 +7,7 @@ Aerio treats each module as its own capability. Connecting a mail account never 
 - Application settings and profile preferences live in `aerio-state.sqlite`; no sample workspace is loaded at runtime.
 - Provider Calendar and Contacts snapshots live in `productivity.sqlite`, keyed by account and provider.
 - Google People and Microsoft Graph contact writes update those caches immediately and use provider revisions where available to avoid overwriting a newer contact blindly.
+- Provider refreshes persist per-calendar event cursors and address-book cursors; expired Google sync tokens and Microsoft delta links fall back to an atomic full refresh.
 - Production local Contacts, Tasks, and Notes also live in `productivity.sqlite`, but in separate local records with no provider identity.
 - Chat has no storage, fake transport, or v1 navigation entry.
 

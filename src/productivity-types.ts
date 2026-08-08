@@ -28,6 +28,8 @@ export interface SyncedContact extends Contact {
   provider: ProductivityProvider
   readOnly: boolean
   revision?: string
+  sourceId?: string
+  folderId?: string
 }
 
 export interface ProductivitySyncState {
@@ -49,6 +51,10 @@ export interface ProviderProductivityData {
   calendars: SyncedCalendar[]
   events: SyncedCalendarEvent[]
   contacts: SyncedContact[]
+}
+
+export interface ProviderProductivitySyncResult extends ProviderProductivityData {
+  checkpoints: Record<string, string>
 }
 
 export interface LocalModuleSnapshot {

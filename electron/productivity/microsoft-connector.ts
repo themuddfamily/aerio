@@ -1,11 +1,12 @@
 import type { CalendarEvent, Contact } from '../../src/types'
-import type { ProviderProductivityData, SyncedCalendar, SyncedCalendarEvent, SyncedContact } from '../../src/productivity-types'
-import { retryingJson, type ProductivityConnector } from './connector'
+import type { ProviderProductivityData, ProviderProductivitySyncResult, SyncedCalendar, SyncedCalendarEvent, SyncedContact } from '../../src/productivity-types'
+import { ProductivityApiError, retryingJson, type ProductivityConnector } from './connector'
 
-interface GraphPage<T> { value: T[]; '@odata.nextLink'?: string }
+interface GraphPage<T> { value: T[]; '@odata.nextLink'?: string; '@odata.deltaLink'?: string }
 interface GraphCalendar { id: string; name?: string; color?: string; isDefaultCalendar?: boolean; canEdit?: boolean }
 interface GraphEvent {
   id: string
+  '@removed'?: { reason?: string }
   subject?: string
   bodyPreview?: string
   location?: { displayName?: string }
@@ -19,7 +20,9 @@ interface GraphEvent {
 }
 interface GraphContact {
   id: string
+  '@removed'?: { reason?: string }
   changeKey?: string
+  parentFolderId?: string
   displayName?: string
   givenName?: string
   surname?: string
@@ -109,6 +112,7 @@ export function mapMicrosoftContact(accountId: string, contact: GraphContact, re
     accountId,
     provider: 'microsoft',
     revision: contact.changeKey,
+    folderId: contact.parentFolderId,
     name,
     email: contact.emailAddresses?.[0]?.address ?? '',
     phone: contact.mobilePhone ?? contact.businessPhones?.[0],
@@ -132,7 +136,10 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
     private readonly contactsWriteAuthorized = false
   ) {}
 
-  async sync(): Promise<ProviderProductivityData> {
+  async sync(
+    previous: ProviderProductivityData = { calendars: [], events: [], contacts: [] },
+    checkpoints: Record<string, string> = {}
+  ): Promise<ProviderProductivitySyncResult> {
     const remoteCalendars = await this.pages<GraphCalendar>('https://graph.microsoft.com/v1.0/me/calendars?$select=id,name,color,isDefaultCalendar,canEdit')
     const calendars: SyncedCalendar[] = remoteCalendars.map((calendar) => ({
       id: `${this.accountId}:microsoft-calendar:${calendar.id}`,
@@ -147,13 +154,73 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
     const from = new Date(); from.setUTCFullYear(from.getUTCFullYear() - 1)
     const to = new Date(); to.setUTCFullYear(to.getUTCFullYear() + 2)
     const events: SyncedCalendarEvent[] = []
+    const nextCheckpoints: Record<string, string> = {}
     for (const calendar of calendars) {
-      const query = new URLSearchParams({ startDateTime: from.toISOString(), endDateTime: to.toISOString(), '$top': '1000', '$select': 'id,subject,bodyPreview,location,start,end,attendees,recurrence,isCancelled,isOrganizer' })
-      const remoteEvents = await this.pages<GraphEvent>(`https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(calendar.remoteId)}/calendarView?${query}`)
-      events.push(...remoteEvents.flatMap((event) => { const mapped = mapMicrosoftEvent(this.accountId, calendar, event); return mapped ? [mapped] : [] }))
+      const key = `events:${calendar.remoteId}`
+      const synced = await this.syncEvents(calendar, previous.events, checkpoints[key], from, to)
+      events.push(...synced.items)
+      if (synced.checkpoint) nextCheckpoints[key] = synced.checkpoint
     }
-    const contacts = await this.pages<GraphContact>('https://graph.microsoft.com/v1.0/me/contacts?$top=1000&$select=id,changeKey,displayName,givenName,surname,emailAddresses,businessPhones,mobilePhone,companyName,jobTitle,personalNotes,categories')
-    return { calendars, events, contacts: contacts.flatMap((contact) => { const mapped = mapMicrosoftContact(this.accountId, contact, !this.contactsWriteAuthorized); return mapped ? [mapped] : [] }) }
+    const contactSync = await this.syncContacts(previous.contacts, checkpoints.contacts)
+    if (contactSync.checkpoint) nextCheckpoints.contacts = contactSync.checkpoint
+    return { calendars, events, contacts: contactSync.items, checkpoints: nextCheckpoints }
+  }
+
+  private async syncEvents(calendar: SyncedCalendar, previous: SyncedCalendarEvent[], checkpoint: string | undefined, from: Date, to: Date) {
+    const run = async (deltaLink?: string) => {
+      const initial = new URL(`https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(calendar.remoteId)}/calendarView/delta`)
+      initial.search = new URLSearchParams({ startDateTime: from.toISOString(), endDateTime: to.toISOString() }).toString()
+      const delta = await this.deltaPages<GraphEvent>(deltaLink ?? initial.toString())
+      const current = deltaLink ? new Map(previous.filter((event) => event.calendarId === calendar.id).map((event) => [event.id, event])) : new Map<string, SyncedCalendarEvent>()
+      for (const event of delta.items) {
+        const id = `${this.accountId}:microsoft-event:${calendar.remoteId}:${event.id}`
+        const mapped = mapMicrosoftEvent(this.accountId, calendar, event)
+        if (mapped) current.set(id, mapped)
+        else if (event['@removed'] || event.isCancelled) current.delete(id)
+      }
+      return { items: [...current.values()], checkpoint: delta.checkpoint }
+    }
+    try {
+      return await run(checkpoint)
+    } catch (error) {
+      if (!checkpoint || !(error instanceof ProductivityApiError) || (error.status !== 404 && error.status !== 410)) throw error
+      return run()
+    }
+  }
+
+  private async syncContacts(previous: SyncedContact[], checkpoint?: string) {
+    const run = async (deltaLink?: string) => {
+      let initial = deltaLink
+      if (!initial) {
+        const knownFolder = previous.find((contact) => contact.folderId)?.folderId
+        const folderId = knownFolder ?? await this.defaultContactFolderId()
+        if (!folderId) return { items: [] as SyncedContact[], checkpoint: undefined }
+        const select = 'id,changeKey,parentFolderId,displayName,givenName,surname,emailAddresses,businessPhones,mobilePhone,companyName,jobTitle,personalNotes,categories'
+        initial = `https://graph.microsoft.com/v1.0/me/contactFolders/${encodeURIComponent(folderId)}/contacts/delta?$select=${select}`
+      }
+      const delta = await this.deltaPages<GraphContact>(initial)
+      const current = deltaLink ? new Map(previous.map((contact) => [contact.remoteId, contact])) : new Map<string, SyncedContact>()
+      for (const contact of delta.items) {
+        if (contact['@removed']) {
+          current.delete(contact.id)
+          continue
+        }
+        const mapped = mapMicrosoftContact(this.accountId, contact, !this.contactsWriteAuthorized)
+        if (mapped) current.set(contact.id, mapped)
+      }
+      return { items: [...current.values()], checkpoint: delta.checkpoint }
+    }
+    try {
+      return await run(checkpoint)
+    } catch (error) {
+      if (!checkpoint || !(error instanceof ProductivityApiError) || (error.status !== 404 && error.status !== 410)) throw error
+      return run()
+    }
+  }
+
+  private async defaultContactFolderId() {
+    const page = await retryingJson<GraphPage<GraphContact>>(this.provider, 'https://graph.microsoft.com/v1.0/me/contacts?$top=1&$select=id,parentFolderId', this.token)
+    return page.value[0]?.parentFolderId
   }
 
   async createEvent(calendar: SyncedCalendar, event: CalendarEvent) {
@@ -251,6 +318,19 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
       url = page['@odata.nextLink']
     }
     return items
+  }
+
+  private async deltaPages<T>(initialUrl: string) {
+    const items: T[] = []
+    let url: string | undefined = initialUrl
+    let checkpoint: string | undefined
+    while (url) {
+      const page: GraphPage<T> = await retryingJson(this.provider, url, this.token, { headers: { Prefer: 'outlook.timezone="UTC", odata.maxpagesize=1000' } })
+      items.push(...page.value)
+      checkpoint = page['@odata.deltaLink'] ?? checkpoint
+      url = page['@odata.nextLink']
+    }
+    return { items, checkpoint }
   }
 }
 

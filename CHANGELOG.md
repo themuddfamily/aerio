@@ -11,6 +11,7 @@
 - Automatic Calendar and Contacts refresh every 15 minutes.
 - Editable local Contacts alongside cached provider contacts.
 - Create, edit, and delete Google and Microsoft provider contacts after reconnecting for write access.
+- Incremental Google Calendar/People sync tokens and Microsoft Calendar/Contacts delta links with expired-cursor recovery.
 - Validated export and restore for local Contacts, Tasks, and Notes.
 - Real Help and What’s New panels, and Ctrl-K searches that reach the Mail view.
 

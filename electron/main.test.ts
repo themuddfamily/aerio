@@ -108,12 +108,13 @@ const mocks = vi.hoisted(() => {
 
   const store = {
     snapshot: vi.fn(() => storeSnapshot), localSnapshot: vi.fn(() => ({ tasks: [], notes: [] })), saveLocal: vi.fn(),
+    accountData: vi.fn(() => ({ calendars: [], events: [], contacts: [] })), checkpoints: vi.fn(() => ({})),
     setSyncing: vi.fn(), setError: vi.fn(), replaceAccount: vi.fn((_id: string, _provider: string, data: any) => {
       storeSnapshot = { ...storeSnapshot, ...data }
     }), removeAccount: vi.fn(), upsertEvent: vi.fn(), deleteEvent: vi.fn(), upsertContact: vi.fn(), deleteContact: vi.fn(), close: vi.fn()
   }
   const google = {
-    sync: vi.fn(async () => ({ calendars: [], events: [], contacts: [] })),
+    sync: vi.fn(async () => ({ calendars: [], events: [], contacts: [], checkpoints: { contacts: 'google-token' } })),
     createEvent: vi.fn(async (_calendar: any, input: any) => ({ ...input, accountId: 'a1b2', provider: 'gmail', remoteId: 'remote', readOnly: false })),
     updateEvent: vi.fn(async (_calendar: any, _current: any, input: any) => ({ ...input, accountId: 'a1b2', provider: 'gmail', remoteId: 'remote', readOnly: false })),
     deleteEvent: vi.fn(async () => undefined),
@@ -122,7 +123,7 @@ const mocks = vi.hoisted(() => {
     deleteContact: vi.fn(async () => undefined)
   }
   const microsoft = {
-    sync: vi.fn(async () => ({ calendars: [], events: [], contacts: [] })),
+    sync: vi.fn(async () => ({ calendars: [], events: [], contacts: [], checkpoints: { contacts: 'microsoft-token' } })),
     createEvent: vi.fn(async (_calendar: any, input: any) => ({ ...input, accountId: '123456', provider: 'microsoft', remoteId: 'remote', readOnly: false })),
     updateEvent: vi.fn(async (_calendar: any, _current: any, input: any) => ({ ...input, accountId: '123456', provider: 'microsoft', remoteId: 'remote', readOnly: false })),
     deleteEvent: vi.fn(async () => undefined),
@@ -239,6 +240,8 @@ describe.sequential('Electron main process', () => {
     expect(() => invoke('productivity:local-save', { tasks: 'bad', notes: [] })).toThrow(/invalid/)
     expect(() => invoke('productivity:sync', '')).toThrow(/valid account/)
     await expect(invoke('productivity:sync', 'a1b2')).resolves.toMatchObject({ calendars: [] })
+    expect(mocks.google.sync).toHaveBeenCalledWith({ calendars: [], events: [], contacts: [] }, {})
+    expect(mocks.store.replaceAccount).toHaveBeenCalledWith('a1b2', 'gmail', expect.any(Object), { contacts: 'google-token' })
     expect(invoke('productivity:snapshot')).toBe(mocks.store.snapshot())
     expect(invoke('productivity:local-snapshot')).toEqual({ tasks: [], notes: [] })
   })

@@ -297,8 +297,8 @@ async function syncProductivity(accountId: string): Promise<ProductivitySnapshot
       requireVault().hasMicrosoftContactsWriteAccess(accountId)
     )
   try {
-    const data = await connector.sync()
-    store.replaceAccount(accountId, provider, data)
+    const data = await connector.sync(store.accountData(accountId), store.checkpoints(accountId))
+    store.replaceAccount(accountId, provider, data, data.checkpoints)
     diagnostic({
       level: 'info', component: 'provider', event: 'productivity-sync-complete', accountId,
       details: { provider, calendars: data.calendars.length, events: data.events.length, contacts: data.contacts.length }
