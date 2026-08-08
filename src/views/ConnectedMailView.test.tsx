@@ -538,7 +538,10 @@ describe('ConnectedMailView', () => {
     expect(onToast).not.toHaveBeenCalledWith('Account disconnected')
   })
 
-  it('applies every local-draft search filter', async () => {
+  it.each([
+    ['address and content', ['from', 'to', 'subject', 'attachmentName', 'dateFrom']],
+    ['date and state', ['dateTo', 'hasAttachments', 'unread', 'starred', 'important']]
+  ] as const)('applies local-draft %s search filters', async (_group, fields) => {
     const user = userEvent.setup()
     renderMail(); await screen.findByText('Launch & plans')
     await user.click(screen.getByRole('button', { name: /Drafts/ }))
@@ -546,7 +549,7 @@ describe('ConnectedMailView', () => {
     await user.type(screen.getByLabelText('Search mail'), 'missing')
     expect(screen.queryByText('Local draft')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Clear mail search' }))
-    for (const field of ['from', 'to', 'subject', 'attachmentName', 'dateFrom', 'dateTo', 'hasAttachments', 'unread', 'starred', 'important']) {
+    for (const field of fields) {
       await user.click(screen.getByTitle('Advanced search filters'))
       await user.click(screen.getByRole('button', { name: `Filter draft ${field}` }))
       expect(screen.queryByText('Local draft')).not.toBeInTheDocument()
