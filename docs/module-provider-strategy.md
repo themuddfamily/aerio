@@ -6,8 +6,8 @@ Aerio treats each module as its own capability. Connecting a mail account never 
 
 - Application settings and profile preferences live in `aerio-state.sqlite`; no sample workspace is loaded at runtime.
 - Provider Calendar and Contacts snapshots live in `productivity.sqlite`, keyed by account and provider.
-- Production local Tasks and Notes also live in `productivity.sqlite`, but in separate local-module records with no provider identity.
-- Connected Chat has no storage or fake transport. The UI reports that no service is connected.
+- Production local Contacts, Tasks, and Notes also live in `productivity.sqlite`, but in separate local records with no provider identity.
+- Chat has no storage, fake transport, or v1 navigation entry.
 
 This split keeps provider caches, local production data, and application preferences independent and gives future connectors a stable boundary.
 
@@ -15,7 +15,7 @@ This split keeps provider caches, local production data, and application prefere
 
 The production baseline is an empty, persistent local task list. Google Tasks and Microsoft To Do are planned as independent adapters behind the provider capability contract.
 
-Before either adapter is enabled, the task model needs:
+Recurring local tasks now schedule their next occurrence and local custom lists are supported. Before either remote adapter is enabled, the task model still needs:
 
 1. stable local, provider, and remote identifiers;
 2. per-record revision/checkpoint metadata;
@@ -29,7 +29,7 @@ The first remote milestone should be one provider end to end, including create, 
 
 Aerio Notes are production local data, not disguised provider notes. Google Keep has no suitable general synchronization API. Microsoft OneNote has an API, but its page/section/HTML model is materially different from Aerio’s current plain note model.
 
-The next Notes milestone is therefore local reliability: export/import, backup/restore, attachment policy, full-text search, and an optional application lock. A OneNote adapter can be evaluated later as an explicit connector with a documented conversion model; it should not redefine the local format.
+Local-data export/import and full-content search are implemented for Notes. The next Notes milestones are an attachment policy and an optional application lock. A OneNote adapter can be evaluated later as an explicit connector with a documented conversion model; it should not redefine the local format.
 
 ## Chat: choose a transport before building UI promises
 

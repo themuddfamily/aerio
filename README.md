@@ -1,6 +1,6 @@
 # Aerio
 
-Aerio is a calm, modern desktop communications client for Windows. It supports multi-provider mail, writable Google Calendar synchronization, read-only Outlook Calendar and provider Contacts, plus local Tasks and Notes.
+Aerio is a calm, modern desktop communications client for Windows. It supports multi-provider mail, writable Google and Microsoft Calendar synchronization, cached provider Contacts, and local Contacts, Tasks, and Notes.
 
 ## Real-mail alpha
 
@@ -20,9 +20,10 @@ Aerio is a calm, modern desktop communications client for Windows. It supports m
 - Sanitized HTML; scripts and unsafe links are removed, and remote images are blocked by default
 - Dedicated message windows for provider mail; double-click a conversation to open or focus its window
 - Read-only local archive or complete local deletion when disconnecting an account
-- Google Calendar synchronization with event creation, editing, and deletion; Google Contacts and Outlook Calendar/Contacts remain read-only and are cached in a separate local database
+- Google and Microsoft Calendar synchronization with event creation, editing, deletion, recurrence, and configurable reminders
+- Cached read-only provider Contacts plus editable local Contacts, with portable backup and restore for local Contacts, Tasks, and Notes
 
-Tasks and Notes are production local modules. Chat remains visible as an unconfigured module until a secure transport is selected. Provider Calendar and Contacts data is loaded after **Sync now**. Google events can be created by double-clicking a day or time slot and edited from Aerio after granting the event scope once.
+Tasks, Notes, and local Contacts are production local modules. Chat is outside the v1 navigation until a secure transport is selected. Provider Calendar and Contacts data refreshes automatically every 15 minutes and can also be refreshed with **Sync now**. Calendar events can be created by double-clicking a day or time slot and edited after granting the event scope once.
 
 ## Connect an account
 
@@ -46,7 +47,7 @@ The first download is quota-bound. A mailbox with 100,000 messages can take roug
 
 1. Create an app registration in [Microsoft Entra](https://entra.microsoft.com/).
 2. Enable public client flows and add the **Mobile and desktop applications** redirect URI `http://localhost`.
-3. Aerio's public Application (client) ID is already included. Choose Microsoft and sign in. The browser requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.Read`, and `Contacts.Read` access. Existing connections must reconnect once to grant the added read-only scopes.
+3. Aerio's public Application (client) ID is already included. Choose Microsoft and sign in. The browser requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite`, and `Contacts.Read` access. Existing connections must reconnect once to grant Calendar editing.
 
 Aerio includes its Microsoft public-client application ID by default, because desktop application IDs are public identifiers rather than secrets. `MAIN_VITE_MICROSOFT_CLIENT_ID` can override it for a separate development registration.
 
@@ -73,6 +74,7 @@ Proton Mail connects through the local [Proton Mail Bridge](https://proton.me/su
 - Remote message images are represented by an isolated `aerio-image:` protocol and are fetched only after an explicit per-conversation choice.
 - External HTTP(S) and `mailto:` links open in the system browser/mail handler rather than navigating Aerio.
 - Mailbox files are protected by the Windows user account and disk encryption. Enable BitLocker if the device may be lost or shared.
+- Settings can export and restore local Contacts, Tasks, and Notes as a validated JSON backup. Provider mail and cached provider data are intentionally excluded because they can be synchronized again.
 
 Application preferences live in `aerio-state.sqlite`. On first launch after this change, Aerio imports only appearance, customized profile, notification, startup, and tray preferences from the former workspace database when available; sample content and the old sample persona are neither loaded nor copied. The legacy database is left untouched.
 
@@ -114,13 +116,13 @@ The app uses Electron 43, React 19, TypeScript, Vite, and local SQLite databases
 - The main process owns OAuth, OS dialogs, safe storage, external navigation, and a typed IPC boundary.
 - A dedicated Node worker owns the normalized mail database, Gmail/Graph/IMAP synchronization, SMTP delivery, MIME parsing, full-text search, queued mutations, and drafts.
 - Main-process Google and Microsoft productivity connectors normalize Calendar and Contacts into an isolated SQLite cache. Failed refreshes retain the last good snapshot; disconnecting removes that account’s cached productivity data.
-- Application preferences use their own small SQLite database; provider data and local Tasks/Notes retain their existing dedicated stores.
+- Application preferences use their own small SQLite database; provider data and local Contacts/Tasks/Notes retain their existing dedicated stores.
 
 Automated coverage includes provider data integrity, productivity connector normalization and atomic cache replacement, logical duplicate suppression, exact-state Undo, editable drafts, outgoing MIME, new-mail notification filtering, Microsoft delta pagination, mocked Gmail behavior, local-module badge logic, and pagination over a synthetic 100,000-thread mailbox. Static interaction-contract, WCAG, focus-management, and Playwright-driven Electron passes cover buttons, feature context menus, editing/link/image menus, profile management, dedicated message windows, cached Calendar/Contacts surfaces, bulk mail organization, account settings, module actions, account onboarding, and native window controls.
 
 Live provider behavior is release-gated by the disposable-account scenarios in [`docs/live-provider-test-matrix.md`](docs/live-provider-test-matrix.md). Settings → Mail diagnostics checks database integrity and exports a privacy-redacted troubleshooting report; credentials, message bodies, raw mail, HTML, and attachment paths are excluded.
 
-The longer-term provider boundaries and the reasoning behind local Tasks/Notes and unconfigured Chat are documented in [`docs/module-provider-strategy.md`](docs/module-provider-strategy.md).
+The longer-term provider boundaries and the reasoning behind local productivity data and deferred Chat are documented in [`docs/module-provider-strategy.md`](docs/module-provider-strategy.md).
 
 ## Keyboard shortcuts
 
@@ -128,7 +130,7 @@ The longer-term provider boundaries and the reasoning behind local Tasks/Notes a
 | --- | --- |
 | `Ctrl+K` | Search and command palette |
 | `Ctrl+N` | New message, or account setup when real mail has no account |
-| `Ctrl+1`…`Ctrl+6` | Switch between modules |
+| `Ctrl+1`…`Ctrl+5` | Switch between Mail, Calendar, Contacts, Tasks, and Notes |
 | `Shift+F10` | Open the context menu for the focused item |
 | `Shift+Enter` | Open the focused message in a separate window |
 | `Esc` | Close the active overlay |
@@ -139,8 +141,8 @@ The longer-term provider boundaries and the reasoning behind local Tasks/Notes a
 - Automated tests use mocked provider responses. Live validation requires real provider accounts, app registrations, or app passwords.
 - IMAP has no universal standard for Archive or special folders. Aerio reports an error instead of guessing when a server does not advertise a required destination.
 - IMAP can store multiple physical copies of the same message, but Aerio presents them as one logical conversation and keeps every location available for folder actions.
-- Scheduled delivery, Undo Send, snooze, and rules are coordinated locally by Aerio. If Aerio is fully quit at a due time, the action resumes when it next starts; keeping it in the tray allows on-time processing.
-- Offline drafts are queued until connectivity returns, but conflict resolution with edits made simultaneously in another client is not yet implemented.
-- Google Calendar events are writable; Outlook Calendar and all provider Contacts remain read-only and refresh manually. The initial Calendar window covers one year in the past through two years in the future; incremental checkpoints and Outlook writes are next.
-- Google Keep and consumer Google Chat do not expose suitable general synchronization APIs. Aerio Notes remain local, and remote Chat requires a separately defined service strategy.
+- Scheduled delivery, Undo Send, snooze, and rules are coordinated locally by Aerio. If Aerio is fully quit at a due time, the action resumes when it next starts; keeping it in the tray allows on-time processing, and Settings can start Aerio automatically after Windows sign-in.
+- Offline drafts are queued until connectivity returns. Aerio detects and preserves simultaneous edits from two Aerio editors; provider-side revision conflict detection for edits made in another mail client remains future work.
+- Google and Microsoft Calendar events are writable after reconnection. Provider Contacts remain read-only, while contacts created in Aerio are editable local records. The initial Calendar window covers one year in the past through two years in the future; incremental provider checkpoints are still planned.
+- Google Keep and consumer Google Chat do not expose suitable general synchronization APIs. Aerio Notes remain local, and Chat stays out of the v1 navigation until a transport and security model are defined.
 - Windows is the tested packaging target; macOS and Linux packaging are not configured.
