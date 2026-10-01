@@ -1,4 +1,4 @@
-import { Archive, Copy, Download, Forward, Image, Inbox, LoaderCircle, Mail, MailOpen, Reply, ReplyAll, Star, Trash2, Undo2 } from 'lucide-react'
+import { Archive, Copy, Download, Forward, Inbox, LoaderCircle, Mail, MailOpen, Reply, ReplyAll, Star, Trash2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import MailComposeModal from '../components/MailComposeModal'
 import TitleBar from '../components/TitleBar'
@@ -202,8 +202,8 @@ export default function MessageWindow() {
         {!loading && error && <div className="empty-state grow"><Inbox size={34} /><h3>Message unavailable</h3><p>{error}</p></div>}
         {!loading && thread && (
           <article className="message-reader mail-thread message-window-reader">
-            <header><div className="message-window-heading"><h2>{thread.subject}</h2>{!remoteImages && <button className="button ghost small" onClick={() => void loadRemoteImages()}><Image size={15} /> Load remote images</button>}</div></header>
-            {thread.messages.map((message) => <ThreadMessageAccordion key={message.id} message={message} expanded={expandedMessageId === message.id} onToggle={() => setExpandedMessageId((current) => current === message.id ? undefined : message.id)} onReply={mailReadOnly ? undefined : () => { const reply = replyThreadFor(message); if (reply) setMailCompose({ reply }) }}>
+            <header><div className="message-window-heading"><h2>{thread.subject}</h2></div></header>
+            {thread.messages.map((message) => <ThreadMessageAccordion key={message.id} message={message} expanded={expandedMessageId === message.id} onLoadRemoteImages={remoteImages ? undefined : () => void loadRemoteImages()} onToggle={() => setExpandedMessageId((current) => current === message.id ? undefined : message.id)} onReply={mailReadOnly ? undefined : () => { const reply = replyThreadFor(message); if (reply) setMailCompose({ reply }) }}>
               {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} onContextMenu={(event) => showContextMenu(event, [
                 { label: 'Open attachment', icon: Download, action: () => openAttachment(message, attachment) },
                 { label: 'Save as…', icon: Download, action: () => saveAttachment(message, attachment) },

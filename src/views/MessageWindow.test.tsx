@@ -9,9 +9,10 @@ import MessageWindow from './MessageWindow'
 
 vi.mock('../components/TitleBar', () => ({ default: ({ title }: any) => <div data-testid="title-bar">{title}</div> }))
 vi.mock('../components/ThreadMessageAccordion', () => ({
-  default: ({ message, expanded, onToggle, onReply, children }: any) => <section data-testid={`message-${message.id}`}>
+  default: ({ message, expanded, onToggle, onReply, onLoadRemoteImages, children }: any) => <section data-testid={`message-${message.id}`}>
     <button onClick={onToggle}>{expanded ? 'Collapse message' : 'Expand message'}</button>
     {onReply && <button onClick={onReply}>Reply to message</button>}
+    {expanded && onLoadRemoteImages && <button onClick={onLoadRemoteImages}>Load remote images</button>}
     {expanded && <div>{message.text}</div>}{children}
   </section>
 }))

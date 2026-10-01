@@ -1,5 +1,5 @@
 import {
-  Archive, AtSign, CalendarClock, CheckSquare, ChevronDown, Clock3, Copy, Download, Edit3, ExternalLink, FileText, Filter, FolderInput, Forward, Image, Inbox, LoaderCircle, Mail, MailOpen,
+  Archive, AtSign, CalendarClock, CheckSquare, ChevronDown, Clock3, Copy, Download, Edit3, ExternalLink, FileText, Filter, FolderInput, Forward, Inbox, LoaderCircle, Mail, MailOpen,
   MoreVertical, Paperclip, Pause, Play, Plus, RefreshCw, Reply, ReplyAll, Search, Send, Settings2,
   Star, Tag, Tags, Trash2, Undo2, UserPlus, WifiOff, X
 } from 'lucide-react'
@@ -962,7 +962,6 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
               <button className={`reader-toolbar-action ${selected.starred ? 'active' : ''}`} disabled={selectedAccount?.archived} title={selected.starred ? 'Unstar' : 'Star'} onClick={() => void applyAction(selected.starred ? 'unstar' : 'star')}><Star size={17} fill={selected.starred ? 'currentColor' : 'none'} /><span>{selected.starred ? 'Unstar' : 'Star'}</span></button>
             </div>
             <div className="reader-toolbar-secondary">
-              {!remoteImages && <button className="button ghost small" onClick={() => void loadRemoteImages()}><Image size={15} /> Load remote images</button>}
               <button className="icon-button" aria-label="More message actions" title="More" onClick={showReaderMoreMenu}><MoreVertical size={18} /></button>
             </div>
           </div>
@@ -972,6 +971,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
               key={message.id}
               message={message}
               expanded={expandedMessageId === message.id}
+              onLoadRemoteImages={remoteImages ? undefined : () => void loadRemoteImages()}
               onToggle={() => setExpandedMessageId((current) => current === message.id ? undefined : message.id)}
               onReply={selectedAccount?.archived ? undefined : () => setCompose({ reply: replyThreadFor(message) })}
               onContextMenu={(event) => showProviderMessageMenu(event, message)}

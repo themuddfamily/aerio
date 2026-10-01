@@ -1,4 +1,4 @@
-import { ChevronDown, Reply } from 'lucide-react'
+import { ChevronDown, Reply, TriangleAlert } from 'lucide-react'
 import type { MouseEvent, ReactNode } from 'react'
 import type { MailMessageDetail } from '../mail-types'
 import { formatMailArrival, formatMailArrivalTooltip } from '../lib/mail-date'
@@ -11,6 +11,7 @@ interface ThreadMessageAccordionProps {
   children?: ReactNode
   onToggle(): void
   onReply?(): void
+  onLoadRemoteImages?(): void
   onContextMenu?(event: MouseEvent<HTMLElement>): void
 }
 
@@ -24,6 +25,7 @@ export default function ThreadMessageAccordion({
   children,
   onToggle,
   onReply,
+  onLoadRemoteImages,
   onContextMenu
 }: ThreadMessageAccordionProps) {
   const sender = message.fromName || message.fromEmail
@@ -52,6 +54,10 @@ export default function ThreadMessageAccordion({
       </header>
       <div className="thread-message-content-shell" aria-hidden={!expanded} inert={!expanded}>
         <div className="thread-message-content" id={contentId}>
+          {expanded && onLoadRemoteImages && <div className="remote-images-notice">
+            <TriangleAlert size={15} aria-hidden="true" />
+            <p><button type="button" onClick={onLoadRemoteImages}>Load remote images</button><span>. To preserve your privacy, external images have been blocked.</span></p>
+          </div>}
           {message.sanitizedHtml
             ? <MessageHtml className="message-body mail-html" html={message.sanitizedHtml} />
             : <div className="message-body mail-text">{message.text}</div>}

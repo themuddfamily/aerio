@@ -1833,6 +1833,38 @@ kbd {
   transform: translateY(0) scale(1);
 }
 
+.remote-images-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-bottom: 16px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.remote-images-notice > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.remote-images-notice p {
+  margin: 0;
+}
+
+.remote-images-notice button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.remote-images-notice button:hover {
+  text-decoration: underline;
+}
+
 .thread-message-content-shell {
   display: grid;
   grid-template-rows: 0fr;
