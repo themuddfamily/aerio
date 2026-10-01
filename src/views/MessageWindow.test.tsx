@@ -9,9 +9,10 @@ import MessageWindow from './MessageWindow'
 
 vi.mock('../components/TitleBar', () => ({ default: ({ title }: any) => <div data-testid="title-bar">{title}</div> }))
 vi.mock('../components/ThreadMessageAccordion', () => ({
-  default: ({ message, expanded, onToggle, onReply, onLoadRemoteImages, children }: any) => <section data-testid={`message-${message.id}`}>
+  default: ({ message, expanded, onToggle, onReply, onMoreActions, onLoadRemoteImages, children }: any) => <section data-testid={`message-${message.id}`}>
     <button onClick={onToggle}>{expanded ? 'Collapse message' : 'Expand message'}</button>
     {onReply && <button onClick={onReply}>Reply to message</button>}
+    {onMoreActions && <button onClick={onMoreActions}>Message options</button>}
     {expanded && onLoadRemoteImages && <button onClick={onLoadRemoteImages}>Load remote images</button>}
     {expanded && <div>{message.text}</div>}{children}
   </section>
@@ -67,6 +68,20 @@ beforeEach(() => {
 })
 
 describe('MessageWindow', () => {
+  it('opens options for the chosen message and reuses attachment and conversation actions', async () => {
+    const user = userEvent.setup()
+    renderWindow(); await screen.findByText('report.pdf')
+    const message = within(screen.getByTestId('message-message-2'))
+    await user.click(message.getByRole('button', { name: 'Message options' }))
+    expect(screen.getByRole('menuitem', { name: 'View message headers' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Print…' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('menuitem', { name: 'Save attachment: report.pdf' }))
+    expect(api.mail.attachments.save).toHaveBeenCalledWith('account', 'message-2', 'attachment', 'report.pdf')
+    await user.click(message.getByRole('button', { name: 'Message options' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Mark as read' }))
+    await waitFor(() => expect(api.mail.mail.action).toHaveBeenCalledWith({ accountId: 'account', threadIds: ['thread'], action: 'read' }))
+  })
+
   it('loads preferences, accounts, the requested message, and applies renderer appearance', async () => {
     renderWindow()
     expect(screen.getByText('Opening message…')).toBeInTheDocument()

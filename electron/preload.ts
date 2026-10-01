@@ -32,6 +32,11 @@ const api: AerioDesktopApi = {
     }
   },
   productivity: {
+    onChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: Parameters<typeof callback>[0]) => callback(data)
+      ipcRenderer.on('productivity:changed', listener)
+      return () => ipcRenderer.removeListener('productivity:changed', listener)
+    },
     snapshot: () => ipcRenderer.invoke('productivity:snapshot'),
     sync: (accountId) => ipcRenderer.invoke('productivity:sync', accountId),
     createEvent: (event) => ipcRenderer.invoke('productivity:event-create', event),
@@ -65,6 +70,17 @@ const api: AerioDesktopApi = {
     return () => ipcRenderer.removeListener('command:compose', listener)
   },
   mail: {
+    messageTools: {
+      updateLocal: (ref, updates) => ipcRenderer.invoke('mail:message:local', ref, updates),
+      save: (ref) => ipcRenderer.invoke('mail:message:save', ref),
+      saveAttachments: (ref) => ipcRenderer.invoke('mail:message:save-attachments', ref),
+      copy: (ref, destination) => ipcRenderer.invoke('mail:message:copy', ref, destination),
+      print: (ref, format) => ipcRenderer.invoke('mail:message:print', ref, format),
+      createTask: (ref, input) => ipcRenderer.invoke('mail:message:create-task', ref, input),
+      addNote: (ref, input) => ipcRenderer.invoke('mail:message:add-note', ref, input),
+      notes: (ref) => ipcRenderer.invoke('mail:message:notes', ref),
+      translate: (ref, input) => ipcRenderer.invoke('mail:message:translate', ref, input)
+    },
     credentials: {
       status: () => ipcRenderer.invoke('gmail:credentials:status'),
       import: () => ipcRenderer.invoke('gmail:credentials:import'),

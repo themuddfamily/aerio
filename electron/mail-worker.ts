@@ -1009,6 +1009,35 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     }))
     return thread
   }
+  if (command.type === 'mail:export') {
+    const rawPath = database.getMessageRaw(command.payload.accountId, command.payload.messageId)
+    if (!rawPath) throw new Error('The original message is not available offline')
+    copyFileSync(rawPath, command.payload.targetPath)
+    return
+  }
+  if (command.type === 'mail:copy') {
+    const { accountId, threadId, messageId, destination } = command.payload
+    const account = database.getAccount(accountId)
+    if (!account || account.archived) throw new Error('Connect this account before copying messages')
+    if (!online) throw new Error('Copying messages requires an internet connection')
+    const target = database.listLabels([accountId]).find((label) => label.id === destination)
+    if (!target) throw new Error('The destination folder no longer exists')
+    const message = database.remoteMessagesForThreads(accountId, [threadId]).find((item) => item.id === messageId)
+    if (!message) throw new Error('Message not found in this conversation')
+    if (account.provider === 'gmail') {
+      if (target.type !== 'user' && target.id !== 'INBOX') throw new Error('Choose Inbox or a user label as the copy destination')
+      await clientFor(accountId).copyToLabel(messageId, destination)
+    } else if (account.provider === 'microsoft') {
+      if (!destination.startsWith('folder:')) throw new Error('Choose a mail folder')
+      await microsoftClientFor(accountId).copyMessage(messageId, destination.slice(7))
+    } else {
+      if (!message.remoteFolderId || !message.remoteUid || !destination.startsWith('folder:')) throw new Error('The source or destination folder is unavailable')
+      await (await imapClientFor(accountId)).copyMessage(message.remoteFolderId, Number(message.remoteUid), destination.slice(7))
+    }
+    if (!paused.has(accountId)) void syncAccount(accountId)
+    emit({ type: 'mail-changed', payload: { accountId } })
+    return
+  }
   if (command.type === 'mail:source') {
     const rawPath = database.getMessageRaw(command.payload.accountId, command.payload.messageId)
     if (!rawPath) throw new Error('The original message is not available offline')

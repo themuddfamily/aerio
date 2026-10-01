@@ -130,6 +130,16 @@ export class ImapSmtpClient {
     return folders.find((folder) => folder.specialUse?.toLowerCase() === specialUse.toLowerCase())?.path
   }
 
+  async copyMessage(folder: string, uid: number, destination: string) {
+    await this.withConnection(async (client) => {
+      const lock = await client.getMailboxLock(folder)
+      try {
+        const result = await client.messageCopy(uid, destination, { uid: true })
+        if (!result) throw new Error('The mail server could not copy the message')
+      } finally { lock.release() }
+    })
+  }
+
   async applyAction(messages: { folder: string; uid: number }[], action: MailActionKind, labelId?: string) {
     await this.withConnection(async (client) => {
       const folders = await this.listFolders(client)

@@ -15,6 +15,8 @@ import MailSnoozeModal from '../components/MailSnoozeModal'
 import SenderAvatar from '../components/SenderAvatar'
 import ThreadListPreview from '../components/ThreadListPreview'
 import ThreadMessageAccordion from '../components/ThreadMessageAccordion'
+import { useMailMessageTools } from '../components/MailMessageTools'
+import { useThreadExpansion } from '../lib/use-thread-expansion'
 import { MailPaneSeparator, useResizableMailPanes } from '../components/MailPaneResizer'
 import type {
   MailAccountSummary,
@@ -84,6 +86,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [selectedKey, setSelectedKey] = useState('')
   const [thread, setThread] = useState<MailThreadDetail>()
   const [expandedMessageId, setExpandedMessageId] = useState<string>()
+  const expansion = useThreadExpansion(thread, expandedMessageId, setExpandedMessageId)
+  const messageTools = useMailMessageTools({ accounts, onToast, collapseAll: expansion.collapseAll, expandAll: expansion.expandAll, onUpdated: (message, local) => setThread((current) => current && ({ ...current, messages: current.messages.map((item) => item.id === message.id ? { ...item, local } : item) })) })
   const [threadLoading, setThreadLoading] = useState(false)
   const [expandedListThreadKey, setExpandedListThreadKey] = useState<string>()
   const [listThreadDetails, setListThreadDetails] = useState<Record<string, MailThreadDetail>>({})
@@ -505,7 +509,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     const threadKey = `${item.accountId}:${item.id}`
     requestedMessage.current = messageId ? { threadKey, messageId } : undefined
     if (threadKey === selectedKey && messageId && thread?.messages.some((message) => message.id === messageId)) {
-      setExpandedMessageId(messageId)
+      expansion.focus(messageId)
       return
     }
     setSelectedKey(threadKey)
@@ -714,6 +718,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       { label: 'View message headers', icon: AtSign, separatorBefore: true, action: () => viewMessageData(message, 'headers') },
       { label: 'View message source', icon: FileText, action: () => viewMessageData(message, 'source') },
       { label: 'Copy subject', icon: Copy, separatorBefore: true, action: () => copyText(selected.subject) },
+      ...messageTools.items(message),
       ...(message.messageIdHeader ? [{ label: 'Copy message ID', icon: Copy, action: () => copyText(message.messageIdHeader!) }] satisfies ContextMenuItem[] : [])
     ], 'More message actions')
   }
@@ -744,12 +749,17 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   ], attachment.filename)
 
   const showProviderMessageMenu = (event: React.MouseEvent, message: MailMessageDetail) => {
-    if (window.getSelection()?.toString() || (event.target instanceof Element && event.target.closest('a[href], img[src]'))) return
+    if (event.type === 'contextmenu' && (window.getSelection()?.toString() || (event.target instanceof Element && event.target.closest('a[href], img[src]')))) return
     const replyThread = replyThreadFor(message)
     showContextMenu(event, [
       { label: 'Reply', icon: Reply, disabled: selectedAccount?.archived || !replyThread, action: () => setCompose({ reply: replyThread }) },
       { label: 'Reply all', icon: ReplyAll, disabled: selectedAccount?.archived || !replyThread, action: () => setCompose({ reply: replyThread, replyAll: true }) },
       { label: 'Forward', icon: Forward, disabled: selectedAccount?.archived || !replyThread, action: () => setCompose({ reply: replyThread, forward: true }) },
+      ...(selected ? summaryMenu(selected).slice(6, -2) : []),
+      ...messageTools.items(message),
+      { label: 'View message headers', icon: AtSign, separatorBefore: true, action: () => viewMessageData(message, 'headers') },
+      { label: 'View message source', icon: FileText, action: () => viewMessageData(message, 'source') },
+      ...message.attachments.map((attachment) => ({ label: `Save attachment: ${attachment.filename}`, icon: Download, action: () => saveAttachment(message, attachment) })),
       { label: 'Copy sender name', icon: Copy, separatorBefore: true, action: () => copyText(message.fromName || message.fromEmail) },
       { label: 'Copy sender address', icon: AtSign, action: () => copyText(message.fromEmail) },
       { label: 'Copy message text', icon: Copy, action: () => copyText(message.text) }
@@ -970,10 +980,11 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
             {thread.messages.map((message) => <ThreadMessageAccordion
               key={message.id}
               message={message}
-              expanded={expandedMessageId === message.id}
+              expanded={expansion.isExpanded(message.id)}
               onLoadRemoteImages={remoteImages ? undefined : () => void loadRemoteImages()}
-              onToggle={() => setExpandedMessageId((current) => current === message.id ? undefined : message.id)}
+              onToggle={() => expansion.toggle(message.id)}
               onReply={selectedAccount?.archived ? undefined : () => setCompose({ reply: replyThreadFor(message) })}
+              onMoreActions={(event) => showProviderMessageMenu(event, message)}
               onContextMenu={(event) => showProviderMessageMenu(event, message)}
             >
               {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} onContextMenu={(event) => showAttachmentMenu(event, message, attachment)}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{formatFileSize(attachment.size)}</small></span><button className="icon-button" title="Open" onClick={() => void openAttachment(message, attachment)}><Download size={16} /></button><button className="button ghost small" onClick={() => void saveAttachment(message, attachment)}>Save as</button></div>)}</div>}
@@ -992,6 +1003,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       {snoozeItems && <MailSnoozeModal count={snoozeItems.length} onApply={(until) => applySnooze(snoozeItems, until)} onClose={() => setSnoozeItems(undefined)} />}
       {rulesOpen && <MailRulesModal accounts={accounts} labels={labels} onToast={onToast} onClose={() => setRulesOpen(false)} />}
       {sourceViewer && <MailMessageSourceModal {...sourceViewer} onClose={() => setSourceViewer(undefined)} />}
+      {messageTools.dialog}
     </div>
   )
 }

@@ -7,6 +7,12 @@ afterEach(() => {
 })
 
 describe('Microsoft Graph mail client', () => {
+  it('copies a message with the Graph copy endpoint while keeping the original', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 'copy' }), { status: 201 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await new MicrosoftGraphClient(async () => 'token').copyMessage('message/id', 'work')
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/me/messages/message%2Fid/copy'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ destinationId: 'work' }) }))
+  })
   it('follows message delta pagination and retains the opaque delta link', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ value: [{ id: 'one' }], '@odata.nextLink': 'https://graph.microsoft.com/next' }), { status: 200 }))

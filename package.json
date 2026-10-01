@@ -24,6 +24,7 @@
     "audit:accessibility": "node scripts/desktop-accessibility-audit.mjs",
     "audit:context-menus": "node scripts/audit-context-menus.mjs",
     "test:context-menus": "npm run audit:context-menus && node scripts/desktop-context-menu-audit.mjs",
+    "test:message-tools": "npm run build && node scripts/desktop-message-tools-audit.mjs",
     "test:desktop": "node scripts/run-desktop-tests.mjs",
     "test:desktop:visible": "node scripts/run-desktop-tests.mjs --visible",
     "test:desktop:checks": "npm run build && npm run audit:buttons && node scripts/desktop-button-audit.mjs && npm run test:context-menus && npm run audit:accessibility",

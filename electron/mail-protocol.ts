@@ -39,6 +39,8 @@ export type MailWorkerCommand =
   | { type: 'mail:account-unread-counts' }
   | { type: 'mail:thread'; payload: { accountId: string; threadId: string; allowRemoteImages?: boolean } }
   | { type: 'mail:source'; payload: { accountId: string; messageId: string } }
+  | { type: 'mail:copy'; payload: { accountId: string; threadId: string; messageId: string; destination: string } }
+  | { type: 'mail:export'; payload: { accountId: string; messageId: string; targetPath: string } }
   | { type: 'mail:action'; payload: ApplyMailActionInput }
   | { type: 'mail:undo'; payload: { operationId: string } }
   | { type: 'mail:snooze'; payload: { accountId: string; threadIds: string[]; until: string } }

@@ -54,6 +54,10 @@ export default function App() {
   const [connectedAccounts, setConnectedAccounts] = useState<MailAccountSummary[]>([])
   const [productivity, setProductivity] = useState<ProductivitySnapshot>(emptyProductivity)
   const [localModules, setLocalModules] = useState<LocalModuleSnapshot>(emptyLocalModules)
+  useEffect(() => window.aerio.productivity.onChanged?.((data) => {
+    if (data.local) setLocalModules(data.local)
+    if (data.snapshot) setProductivity(data.snapshot)
+  }), [])
   const [productivitySyncing, setProductivitySyncing] = useState(false)
   const [commandIndex, setCommandIndex] = useState(0)
   const hydrated = useRef(false)

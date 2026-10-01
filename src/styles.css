@@ -1704,7 +1704,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: 11px;
-  padding: 0 72px 0 0;
+  padding: 0 106px 0 0;
   border: 0;
   outline: 0;
   color: var(--text-soft);
@@ -1787,7 +1787,8 @@ kbd {
   transform: rotate(180deg);
 }
 
-.thread-message-reply {
+.thread-message-reply,
+.thread-message-more {
   position: absolute;
   top: 32px;
   right: 43px;
@@ -1799,7 +1800,11 @@ kbd {
   transition: opacity .15s ease, transform .2s ease;
 }
 
-.thread-message.expanded .thread-message-reply {
+.thread-message-reply { right: 77px; }
+.thread-message-more { opacity: 1; pointer-events: auto; transform: none; }
+
+.thread-message.expanded .thread-message-reply,
+.thread-message.expanded .thread-message-more {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0) scale(1);
@@ -1896,6 +1901,7 @@ kbd {
   .thread-message-preview,
   .thread-message-chevron,
   .thread-message-reply,
+  .thread-message-more,
   .thread-message-content-shell,
   .thread-message-content,
   .thread-message .avatar,
@@ -4032,6 +4038,18 @@ kbd {
 }
 
 /* Desktop context menus */
+.message-tool-form { padding: 20px; }
+.message-tool-error { color: var(--danger); }
+.message-properties { display: grid; gap: 12px; margin: 0; }
+.message-properties > div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 16px; }
+.message-properties dt { color: var(--muted); }
+.message-properties dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-local-details { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+.message-category { padding: 3px 9px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); font-size: 12px; }
+.message-linked-notes article { border-top: 1px solid var(--line); padding: 12px 0; }
+.message-linked-notes p { white-space: pre-wrap; }
+.message-custom-format .message-body, .message-custom-format .message-body * { font-size: var(--message-font-size) !important; }
+
 .context-menu {
   position: fixed;
   z-index: 1000;

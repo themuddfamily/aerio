@@ -143,6 +143,10 @@ export class GmailClient {
     return this.request<HistoryResponse>(`/history?${params}`)
   }
 
+  copyToLabel(messageId: string, labelId: string) {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/modify`, { method: 'POST', body: JSON.stringify({ addLabelIds: [labelId], removeLabelIds: [] }) })
+  }
+
   modifyThreads(threadIds: string[], addLabelIds: string[], removeLabelIds: string[]) {
     return Promise.all(threadIds.map((threadId) => this.request(`/threads/${encodeURIComponent(threadId)}/modify`, {
       method: 'POST',

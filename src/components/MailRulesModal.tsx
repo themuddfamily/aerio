@@ -8,15 +8,16 @@ interface MailRulesModalProps {
   labels: MailLabel[]
   onToast(message: string): void
   onClose(): void
+  initialRule?: MailRuleInput
 }
 
 const newCondition = (): MailRuleCondition => ({ field: 'from', operator: 'contains', value: '' })
 const newAction = (): MailRuleAction => ({ action: 'archive' })
 
-export default function MailRulesModal({ accounts, labels, onToast, onClose }: MailRulesModalProps) {
+export default function MailRulesModal({ accounts, labels, onToast, onClose, initialRule }: MailRulesModalProps) {
   const writableAccounts = accounts.filter((account) => !account.archived)
   const [rules, setRules] = useState<MailRule[]>([])
-  const [editing, setEditing] = useState<MailRuleInput>()
+  const [editing, setEditing] = useState<MailRuleInput | undefined>(initialRule)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
 

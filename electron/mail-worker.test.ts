@@ -98,6 +98,7 @@ const mocks = vi.hoisted(() => {
   method('restoreOperationSnapshot')
 
   const gmail = {
+    copyToLabel: vi.fn().mockResolvedValue(undefined),
     getAccessToken: undefined as undefined | ((id: string) => Promise<string>),
     getProfile: vi.fn().mockResolvedValue({ emailAddress: 'person@example.test', historyId: '1' }),
     createDraft: vi.fn().mockResolvedValue({ id: 'remote-draft', message: { id: 'gmail-revision-2' } }),
@@ -112,6 +113,7 @@ const mocks = vi.hoisted(() => {
     listHistory: vi.fn().mockResolvedValue({ history: [], historyId: '1' })
   }
   const microsoft = {
+    copyMessage: vi.fn().mockResolvedValue(undefined),
     getAccessToken: undefined as undefined | (() => Promise<string>),
     listFolders: vi.fn().mockResolvedValue([]), applyAction: vi.fn().mockResolvedValue(undefined),
     saveDraft: vi.fn().mockResolvedValue({ id: 'remote-draft', revision: 'microsoft-revision-2' }),
@@ -119,6 +121,7 @@ const mocks = vi.hoisted(() => {
     delta: vi.fn().mockResolvedValue({ messages: [], deltaLink: 'delta' }), messageRaw: vi.fn().mockResolvedValue(Buffer.from('raw'))
   }
   const imap = {
+    copyMessage: vi.fn().mockResolvedValue(undefined),
     verify: vi.fn().mockResolvedValue(undefined), listFolders: vi.fn().mockResolvedValue([]), applyAction: vi.fn().mockResolvedValue(undefined),
     saveDraft: vi.fn().mockResolvedValue('remote-draft'), deleteDraft: vi.fn().mockResolvedValue(undefined), send: vi.fn().mockResolvedValue(undefined),
     withConnection: vi.fn(async (callback: (connection: any) => Promise<void>) => callback({})),
@@ -189,6 +192,36 @@ describe.sequential('mail worker protocol routing', () => {
     const response = await request({ type: 'initialize', payload: { databasePath: 'mail.db', contentPath: 'C:\\content' } })
     expect(response).toMatchObject({ kind: 'response', result: undefined })
     expect(mocks.MailDatabase).toHaveBeenCalledWith('mail.db', 'C:\\content')
+  })
+
+  it('exports original bytes and copies only the selected message without moving it for every provider', async () => {
+    const payload = { accountId: 'copy-account', threadId: 'thread-1', messageId: 'message-1', destination: 'folder:work' }
+    await request({ type: 'sync:pause', payload: { accountId: 'copy-account' } })
+    mocks.db.getMessageRaw.mockReturnValueOnce('original.eml')
+    await expect(request({ type: 'mail:export', payload: { accountId: 'account-1', messageId: 'message-1', targetPath: 'saved.eml' } })).resolves.toMatchObject({ result: undefined })
+    expect(mocks.fs.copyFileSync).toHaveBeenCalledWith('original.eml', 'saved.eml')
+    mocks.db.remoteMessagesForThreads.mockReturnValue([{ id: 'message-1', remoteFolderId: 'INBOX', remoteUid: '12' }, { id: 'other-message', remoteFolderId: 'INBOX', remoteUid: '13' }])
+    mocks.db.listLabels.mockReturnValue([{ id: 'work', type: 'user' }, { id: 'folder:work', type: 'user' }])
+    try {
+      mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'gmail' })
+      await expect(request({ type: 'mail:copy', payload: { ...payload, destination: 'work' } })).resolves.toMatchObject({ result: undefined })
+      expect(mocks.gmail.copyToLabel).toHaveBeenCalledWith('message-1', 'work')
+      mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'microsoft' })
+      await expect(request({ type: 'mail:copy', payload })).resolves.toMatchObject({ result: undefined })
+      expect(mocks.microsoft.copyMessage).toHaveBeenCalledWith('message-1', 'work')
+      mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'imap' })
+      mocks.setCredential({ type: 'imap', config: { email: 'imap@example.test' } })
+      await expect(request({ type: 'mail:copy', payload })).resolves.toMatchObject({ result: undefined })
+      expect(mocks.imap.copyMessage).toHaveBeenCalledWith('INBOX', 12, 'work')
+      await expect(request({ type: 'mail:copy', payload: { ...payload, messageId: 'missing' } })).resolves.toMatchObject({ error: { message: 'Message not found in this conversation' } })
+      mocks.db.getAccount.mockReturnValue({ ...mocks.account, archived: true })
+      await expect(request({ type: 'mail:copy', payload })).resolves.toMatchObject({ error: { message: 'Connect this account before copying messages' } })
+    } finally {
+      mocks.db.getAccount.mockReturnValue(mocks.account)
+      mocks.db.listLabels.mockReturnValue([{ id: 'INBOX' }])
+      mocks.db.remoteMessagesForThreads.mockReturnValue([])
+      mocks.setCredential({ type: 'oauth', accessToken: 'token' })
+    }
   })
 
   it('routes account, label, recipient, list, thread, source, action, and undo commands', async () => {

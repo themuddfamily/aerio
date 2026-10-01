@@ -147,6 +147,10 @@ export class MicrosoftGraphClient {
     return Buffer.from(await response.arrayBuffer())
   }
 
+  async copyMessage(id: string, destinationId: string) {
+    await this.request(`/me/messages/${encodeURIComponent(id)}/copy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destinationId }) })
+  }
+
   async applyAction(ids: string[], action: MailActionKind, folderId?: string) {
     for (const id of ids) {
       if (action === 'trash' || action === 'archive' || action === 'untrash' || action === 'unarchive' || action === 'label' || action === 'move') {

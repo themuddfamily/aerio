@@ -178,6 +178,21 @@ describe('IMAP folders and inventory', () => {
 })
 
 describe('IMAP actions and drafts', () => {
+  it('copies a UID under a mailbox lock and releases the lock on errors', async () => {
+    const subject = new ImapSmtpClient(config)
+    const sourceLock = lock()
+    const messageCopy = vi.fn(async () => ({ uidMap: new Map() }))
+    const messageMove = vi.fn()
+    const client = connectedClient({ getMailboxLock: vi.fn(async () => sourceLock), messageCopy, messageMove })
+    useConnection(subject, client)
+    await subject.copyMessage('INBOX', 12, 'Work')
+    expect(messageCopy).toHaveBeenCalledWith(12, 'Work', { uid: true })
+    expect(messageMove).not.toHaveBeenCalled()
+    expect(sourceLock.release).toHaveBeenCalledTimes(1)
+    messageCopy.mockRejectedValueOnce(new Error('Copy denied'))
+    await expect(subject.copyMessage('INBOX', 12, 'Work')).rejects.toThrow('Copy denied')
+    expect(sourceLock.release).toHaveBeenCalledTimes(2)
+  })
   let subject: ImapSmtpClient
   let client: Record<string, ReturnType<typeof vi.fn>>
   let mailboxLock: ReturnType<typeof lock>

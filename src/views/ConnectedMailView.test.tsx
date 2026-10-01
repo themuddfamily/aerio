@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MailAccountSummary, MailDraftRecord, MailPage, MailThreadDetail, SyncProgress } from '../mail-types'
 import { ContextMenuProvider } from '../components/ContextMenu'
 import ConnectedMailView from './ConnectedMailView'
+import { formatMailDateHeading } from '../lib/mail-date'
 
 vi.mock('../components/MailComposeModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Compose mock"><span>{props.draft ? `Editing ${props.draft.subject}` : props.replyAll ? 'Reply all' : props.forward ? 'Forward' : props.reply ? 'Reply' : `New ${props.initialTo ?? ''}`}</span><button onClick={() => props.onSent({ id: 'send-1', status: 'send-pending', updatedAt: new Date().toISOString(), undoUntil: new Date(Date.now() + 60_000).toISOString() })}>Queue send</button><button onClick={props.onClose}>Close compose</button></div> }))
 vi.mock('../components/MailAccountSetupModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Account setup mock"><button onClick={() => props.onConnected()}>Finish account</button><button onClick={props.onClose}>Close setup</button></div> }))
@@ -21,7 +22,7 @@ vi.mock('../components/MailSearchFiltersPanel', () => ({ default: (props: any) =
 vi.mock('../components/MailSnoozeModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Snooze mock"><button onClick={() => props.onApply(new Date(Date.now() + 60_000).toISOString())}>Apply snooze</button><button onClick={props.onClose}>Close snooze</button></div> }))
 vi.mock('../components/SenderAvatar', () => ({ default: ({ name }: any) => <span>{name?.slice(0, 1)}</span> }))
 vi.mock('../components/ThreadListPreview', () => ({ default: (props: any) => <div data-testid="thread-preview"><button onClick={() => props.onSelect(props.thread.messages[0])}>Select preview message</button><button onClick={() => props.onOpenWindow(props.thread.messages[0])}>Open preview window</button></div> }))
-vi.mock('../components/ThreadMessageAccordion', () => ({ default: (props: any) => <section data-testid={`accordion-${props.message.id}`} onContextMenu={props.onContextMenu}><button onClick={props.onToggle}>{props.expanded ? 'Collapse mail message' : 'Expand mail message'}</button>{props.onReply && <button onClick={props.onReply}>Reply to provider message</button>}{props.expanded && props.onLoadRemoteImages && <button onClick={props.onLoadRemoteImages}>Load remote images</button>}{props.expanded && <span>{props.message.text}</span>}{props.children}</section> }))
+vi.mock('../components/ThreadMessageAccordion', () => ({ default: (props: any) => <section data-testid={`accordion-${props.message.id}`} onContextMenu={props.onContextMenu}><button onClick={props.onToggle}>{props.expanded ? 'Collapse mail message' : 'Expand mail message'}</button>{props.onReply && <button onClick={props.onReply}>Reply to provider message</button>}{props.onMoreActions && <button onClick={props.onMoreActions}>Message options</button>}{props.expanded && props.onLoadRemoteImages && <button onClick={props.onLoadRemoteImages}>Load remote images</button>}{props.expanded && <span>{props.message.text}</span>}{props.children}</section> }))
 vi.mock('../components/MailPaneResizer', () => ({
   useResizableMailPanes: () => ({ containerRef: { current: null }, style: {}, widths: { sidebar: 220, list: 420 }, startResize: vi.fn(), resizeWithKeyboard: vi.fn(), resetWidths: vi.fn() }),
   MailPaneSeparator: ({ pane }: any) => <div data-testid={`separator-${pane}`} />
@@ -142,7 +143,7 @@ describe('ConnectedMailView', () => {
     expect(screen.getByText('Loading local mail…')).toBeInTheDocument()
     expect(await screen.findByText('Launch & plans')).toBeInTheDocument()
     expect(screen.getAllByText('Ready & waiting')).toHaveLength(2)
-    expect(screen.getByRole('heading', { name: 'Today' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: formatMailDateHeading(initialPage.items[0].lastDate) })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Launch & plans' })).toBeInTheDocument()
     expect(api.mail.mail.action).toHaveBeenCalledWith({ accountId: 'account', threadIds: ['thread-1'], action: 'read', labelId: undefined })
     expect(screen.getAllByText('Project').length).toBeGreaterThanOrEqual(1)
@@ -263,7 +264,9 @@ describe('ConnectedMailView', () => {
     await summaryAction('Copy subject')
     expect(writeText).toHaveBeenCalledWith('Launch &amp; plans')
 
-    fireEvent.contextMenu(screen.getByTestId('accordion-message-1'))
+    await user.click(within(screen.getByTestId('accordion-message-1')).getByRole('button', { name: 'Message options' }))
+    expect(screen.getByRole('menuitem', { name: 'Snooze…' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'View message headers' })).toBeInTheDocument()
     await user.click(screen.getByRole('menuitem', { name: 'Copy sender address' }))
     expect(writeText).toHaveBeenCalledWith('ada@example.test')
     fireEvent.contextMenu(document.querySelector('.attachment-card')!)

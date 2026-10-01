@@ -44,6 +44,8 @@ import { MailWorkerClient } from './mail/worker-client'
 import { DiagnosticLogger, type DiagnosticRecord } from './diagnostics'
 import { UpdateManager } from './update-manager'
 import { ProductivityStore } from './productivity/store'
+import { MessageLocalStore } from './mail/message-local-store'
+import { registerMessageTools } from './mail/message-tools'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
@@ -87,6 +89,7 @@ let lastBoundsWrite: NodeJS.Timeout | undefined
 let diagnostics: DiagnosticLogger | null = null
 let updates: UpdateManager | null = null
 let productivityStore: ProductivityStore | null = null
+let messageLocalStore: MessageLocalStore | null = null
 let readyToOpenWindows = false
 const senderFaviconCache = new Map<string, { image: Buffer | null; expiresAt: number }>()
 const senderFaviconCandidateRequests = new Map<string, Promise<Buffer | null>>()
@@ -495,6 +498,7 @@ async function createProductivityEvent(input: CalendarEvent) {
   if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
   const saved = await writableCalendarConnector(calendar).createEvent(calendar, input)
   store.upsertEvent(saved)
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { snapshot: store.snapshot() })
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-created', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
   return store.snapshot()
 }
@@ -1083,6 +1087,10 @@ function createTray() {
 }
 
 function registerIpc() {
+  messageLocalStore = new MessageLocalStore(join(app.getPath('userData'), 'message-local.sqlite'))
+  registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
+  } })
   ipcMain.handle('preferences:load', () => loadPreferences())
   ipcMain.handle('preferences:save', (_event, preferences: AppPreferences) => savePreferences(preferences))
   ipcMain.handle('app-lock:status', () => appLockStatus())
@@ -1414,8 +1422,10 @@ function registerIpc() {
     requireMailWorker().request<MailFolderUnreadCounts>({ type: 'mail:unread-counts', payload: { accountIds } }))
   ipcMain.handle('mail:accounts:unread-counts', () =>
     requireMailWorker().request<MailAccountUnreadCounts>({ type: 'mail:account-unread-counts' }))
-  ipcMain.handle('mail:threads:get', (_event, accountId: string, threadId: string, allowRemoteImages?: boolean) =>
-    requireMailWorker().request<MailThreadDetail>({ type: 'mail:thread', payload: { accountId, threadId, allowRemoteImages } }))
+  ipcMain.handle('mail:threads:get', async (_event, accountId: string, threadId: string, allowRemoteImages?: boolean) => {
+    const thread = await requireMailWorker().request<MailThreadDetail>({ type: 'mail:thread', payload: { accountId, threadId, allowRemoteImages } })
+    return { ...thread, messages: thread.messages.map((message) => ({ ...message, local: messageLocalStore?.get({ accountId, messageId: message.id }) })) }
+  })
   ipcMain.handle('mail:message:source', (_event, accountId: string, messageId: string) =>
     requireMailWorker().request<MailMessageSource>({ type: 'mail:source', payload: { accountId, messageId } }))
   ipcMain.handle('mail:actions:apply', (_event, input: ApplyMailActionInput) =>
@@ -1561,6 +1571,7 @@ app.on('before-quit', () => {
   quitting = true
   updates?.stop()
   productivityStore?.close()
+  messageLocalStore?.close()
   diagnostic({ level: 'info', component: 'app', event: 'shutdown' })
   void mailWorker?.close()
 })

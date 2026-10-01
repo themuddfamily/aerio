@@ -97,6 +97,7 @@ const mocks = vi.hoisted(() => {
       if (workerFailure) { const error = workerFailure; workerFailure = undefined; throw error }
       switch (command.type) {
         case 'accounts:list': return accounts
+        case 'mail:thread': return { accountId: command.payload.accountId, id: command.payload.threadId, subject: 'Test conversation', messages: [] }
         case 'drafts:list': return [{ id: 'draft-1', attachmentPaths: ['C:\\approved.txt'] }]
         case 'drafts:get': return { id: command.payload.id, attachmentPaths: ['C:\\approved-get.txt'] }
         case 'drafts:stage-message-attachments': return [{ path: 'C:\\staged.txt', name: 'staged.txt', size: 1 }]

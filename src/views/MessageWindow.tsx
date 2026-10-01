@@ -1,11 +1,16 @@
-import { Archive, Copy, Download, Forward, Inbox, LoaderCircle, Mail, MailOpen, Reply, ReplyAll, Star, Trash2, Undo2 } from 'lucide-react'
+import { Archive, AtSign, Clock3, Copy, Download, FileText, FolderInput, Forward, Inbox, LoaderCircle, Mail, MailOpen, Reply, ReplyAll, Star, Tag, Tags, Trash2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import MailComposeModal from '../components/MailComposeModal'
+import MailMessageSourceModal from '../components/MailMessageSourceModal'
+import MailOrganizeModal from '../components/MailOrganizeModal'
+import MailSnoozeModal from '../components/MailSnoozeModal'
 import TitleBar from '../components/TitleBar'
 import ThreadMessageAccordion from '../components/ThreadMessageAccordion'
+import { useMailMessageTools } from '../components/MailMessageTools'
+import { useThreadExpansion } from '../lib/use-thread-expansion'
 import { copyText, useContextMenu } from '../components/ContextMenu'
 import { formatFileSize } from '../lib/domain'
-import type { MailAccountSummary, MailAttachment, MailDraftResult, MailMessageDetail, MailThreadDetail, MailActionKind, PendingOperation } from '../mail-types'
+import type { MailAccountSummary, MailAttachment, MailDraftResult, MailLabel, MailMessageDetail, MailThreadDetail, MailThreadSummary, MailActionKind, PendingOperation } from '../mail-types'
 
 type MessageWindowSource = { accountId: string; threadId: string; messageId?: string }
 
@@ -31,11 +36,18 @@ export default function MessageWindow() {
   const [pendingOperation, setPendingOperation] = useState<PendingOperation>()
   const [pendingSend, setPendingSend] = useState<MailDraftResult>()
   const [mailCompose, setMailCompose] = useState<{ reply: MailThreadDetail; replyAll?: boolean; forward?: boolean }>()
+  const [organizeMode, setOrganizeMode] = useState<'move' | 'label'>()
+  const [labels, setLabels] = useState<MailLabel[]>([])
+  const [snoozeOpen, setSnoozeOpen] = useState(false)
+  const [sourceViewer, setSourceViewer] = useState<{ mode: 'headers' | 'source'; subject: string; content: string }>()
 
   const showToast = (message: string) => {
     setToast(message)
     window.setTimeout(() => setToast(''), 2_600)
   }
+
+  const expansion = useThreadExpansion(thread, expandedMessageId, setExpandedMessageId)
+  const messageTools = useMailMessageTools({ accounts, onToast: showToast, collapseAll: expansion.collapseAll, expandAll: expansion.expandAll, onUpdated: (message, local) => setThread((current) => current && ({ ...current, messages: current.messages.map((item) => item.id === message.id ? { ...item, local } : item) })) })
 
   useEffect(() => {
     if (!source) {
@@ -105,11 +117,11 @@ export default function MessageWindow() {
   const mailInInbox = mailLabels.has('INBOX')
   const mailTrashed = mailLabels.has('TRASH')
 
-  const applyMailAction = async (action: MailActionKind) => {
+  const applyMailAction = async (action: MailActionKind, labelId?: string) => {
     if (!source || mailReadOnly || actionBusy) return
     setActionBusy(action)
     try {
-      const operation = await window.aerio.mail.mail.action({ accountId: source.accountId, threadIds: [source.threadId], action })
+      const operation = await window.aerio.mail.mail.action({ accountId: source.accountId, threadIds: [source.threadId], action, ...(labelId ? { labelId } : {}) })
       setPendingOperation(operation)
       await reloadMailThread()
       const labels: Partial<Record<MailActionKind, string>> = {
@@ -183,6 +195,57 @@ export default function MessageWindow() {
     }
   }
 
+  const openOrganize = async (mode: 'move' | 'label') => {
+    if (!source) return
+    try {
+      setLabels(await window.aerio.mail.mail.labels([source.accountId]))
+      setOrganizeMode(mode)
+    } catch (reason) {
+      showToast(reason instanceof Error ? reason.message : 'Folders and labels could not be loaded')
+    }
+  }
+
+  const viewMessageData = async (message: MailMessageDetail, mode: 'headers' | 'source') => {
+    try {
+      const result = await window.aerio.mail.mail.source(message.accountId, message.id)
+      setSourceViewer({ mode, subject: message.subject, content: result[mode] })
+    } catch (reason) {
+      showToast(reason instanceof Error ? reason.message : 'The original message is not available')
+    }
+  }
+
+  const showMessageMenu = (event: React.MouseEvent, message: MailMessageDetail) => {
+    const reply = replyThreadFor(message)
+    const disabled = mailReadOnly || Boolean(actionBusy)
+    const important = mailLabels.has('IMPORTANT')
+    showContextMenu(event, [
+      { label: 'Reply', icon: Reply, disabled: mailReadOnly || !reply, action: () => { if (reply) setMailCompose({ reply }) } },
+      { label: 'Reply all', icon: ReplyAll, disabled: mailReadOnly || !reply, action: () => { if (reply) setMailCompose({ reply, replyAll: true }) } },
+      { label: 'Forward', icon: Forward, disabled: mailReadOnly || !reply, action: () => { if (reply) setMailCompose({ reply, forward: true }) } },
+      { label: mailUnread ? 'Mark as read' : 'Mark as unread', icon: mailUnread ? MailOpen : Mail, separatorBefore: true, disabled, action: () => applyMailAction(mailUnread ? 'read' : 'unread') },
+      { label: mailStarred ? 'Remove star' : 'Add star', icon: Star, checked: mailStarred, disabled, action: () => applyMailAction(mailStarred ? 'unstar' : 'star') },
+      { label: important ? 'Mark as not important' : 'Mark as important', icon: Tag, checked: important, disabled, action: () => applyMailAction(important ? 'unimportant' : 'important') },
+      { label: mailInInbox ? 'Archive' : 'Move to inbox', icon: mailInInbox ? Archive : Inbox, separatorBefore: true, disabled: disabled || mailTrashed, action: () => applyMailAction(mailInInbox ? 'archive' : mailLabels.has('SPAM') ? 'move' : 'unarchive', mailLabels.has('SPAM') ? 'INBOX' : undefined) },
+      { label: 'Move to…', icon: FolderInput, disabled, action: () => openOrganize('move') },
+      { label: 'Manage labels…', icon: Tags, disabled: disabled || mailAccount?.provider !== 'gmail', action: () => openOrganize('label') },
+      { label: 'Snooze…', icon: Clock3, disabled, action: () => setSnoozeOpen(true) },
+      { label: mailTrashed ? 'Restore from Trash' : 'Move to Trash', icon: Trash2, danger: !mailTrashed, disabled, action: () => applyMailAction(mailTrashed ? 'untrash' : 'trash') },
+      ...messageTools.items(message),
+      { label: 'View message headers', icon: AtSign, separatorBefore: true, action: () => viewMessageData(message, 'headers') },
+      { label: 'View message source', icon: FileText, action: () => viewMessageData(message, 'source') },
+      ...message.attachments.map((attachment) => ({ label: `Save attachment: ${attachment.filename}`, icon: Download, action: () => saveAttachment(message, attachment) }))
+    ], 'Message options')
+  }
+
+  const organizeItems: MailThreadSummary[] = thread ? [{
+    accountId: thread.accountId, id: thread.id, subject: thread.subject,
+    participants: thread.messages.map((message) => message.fromEmail), senderEmail: thread.messages[0]?.fromEmail ?? '',
+    snippet: '', lastDate: thread.messages.at(-1)?.date ?? '', unread: mailUnread, starred: mailStarred,
+    important: mailLabels.has('IMPORTANT'), trashed: mailTrashed, draft: mailLabels.has('DRAFT'),
+    hasAttachments: thread.messages.some((message) => message.attachments.length > 0), messageCount: thread.messages.length,
+    labelIds: [...mailLabels]
+  }] : []
+
   return (
     <div className="message-window-shell">
       <TitleBar title={title} />
@@ -203,7 +266,7 @@ export default function MessageWindow() {
         {!loading && thread && (
           <article className="message-reader mail-thread message-window-reader">
             <header><div className="message-window-heading"><h2>{thread.subject}</h2></div></header>
-            {thread.messages.map((message) => <ThreadMessageAccordion key={message.id} message={message} expanded={expandedMessageId === message.id} onLoadRemoteImages={remoteImages ? undefined : () => void loadRemoteImages()} onToggle={() => setExpandedMessageId((current) => current === message.id ? undefined : message.id)} onReply={mailReadOnly ? undefined : () => { const reply = replyThreadFor(message); if (reply) setMailCompose({ reply }) }}>
+            {thread.messages.map((message) => <ThreadMessageAccordion key={message.id} message={message} expanded={expansion.isExpanded(message.id)} onLoadRemoteImages={remoteImages ? undefined : () => void loadRemoteImages()} onToggle={() => expansion.toggle(message.id)} onReply={mailReadOnly ? undefined : () => { const reply = replyThreadFor(message); if (reply) setMailCompose({ reply }) }} onMoreActions={(event) => showMessageMenu(event, message)}>
               {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} onContextMenu={(event) => showContextMenu(event, [
                 { label: 'Open attachment', icon: Download, action: () => openAttachment(message, attachment) },
                 { label: 'Save as…', icon: Download, action: () => saveAttachment(message, attachment) },
@@ -216,6 +279,16 @@ export default function MessageWindow() {
       {pendingOperation && <div className="undo-toast"><span>Mail change queued</span><button onClick={() => void undoMailAction()}><Undo2 size={15} /> Undo</button><button onClick={() => setPendingOperation(undefined)}>Dismiss</button></div>}
       {pendingSend && <div className="undo-toast send-undo-toast"><span>Message will send shortly</span><button onClick={() => void undoSend()}><Undo2 size={15} /> Undo Send</button><button onClick={() => setPendingSend(undefined)}>Dismiss</button></div>}
       {mailCompose && <MailComposeModal accounts={accounts.filter((account) => !account.archived)} replyTo={mailCompose.reply} replyAll={mailCompose.replyAll} forward={mailCompose.forward} onClose={() => setMailCompose(undefined)} onSent={(result) => { if (result.status === 'send-pending') setPendingSend(result); void reloadMailThread() }} onToast={showToast} />}
+      {organizeMode && <MailOrganizeModal mode={organizeMode} items={organizeItems} accounts={accounts} labels={labels} onApply={async (requests) => { for (const request of requests) await applyMailAction(request.action, request.labelId) }} onClose={() => setOrganizeMode(undefined)} />}
+      {snoozeOpen && source && <MailSnoozeModal count={1} onApply={async (until) => {
+        try {
+          await window.aerio.mail.mail.snooze(source.accountId, [source.threadId], until)
+          await reloadMailThread()
+          showToast('Conversation snoozed')
+        } catch (reason) { showToast(reason instanceof Error ? reason.message : 'The conversation could not be snoozed') }
+      }} onClose={() => setSnoozeOpen(false)} />}
+      {sourceViewer && <MailMessageSourceModal {...sourceViewer} onClose={() => setSourceViewer(undefined)} />}
+      {messageTools.dialog}
       {toast && <div className="toast">{toast}</div>}
     </div>
   )

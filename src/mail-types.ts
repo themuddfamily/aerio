@@ -112,6 +112,7 @@ export interface MailAttachment {
 }
 
 export interface MailMessageDetail {
+  local?: MailMessageLocalData
   accountId: string
   id: string
   threadId: string
@@ -133,6 +134,28 @@ export interface MailMessageDetail {
 export interface MailMessageSource {
   headers: string
   source: string
+}
+
+export interface MailMessageLocalData {
+  categories: string[]
+  format: 'auto' | 'plain' | 'html'
+  fontSize: number
+  noteIds: string[]
+  taskIds: string[]
+}
+
+export interface MailMessageRef { accountId: string; threadId: string; messageId: string }
+
+export interface MessageToolsApi {
+  updateLocal(ref: MailMessageRef, updates: Partial<Pick<MailMessageLocalData, 'categories' | 'format' | 'fontSize'>>): Promise<MailMessageLocalData>
+  save(ref: MailMessageRef): Promise<{ savedPath?: string }>
+  saveAttachments(ref: MailMessageRef): Promise<{ savedPath?: string; count: number }>
+  copy(ref: MailMessageRef, destination: string): Promise<void>
+  print(ref: MailMessageRef, format: MailMessageLocalData['format']): Promise<void>
+  createTask(ref: MailMessageRef, input: { title: string; notes: string; due?: string }): Promise<void>
+  addNote(ref: MailMessageRef, input: { title: string; content: string }): Promise<void>
+  notes(ref: MailMessageRef): Promise<import('./types').Note[]>
+  translate(ref: MailMessageRef, input: { endpoint: string; apiKey?: string; target: string; source: string }): Promise<string>
 }
 
 export interface MailThreadDetail {
@@ -325,6 +348,7 @@ export interface MailDiagnosticHealth {
 }
 
 export interface MailDesktopApi {
+  messageTools: MessageToolsApi
   credentials: {
     status(): Promise<MailCredentialStatus>
     import(): Promise<MailCredentialStatus>

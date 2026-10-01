@@ -73,6 +73,7 @@ export interface ProductivityContactWriteResult {
 }
 
 export interface ProductivityDesktopApi {
+  onChanged(callback: (data: { local?: LocalModuleSnapshot; snapshot?: ProductivitySnapshot }) => void): () => void
   snapshot(): Promise<ProductivitySnapshot>
   sync(accountId: string): Promise<ProductivitySnapshot>
   createEvent(event: CalendarEvent): Promise<ProductivitySnapshot>
