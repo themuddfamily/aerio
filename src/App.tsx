@@ -389,13 +389,6 @@ export default function App() {
               <span>Search {modules.find((item) => item.id === activeModule)?.label.toLowerCase()} or run a command</span>
               <kbd>Ctrl K</kbd>
             </button>
-            <button className="local-badge connected" onClick={() => void syncProductivity()} onContextMenu={(event) => showContextMenu(event, [
-              { label: 'Sync Calendar and Contacts', icon: CalendarDays, disabled: productivitySyncing, action: () => syncProductivity() },
-              { label: 'New message', icon: Plus, separatorBefore: true, action: () => startCompose() }
-            ], 'Connected services')}>
-              <Mail size={14} />
-              Connected services
-            </button>
             <span className={`save-indicator ${saveStatus}`} aria-live="polite">{saveStatus === 'saved' ? 'All changes saved' : 'Saving…'}</span>
             <button className="theme-quick" aria-label="Toggle theme" title="Toggle theme" onClick={() => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: preferences.settings.theme === 'dark' ? 'light' : 'dark' } })} onContextMenu={(event) => showContextMenu(event, [
               { label: 'System theme', icon: Settings, checked: preferences.settings.theme === 'system', action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: 'system' } }) },

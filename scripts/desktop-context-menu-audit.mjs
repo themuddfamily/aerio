@@ -453,11 +453,7 @@ try {
     await page.locator('.real-mail .context-sidebar .sidebar-item').filter({ hasText: 'Inbox' }).first().click()
   })
 
-  await step('connected services and theme controls expose direct choices', async () => {
-    await openMenu(page.getByRole('button', { name: 'Connected services' }))
-    await expectItems('Sync Calendar and Contacts', 'New message')
-    await dismiss()
-
+  await step('settings and theme controls expose direct choices', async () => {
     await openMenu(page.getByRole('button', { name: 'Settings' }))
     await expectItems('Open settings')
     assert.doesNotMatch(await popup.innerText(), /Open profile/)

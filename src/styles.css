@@ -366,34 +366,6 @@ kbd {
   font-size: 10px;
 }
 
-.local-badge {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.local-badge.connected {
-  height: 28px;
-  padding: 0 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
-}
-
-.local-badge.connected:hover {
-  color: var(--text-soft);
-  background: var(--surface-hover);
-}
-
-.local-badge.connected {
-  border-color: color-mix(in srgb, var(--success) 35%, var(--line));
-  color: var(--success);
-  background: color-mix(in srgb, var(--success) 10%, var(--surface));
-}
-
 .save-indicator {
   margin-left: auto;
   color: var(--muted);

@@ -225,7 +225,8 @@ describe('App', () => {
     const user = userEvent.setup()
     accountResults = [{ ...gmailAccount, id: 'imap', provider: 'imap', email: 'me@imap.test' }]
     renderApp(); await screen.findByRole('region', { name: 'Mail mock' })
-    await user.click(screen.getByRole('button', { name: 'Connected services' }))
+    await user.click(screen.getByRole('button', { name: 'Calendar' }))
+    await user.click(screen.getByRole('button', { name: 'Sync calendar' }))
     expect(await screen.findByRole('status')).toHaveTextContent('Connect Google or Microsoft')
     await user.click(screen.getByRole('button', { name: 'Calendar' }))
     await user.click(screen.getByRole('button', { name: 'Enable editing' }))
@@ -239,7 +240,8 @@ describe('App', () => {
       return productivity
     })
     renderApp(); await screen.findByRole('region', { name: 'Mail mock' })
-    await user.click(screen.getByRole('button', { name: 'Connected services' }))
+    await user.click(screen.getByRole('button', { name: 'Calendar' }))
+    await user.click(screen.getByRole('button', { name: 'Sync calendar' }))
     expect(await screen.findByRole('status')).toHaveTextContent('Some provider data could not synchronize: Google calendar unavailable')
     expect(api.productivity.snapshot).toHaveBeenCalledTimes(3)
   })
@@ -316,7 +318,8 @@ describe('App', () => {
     api.productivity.sync.mockRejectedValueOnce('offline')
     const user = userEvent.setup()
     renderApp(); await screen.findByRole('region', { name: 'Mail mock' })
-    await user.click(screen.getByRole('button', { name: 'Connected services' }))
+    await user.click(screen.getByRole('button', { name: 'Contacts' }))
+    await user.click(screen.getByRole('button', { name: 'Sync contacts' }))
     expect(await screen.findByRole('status')).toHaveTextContent('me@gmail.test could not synchronize')
 
     api.mail.accounts.reconnect.mockRejectedValueOnce('offline')
