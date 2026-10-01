@@ -759,6 +759,10 @@ kbd {
   user-select: none;
 }
 
+.message-row:not(:has(.message-tags)) {
+  min-height: calc(var(--row-height) - 20px);
+}
+
 .mail-workspace .context-sidebar {
   width: var(--mail-sidebar-width, 220px);
   flex-basis: var(--mail-sidebar-width, 220px);

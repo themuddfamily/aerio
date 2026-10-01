@@ -935,12 +935,12 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
                   <span className="message-meta"><strong>{item.participants.join(', ') || 'Unknown sender'}</strong><time dateTime={item.lastDate} title={formatMailArrivalTooltip(item.lastDate)}>{formatMailListTime(item.lastDate)}</time></span>
                   <span className="message-subject">{item.subject}</span>
                   <span className="message-preview">{decodeHtmlEntities(item.snippet)}</span>
-                  <span className="message-tags">
+                  {(itemLabels.length > 0 || item.snoozedUntil || item.hasAttachments || item.messageCount > 1) && <span className="message-tags">
                     {itemLabels.map((label) => <em className="mail-label-badge" key={label.id} title={label.name}>{label.name}</em>)}
                     {item.snoozedUntil && <em>Snoozed until {new Date(item.snoozedUntil).toLocaleString()}</em>}
                     {item.messageCount > 1 && <><em>{item.messageCount} messages</em><button type="button" className={`thread-list-toggle ${listExpanded ? 'expanded' : ''}`} aria-label={`${listExpanded ? 'Collapse' : 'Expand'} ${item.messageCount} messages in ${item.subject}`} aria-expanded={listExpanded} onClick={(event) => { event.stopPropagation(); void toggleListThread(item) }} onDoubleClick={(event) => event.stopPropagation()}><ChevronDown size={13} /></button></>}
                     {item.hasAttachments && <Paperclip size={13} />}
-                  </span>
+                  </span>}
                 </span>
                 <span className="row-flags">{item.starred && <Star size={13} fill="currentColor" />}</span>
               </div>
