@@ -56,7 +56,16 @@ try {
   assert.deepEqual(saved, expected, 'Native preferences must be persisted before testing close behavior')
   await settings.getByRole('button', { name: 'Close', exact: true }).click()
   const exited = new Promise((resolve) => application.process().once('exit', resolve))
-  await page.getByRole('button', { name: 'Close', exact: true }).first().click()
+  const closed = page.waitForEvent('close', { timeout: 10_000 })
+  await page.getByRole('button', { name: 'Close', exact: true }).first().click().catch((error) => {
+    if (!/Target page, context or browser has been closed/.test(error.message)) throw error
+  })
+  await closed
+  if (process.platform === 'darwin') {
+    assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 0)
+    assert.equal(application.process().exitCode, null)
+    await application.close()
+  }
   await Promise.race([exited, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('Close without tray did not exit')), 10_000); timer.unref() })])
   application = undefined
   page = await launch()

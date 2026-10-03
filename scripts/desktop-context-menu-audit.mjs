@@ -367,11 +367,14 @@ try {
     const arrivalTime = expandedHeader.locator('time')
     assert.match(await arrivalTime.innerText(), /^[A-Z][a-z]{2} \d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/)
     assert.match(await arrivalTime.getAttribute('title'), /^[A-Z][a-z]+ \d{2}\/\d{2}\/\d{4} \d{2}:\d{2}:\d{2}$/)
-    const [timeBox, replyBox, chevronBox] = await Promise.all([
-      arrivalTime.boundingBox(),
-      expandedHeader.locator('.thread-message-reply').boundingBox(),
-      newestReply.locator('.thread-message-chevron').boundingBox()
-    ])
+    // Read one layout frame; separate protocol calls can straddle expansion/scroll updates.
+    const [timeBox, replyBox, chevronBox] = await expandedHeader.evaluate((header) =>
+      ['time', '.thread-message-reply', '.thread-message-chevron'].map((selector) => {
+        const element = header.querySelector(selector)
+        if (!element) return null
+        const bounds = element.getBoundingClientRect()
+        return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
+      }))
     assert(timeBox && replyBox && chevronBox)
     assert(replyBox.y > timeBox.y && chevronBox.y > timeBox.y, 'Reply and expand controls should sit below the received timestamp')
     assert(replyBox.x < chevronBox.x, 'Reply should appear before the expand control after their positions are swapped')
