@@ -162,6 +162,32 @@ describe('ConnectedMailView', () => {
     await user.click(screen.getByRole('button', { name: /All accounts/ }))
   })
 
+  it('selects conversations with Ctrl-click without opening them and supports range and keyboard selection', async () => {
+    renderMail()
+    await screen.findByText('Launch & plans')
+    const first = document.querySelector('.message-row')!
+    const second = screen.getByText('Second conversation').closest('.message-row')!
+    expect(document.querySelector('.message-select')).toBeNull()
+    const openedThreads = api.mail.mail.thread.mock.calls.length
+
+    fireEvent.click(second, { ctrlKey: true })
+    expect(second).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+    expect(api.mail.mail.thread).toHaveBeenCalledTimes(openedThreads)
+    expect(api.mail.mail.action).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'read', threadIds: ['thread-2'] }))
+
+    fireEvent.click(first, { shiftKey: true })
+    expect(screen.getByText('2 selected')).toBeInTheDocument()
+    fireEvent.keyDown(first, { key: ' ', ctrlKey: true })
+    expect(first).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+    fireEvent.click(second, { ctrlKey: true })
+    expect(document.querySelector('.bulk-mail-toolbar')).toBeNull()
+
+    fireEvent.click(second)
+    await waitFor(() => expect(api.mail.mail.thread).toHaveBeenCalledWith('account', 'thread-2'))
+  })
+
   it('performs bulk actions, move/label organization, snooze, and undo', async () => {
     const user = userEvent.setup(), onToast = renderMail()
     await screen.findByText('Launch & plans')
@@ -285,9 +311,9 @@ describe('ConnectedMailView', () => {
   it('covers range selection and the remaining bulk toolbar actions', async () => {
     const user = userEvent.setup()
     renderMail(); await screen.findByText('Launch & plans')
-    const checks = screen.getAllByRole('checkbox', { name: /Select/ })
-    fireEvent.click(checks[0])
-    fireEvent.click(checks[1], { shiftKey: true })
+    const rows = document.querySelectorAll('.message-row')
+    fireEvent.click(rows[0], { ctrlKey: true })
+    fireEvent.click(rows[1], { shiftKey: true })
     expect(screen.getByText('2 selected')).toBeInTheDocument()
     await user.click(screen.getByTitle('Clear selection'))
 

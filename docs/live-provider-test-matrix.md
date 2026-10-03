@@ -41,12 +41,17 @@ Record no secrets in evidence. Use an account alias such as `gmail-a`, the Aerio
 | `MAIL-02` | Search/pagination | Seeded messages are found offline and appear exactly once across page boundaries. |
 | `DESKTOP-01` | Background notification | With Aerio hidden, one incoming message creates one notification; clicking it opens Aerio. Disabled accounts stay silent. |
 | `HEALTH-01` | Diagnostics | Health check reports zero orphans/missing files/failures; export contains no tokens, passwords, message bodies or full local parts of email addresses. |
-| `PROD-AUTH-01` | Productivity consent | Google sign-in grants Calendar event write plus read-only Calendar-list/Contacts scopes; Microsoft grants the documented read-only Calendar/Contacts scopes; an older Google connection explains that reconnect is required. |
+| `PROD-AUTH-01` | Productivity consent | Google sign-in grants Calendar event and Contacts read/write plus read-only Calendar-list access; Microsoft grants Calendars.ReadWrite and Contacts.ReadWrite. Older connections offer the one-time enable/reconnect path for added write scopes. |
 | `CAL-01` | Calendar initial sync | Calendars and events in the supported date window appear once with correct account, time, location, attendees, recurrence and per-calendar write capability. |
 | `CAL-02` | Calendar pagination/time zones | More than one provider page, all-day events, DST boundaries and UTC/non-UTC events render on the correct date and time. |
-| `CAL-WRITE-01` | Google event lifecycle | Double-click a blank month/week/day slot, create an event, then edit and delete it; each change appears in Google Calendar and survives a fresh Aerio sync. |
-| `CAL-WRITE-02` | Google write permissions | Reader calendars and events that cannot be changed expose details without edit/delete controls; an older token offers the one-time enable/reconnect path. |
+| `CAL-WRITE-01` | Provider event lifecycle | On Google and Microsoft, double-click a blank month/week/day slot, create an event, then edit and delete it; each change appears in the provider client and survives a fresh Aerio sync. Include recurrence and reminders. |
+| `CAL-WRITE-02` | Provider write permissions | Reader calendars and events that cannot be changed expose details without edit/delete controls; an older token offers the one-time enable/reconnect path. |
 | `CONTACT-01` | Contacts initial sync | More than one provider page maps names, email, phone, company, title and groups without duplicates; contacts without an email remain viewable. |
+| `CONTACT-WRITE-01` | Provider contact lifecycle | Explicitly target Google or Microsoft when creating a contact; create, edit and delete converge in the provider client and survive refresh. New contacts default to local storage. |
+| `CONTACT-WRITE-02` | Contact conflicts and permissions | Edit a contact in another client before saving a stale Aerio edit; newer data is not silently overwritten. Revoked write permissions fail visibly without losing the cached contact. |
+| `PROD-SYNC-01` | Incremental refresh and checkpoint expiry | Calendar and Contacts changes from another client arrive on automatic/manual refresh; expire stored checkpoints and verify full-refresh recovery without duplicates or stale records. |
+| `DRAFT-04` | Cross-client draft conflict | Change a Gmail or Microsoft draft in another client, then save the stale Aerio editor; explain the conflict and preserve the stale edit as a separate copy when requested. |
+| `LOCAL-TIME-01` | Scheduled actions and recovery | Scheduled sending, Undo Send, snooze and rules recover across offline use/restart without duplicate sends. Tray mode processes due actions; fully quitting defers due actions until next launch as documented. |
 | `PROD-FAIL-01` | Productivity refresh failure | Revoked scope, 429 and 5xx errors are visible, retry safely, and retain the last successful cached snapshot. |
 
 ## Provider coverage
@@ -67,14 +72,22 @@ Every Required cell must have dated evidence before a public beta. `N/A` must in
 
 IMAP/SMTP is a mail protocol and does not imply Calendar or Contacts APIs. These scenarios apply only to the OAuth providers whose existing Aerio app connection can request the relevant service scopes.
 
-| Provider | PROD-AUTH-01 | CAL-01 | CAL-02 | CONTACT-01 | PROD-FAIL-01 |
-| --- | --- | --- | --- | --- | --- |
-| gmail | Required | Required | Required | Required | Required |
-| microsoft | Required | Required | Required | Required | Required |
+| Provider | PROD-AUTH-01 | CAL-01 | CAL-02 | CAL-WRITE-01 | CAL-WRITE-02 | CONTACT-01 | CONTACT-WRITE-01 | CONTACT-WRITE-02 | PROD-SYNC-01 | PROD-FAIL-01 | DRAFT-04 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| gmail | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required |
+| microsoft | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required | Required |
+
+`LOCAL-TIME-01` is additionally Required for every required mail provider and Beta for Proton Bridge.
 
 ## Execution log
 
 Copy this row for every run. A failure remains a release blocker until its linked issue is fixed and the scenario is rerun.
+
+Use aliases starting with `gmail-`, `icloud-`, `yahoo-`, `fastmail-`, `custom-imap-`, or `proton-bridge-`. Microsoft needs separate runs with aliases starting with `microsoft-consumer-` and `microsoft-365-`. Record the package version and exact commit in Commit/version. Evidence for a public release must match that package version. The last recorded result for each account class/scenario determines its status.
+
+`npm run test:live-matrix` checks the checklist structure only. Before publishing, run `npm run verify:live-evidence` to require dated Pass results for all Required scenarios, on both Microsoft account classes. This verifies recorded evidence, not the provider behavior itself; review diagnostics and confirm results apply to the candidate commit.
+
+The [opt-in live-provider runner](live-provider-runner.md) can check preconfigured accounts and export sanitized diagnostic reports and execution rows. It marks limited enrollment, sync, and pagination checks as Partial; these do not satisfy the release gate. It never inserts rows into this log automatically.
 
 | Date | Commit/version | Provider/account alias | Scenario | Result | Diagnostics | Issue/notes | Tester |
 | --- | --- | --- | --- | --- | --- | --- | --- |

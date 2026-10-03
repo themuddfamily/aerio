@@ -21,6 +21,9 @@ describe('outgoing MIME builder', () => {
     expect(parsed.text).toContain('Plain body')
     expect(parsed.html).toContain('<strong>Rich body</strong>')
     expect(parsed.html).not.toContain('<script>')
+    expect(parsed.messageId).toMatch(/^<[0-9a-f-]+@aerio\.local>$/)
+    expect(Number.isFinite(Date.parse(parsed.date!))).toBe(true)
+    expect((await PostalMime.parse(createMimeBuffer(input()))).messageId).not.toBe(parsed.messageId)
   })
 
   it('hides Bcc for SMTP and restores original staged attachment names', async () => {

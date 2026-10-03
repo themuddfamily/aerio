@@ -25,13 +25,17 @@ export class UpdateManager {
     autoUpdater.on('checking-for-update', () => this.set({ phase: 'checking', message: 'Checking for updates…' }))
     autoUpdater.on('update-available', (info) => this.set({ phase: 'available', availableVersion: info.version, message: `Aerio ${info.version} is available.` }))
     autoUpdater.on('update-not-available', () => this.set({ phase: 'current', availableVersion: undefined, progress: undefined, checkedAt: new Date().toISOString(), message: 'Aerio is up to date.' }))
-    autoUpdater.on('download-progress', (progress) => this.set({ phase: 'downloading', progress: Math.max(0, Math.min(100, progress.percent)), message: `Downloading update… ${Math.round(progress.percent)}%` }))
+    autoUpdater.on('download-progress', (progress) => {
+      const percent = Number.isFinite(progress.percent) ? Math.max(0, Math.min(100, progress.percent)) : 0
+      this.set({ phase: 'downloading', progress: percent, message: `Downloading update… ${Math.round(percent)}%` })
+    })
     autoUpdater.on('update-downloaded', (info) => this.set({ phase: 'ready', availableVersion: info.version, progress: 100, message: `Aerio ${info.version} is ready to install.` }))
     autoUpdater.on('error', (error) => this.set({ phase: 'error', message: this.safeError(error) }))
   }
 
   start() {
     if (this.state.phase === 'unsupported') return
+    this.stop()
     this.startupTimer = setTimeout(() => void this.check(false), 15_000)
   }
 

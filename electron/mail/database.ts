@@ -1024,6 +1024,7 @@ export class MailDatabase {
           this.stmt('UPDATE gmail_messages SET label_ids_json=? WHERE account_id=? AND id=?').run(JSON.stringify([...labels]), input.accountId, String(row.id))
         }
         this.rebuildThread(input.accountId, threadId)
+        if (input.action === 'unarchive') this.stmt('DELETE FROM mail_snoozes WHERE account_id=? AND thread_id=?').run(input.accountId, threadId)
       }
       this.stmt(`
         INSERT INTO gmail_operations(id,account_id,thread_ids_json,kind,label_id,inverse_kind,status,execute_after,undo_until,created_at,updated_at,before_labels_json)
@@ -1192,6 +1193,10 @@ export class MailDatabase {
     return this.stmt(`SELECT * FROM gmail_drafts WHERE status IN ('queued','send-pending','scheduled') AND COALESCE(delivery_at,updated_at)<=? ORDER BY COALESCE(delivery_at,updated_at) LIMIT 20`).all(nowIso()) as DatabaseRow[]
   }
 
+  getDueDraft(id: string) {
+    return this.stmt(`SELECT * FROM gmail_drafts WHERE id=? AND status IN ('queued','send-pending','scheduled') AND COALESCE(delivery_at,updated_at)<=?`).get(id, nowIso()) as DatabaseRow | undefined
+  }
+
   draftsToSync() {
     return this.stmt(`SELECT * FROM gmail_drafts WHERE status='local' ORDER BY updated_at LIMIT 20`).all() as DatabaseRow[]
   }
@@ -1232,12 +1237,23 @@ export class MailDatabase {
 
   releaseDueSnoozes() {
     const rows = this.stmt('SELECT account_id,thread_id,snoozed_until FROM mail_snoozes WHERE snoozed_until<=? ORDER BY snoozed_until LIMIT 100').all(nowIso()) as DatabaseRow[]
-    if (!rows.length) return [] as MailSnooze[]
-    this.transaction(() => {
-      const remove = this.stmt('DELETE FROM mail_snoozes WHERE account_id=? AND thread_id=?')
-      for (const row of rows) remove.run(String(row.account_id), String(row.thread_id))
-    })
-    return rows.map((row) => ({ accountId: String(row.account_id), threadId: String(row.thread_id), snoozedUntil: String(row.snoozed_until) }))
+    const released: (MailSnooze & { operation: PendingOperation })[] = []
+    for (const row of rows) {
+      const accountId = String(row.account_id), threadId = String(row.thread_id)
+      if (!this.stmt('SELECT 1 FROM gmail_threads WHERE account_id=? AND id=?').get(accountId, threadId)) {
+        this.stmt('DELETE FROM mail_snoozes WHERE account_id=? AND thread_id=?').run(accountId, threadId)
+        continue
+      }
+      try {
+        // Inbox restoration, its durable provider operation, and snooze removal
+        // commit together inside applyLocalAction. A crash cannot lose the wake-up.
+        const operation = this.applyLocalAction({ accountId, threadIds: [threadId], action: 'unarchive' }, crypto.randomUUID(), 0)
+        released.push({ accountId, threadId, snoozedUntil: String(row.snoozed_until), operation })
+      } catch {
+        // A failed transaction retains the snooze for a later queue pass.
+      }
+    }
+    return released
   }
 
   private ruleRecord(row: DatabaseRow): MailRule {

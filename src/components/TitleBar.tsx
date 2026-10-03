@@ -1,8 +1,8 @@
 import { Minus, Square, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useContextMenu } from './ContextMenu'
 
-export default function TitleBar({ title = 'Aerio' }: { title?: string }) {
+export default function TitleBar({ title = 'Aerio', children }: { title?: string; children?: ReactNode }) {
   const { showContextMenu } = useContextMenu()
   const [maximized, setMaximized] = useState(false)
 
@@ -23,6 +23,7 @@ export default function TitleBar({ title = 'Aerio' }: { title?: string }) {
           <span className="titlebar-title">{title}</span>
         </div>
       </div>
+      {children && <div className="titlebar-center">{children}</div>}
       <div className="window-actions" aria-label="Window controls">
         <button className="window-button" aria-label="Minimize" onClick={() => void window.aerio.window.minimize()}>
           <Minus size={15} />

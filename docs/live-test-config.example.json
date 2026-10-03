@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "timeoutMs": 180000,
+  "accounts": [
+    {
+      "alias": "gmail-a",
+      "provider": "gmail",
+      "accountClass": "gmail",
+      "credentialEnv": "AERIO_LIVE_GMAIL_A"
+    },
+    {
+      "alias": "microsoft-consumer-a",
+      "provider": "microsoft",
+      "accountClass": "microsoft-consumer",
+      "credentialEnv": "AERIO_LIVE_MICROSOFT_CONSUMER_A"
+    },
+    {
+      "alias": "custom-imap-a",
+      "provider": "imap",
+      "accountClass": "custom-imap",
+      "credentialEnv": "AERIO_LIVE_IMAP_A"
+    }
+  ]
+}

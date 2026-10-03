@@ -6,6 +6,8 @@ dist/
 dist-electron/
 release/
 coverage/
+live-test-config.local.json
+live-test-evidence/
 *.tsbuildinfo
 *.log
 .DS_Store

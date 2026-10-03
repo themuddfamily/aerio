@@ -65,6 +65,7 @@ const mocks = vi.hoisted(() => {
   method('draftsToDiscard', () => [])
   method('draftsToSync', () => [])
   method('queuedDrafts', () => [])
+  method('getDueDraft')
   method('matchingRulesForMessage', () => [])
   method('rawPath', () => 'C:\\content\\raw.eml')
   method('hasMessage', () => false)
@@ -175,6 +176,11 @@ vi.mock('./mail/mime-builder', () => ({ createMime: vi.fn(() => 'mime'), createM
 import './mail-worker'
 
 let nextId = 0
+function queueDeliveries(rows: any[]) {
+  mocks.db.queuedDrafts.mockReturnValueOnce(rows).mockReturnValue([])
+  mocks.db.getDueDraft.mockImplementation((id: string) => rows.find((row) => row.id === id))
+}
+
 async function request(command: any) {
   const id = `request-${++nextId}`
   mocks.emit({ kind: 'request', id, command })
@@ -397,6 +403,25 @@ describe.sequential('mail worker protocol routing', () => {
     expect(mocks.db.reconcileInventory).toHaveBeenCalledWith('account-1')
   })
 
+  it.each(['imap', 'microsoft'] as const)('initializes empty persisted provider state for first %s sync', async (provider) => {
+    mocks.setCredential(provider === 'imap' ? { type: 'imap', config: { email: 'imap@example.test' } } : { type: 'oauth', accessToken: 'token' })
+    mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider })
+    mocks.db.getAccountHistory.mockReturnValue(undefined)
+    mocks.db.getProviderState.mockReturnValue({})
+    mocks.db.pendingMessageIds.mockReturnValue([])
+    mocks.db.setProviderState.mockClear()
+    if (provider === 'imap') {
+      mocks.imap.listFolders.mockResolvedValueOnce([{ path: 'INBOX', name: 'Inbox' }])
+      mocks.imap.inventoryFolder.mockResolvedValueOnce({ refs: [], uidValidity: '1', uidNext: 1 })
+    } else {
+      mocks.microsoft.listFolders.mockResolvedValueOnce([{ id: 'inbox', displayName: 'Inbox', specialUse: 'inbox' }])
+      mocks.microsoft.delta.mockResolvedValueOnce({ messages: [], deltaLink: 'first-delta' })
+    }
+    await request({ type: 'sync:resume', payload: { accountId: 'account-1' } })
+    await vi.waitFor(() => expect(mocks.db.setProviderState).toHaveBeenCalledWith('account-1', expect.objectContaining(provider === 'imap' ? { folders: { INBOX: expect.objectContaining({ uidValidity: '1' }) } } : { deltaLinks: { inbox: 'first-delta' } })))
+    mocks.setCredential({ type: 'oauth', accessToken: 'token' })
+  })
+
   it('runs IMAP inventory and message download with UID validity reconciliation', async () => {
     mocks.setCredential({ type: 'imap', config: { email: 'imap@example.test' } })
     mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'imap' })
@@ -453,13 +478,74 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.db.getDraft.mockImplementation((id: string) => id === 'discard' ? row(id) : undefined)
     mocks.db.draftsToDiscard.mockReturnValueOnce([row('discard')]).mockReturnValue([])
     mocks.db.draftsToSync.mockReturnValueOnce([row('sync')]).mockReturnValue([])
-    mocks.db.queuedDrafts.mockReturnValueOnce([row('deliver')]).mockReturnValue([])
+    queueDeliveries([row('deliver')])
     await request({ type: 'network', payload: { online: true } })
     await vi.waitFor(() => expect(mocks.gmail.deleteDraft).toHaveBeenCalledWith('remote-discard'))
     await vi.waitFor(() => expect(mocks.gmail.createDraft).toHaveBeenCalled())
     await vi.waitFor(() => expect(mocks.gmail.sendMessage).toHaveBeenCalled())
     expect(mocks.db.deleteDraftRecord).toHaveBeenCalledWith('discard')
     expect(mocks.db.updateDraftResult).toHaveBeenCalledWith('deliver', expect.objectContaining({ status: 'sent' }))
+  })
+
+  it('does not start overlapping queue passes while a scheduled delivery is still sending', async () => {
+    const row = { id: 'slow-delivery', account_id: 'account-1', thread_id: null, in_reply_to: null, references_json: '[]', to_json: '["ada@example.test"]', cc_json: '[]', bcc_json: '[]', subject: 'One delivery', body_text: 'Body', body_html: null, attachment_paths_json: '[]', gmail_draft_id: null }
+    let finishSend!: () => void
+    const send = new Promise<void>((resolve) => { finishSend = resolve })
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.getDraft.mockReturnValue(undefined)
+    queueDeliveries([row])
+    mocks.gmail.sendMessage.mockClear()
+    mocks.gmail.sendMessage.mockReturnValueOnce(send)
+    try {
+      await request({ type: 'network', payload: { online: true } })
+      await vi.waitFor(() => expect(mocks.gmail.sendMessage).toHaveBeenCalledTimes(1))
+      const passes = mocks.db.queuedDrafts.mock.calls.length
+      await request({ type: 'network', payload: { online: true } })
+      expect(mocks.db.queuedDrafts.mock.calls.length).toBe(passes)
+      mocks.db.queuedDrafts.mockReturnValue([])
+      finishSend()
+      await vi.waitFor(() => expect(mocks.db.updateDraftResult).toHaveBeenCalledWith('slow-delivery', expect.objectContaining({ status: 'sent' })))
+      expect(mocks.gmail.sendMessage).toHaveBeenCalledTimes(1)
+    } finally {
+      mocks.db.queuedDrafts.mockReturnValue([])
+      finishSend()
+      await send
+    }
+  })
+
+  it.each(['cancel', 'reschedule', 'offline'] as const)('rechecks the second queued delivery after %s while the first send is blocked', async (change) => {
+    const row = (id: string) => ({ id, account_id: 'account-1', thread_id: null, in_reply_to: null, references_json: '[]', to_json: '["ada@example.test"]', cc_json: '[]', bcc_json: '[]', subject: id, body_text: 'Body', body_html: null, attachment_paths_json: '[]', gmail_draft_id: null })
+    const first = row('blocked-first'), second = row('changed-second')
+    const due = new Map([[first.id, first], [second.id, second]])
+    let finishSend!: () => void
+    const send = new Promise<void>((resolve) => { finishSend = resolve })
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.getDraft.mockReturnValue(undefined)
+    queueDeliveries([first, second])
+    mocks.db.getDueDraft.mockImplementation((id: string) => due.get(id))
+    mocks.gmail.sendMessage.mockClear()
+    mocks.gmail.sendMessage.mockReturnValueOnce(send)
+    try {
+      await request({ type: 'network', payload: { online: true } })
+      await vi.waitFor(() => expect(mocks.gmail.sendMessage).toHaveBeenCalledTimes(1))
+      if (change === 'cancel') {
+        mocks.db.cancelDraftDelivery.mockImplementationOnce((id: string) => { due.delete(id); return { id, status: 'local' } })
+        await request({ type: 'drafts:cancel-send', payload: { id: second.id } })
+      } else if (change === 'reschedule') {
+        mocks.db.saveDraft.mockImplementationOnce((input: any, state: any) => { due.delete(input.id); return { ...input, ...state } })
+        await request({ type: 'drafts:schedule', payload: { input: { id: second.id, accountId: 'account-1', to: ['ada@example.test'], cc: [], bcc: [], subject: 'Later', text: 'Body', attachmentPaths: [] }, deliveryAt: new Date(Date.now() + 60_000).toISOString() } })
+      } else await request({ type: 'network', payload: { online: false } })
+      finishSend()
+      await vi.waitFor(() => expect(mocks.db.updateDraftResult).toHaveBeenCalledWith(first.id, expect.objectContaining({ status: 'sent' })))
+      // Drain the current promise chain before reconnecting: a due draft is allowed
+      // to send on a later reconnect, but must stay queued while offline.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(mocks.gmail.sendMessage).toHaveBeenCalledTimes(1)
+    } finally {
+      finishSend(); await send
+      mocks.db.queuedDrafts.mockReturnValue([])
+      await request({ type: 'network', payload: { online: true } })
+    }
   })
 
   it('extracts string and binary attachments and rejects unknown attachment ids', async () => {
@@ -509,14 +595,14 @@ describe.sequential('mail worker protocol routing', () => {
   })
 
   it('applies Microsoft and IMAP operations including released snoozes', async () => {
-    mocks.db.releaseDueSnoozes.mockReturnValueOnce([{ accountId: 'account-1', threadId: 'snoozed-thread' }]).mockReturnValue([])
+    mocks.db.releaseDueSnoozes.mockReturnValueOnce([{ accountId: 'account-1', threadId: 'snoozed-thread', operation: { ...mocks.operation, kind: 'unarchive' } }]).mockReturnValue([])
     mocks.db.remoteMessagesForThreads.mockReturnValue([{ id: 'remote-message', remoteFolderId: 'INBOX', remoteUid: '7' }])
     mocks.db.getProviderState.mockReturnValue({ deltaLinks: {}, specialFolders: { archive: 'archive-folder', inbox: 'inbox-folder', deleteditems: 'trash-folder' } })
     mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'microsoft' })
     mocks.db.dueOperations.mockReturnValueOnce([{ id: 'ms-archive', account_id: 'account-1', kind: 'archive', thread_ids_json: '["thread-1"]', label_id: null }]).mockReturnValue([])
     await request({ type: 'network', payload: { online: true } })
     await vi.waitFor(() => expect(mocks.microsoft.applyAction).toHaveBeenCalledWith(['remote-message'], 'archive', 'archive-folder'))
-    expect(mocks.db.applyLocalAction).toHaveBeenCalledWith(expect.objectContaining({ action: 'unarchive', threadIds: ['snoozed-thread'] }), expect.any(String), 0)
+    expect(mocks.posted).toContainEqual(expect.objectContaining({ kind: 'event', event: expect.objectContaining({ type: 'operation', payload: expect.objectContaining({ kind: 'unarchive' }) }) }))
 
     mocks.setCredential({ type: 'imap', config: { email: 'imap@example.test' } })
     mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'imap' })
@@ -540,7 +626,7 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.setCredential({ type: 'imap', config: { email: 'imap@example.test' } })
     mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'imap' })
     mocks.db.getDraft.mockReturnValue(row)
-    mocks.db.queuedDrafts.mockReturnValueOnce([row]).mockReturnValue([])
+    queueDeliveries([row])
     await request({ type: 'network', payload: { online: true } })
     await vi.waitFor(() => expect(mocks.imap.send).toHaveBeenCalledWith(expect.any(Buffer), ['ada@example.test', 'team@example.test']))
     expect(mocks.imap.deleteDraft).toHaveBeenCalledWith('imap-remote')
@@ -707,8 +793,8 @@ describe.sequential('mail worker protocol routing', () => {
 
   it('maps every Gmail label action and covers operation fallbacks and snooze failures', async () => {
     mocks.db.getAccount.mockReturnValue(mocks.account)
-    mocks.db.releaseDueSnoozes.mockReturnValueOnce([{ accountId: 'account-1', threadId: 'gone-thread' }]).mockReturnValue([])
-    mocks.db.applyLocalAction.mockImplementationOnce(() => { throw new Error('gone') }).mockImplementation(() => mocks.operation)
+    mocks.db.releaseDueSnoozes.mockReturnValue([])
+    mocks.db.applyLocalAction.mockImplementation(() => mocks.operation)
     const kinds = [
       ['archive', null], ['unarchive', null], ['unread', null], ['star', null], ['unstar', null],
       ['important', null], ['unimportant', null], ['label', 'Label'], ['label', null], ['unlabel', 'Label'],
@@ -737,7 +823,7 @@ describe.sequential('mail worker protocol routing', () => {
     await expect(request({ type: 'drafts:save', payload: { ...input, id: 'offline-save' } })).resolves.toMatchObject({ result: { status: 'local' } })
     await request({ type: 'drafts:send', payload: { ...input, id: 'offline-send' } })
     const offlineRow = { id: 'offline-delivery', account_id: 'account-1', thread_id: null, in_reply_to: null, references_json: '[]', to_json: '["ada@example.test"]', cc_json: '[]', bcc_json: '[]', subject: 'Offline', body_text: 'Body', body_html: null, attachment_paths_json: '[]', gmail_draft_id: null }
-    mocks.db.queuedDrafts.mockReturnValueOnce([offlineRow]).mockReturnValue([])
+    queueDeliveries([offlineRow])
     await request({ type: 'network', payload: { online: true } })
 
     mocks.db.getDraft.mockReturnValue({ gmail_draft_id: 'remote-gmail' })
@@ -747,7 +833,7 @@ describe.sequential('mail worker protocol routing', () => {
       id, account_id: 'account-1', thread_id: null, in_reply_to: null, references_json: '[]', to_json: '["ada@example.test"]',
       cc_json: '[]', bcc_json: '[]', subject: 'Delivery', body_text: 'Body', body_html: null, attachment_paths_json: '[]', gmail_draft_id: remoteId
     })
-    mocks.db.queuedDrafts.mockReturnValueOnce([deliveryRow('gmail-send-existing', 'remote-gmail')]).mockReturnValue([])
+    queueDeliveries([deliveryRow('gmail-send-existing', 'remote-gmail')])
     await request({ type: 'network', payload: { online: true } })
     await vi.waitFor(() => expect(mocks.gmail.sendDraft).toHaveBeenCalledWith('remote-gmail', expect.any(String)))
 
@@ -759,7 +845,7 @@ describe.sequential('mail worker protocol routing', () => {
 
     mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'microsoft' })
     mocks.db.getDraft.mockReturnValue({ gmail_draft_id: null })
-    mocks.db.queuedDrafts.mockReturnValueOnce([deliveryRow('microsoft-send', null)]).mockReturnValue([])
+    queueDeliveries([deliveryRow('microsoft-send', null)])
     await request({ type: 'network', payload: { online: true } })
     await vi.waitFor(() => expect(mocks.microsoft.send).toHaveBeenCalledWith(expect.any(Buffer), undefined))
     mocks.db.getDraft.mockReturnValue({ id: 'discard-ms', account_id: 'account-1', gmail_draft_id: 'remote-ms' })
@@ -933,7 +1019,7 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.db.getDraft.mockImplementation((id: string) => id === 'discard-local' ? discard : undefined)
     mocks.db.draftsToDiscard.mockReturnValueOnce([discard]).mockReturnValue([])
     mocks.db.draftsToSync.mockReturnValueOnce([row('invalid-recipient', '["unfinished"]')]).mockReturnValue([])
-    mocks.db.queuedDrafts.mockReturnValueOnce([row('failed-delivery')]).mockReturnValue([])
+    queueDeliveries([row('failed-delivery')])
     mocks.gmail.sendMessage.mockRejectedValueOnce('plain send failure')
     await request({ type: 'network', payload: { online: true } })
     await vi.waitFor(() => expect(mocks.db.updateDraftResult).toHaveBeenCalledWith('failed-delivery', expect.objectContaining({ status: 'failed', error: 'plain send failure' })))
@@ -1001,7 +1087,7 @@ describe.sequential('mail worker protocol routing', () => {
       cc_json: '[]', bcc_json: '[]', subject: id, body_text: 'Body', body_html: null, attachment_paths_json: '[]', gmail_draft_id: remoteId
     })
     mocks.db.getDraft.mockReturnValue(row('microsoft-remote-send', 'remote-ms'))
-    mocks.db.queuedDrafts.mockReturnValueOnce([row('microsoft-remote-send', 'remote-ms')]).mockReturnValue([])
+    queueDeliveries([row('microsoft-remote-send', 'remote-ms')])
     await request({ type: 'network', payload: { online: true } })
     await vi.waitFor(() => expect(mocks.microsoft.send).toHaveBeenCalledWith(expect.any(Buffer), 'remote-ms'))
 
@@ -1012,7 +1098,7 @@ describe.sequential('mail worker protocol routing', () => {
     expect(mocks.imap.saveDraft).toHaveBeenCalledWith(expect.any(Buffer), 'remote-imap')
 
     mocks.db.getDraft.mockReturnValue(row('imap-no-remote-send', null))
-    mocks.db.queuedDrafts.mockReturnValueOnce([row('imap-no-remote-send', null)]).mockReturnValue([])
+    queueDeliveries([row('imap-no-remote-send', null)])
     await request({ type: 'network', payload: { online: true } })
     await vi.waitFor(() => expect(mocks.imap.send).toHaveBeenCalledWith(expect.any(Buffer), ['ada@example.test']))
 

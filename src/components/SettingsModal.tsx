@@ -126,7 +126,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
   }
 
   const importLocalData = async () => {
-    if (!window.confirm('Restore Tasks and Notes from a backup? This replaces the current local Tasks and Notes.')) return
+    if (!window.confirm('Restore Contacts, Tasks, and Notes from a backup? This replaces the current local Contacts, Tasks, Notes, and note attachments.')) return
     setLocalDataStatus('importing')
     setLocalDataMessage('')
     try {
@@ -211,7 +211,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
           <div className="settings-icon"><DatabaseBackup size={18} /></div>
           <div className="settings-content">
             <h3>Local data backup</h3>
-            <p>Export local Tasks, Notes, and Contacts to a portable JSON backup, or restore them on this PC.</p>
+            <p>Export local Tasks, Notes, and Contacts to a portable JSON backup, or restore them on this PC. Connected task backups are available in the Tasks sidebar.</p>
             <div className="settings-actions">
               <button className="button ghost" disabled={localDataStatus !== 'idle'} onClick={() => void exportLocalData()}><Download size={16} /> {localDataStatus === 'exporting' ? 'Exporting…' : 'Export backup'}</button>
               <button className="button ghost" disabled={localDataStatus !== 'idle'} onClick={() => void importLocalData()}><Upload size={16} /> {localDataStatus === 'importing' ? 'Restoring…' : 'Restore backup'}</button>
@@ -269,14 +269,14 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
           <div className="settings-content">
             <h3>Desktop behaviour</h3>
             <label className="toggle-row">
-              <span><strong>Keep scheduling active in the tray</strong><small>Required for scheduled sending, snooze, mail rules, and background synchronization while the window is closed.</small></span>
+              <span><strong>Keep scheduling active in the tray</strong><small>Keeps scheduled sending, snooze, rules, and sync running. If the tray is unavailable, Aerio stays minimized in the taskbar.</small></span>
               <input type="checkbox" checked={preferences.settings.closeToTray} onChange={(event) => {
                 setSettings({ closeToTray: event.target.checked })
               }} />
             </label>
             {!preferences.settings.closeToTray && <small className="diagnostic-error">Background actions pause whenever Aerio is fully closed.</small>}
             <label className="toggle-row">
-              <span><strong>Start Aerio when you sign in</strong><small>Starts minimized to the normal app workspace so scheduled work can resume after a Windows restart.</small></span>
+              <span><strong>Start Aerio when you sign in</strong><small>Starts minimized to the normal app workspace so scheduled work can resume after a restart.</small></span>
               <input type="checkbox" checked={Boolean(preferences.settings.launchAtLogin)} onChange={(event) => setSettings({ launchAtLogin: event.target.checked })} />
             </label>
             <label className="field-label">Open Aerio to

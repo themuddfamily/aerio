@@ -26,6 +26,7 @@ jobs:
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           MAIN_VITE_GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
       - run: npm test
+      - run: npm run test:imap
       - run: npm run test:live-matrix
       - run: npm run test:desktop
       - run: npm run icons
@@ -37,6 +38,8 @@ jobs:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           MAIN_VITE_GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+      - name: Verify installer and update artifacts
+        run: npm run verify:artifacts
       - uses: actions/upload-artifact@v7
         with:
           name: aerio-windows-${{ github.ref_name }}

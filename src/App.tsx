@@ -226,7 +226,7 @@ export default function App() {
     if (!preferences || !hydrated.current) return
     setSaveStatus('saving')
     const timer = setTimeout(() => {
-      void window.aerio.savePreferences(preferences).then(() => setSaveStatus('saved')).catch(() => showToast('Preferences could not be saved'))
+      void window.aerio.savePreferences(preferences).then(() => setSaveStatus('saved')).catch((error) => showToast(error instanceof Error ? `Preferences could not be saved: ${error.message}` : 'Preferences could not be saved'))
     }, 350)
     return () => clearTimeout(timer)
   }, [preferences, showToast])
@@ -357,7 +357,16 @@ export default function App() {
 
   return (
     <div className="app">
-      <TitleBar />
+      <TitleBar>
+        <button className="command-search" onClick={() => setCommandsOpen(true)} onContextMenu={(event) => showContextMenu(event, [
+          { label: 'Search and commands', icon: Search, action: () => setCommandsOpen(true) },
+          { label: 'Clear search', icon: X, disabled: !query, action: () => setQuery('') }
+        ], 'Search')}>
+          <Search size={16} />
+          <span>Search {modules.find((item) => item.id === activeModule)?.label.toLowerCase()} or run a command</span>
+          <kbd>Ctrl K</kbd>
+        </button>
+      </TitleBar>
       <div className="app-frame">
         <nav className="module-rail" aria-label="Aerio modules">
           <div className="rail-modules">
@@ -385,14 +394,6 @@ export default function App() {
         </nav>
         <main className="app-main">
           <header className="global-bar">
-            <button className="command-search" onClick={() => setCommandsOpen(true)} onContextMenu={(event) => showContextMenu(event, [
-              { label: 'Search and commands', icon: Search, action: () => setCommandsOpen(true) },
-              { label: 'Clear search', icon: X, disabled: !query, action: () => setQuery('') }
-            ], 'Search')}>
-              <Search size={16} />
-              <span>Search {modules.find((item) => item.id === activeModule)?.label.toLowerCase()} or run a command</span>
-              <kbd>Ctrl K</kbd>
-            </button>
             <span className={`save-indicator ${saveStatus}`} aria-live="polite">{saveStatus === 'saved' ? 'All changes saved' : 'Saving…'}</span>
             <button className="theme-quick" aria-label="Toggle theme" title="Toggle theme" onClick={() => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: preferences.settings.theme === 'dark' ? 'light' : 'dark' } })} onContextMenu={(event) => showContextMenu(event, [
               { label: 'System theme', icon: Settings, checked: preferences.settings.theme === 'system', action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: 'system' } }) },
@@ -432,7 +433,7 @@ export default function App() {
               syncing={productivitySyncing}
               sourceMessage={productivityMessage}
             />}
-            {activeModule === 'tasks' && <TasksView state={connectedState} query={query} onChange={updateConnectedLocal} onToast={showToast} />}
+            {activeModule === 'tasks' && <TasksView state={connectedState} query={query} accounts={connectedAccounts} onChange={updateConnectedLocal} onToast={showToast} />}
             {activeModule === 'notes' && <NotesView state={connectedState} query={query} onChange={updateConnectedLocal} onToast={showToast} />}
           </div>
         </main>

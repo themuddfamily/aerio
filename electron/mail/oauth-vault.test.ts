@@ -66,6 +66,7 @@ const mocks = vi.hoisted(() => {
     shell,
     safeStorage: {
       isEncryptionAvailable: vi.fn(() => encryptionAvailable),
+      getSelectedStorageBackend: vi.fn(() => 'gnome_libsecret'),
       encryptString: vi.fn((value: string) => Buffer.from(`encrypted:${value}`)),
       decryptString: vi.fn((value: Buffer) => value.toString().replace(/^encrypted:/, ''))
     },
@@ -161,6 +162,7 @@ describe('OAuthVault storage and configuration', () => {
     mocks.createServer.mockClear()
     mocks.shell.openExternal.mockClear()
     mocks.safeStorage.isEncryptionAvailable.mockClear()
+    mocks.safeStorage.getSelectedStorageBackend.mockReturnValue('gnome_libsecret')
     mocks.safeStorage.encryptString.mockClear()
     mocks.safeStorage.decryptString.mockClear()
     mocks.fs.readFileSync.mockClear()
@@ -195,7 +197,7 @@ describe('OAuthVault storage and configuration', () => {
     expect(new OAuthVault(vaultPath).status().configured).toBe(false)
     mocks.setEncryptionAvailable(false)
     const vault = new OAuthVault(vaultPath)
-    expect(() => vault.storeImap('imap-1', imap)).toThrow('Windows secure storage is unavailable')
+    expect(() => vault.storeImap('imap-1', imap)).toThrow('Secure credential storage is unavailable')
   })
 
   it('imports and atomically saves a user Google desktop configuration', () => {
@@ -209,6 +211,46 @@ describe('OAuthVault storage and configuration', () => {
     expect(mocks.parseDesktopOAuthConfig).toHaveBeenCalledWith({ installed: {} })
     expect(mocks.fs.writeFileSync).toHaveBeenCalledWith(`${vaultPath}.partial`, expect.any(String), { mode: 0o600 })
     expect(mocks.fs.renameSync).toHaveBeenCalledWith(`${vaultPath}.partial`, vaultPath)
+  })
+
+  it('refuses Linux plaintext fallback before reading or saving an existing credential vault', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const original = stored({ googleTokens: { google1: { refresh_token: 'existing-refresh' } } })
+    mocks.files.set(vaultPath, original)
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
+      mocks.safeStorage.getSelectedStorageBackend.mockReturnValue('basic_text')
+      const vault = new OAuthVault(vaultPath)
+      expect(mocks.fs.readFileSync).not.toHaveBeenCalled()
+      expect(mocks.safeStorage.decryptString).not.toHaveBeenCalled()
+      expect(() => vault.storeImap('imap-1', imap)).toThrow(/without OS encryption/)
+      expect(mocks.safeStorage.encryptString).not.toHaveBeenCalled()
+      expect(mocks.fs.writeFileSync).not.toHaveBeenCalled()
+      expect(mocks.fs.renameSync).not.toHaveBeenCalled()
+      expect(mocks.files.get(vaultPath)).toBe(original)
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      mocks.safeStorage.getSelectedStorageBackend.mockReturnValue('gnome_libsecret')
+    }
+  })
+
+  it('preserves an existing Linux vault when its secret service becomes unavailable', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const original = stored({ googleTokens: { google1: { refresh_token: 'existing-refresh' } } })
+    mocks.files.set(vaultPath, original)
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
+      const vault = new OAuthVault(vaultPath)
+      expect(privateData(vault).googleTokens.google1.refresh_token).toBe('existing-refresh')
+      mocks.safeStorage.getSelectedStorageBackend.mockReturnValue('unknown')
+      expect(() => vault.storeImap('imap-1', imap)).toThrow(/without OS encryption/)
+      expect(mocks.safeStorage.encryptString).not.toHaveBeenCalled()
+      expect(mocks.fs.writeFileSync).not.toHaveBeenCalled()
+      expect(mocks.files.get(vaultPath)).toBe(original)
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      mocks.safeStorage.getSelectedStorageBackend.mockReturnValue('gnome_libsecret')
+    }
   })
 
   it('prefers built-in Google and Microsoft registrations and prevents replacement', () => {
@@ -318,6 +360,23 @@ describe('OAuthVault access tokens', () => {
     expect(vault.hasGoogleCalendarWriteAccess('missing')).toBe(false)
   })
 
+  it('requires exact Google Tasks scopes and separates read-only from writable access', () => {
+    const vault = new OAuthVault(vaultPath)
+    privateData(vault).googleTokens = {
+      write: { scope: 'one https://www.googleapis.com/auth/tasks two' },
+      readonly: { scope: 'https://www.googleapis.com/auth/tasks.readonly' },
+      legacy: { scope: 'https://www.googleapis.com/auth/contacts' },
+      lookalike: { scope: 'https://www.googleapis.com/auth/tasks.other' }
+    }
+    expect(vault.hasGoogleTasksAccess('write')).toBe(true)
+    expect(vault.hasGoogleTasksAccess('write', true)).toBe(true)
+    expect(vault.hasGoogleTasksAccess('readonly')).toBe(true)
+    expect(vault.hasGoogleTasksAccess('readonly', true)).toBe(false)
+    expect(vault.hasGoogleTasksAccess('legacy')).toBe(false)
+    expect(vault.hasGoogleTasksAccess('lookalike')).toBe(false)
+    expect(vault.hasGoogleTasksAccess('missing')).toBe(false)
+  })
+
   it('recognizes provider Contacts write scopes without treating read-only access as writable', () => {
     const vault = new OAuthVault(vaultPath)
     privateData(vault).googleTokens = {
@@ -332,6 +391,28 @@ describe('OAuthVault access tokens', () => {
     expect(vault.hasGoogleContactsWriteAccess('readonly')).toBe(false)
     expect(vault.hasMicrosoftContactsWriteAccess('write')).toBe(true)
     expect(vault.hasMicrosoftContactsWriteAccess('readonly')).toBe(false)
+  })
+
+  it('requires exact Microsoft Tasks grants and never infers access from mailbox permission', () => {
+    const vault = new OAuthVault(vaultPath)
+    privateData(vault).microsoftTokens = Object.fromEntries(Object.entries({ write: 'Mail.ReadWrite Tasks.ReadWrite', readonly: 'Tasks.Read', legacy: 'Mail.ReadWrite Contacts.ReadWrite', lookalike: 'Tasks.ReadWrite.All', wrongCase: 'tasks.readwrite' }).map(([id, scope]) => [id, { accessToken: 'a', refreshToken: 'r', expiresAt: 0, scope }]))
+    expect(vault.hasMicrosoftTasksAccess('write', true)).toBe(true)
+    expect(vault.hasMicrosoftTasksAccess('write')).toBe(true)
+    expect(vault.hasMicrosoftTasksAccess('readonly')).toBe(true)
+    expect(vault.hasMicrosoftTasksAccess('readonly', true)).toBe(false)
+    for (const id of ['legacy', 'lookalike', 'wrongCase', 'missing']) expect(vault.hasMicrosoftTasksAccess(id)).toBe(false)
+  })
+
+  it.each([undefined, 'Mail.ReadWrite Tasks.Read', 'Mail.ReadWrite Tasks.ReadWrite'])('refreshes only the existing Microsoft grant %s', async (scope) => {
+    const vault = new OAuthVault(vaultPath, { microsoftClientId })
+    privateData(vault).microsoftTokens.account = { accessToken: 'old', refreshToken: 'r', expiresAt: 0, scope }
+    const fetch = vi.fn().mockResolvedValue(jsonResponse({ access_token: 'renewed', expires_in: 120 }))
+    vi.stubGlobal('fetch', fetch)
+    await vault.microsoftAccessToken('account')
+    const requested = (fetch.mock.calls[0][1] as RequestInit).body as URLSearchParams
+    if (scope !== undefined) expect(requested.get('scope')).toBe(scope)
+    else expect(requested.get('scope')).not.toContain('Tasks.')
+    expect(vault.hasMicrosoftTasksAccess('account', true)).toBe(scope?.includes('Tasks.ReadWrite') ?? false)
   })
 
   it('returns a sufficiently fresh Microsoft token from memory', async () => {
@@ -430,7 +511,7 @@ describe('OAuthVault interactive authorization', () => {
     expect(authorizationClient.generateAuthUrl).toHaveBeenCalledWith(expect.objectContaining({
       access_type: 'offline', prompt: 'consent', code_challenge: 'challenge',
       code_challenge_method: 'S256', redirect_uri: 'http://127.0.0.1:43123/oauth/callback',
-      scope: expect.arrayContaining(['https://www.googleapis.com/auth/contacts'])
+      scope: expect.arrayContaining(['https://www.googleapis.com/auth/contacts', 'https://www.googleapis.com/auth/tasks'])
     }))
     expect(mocks.oauthInstances[1].args).toEqual([googleConfig.clientId, googleConfig.clientSecret, 'http://127.0.0.1:43123/oauth/callback'])
     expect(exchangeClient.getToken).toHaveBeenCalledWith({ code: 'authorization-code', codeVerifier: 'verifier', redirect_uri: 'http://127.0.0.1:43123/oauth/callback' })
@@ -509,6 +590,7 @@ describe('OAuthVault interactive authorization', () => {
     expect(opened.searchParams.get('code_challenge_method')).toBe('S256')
     expect(opened.searchParams.get('scope')).toContain('Mail.Send')
     expect(opened.searchParams.get('scope')).toContain('Contacts.ReadWrite')
+    expect(opened.searchParams.get('scope')).toContain('Tasks.ReadWrite')
     expect(privateData(vault).microsoftTokens[account.accountId]).toMatchObject({ accessToken: 'access', refreshToken: 'refresh' })
     expect(mocks.servers[0].close).toHaveBeenCalledOnce()
   })

@@ -10,6 +10,8 @@ export function createMimeBuffer(input: MailDraftInput, from?: string, omitBcc =
   const boundary = `aerio-${crypto.randomUUID()}`
   const alternativeBoundary = `aerio-alt-${crypto.randomUUID()}`
   const headers = [
+    `Message-ID: <${crypto.randomUUID()}@aerio.local>`,
+    `Date: ${new Date().toUTCString()}`,
     ...(from ? [`From: ${encodeHeader(from)}`] : []),
     `To: ${input.to.map(encodeHeader).join(', ')}`,
     ...(input.cc.length ? [`Cc: ${input.cc.map(encodeHeader).join(', ')}`] : []),

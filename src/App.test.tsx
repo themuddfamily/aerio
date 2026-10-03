@@ -8,7 +8,7 @@ import type { AppPreferences, CalendarEvent } from './types'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from './productivity-types'
 import App from './App'
 
-vi.mock('./components/TitleBar', () => ({ default: () => <div data-testid="title-bar" /> }))
+vi.mock('./components/TitleBar', () => ({ default: ({ children }: any) => <div data-testid="title-bar">{children}</div> }))
 vi.mock('./components/SettingsModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Settings mock"><button onClick={() => props.onChange({ ...props.preferences, settings: { ...props.preferences.settings, density: 'compact' } })}>Change density</button><button onClick={props.onClose}>Close settings</button></div> }))
 vi.mock('./components/ProfileModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Profile mock"><span>{props.profile.displayName}</span><button onClick={() => props.onSave({ displayName: 'Saved Person', email: 'saved@example.test' })}>Save profile</button><button onClick={props.onClose}>Close profile</button></div> }))
 vi.mock('./views/ConnectedMailView', () => ({ default: (props: any) => <section aria-label="Mail mock"><span>Compose {props.composeRequest.id}:{props.composeRequest.initialTo ?? ''}</span><button onClick={() => props.onToast('Mail says hello')}>Mail toast</button></section> }))
@@ -252,6 +252,7 @@ describe('App', () => {
     renderApp(); await screen.findByRole('region', { name: 'Mail mock' })
     await user.click(screen.getByRole('button', { name: 'Toggle theme' }))
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Preferences could not be saved'), { timeout: 1200 })
+    expect(screen.getByRole('status')).toHaveTextContent('preferences unavailable')
     api.productivity.saveLocal.mockRejectedValueOnce(new Error('local storage unavailable'))
     await user.click(screen.getByRole('button', { name: 'Tasks' }))
     await user.click(screen.getByRole('button', { name: 'Change tasks' }))
@@ -306,7 +307,7 @@ describe('App', () => {
     })
     const user = userEvent.setup()
     renderApp(); await screen.findByRole('region', { name: 'Mail mock' })
-    expect(document.documentElement.dataset.theme).toBe('light')
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe('light'))
     expect(screen.getByRole('button', { name: /Profile:/ }).querySelector('img')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Tasks' })).toHaveTextContent('9+')
     await user.click(screen.getByRole('button', { name: 'Calendar' }))

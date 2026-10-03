@@ -31,6 +31,28 @@ const api: AerioDesktopApi = {
       return () => ipcRenderer.removeListener('app:update:status-changed', listener)
     }
   },
+  tasks: {
+    createList: (accountId, title) => ipcRenderer.invoke('tasks:list:create', accountId, title),
+    renameList: (listId, title) => ipcRenderer.invoke('tasks:list:rename', listId, title),
+    deleteList: (listId) => ipcRenderer.invoke('tasks:list:delete', listId),
+    resolveList: (id, resolution) => ipcRenderer.invoke('tasks:list:resolve', id, resolution),
+    exportData: () => ipcRenderer.invoke('tasks:export'),
+    importData: () => ipcRenderer.invoke('tasks:import'),
+    snapshot: () => ipcRenderer.invoke('tasks:snapshot'),
+    sync: (accountId) => ipcRenderer.invoke('tasks:sync', accountId),
+    create: (accountId, listId, input, parentId, local) => ipcRenderer.invoke('tasks:create', accountId, listId, input, parentId, local),
+    update: (id, patch, local) => ipcRenderer.invoke('tasks:update', id, patch, local),
+    delete: (id) => ipcRenderer.invoke('tasks:delete', id),
+    move: (id, parentId) => ipcRenderer.invoke('tasks:move', id, parentId),
+    setLocal: (id, local) => ipcRenderer.invoke('tasks:local', id, local),
+    undo: (id) => ipcRenderer.invoke('tasks:undo', id),
+    resolve: (id, resolution) => ipcRenderer.invoke('tasks:resolve', id, resolution),
+    onChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, snapshot: Parameters<typeof callback>[0]) => callback(snapshot)
+      ipcRenderer.on('tasks:changed', listener)
+      return () => ipcRenderer.removeListener('tasks:changed', listener)
+    }
+  },
   productivity: {
     onChanged: (callback) => {
       const listener = (_event: Electron.IpcRendererEvent, data: Parameters<typeof callback>[0]) => callback(data)

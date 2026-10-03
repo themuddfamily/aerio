@@ -3,17 +3,22 @@ import {
   Plus, Repeat2, Search, Trash2
 } from 'lucide-react'
 import { addDays, addMonths, addWeeks, format, isBefore, isToday, parseISO } from 'date-fns'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Modal from '../components/Modal'
 import { uid } from '../lib/domain'
 import type { AppState, Task } from '../types'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
+import ProviderTasksPanel from './ProviderTasksPanel'
+import ProviderTaskLists from './ProviderTaskLists'
+import type { TaskEntity, TaskSnapshot } from '../task-provider-types'
+import type { MailAccountSummary } from '../mail-types'
 
 interface TasksViewProps {
   state: AppState
   query: string
   onChange(next: AppState): void
   onToast(message: string): void
+  accounts?: MailAccountSummary[]
 }
 
 const builtInLists = ['Today', 'This week', 'Someday']
@@ -40,9 +45,50 @@ export function toggleTaskWithRecurrence(task: Task, now = new Date()): Task[] {
   }]
 }
 
-export default function TasksView({ state, query, onChange, onToast }: TasksViewProps) {
+export default function TasksView({ state, query, onChange, onToast, accounts = [] }: TasksViewProps) {
   const { showContextMenu } = useContextMenu()
-  const [list, setList] = useState('Today')
+  const [list, setLocalList] = useState('Today')
+  const [providerListId, setProviderListId] = useState<string>()
+  const [providerEditing, setProviderEditing] = useState<TaskEntity | 'new' | null>(null)
+  const [provider, setProvider] = useState<TaskSnapshot>({ lists: [], tasks: [], remoteTasks: [], operations: [], accounts: [] })
+  const [reconnecting, setReconnecting] = useState<string>()
+  const [backupBusy, setBackupBusy] = useState(false)
+  const [managingLists, setManagingLists] = useState<string>()
+  const setList = (value: string) => { setLocalList(value); setProviderListId(undefined); setProviderEditing(null) }
+  useEffect(() => {
+    const api = window.aerio?.tasks
+    if (!api) return
+    let active = true
+    let changed = false
+    void api.snapshot().then((snapshot) => { if (active && !changed) setProvider(snapshot) }).catch(() => { if (active && !changed) onToast('Connected tasks could not be loaded') })
+    const unsubscribe = api.onChanged((snapshot) => { changed = true; if (active) setProvider(snapshot) })
+    return () => { active = false; unsubscribe() }
+  }, [onToast])
+  const reconnect = async (accountId: string) => {
+    if (reconnecting) return
+    setReconnecting(accountId)
+    try {
+      await window.aerio.mail.accounts.reconnect(accountId)
+      setProvider(await window.aerio.tasks.sync(accountId))
+      onToast(provider.accounts.find((account) => account.accountId === accountId)?.provider === 'microsoft' ? 'Microsoft To Do connected' : 'Google Tasks connected')
+    } catch (error) { onToast(error instanceof Error ? error.message : 'Connected tasks could not be connected') }
+    finally { setReconnecting(undefined) }
+  }
+  const backupTasks = async (restore = false) => {
+    if (backupBusy) return
+    if (restore && !window.confirm('Replace connected-task caches, settings, and saved changes with this backup? Restored pending changes will require review before sending. Local Tasks, Notes, and Contacts will stay as they are.')) return
+    setBackupBusy(true)
+    try {
+      if (restore) {
+        const restored = await window.aerio.tasks.importData()
+        if (restored) { setProvider(restored); setProviderEditing(null); onToast('Connected tasks restored. Pending changes require review.') }
+      } else {
+        const result = await window.aerio.tasks.exportData()
+        if (result.savedPath) onToast('Connected tasks backup saved')
+      }
+    } catch (error) { onToast(error instanceof Error ? error.message : 'Connected task backup failed') }
+    finally { setBackupBusy(false) }
+  }
   const [showCompleted, setShowCompleted] = useState(true)
   const [editing, setEditing] = useState<Task | 'new' | null>(null)
   const [newTaskList, setNewTaskList] = useState<string>()
@@ -126,7 +172,7 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
   return (
     <div className="workspace">
       <aside className="context-sidebar">
-        <button className="compose-button" onClick={() => setEditing('new')}><Plus size={18} /> New task</button>
+        <button className="compose-button" disabled={Boolean(providerListId && (!provider.lists.find((item) => item.id === providerListId) || provider.lists.find((item) => item.id === providerListId)?.readOnly))} onClick={() => providerListId ? setProviderEditing('new') : setEditing('new')}><Plus size={18} /> New task</button>
         <div className="sidebar-group">
           <span className="sidebar-label">Smart lists</span>
           <button className={`sidebar-item ${list === 'All tasks' ? 'active' : ''}`} onClick={() => setList('All tasks')} onContextMenu={(event) => showListMenu(event, 'All tasks')}><ListTodo size={17} /><span>All tasks</span><em>{state.tasks.filter((task) => !task.completed).length}</em></button>
@@ -144,6 +190,15 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
             setEditing('new')
           }}><Plus size={17} /><span>New list</span></button>
         </div>
+        {provider.accounts.length > 0 && <div className="sidebar-group"><span className="sidebar-label">{provider.accounts.some((account) => account.provider === 'microsoft') ? 'Connected tasks' : 'Google Tasks'}</span>
+          {provider.accounts.map((account) => <div key={`${account.provider}:${account.accountId}`} className="provider-task-account"><span className="sidebar-label">{accounts.find((item) => item.id === account.accountId)?.email ?? (account.recovered ? account.provider === 'microsoft' ? 'Recovered Microsoft tasks' : 'Recovered Google tasks' : account.provider === 'microsoft' ? 'Microsoft account' : 'Google account')}{account.archived && !account.recovered ? ' · Archived' : ''}</span>
+            {provider.lists.filter((item) => item.accountId === account.accountId).map((item) => <button key={item.id} className={`sidebar-item ${providerListId === item.id ? 'active' : ''}`} onClick={() => { setProviderListId(item.id); setProviderEditing(null); setEditing(null) }}><ListTodo size={17} /><span>{item.title}</span><em>{provider.tasks.filter((task) => task.listId === item.id && !task.fields.completed).length}</em></button>)}
+            {!account.archived && account.syncEnabled === false && <span className="sidebar-label">Synchronization paused</span>}
+            <button className="button ghost small" aria-label={`Manage ${account.provider === 'microsoft' ? 'Microsoft' : 'Google'} lists for ${accounts.find((item) => item.id === account.accountId)?.email ?? (account.provider === 'microsoft' ? 'Microsoft account' : 'Google account')}`} onClick={() => setManagingLists(account.accountId)}>Manage lists</button>
+            {!account.archived && account.syncEnabled !== false && (!account.canRead || !account.canWrite || account.error === 'needs-consent') && <button className="button ghost small" disabled={Boolean(reconnecting)} onClick={() => void reconnect(account.accountId)}>{reconnecting === account.accountId ? 'Connecting…' : account.provider === 'microsoft' ? 'Connect Microsoft To Do' : 'Connect Google Tasks'}</button>}
+          </div>)}
+        </div>}
+        {window.aerio?.tasks && <div className="sidebar-group"><span className="sidebar-label">Connected task backups</span><button className="button ghost small" disabled={backupBusy} onClick={() => void backupTasks()}>Back up connected tasks</button><button className="button ghost small" disabled={backupBusy} onClick={() => void backupTasks(true)}>Restore connected tasks</button></div>}
         <div className="task-progress-card">
           <div className="progress-ring" style={{ '--progress': `${completedPercent}%` } as React.CSSProperties}>
             <span>{completedPercent}%</span>
@@ -151,7 +206,7 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
           <div><strong>Nice rhythm</strong><p>{state.tasks.filter((task) => task.completed).length} of {state.tasks.length} tasks complete</p></div>
         </div>
       </aside>
-      <section className="module-panel tasks-panel">
+      {providerListId ? <ProviderTasksPanel key={providerListId} snapshot={provider} listId={providerListId} query={query} showCompleted={showCompleted} setShowCompleted={setShowCompleted} editing={providerEditing} setEditing={setProviderEditing} onSnapshot={setProvider} onToast={onToast} /> : <section className="module-panel tasks-panel">
         <header className="module-header">
           <div><h1>{list}</h1><p>{tasks.filter((task) => !task.completed).length} still open</p></div>
           <label className="check-label"><input type="checkbox" checked={showCompleted} onChange={(event) => setShowCompleted(event.target.checked)} /> Show completed</label>
@@ -181,7 +236,7 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
           })}
           {tasks.length === 0 && <div className="empty-state grow"><Search size={30} /><h3>Nothing on this list</h3><p>A small pocket of calm.</p></div>}
         </div>
-      </section>
+      </section>}
       {editing && (
         <TaskEditor
           task={editing === 'new' ? undefined : editing}
@@ -202,6 +257,7 @@ export default function TasksView({ state, query, onChange, onToast }: TasksView
           }}
         />
       )}
+      {managingLists && <ProviderTaskLists snapshot={provider} accountId={managingLists} onSnapshot={setProvider} onToast={onToast} onClose={() => setManagingLists(undefined)} />}
     </div>
   )
 }

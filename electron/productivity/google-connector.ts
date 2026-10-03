@@ -240,8 +240,9 @@ export class GoogleProductivityConnector implements ProductivityConnector {
   async updateContact(current: SyncedContact, contact: Contact) {
     this.assertContactsWritable(current)
     const resource = this.contactResource(current.remoteId)
-    const revision = current.revision ?? (await retryingJson<GooglePerson>(this.provider, `${resource}?personFields=${googleContactFields}`, this.token))
-      .metadata?.sources?.find((source) => source.type === 'CONTACT')?.etag
+    // A freshly fetched revision does not describe the contents of the open editor.
+    // Require a refresh instead of allowing a stale edit to overwrite newer data.
+    const revision = current.revision
     if (!revision) throw new Error('Google did not return a contact revision; synchronize Contacts before editing again')
     const query = new URLSearchParams({ updatePersonFields: 'names,emailAddresses,phoneNumbers,organizations,biographies', personFields: googleContactFields })
     const remote = await retryingJson<GooglePerson>(this.provider, `${resource}:updateContact?${query}`, this.token, {

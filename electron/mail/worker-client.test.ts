@@ -53,6 +53,19 @@ describe('MailWorkerClient', () => {
     await expect(result).resolves.toEqual([{ id: 'account-1' }])
   })
 
+  it('terminates an unresponsive worker and rejects every outstanding request', async () => {
+    const subject = new MailWorkerClient('mail-worker.js', vi.fn(), vi.fn())
+    const first = subject.request({ type: 'accounts:list' })
+    const second = subject.request({ type: 'diagnostics:health' })
+    const assertions = Promise.all([
+      expect(first).rejects.toThrow('worker was closed'),
+      expect(second).rejects.toThrow('worker was closed')
+    ])
+    await subject.terminate()
+    await assertions
+    expect(latestWorker().terminate).toHaveBeenCalledOnce()
+  })
+
   it('rejects provider errors and ignores unknown response IDs', async () => {
     const subject = new MailWorkerClient('mail-worker.js', vi.fn(), vi.fn())
     latestWorker().emit('message', { kind: 'response', id: 'unknown', result: true })
