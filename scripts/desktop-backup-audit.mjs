@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -9,7 +9,8 @@ import { ProductivityStore } from '../electron/productivity/store.ts'
 import { desktopAuditEnvironment } from './electron-audit-environment.mjs'
 
 const root = resolve(import.meta.dirname, '..')
-const profile = mkdtempSync(join(tmpdir(), 'aerio-backup-audit-'))
+const temporaryRoot = realpathSync(tmpdir())
+const profile = mkdtempSync(join(temporaryRoot, 'aerio-backup-audit-'))
 const attachmentsDirectory = join(profile, 'note-attachments'), backupPath = join(profile, 'backup.json')
 const bytes = Buffer.from([0, 1, 2, 255, 13, 10])
 mkdirSync(attachmentsDirectory)
@@ -25,6 +26,7 @@ let application
 try {
   application = await electron.launch({ executablePath: electronPath, args: [root, `--user-data-dir=${profile}`], cwd: root, env: desktopAuditEnvironment() })
   const page = await application.firstWindow()
+  assert.equal(await application.evaluate(({ app }) => app.getPath('userData')), profile, 'Fixture attachment paths must use the native user-data directory')
   page.on('dialog', (dialog) => dialog.accept())
   await page.waitForSelector('.app')
   await application.evaluate(({ dialog }, path) => {
@@ -34,7 +36,9 @@ try {
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   const settings = page.getByRole('dialog', { name: 'Aerio settings' })
   await settings.getByRole('button', { name: 'Export backup' }).click()
-  await settings.getByText('Tasks, Notes, and Contacts backup exported.').waitFor()
+  await settings.getByText('Tasks, Notes, and Contacts backup exported.').waitFor().catch(async (error) => {
+    throw new Error(`Backup export did not complete: ${await settings.innerText()}`, { cause: error })
+  })
   const backup = JSON.parse(readFileSync(backupPath, 'utf8'))
   assert.deepEqual(backup.data, snapshot)
   assert.equal(backup.attachments.length, 2)
@@ -73,6 +77,6 @@ try {
   console.log('✓ database restore failure retains original records and attachments without orphan files')
 } finally {
   if (application) await application.close().catch(() => undefined)
-  assert.equal(dirname(profile), resolve(tmpdir()))
+  assert.equal(dirname(profile), temporaryRoot)
   rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 }
