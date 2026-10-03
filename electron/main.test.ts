@@ -1156,8 +1156,10 @@ describe.sequential('Electron main process', () => {
     expect(mocks.windows.filter((window) => window.options.title === 'Aerio').at(-1).loadURL).toHaveBeenCalledWith('http://localhost:5173/')
     delete process.env.ELECTRON_RENDERER_URL
     invoke('preferences:save', { schemaVersion: 1, settings: { theme: 'system', density: 'comfortable', closeToTray: false, notifications: true, startModule: 'mail' } })
+    mocks.app.quit.mockClear()
     mocks.appHandlers.get('window-all-closed')?.()
-    expect(mocks.app.quit).toHaveBeenCalled()
+    if (process.platform === 'darwin') expect(mocks.app.quit).not.toHaveBeenCalled()
+    else expect(mocks.app.quit).toHaveBeenCalledOnce()
   })
 
   it('keeps a taskbar window and locks when the tray cannot be used', async () => {
