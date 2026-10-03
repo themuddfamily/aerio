@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MailAccountSummary, MailDraftRecord, MailPage, MailThreadDetail, SyncProgress } from '../mail-types'
@@ -125,8 +125,8 @@ beforeEach(() => {
 describe('ConnectedMailView', () => {
   it('shows unread counts for every non-empty folder and scopes them to the selected account', async () => {
     const user = userEvent.setup()
-    renderMail()
-    expect(await screen.findByRole('button', { name: 'Inbox 2 unread conversations' })).toBeInTheDocument()
+    await act(async () => { renderMail() })
+    expect(screen.getByRole('button', { name: 'Inbox 2 unread conversations' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Starred 1 unread conversation' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Archive 1 unread conversation' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'All mail 3 unread conversations' })).toBeInTheDocument()
@@ -160,6 +160,32 @@ describe('ConnectedMailView', () => {
     await user.click(screen.getByRole('button', { name: 'Clear mail search' }))
     expect(screen.getByLabelText('Search mail')).toHaveValue('')
     await user.click(screen.getByRole('button', { name: /All accounts/ }))
+  })
+
+  it('selects conversations with Ctrl-click without opening them and supports range and keyboard selection', async () => {
+    renderMail()
+    await screen.findByText('Launch & plans')
+    const first = document.querySelector('.message-row')!
+    const second = screen.getByText('Second conversation').closest('.message-row')!
+    expect(document.querySelector('.message-select')).toBeNull()
+    const openedThreads = api.mail.mail.thread.mock.calls.length
+
+    fireEvent.click(second, { ctrlKey: true })
+    expect(second).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+    expect(api.mail.mail.thread).toHaveBeenCalledTimes(openedThreads)
+    expect(api.mail.mail.action).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'read', threadIds: ['thread-2'] }))
+
+    fireEvent.click(first, { shiftKey: true })
+    expect(screen.getByText('2 selected')).toBeInTheDocument()
+    fireEvent.keyDown(first, { key: ' ', ctrlKey: true })
+    expect(first).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+    fireEvent.click(second, { ctrlKey: true })
+    expect(document.querySelector('.bulk-mail-toolbar')).toBeNull()
+
+    fireEvent.click(second)
+    await waitFor(() => expect(api.mail.mail.thread).toHaveBeenCalledWith('account', 'thread-2'))
   })
 
   it('performs bulk actions, move/label organization, snooze, and undo', async () => {
@@ -285,9 +311,9 @@ describe('ConnectedMailView', () => {
   it('covers range selection and the remaining bulk toolbar actions', async () => {
     const user = userEvent.setup()
     renderMail(); await screen.findByText('Launch & plans')
-    const checks = screen.getAllByRole('checkbox', { name: /Select/ })
-    fireEvent.click(checks[0])
-    fireEvent.click(checks[1], { shiftKey: true })
+    const rows = document.querySelectorAll('.message-row')
+    fireEvent.click(rows[0], { ctrlKey: true })
+    fireEvent.click(rows[1], { shiftKey: true })
     expect(screen.getByText('2 selected')).toBeInTheDocument()
     await user.click(screen.getByTitle('Clear selection'))
 
@@ -559,7 +585,7 @@ describe('ConnectedMailView', () => {
       await user.click(screen.getByRole('button', { name: 'Clear mail search' }))
       expect(await screen.findByText('Local draft')).toBeInTheDocument()
     }
-  })
+  }, 15_000) // Five complete filter/reset interactions also run on slower native CI hosts.
 
   it('renders read-only conversation and menu states for archived accounts', async () => {
     const user = userEvent.setup()

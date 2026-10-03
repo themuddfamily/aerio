@@ -1,6 +1,8 @@
 # Aerio
 
-Aerio is a calm, modern desktop communications client for Windows. It supports multi-provider mail, writable Google and Microsoft Calendar and Contacts synchronization, and local Contacts, Tasks, and Notes.
+Aerio is a calm, modern desktop communications client for Windows. It supports multi-provider mail, writable Google and Microsoft Calendar and Contacts synchronization, connected Google Tasks and Microsoft To Do, and local Contacts, Tasks, and Notes.
+
+Remaining release work and optional future features are tracked in [ROADMAP.md](ROADMAP.md).
 
 ## Real-mail alpha
 
@@ -22,9 +24,10 @@ Aerio is a calm, modern desktop communications client for Windows. It supports m
 - Read-only local archive or complete local deletion when disconnecting an account
 - Google and Microsoft Calendar synchronization with event creation, editing, deletion, recurrence, and configurable reminders
 - Writable Google and Microsoft provider Contacts plus editable local Contacts, with portable backup and restore for local Contacts, Tasks, Notes, and managed note attachments
+- Google Tasks and Microsoft To Do lists/tasks with durable offline changes, conflict review, undo, native/local recurrence mapping, and separate connected-task backup/restore; see [provider task integration](docs/task-provider-integration.md)
 - Optional local passphrase privacy lock at launch, when Aerio is sent to the tray, or on demand
 
-Tasks, Notes, and local Contacts are production local modules. Chat is outside the v1 navigation until a secure transport is selected. Provider Calendar and Contacts data refreshes automatically every 15 minutes and can also be refreshed with **Sync now**. Refreshes use persisted Google sync tokens and Microsoft delta links, with an automatic full refresh when a provider expires a checkpoint. Calendar events can be created by double-clicking a day or time slot and edited after granting the event scope once.
+Tasks, Notes, and local Contacts are production local modules. Google Tasks and Microsoft To Do appear alongside local task lists and poll each minute when connected and authorized; cached intent survives offline use, permission changes and restart. Microsoft exposes native recurrence/priority/time zones and checklist items; Google recurrence and priority remain local metadata. Controlled adapter/SQLite/native-desktop checks pass, while hosted Tasks provider compatibility remains unverified. Chat is outside the v1 navigation until a secure transport is selected. Provider Calendar and Contacts data refreshes automatically every 15 minutes and can also be refreshed with **Sync now**. Refreshes use persisted Google sync tokens and Microsoft delta links, with an automatic full refresh when a provider expires a checkpoint. Calendar events can be created by double-clicking a day or time slot and edited after granting the event scope once.
 
 ## Connect an account
 
@@ -34,21 +37,25 @@ Open the real-mail workspace and choose **Add mail account**. The setup screen e
 
 Aerio includes its public Google Desktop client ID and compiles its client secret into the Electron main process. It never proxies your mail through an Aerio server. Development builds read the secret from a git-ignored `.env.local`; official builds receive it from a GitHub Actions secret. If a custom build has no complete registration, the account screen retains a JSON-import fallback for developers.
 
-1. Open the [Google Cloud Console](https://console.cloud.google.com/), create or select a project, and enable the **Gmail API**, **Google Calendar API**, and **People API**.
+Official builds use Aerio's built-in registration: choose Gmail and select **Connect Gmail**. The following steps are for developers configuring a separate registration:
+
+1. Open the [Google Cloud Console](https://console.cloud.google.com/), create or select a project, and enable the **Gmail API**, **Google Calendar API**, **People API**, and **Google Tasks API**.
 2. Configure the OAuth consent screen. For durable personal use, publish it as **In production** and add only the Google accounts you intend to use if Google requests test users. Refresh tokens issued while the app is in **Testing** normally expire after seven days.
 3. Create **OAuth client ID → Desktop app** credentials and download the JSON file.
-4. Put its `client_secret` into `.env.local` as `MAIN_VITE_GOOGLE_CLIENT_SECRET`, then rebuild Aerio. The matching public client ID is already Aerio's default; `MAIN_VITE_GOOGLE_CLIENT_ID` can override it for a different registration.
+4. Put its `client_id` and `client_secret` into `.env.local` as `MAIN_VITE_GOOGLE_CLIENT_ID` and `MAIN_VITE_GOOGLE_CLIENT_SECRET`, then rebuild Aerio. Both values must belong to the same registration.
 5. Choose Gmail and select **Connect Gmail**. Your normal browser completes Google sign-in and returns to Aerio through a temporary `127.0.0.1` callback.
 
-Aerio requests Gmail modify access, read-only Calendar-list access, Google Calendar event read/write access, and Contacts read/write access. It does not request permission to create or share calendars or permanently delete Gmail messages. Existing accounts connected by an older Aerio build must choose **Enable editing** in Calendar or Contacts (or **Account settings → Reconnect**) once to approve the added write scopes.
+Aerio requests Gmail modify access, read-only Calendar-list access, Google Calendar event read/write access, Contacts read/write access, and Tasks read/write access. It does not request permission to create or share calendars or permanently delete Gmail messages. Existing accounts connected by an older Aerio build can use **Enable editing** in Calendar/Contacts, **Connect Google Tasks** in Tasks, or **Account settings → Reconnect** to approve added scopes.
 
 The first download is quota-bound. A mailbox with 100,000 messages can take roughly seven hours or more, depending on message size, retries, and Google’s per-user quota. Progress is persistent; quitting, losing connectivity, or pausing does not discard completed work.
 
 ### Outlook and Microsoft 365
 
+Official builds use Aerio's built-in public-client registration: choose Microsoft and sign in. To configure a separate development registration:
+
 1. Create an app registration in [Microsoft Entra](https://entra.microsoft.com/).
 2. Enable public client flows and add the **Mobile and desktop applications** redirect URI `http://localhost`.
-3. Aerio's public Application (client) ID is already included. Choose Microsoft and sign in. The browser requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite`, and `Contacts.ReadWrite` access. Existing connections must reconnect once to grant Calendar and Contacts editing.
+3. Set `MAIN_VITE_MICROSOFT_CLIENT_ID` to the new Application (client) ID and rebuild, then choose Microsoft and sign in. The browser requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite`, `Contacts.ReadWrite`, and `Tasks.ReadWrite` access. Existing connections can reconnect to grant added permissions; Tasks offers **Connect Microsoft To Do**. Background token refresh renews the existing grant without requesting new Tasks consent.
 
 Aerio includes its Microsoft public-client application ID by default, because desktop application IDs are public identifiers rather than secrets. `MAIN_VITE_MICROSOFT_CLIENT_ID` can override it for a separate development registration.
 
@@ -78,8 +85,11 @@ Proton Mail connects through the local [Proton Mail Bridge](https://proton.me/su
 - Settings can enable a scrypt-verified local app-lock passphrase. The privacy screen blocks workspace loading at launch, closes message windows when locked, and rate-limits failed attempts; it does not encrypt Aerio’s files.
 - Notes can copy attachments up to 25 MB each into Aerio-managed storage, search them by filename, open or remove them, and clean up unreferenced copies.
 - Settings can export and restore local Contacts, Tasks, Notes, and managed note attachments as a validated JSON backup (up to 100 MB of attachment data). Provider mail and cached provider data are intentionally excluded because they can be synchronized again.
+- Restore rejects duplicate record identities and inconsistent attachment metadata. Failed attachment writes or database restores retain the existing records and files and remove newly staged attachments.
 
 Application preferences live in `aerio-state.sqlite`. On first launch after this change, Aerio imports only appearance, customized profile, notification, startup, and tray preferences from the former workspace database when available; sample content and the old sample persona are neither loaded nor copied. The legacy database is left untouched.
+
+Packaged Windows builds register sign-in startup with `--aerio-login` so the first window opens minimized; ordinary launches open normally. The startup choice does not register development builds with Windows. Desktop preference checks use isolated temporary profiles, and unit checks use mocked native notifications and login registration.
 
 ## Run from source
 
@@ -102,9 +112,27 @@ npm test
 npm run audit:buttons
 npm run audit:context-menus
 npm run test:desktop
+npm run test:recovery # Build and run only the tray/quit/relaunch recovery audit
+npm run test:backup # Build and run the real-file backup/restore audit
+npm run test:app-lock # Build and check launch/tray locking and message-window closure
+npm run test:preferences # Build and check desktop preferences/local data across quit and relaunch
+npm run test:tasks # Build and run all four Google/Microsoft Tasks desktop audits
+npm run test:microsoft-tasks # Build and run only the Microsoft consent/write/recovery audit
+npm run test:imap # Disposable loopback IMAP/SMTP integration checks, TLS and STARTTLS
+npm run test:live # Opt-in preconfigured account checks; see docs/live-provider-runner.md
+npm run verify:artifacts # Verify packaged installers, portable executables, and update metadata
+npm run verify:platform-config # Validate macOS/Linux configuration against the installed builder schema
+npm run verify:platform-artifacts -- linux release x64 # Verify Linux artifacts on Linux; use mac on macOS
+npm run test:platform:linux # Audit the packaged Linux executable in an isolated desktop/keyring session
+npm run test:platform:linux:containers # Extract and audit the built AppImage and DEB executables
+npm run test:platform:linux:desktop # Run all desktop audits under Xvfb and Openbox
+npm run test:platform:mac # Audit the packaged app on a native macOS host
+npm run test:platform:mac:containers # Audit extracted ZIP and read-only mounted DMG apps on macOS
 npm run test:desktop:visible # Show Electron windows while debugging a failure
 npm run build
 npm run package:win
+npm run package:mac # Experimental; run on macOS (DMG and ZIP)
+npm run package:linux # Experimental; run on Linux (x64 AppImage and DEB)
 ```
 
 Desktop tests run with every Electron window hidden by default. If an interaction fails, rerun the same suite with `npm run test:desktop:visible` to watch it in real time.
@@ -141,12 +169,15 @@ The longer-term provider boundaries and the reasoning behind local productivity 
 
 ## Current limitations
 
-- Multi-provider support is an alpha. Gmail has not been submitted for Google OAuth verification, and Microsoft uses the app registration supplied by the user.
+- Multi-provider support is an alpha. Gmail has not been submitted for Google OAuth verification. Official builds include Google and Microsoft application IDs; production registration readiness and live-provider validation remain release tasks.
 - Automated tests use mocked provider responses. Live validation requires real provider accounts, app registrations, or app passwords.
 - IMAP has no universal standard for Archive or special folders. Aerio reports an error instead of guessing when a server does not advertise a required destination.
 - IMAP can store multiple physical copies of the same message, but Aerio presents them as one logical conversation and keeps every location available for folder actions.
 - Scheduled delivery, Undo Send, snooze, and rules are coordinated locally by Aerio. If Aerio is fully quit at a due time, the action resumes when it next starts; keeping it in the tray allows on-time processing, and Settings can start Aerio automatically after Windows sign-in.
+- Delivery queue passes run one at a time, including after reconnection. Sends interrupted during a provider request are retained for review instead of automatically retried, because the provider may already have accepted the message.
+- Waiting deliveries recheck their current due state before sending. Snooze expiry restores Inbox membership and creates its queued provider operation atomically, retaining the reminder if the local write fails.
 - Offline drafts are queued until connectivity returns. Aerio detects simultaneous edits from two Aerio editors and provider-side Gmail or Microsoft changes made by another client, preserving the stale edit as a separate copy when requested.
 - Google and Microsoft Calendar events and provider Contacts are writable after reconnection. New contacts remain local by default and can explicitly target a connected provider account. The Calendar window covers one year in the past through two years in the future and is maintained with per-calendar incremental checkpoints.
-- Google Keep and consumer Google Chat do not expose suitable general synchronization APIs. Aerio Notes remain local, and Chat stays out of the v1 navigation until a transport and security model are defined.
-- Windows is the tested packaging target; macOS and Linux packaging are not configured.
+- A Google contact without a cached revision must be refreshed before editing; Aerio does not fetch a newer revision to authorize saving older editor contents.
+- Google Keep and consumer Google Chat do not expose suitable general synchronization APIs. Aerio Notes remain local; the optional [OneNote adapter design](docs/onenote-adapter-design.md) is complete but not implemented. The [Chat proposal](docs/chat-implementation-proposal.md) recommends an independent Matrix connector with defined security and recovery gates; Chat remains unimplemented and outside v1 navigation.
+- Windows is the established packaging target. Experimental Linux x64 AppImage/DEB and macOS Intel/Apple Silicon DMG/ZIP packaging, native secure-storage restarts, desktop checks and packaged-container launches pass in hosted CI. Linux evidence covers extracted containers; macOS evidence includes extracted ZIPs and read-only mounted DMGs. The [platform compatibility assessment](docs/platform-compatibility.md) records CI links and the limits of this evidence, including signed distribution and physical desktop interactions. The credential vault refuses Linux's weak storage fallback.

@@ -2,7 +2,7 @@
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ContextMenuProvider } from '../components/ContextMenu'
 import type { AppState, CalendarEvent } from '../types'
 import CalendarView from './CalendarView'
@@ -27,9 +27,14 @@ const renderCalendar = (writable: ReadonlySet<string>, props = callbacks(), cale
 }
 
 beforeEach(() => {
+  // Freeze only Date: userEvent and asynchronous UI checks still use real timers.
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-08-08T08:00:00Z'))
   vi.clearAllMocks()
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn(async () => undefined) } })
 })
+
+afterEach(() => vi.useRealTimers())
 
 describe('CalendarView', () => {
   it('prompts for editing permission, synchronizes, and exposes the source state', async () => {
@@ -54,7 +59,7 @@ describe('CalendarView', () => {
     await user.click(screen.getByRole('button', { name: 'agenda' })); expect(document.querySelector('.agenda-list')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Today' }))
     await user.click(screen.getByRole('button', { name: 'Work Calendar' })); expect(screen.queryByText('Planning session')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Work Calendar' })); expect(screen.getByText('Planning session')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Work Calendar' })); expect(screen.getAllByText('Planning session').length).toBeGreaterThan(0)
   })
 
   it('creates a provider event with all editor fields', async () => {
@@ -191,7 +196,7 @@ describe('CalendarView', () => {
     await user.click(screen.getByRole('menuitem', { name: 'Copy date' }))
     fireEvent.contextMenu(screen.getByRole('button', { name: 'Work Calendar' }))
     await user.click(screen.getByRole('menuitem', { name: 'Copy calendar address' }))
-    const remote = screen.getAllByText('Remote planning')[0].closest('.calendar-event')!
+    const remote = [...document.querySelectorAll('.calendar-event')].find((element) => element.textContent?.includes('Remote planning'))!
     fireEvent.contextMenu(remote)
     await user.click(screen.getByRole('menuitem', { name: 'Copy event details' }))
     expect(writeText).toHaveBeenCalledWith('work@example.test')

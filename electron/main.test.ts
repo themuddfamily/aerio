@@ -1,7 +1,11 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi, type Mock } from 'vitest'
+import { basename, dirname, join, resolve } from 'node:path'
 
 const mocks = vi.hoisted(() => {
-  process.env.AERIO_TEST_HIDDEN = '1'
+  // Native Electron objects are mocked: exercise the production window,
+  // tray, and notification paths without creating any operating-system UI.
+  delete process.env.AERIO_TEST_HIDDEN
+  process.argv.push('--aerio-login')
   delete process.env.AERIO_CAPTURE_PATH
   delete process.env.ELECTRON_RENDERER_URL
 
@@ -9,6 +13,8 @@ const mocks = vi.hoisted(() => {
   const appHandlers = new Map<string, (...args: any[]) => any>()
   const protocolHandlers = new Map<string, (request: { url: string }) => Promise<Response>>()
   const windows: any[] = []
+  const notifications: any[] = []
+  const trays: any[] = []
   let preferencesPayload: string | undefined
   let appLockRecord: { salt: string; verifier: string } | undefined
   let accounts: any[] = [{
@@ -22,6 +28,7 @@ const mocks = vi.hoisted(() => {
   let statResult: any = { size: 12, isFile: () => true }
   let readResult: string | Buffer | Error = new Error('missing')
   let existsResult: boolean | ((path: string) => boolean) = false
+  let loginEnabled = false
 
   class FakeWebContents {
     handlers = new Map<string, (...args: any[]) => any>()
@@ -142,16 +149,29 @@ const mocks = vi.hoisted(() => {
     status: vi.fn(() => ({ phase: 'idle', currentVersion: '0.4.0' })), check: vi.fn(async () => ({ phase: 'current' })),
     download: vi.fn(async () => ({ phase: 'ready' })), install: vi.fn(), start: vi.fn(), stop: vi.fn()
   }
+  const taskService = {
+    createList: vi.fn(async () => ({})), renameList: vi.fn(async () => ({})), deleteList: vi.fn(async () => ({})), resolveList: vi.fn(async () => ({})),
+    exportBackup: vi.fn(async () => ({ format: 'aerio-provider-tasks', schemaVersion: 1, exportedAt: '2026-10-01T10:00:00Z', accounts: [], entities: [], operations: [], occurrences: [], resolutions: [] })),
+    restoreBackup: vi.fn(async () => ({ lists: [], tasks: [], remoteTasks: [], operations: [], accounts: [] })),
+    snapshot: vi.fn(async () => ({ lists: [], tasks: [], operations: [], accounts: [] })),
+    sync: vi.fn(async () => ({ lists: [], tasks: [], operations: [], accounts: [] })),
+    create: vi.fn(async () => ({})), update: vi.fn(async () => ({})), delete: vi.fn(async () => ({})),
+    move: vi.fn(async () => ({})), setLocal: vi.fn(async () => ({})), undo: vi.fn(async () => ({})), resolve: vi.fn(async () => ({})),
+    flush: vi.fn(async () => {}), poll: vi.fn(async () => {}), accountChanged: vi.fn(async () => {}), stopAccount: vi.fn(async () => {}), removeAccount: vi.fn(async () => {}), resumeAccount: vi.fn(), close: vi.fn(async () => {})
+  }
   const diagnosticLogger = { log: vi.fn(), exportBundle: vi.fn() }
   const imapClient = { verify: vi.fn(async () => undefined) }
   const image = {
     isEmpty: vi.fn(() => false), getSize: vi.fn(() => ({ width: 512, height: 256 })),
-    resize: vi.fn(() => image), toDataURL: vi.fn(() => 'data:image/png;base64,AA=='), toPNG: vi.fn(() => Buffer.from('png'))
+    resize: vi.fn(() => image), toDataURL: vi.fn(() => 'data:image/png;base64,AA=='), toPNG: vi.fn(() => Buffer.from('png')),
+    setTemplateImage: vi.fn()
   }
 
   return {
-    ipcHandlers, appHandlers, protocolHandlers, windows, FakeBrowserWindow, FakeDatabaseSync,
-    vault, worker, MailWorkerClient, store, google, microsoft, updateManager, diagnosticLogger, imapClient, image,
+    ipcHandlers, appHandlers, protocolHandlers, windows, notifications, trays, FakeBrowserWindow, FakeDatabaseSync,
+    setLinuxLoginItem: vi.fn(),
+    linuxTrayHostAvailable: vi.fn(async () => true),
+    vault, worker, MailWorkerClient, store, google, microsoft, updateManager, taskService, diagnosticLogger, imapClient, image,
     get accounts() { return accounts }, set accounts(value: any[]) { accounts = value },
     failWorker(error: Error) { workerFailure = error }, emitWorker(event: any) { workerEvent?.(event) },
     setOpenResult(value: any) { dialogOpenResult = value }, setSaveResult(value: any) { dialogSaveResult = value },
@@ -161,9 +181,10 @@ const mocks = vi.hoisted(() => {
     setExistsResult(value: boolean | ((path: string) => boolean)) { existsResult = value },
     app: {
       isPackaged: false, requestSingleInstanceLock: vi.fn(() => true), quit: vi.fn(), setAppUserModelId: vi.fn(),
-      getPath: vi.fn(() => 'C:\\aerio-test'), getAppPath: vi.fn(() => 'C:\\aerio'), getVersion: vi.fn(() => '0.4.0'),
+      getPath: vi.fn(() => process.platform === 'win32' ? 'C:\\aerio-test' : '/tmp/aerio-test'), getAppPath: vi.fn(() => process.platform === 'win32' ? 'C:\\aerio' : '/tmp/aerio'), getVersion: vi.fn(() => '0.4.0'),
       on: vi.fn((event: string, handler: (...args: any[]) => any) => { appHandlers.set(event, handler) }),
-      whenReady: vi.fn(() => Promise.resolve())
+      whenReady: vi.fn(() => Promise.resolve()), setLoginItemSettings: vi.fn((settings: { openAtLogin: boolean }) => { loginEnabled = settings.openAtLogin }),
+      getLoginItemSettings: vi.fn(() => ({ openAtLogin: loginEnabled, status: loginEnabled ? 'enabled' : 'not-registered', wasOpenedAtLogin: false }))
     },
     ipcMain: { handle: vi.fn((channel: string, handler: (...args: any[]) => any) => ipcHandlers.set(channel, handler)) },
     dialog: {
@@ -176,12 +197,20 @@ const mocks = vi.hoisted(() => {
     shell: { openExternal: vi.fn(async () => undefined), openPath: vi.fn(async () => '') },
     nativeImage: { createFromPath: vi.fn(() => image), createFromBuffer: vi.fn(() => image), createEmpty: vi.fn(() => image) },
     Notification: class {
-      static isSupported(): boolean { return true }
-      on = vi.fn(); show = vi.fn()
-      constructor(public options: any) {}
+      static isSupported: Mock<() => boolean> = vi.fn(() => true)
+      handlers = new Map<string, (...args: any[]) => any>()
+      on = vi.fn((event: string, handler: (...args: any[]) => any) => { this.handlers.set(event, handler) })
+      show = vi.fn()
+      constructor(public options: any) { notifications.push(this) }
     },
     Menu: { setApplicationMenu: vi.fn(), buildFromTemplate: vi.fn((template: any[]) => template) },
-    Tray: class { setToolTip = vi.fn(); setContextMenu = vi.fn(); on = vi.fn() },
+    Tray: class {
+      handlers = new Map<string, (...args: any[]) => any>()
+      setToolTip = vi.fn(); setContextMenu = vi.fn()
+      isDestroyed = vi.fn(() => false); destroy = vi.fn()
+      on = vi.fn((event: string, handler: (...args: any[]) => any) => { this.handlers.set(event, handler) })
+      constructor() { trays.push(this) }
+    },
     fs: {
       existsSync: vi.fn((path: string) => typeof existsResult === 'function' ? existsResult(path) : existsResult), mkdirSync: vi.fn(),
       copyFileSync: vi.fn(), unlinkSync: vi.fn(),
@@ -202,6 +231,8 @@ vi.mock('electron', () => ({
 vi.mock('node:fs', () => mocks.fs)
 vi.mock('node:dns/promises', () => ({ lookup: mocks.lookup }))
 vi.mock('node:sqlite', () => ({ DatabaseSync: mocks.FakeDatabaseSync }))
+vi.mock('./linux-login', () => ({ setLinuxLoginItem: mocks.setLinuxLoginItem }))
+vi.mock('./tray-availability', () => ({ linuxTrayHostAvailable: mocks.linuxTrayHostAvailable }))
 vi.mock('./mail/oauth-vault', () => ({ OAuthVault: vi.fn(function () { return mocks.vault }) }))
 vi.mock('./mail/worker-client', () => ({ MailWorkerClient: mocks.MailWorkerClient }))
 vi.mock('./mail/imap-client', () => ({ ImapSmtpClient: vi.fn(function () { return mocks.imapClient }) }))
@@ -209,6 +240,7 @@ vi.mock('./mail/provider-presets', () => ({ PROVIDER_PRESETS: [{ id: 'gmail' }],
 vi.mock('./diagnostics', () => ({ DiagnosticLogger: vi.fn(function () { return mocks.diagnosticLogger }) }))
 vi.mock('./update-manager', () => ({ UpdateManager: vi.fn(function () { return mocks.updateManager }) }))
 vi.mock('./productivity/store', () => ({ ProductivityStore: vi.fn(function () { return mocks.store }) }))
+vi.mock('./productivity/task-service', () => ({ TaskService: vi.fn(function () { return mocks.taskService }) }))
 vi.mock('./productivity/google-connector', () => ({ GoogleProductivityConnector: vi.fn(function () { return mocks.google }) }))
 vi.mock('./productivity/microsoft-connector', () => ({ MicrosoftProductivityConnector: vi.fn(function () { return mocks.microsoft }) }))
 
@@ -221,8 +253,10 @@ const invoke = (channel: string, ...args: any[]) => {
 
 describe.sequential('Electron main process', () => {
   beforeAll(async () => {
+    mocks.setExistsResult((path) => path.endsWith('icon.png') || path.endsWith('trayTemplate.png'))
     await import('./main')
     await vi.waitFor(() => expect(mocks.ipcHandlers.size).toBeGreaterThan(40))
+    process.argv.splice(process.argv.indexOf('--aerio-login'), 1)
   })
 
   it('boots storage, mail, updates, a secured renderer window, and the remote-image protocol', async () => {
@@ -231,9 +265,63 @@ describe.sequential('Electron main process', () => {
     expect(mocks.worker.request).toHaveBeenCalledWith(expect.objectContaining({ type: 'initialize' }))
     expect(mocks.updateManager.start).toHaveBeenCalledOnce()
     expect(mocks.windows).toHaveLength(1)
+    const window = mocks.windows[0]
+    window.handlers.get('ready-to-show')?.()
+    expect(window.show).toHaveBeenCalledOnce()
+    expect(window.minimize).toHaveBeenCalledOnce()
+    window.restore()
+    expect(mocks.trays).toHaveLength(1)
+    expect(mocks.trays[0].setToolTip).toHaveBeenCalledWith('Aerio')
     expect(mocks.windows[0].options.webPreferences).toMatchObject({ sandbox: true, contextIsolation: true, nodeIntegration: false })
     expect(mocks.protocolHandlers.has('aerio-image')).toBe(true)
     expect(await invoke('preferences:load')).toMatchObject({ schemaVersion: 1, settings: { theme: 'system' } })
+  })
+
+  it('exposes provider task IPC and rejects malformed identities before calling the service', async () => {
+    expect(await invoke('tasks:snapshot')).toMatchObject({ lists: [], tasks: [], operations: [], accounts: [] })
+    await invoke('tasks:sync', 'a1b2')
+    expect(mocks.taskService.sync).toHaveBeenCalledWith('a1b2')
+    await invoke('tasks:create', 'a1b2', 'list', { title: 'Task', completed: false }, 'parent')
+    expect(mocks.taskService.create).toHaveBeenCalledWith('a1b2', 'list', { title: 'Task', completed: false }, 'parent', undefined)
+    await invoke('tasks:update', 'task', { completed: true })
+    await invoke('tasks:resolve', 'operation', { action: 'discard' })
+    expect(mocks.taskService.update).toHaveBeenCalledWith('task', { completed: true }, undefined)
+    expect(mocks.taskService.resolve).toHaveBeenCalledWith('operation', { action: 'discard' })
+    await invoke('tasks:list:create', 'a1b2', 'New list')
+    await invoke('tasks:list:rename', 'list', 'Renamed')
+    await invoke('tasks:list:delete', 'list')
+    await invoke('tasks:list:resolve', 'list-operation', { action: 'discard' })
+    expect(mocks.taskService.createList).toHaveBeenCalledWith('a1b2', 'New list')
+    expect(mocks.taskService.renameList).toHaveBeenCalledWith('list', 'Renamed')
+    expect(mocks.taskService.deleteList).toHaveBeenCalledWith('list')
+    expect(mocks.taskService.resolveList).toHaveBeenCalledWith('list-operation', { action: 'discard' })
+    expect(() => invoke('tasks:sync', null)).toThrow('Invalid task identity')
+    expect(() => invoke('tasks:delete', '')).toThrow('Invalid task identity')
+    expect(() => invoke('tasks:move', 'task', {})).toThrow('Invalid task identity')
+    expect(() => invoke('mail:network', 'online')).toThrow('Invalid network state')
+  })
+
+  it('exports and validates connected-task backups independently of local productivity data', async () => {
+    mocks.setSaveResult({ canceled: false, filePath: 'C:\\backup\\tasks.json' })
+    expect(await invoke('tasks:export')).toEqual({ savedPath: 'C:\\backup\\tasks.json' })
+    const write = mocks.fs.writeFileSync.mock.calls.find((call) => call[0] === 'C:\\backup\\tasks.json')!
+    const backup = JSON.parse(String(write[1]))
+    expect(backup).toMatchObject({ format: 'aerio-provider-tasks', schemaVersion: 1 })
+    mocks.setOpenResult({ canceled: false, filePaths: ['C:\\backup\\tasks.json'] })
+    mocks.setStatResult({ size: 100, isFile: () => true })
+    mocks.setReadResult(JSON.stringify(backup))
+    expect(await invoke('tasks:import')).toMatchObject({ lists: [], tasks: [], accounts: [] })
+    expect(mocks.taskService.restoreBackup).toHaveBeenCalledWith(backup)
+    mocks.setReadResult(JSON.stringify({ ...backup, accessToken: 'forbidden-field' }))
+    await expect(invoke('tasks:import')).rejects.toThrow('invalid or unsupported')
+    mocks.setReadResult('{bad json')
+    await expect(invoke('tasks:import')).rejects.toThrow('not a readable')
+    mocks.setStatResult({ size: 151 * 1024 * 1024, isFile: () => true })
+    await expect(invoke('tasks:import')).rejects.toThrow('smaller than 150 MB')
+    mocks.setSaveResult({ canceled: true }); mocks.setOpenResult({ canceled: true, filePaths: [] })
+    expect(await invoke('tasks:export')).toEqual({})
+    expect(await invoke('tasks:import')).toBeUndefined()
+    mocks.setStatResult({ size: 12, isFile: () => true }); mocks.setReadResult(new Error('missing'))
   })
 
   it('validates and saves preferences and local productivity data', async () => {
@@ -266,7 +354,15 @@ describe.sequential('Electron main process', () => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
     for (let attempt = 0; attempt < 5; attempt += 1) expect(() => invoke('app-lock:unlock', 'wrong passphrase')).toThrow(/incorrect/)
     expect(() => invoke('app-lock:unlock', 'correct horse battery staple')).toThrow(/Too many attempts/)
-    clock.mockReturnValue(1_030_001)
+    expect(() => invoke('app-lock:disable', 'correct horse battery staple')).toThrow(/Too many attempts/)
+    clock.mockReturnValue(1_029_999)
+    expect(() => invoke('app-lock:unlock', 'correct horse battery staple')).toThrow(/1 seconds/)
+    expect(invoke('app-lock:status')).toEqual({ enabled: true, locked: true })
+    clock.mockReturnValue(1_030_000)
+    expect(invoke('app-lock:unlock', 'correct horse battery staple')).toEqual({ enabled: true, locked: false })
+    // Successful authentication clears the previous failed-attempt count.
+    invoke('app-lock:lock')
+    for (let attempt = 0; attempt < 4; attempt += 1) expect(() => invoke('app-lock:unlock', 'wrong passphrase')).toThrow(/incorrect/)
     expect(invoke('app-lock:unlock', 'correct horse battery staple')).toEqual({ enabled: true, locked: false })
     clock.mockRestore()
     expect(() => invoke('app-lock:disable', 'wrong passphrase')).toThrow(/incorrect/)
@@ -390,7 +486,7 @@ describe.sequential('Electron main process', () => {
   })
 
   it('handles attachments, profile images, credential imports, and diagnostic exports', async () => {
-    mocks.setOpenResult({ canceled: false, filePaths: ['C:\\folder\\report.pdf'] })
+    mocks.setOpenResult({ canceled: false, filePaths: [join(mocks.app.getPath(), 'folder', 'report.pdf')] })
     await expect(invoke('files:choose')).resolves.toEqual([expect.objectContaining({ name: 'report.pdf', size: 12, mime: 'pdf' })])
     await expect(invoke('profile:image:choose')).resolves.toBe('data:image/png;base64,AA==')
     await expect(invoke('gmail:credentials:import')).resolves.toEqual({ configured: true })
@@ -407,7 +503,8 @@ describe.sequential('Electron main process', () => {
     mocks.setStatResult({ size: 12, isFile: () => true })
     const attachments = await invoke('productivity:note-attachments-choose')
     expect(attachments).toEqual([expect.objectContaining({ name: 'brief.pdf', size: 12, mime: 'pdf' })])
-    expect(attachments[0].path).toMatch(/^C:\\aerio-test\\note-attachments\\.+\.pdf$/)
+    expect(dirname(attachments[0].path)).toBe(resolve(mocks.app.getPath(), 'note-attachments'))
+    expect(basename(attachments[0].path)).toMatch(/^.+\.pdf$/)
     expect(mocks.fs.copyFileSync).toHaveBeenCalledWith('C:/folder/brief.pdf', attachments[0].path)
 
     mocks.setExistsResult(true)
@@ -464,8 +561,67 @@ describe.sequential('Electron main process', () => {
     mocks.setSaveResult({ canceled: true })
   })
 
+  it('rejects malformed backup identities and attachment metadata before writing files or replacing local data', async () => {
+    const attachment = { id: 'file', name: 'brief.txt', size: 5, mime: 'txt', path: 'old-computer/brief.txt' }
+    const note = { id: 'note', folder: 'Notes', title: 'Note', content: 'Body', tags: [], pinned: false, archived: false, updatedAt: '2026-10-01T09:00:00Z', attachments: [attachment] }
+    const task = { id: 'task', listId: 'Today', title: 'Task', priority: 'normal', completed: false, subtasks: [] }
+    const contact = { id: 'contact', name: 'Ada', email: 'ada@example.test', group: 'Personal', favorite: false, color: '#4d8f78', source: 'local' }
+    const backup = { format: 'aerio-local-data', schemaVersion: 2, exportedAt: '2026-10-01T09:00:00Z', data: { tasks: [task], notes: [note], contacts: [contact] }, attachments: [{ id: 'file', name: 'brief.txt', size: 5, mime: 'txt', dataBase64: 'aGVsbG8=' }] }
+    const invalid = [
+      { ...backup, exportedAt: 'not a date' },
+      { ...backup, data: { ...backup.data, tasks: [task, task] } },
+      { ...backup, data: { ...backup.data, notes: [note, note] } },
+      { ...backup, data: { ...backup.data, contacts: [contact, contact] } },
+      { ...backup, data: { ...backup.data, notes: [{ ...note, attachments: [attachment, attachment] }] } },
+      { ...backup, attachments: [] },
+      { ...backup, attachments: [{ ...backup.attachments[0], name: 'different.txt' }] },
+      { ...backup, attachments: [{ ...backup.attachments[0], size: 4 }] },
+      { ...backup, attachments: [{ ...backup.attachments[0], mime: 'exe' }] },
+      { ...backup, attachments: [...backup.attachments, { ...backup.attachments[0], id: 'unreferenced' }] },
+      { ...backup, attachments: [...backup.attachments, backup.attachments[0]] },
+      { ...backup, attachments: [{ ...backup.attachments[0], dataBase64: 'invalid!' }] }
+    ]
+    mocks.setOpenResult({ canceled: false, filePaths: ['C:/invalid-backup.json'] })
+    mocks.setStatResult({ size: 2048, isFile: () => true })
+    try {
+      for (const candidate of invalid) {
+        mocks.fs.writeFileSync.mockClear(); mocks.store.saveLocal.mockClear()
+        mocks.setReadResult(JSON.stringify(candidate))
+        await expect(invoke('productivity:local-import')).rejects.toThrow(/invalid|unsupported/)
+        expect(mocks.fs.writeFileSync).not.toHaveBeenCalled()
+        expect(mocks.store.saveLocal).not.toHaveBeenCalled()
+      }
+    } finally { mocks.setOpenResult({ canceled: true, filePaths: [] }) }
+  })
+
+  it('refuses to export conflicting shared attachment identities instead of silently dropping a file', async () => {
+    const attachment = { id: 'shared', name: 'brief.txt', size: 5, mime: 'txt', path: join(mocks.app.getPath(), 'note-attachments', 'brief.txt') }
+    const note = { id: 'one', folder: 'Notes', title: 'Note', content: '', tags: [], pinned: false, archived: false, updatedAt: '2026-10-01T09:00:00Z', attachments: [attachment] }
+    mocks.store.localSnapshot.mockReturnValueOnce({ tasks: [], contacts: [], notes: [note, { ...note, id: 'two', attachments: [{ ...attachment, path: join(mocks.app.getPath(), 'note-attachments', 'other.txt') }] }] } as any)
+    mocks.setExistsResult(true); mocks.setReadResult(Buffer.from('hello')); mocks.setSaveResult({ canceled: false, filePath: 'C:/backup.json' })
+    mocks.fs.writeFileSync.mockClear()
+    try {
+      await expect(invoke('productivity:local-export')).rejects.toThrow(/conflicting attachment references/)
+      expect(mocks.fs.writeFileSync).not.toHaveBeenCalled()
+    } finally { mocks.setExistsResult(false); mocks.setSaveResult({ canceled: true }) }
+  })
+
+  it('removes a partially written restored attachment when file creation fails', async () => {
+    const attachment = { id: 'file', name: 'brief.txt', size: 5, mime: 'txt', path: 'old/brief.txt' }
+    const backup = { format: 'aerio-local-data', schemaVersion: 2, exportedAt: '2026-10-01T09:00:00Z', data: { tasks: [], contacts: [], notes: [{ id: 'note', folder: 'Notes', title: 'Note', content: '', tags: [], pinned: false, archived: false, updatedAt: '2026-10-01T09:00:00Z', attachments: [attachment] }] }, attachments: [{ ...attachment, path: undefined, dataBase64: 'aGVsbG8=' }] }
+    mocks.setOpenResult({ canceled: false, filePaths: ['C:/backup.json'] })
+    mocks.setStatResult({ size: 2048, isFile: () => true }); mocks.setReadResult(JSON.stringify(backup)); mocks.setExistsResult(true)
+    mocks.fs.writeFileSync.mockClear(); mocks.fs.unlinkSync.mockClear(); mocks.store.saveLocal.mockClear()
+    mocks.fs.writeFileSync.mockImplementationOnce(() => { throw new Error('disk full') })
+    try {
+      await expect(invoke('productivity:local-import')).rejects.toThrow('disk full')
+      expect(mocks.fs.unlinkSync).toHaveBeenCalledWith(mocks.fs.writeFileSync.mock.calls[0][0])
+      expect(mocks.store.saveLocal).not.toHaveBeenCalled()
+    } finally { mocks.setExistsResult(false); mocks.setOpenResult({ canceled: true, filePaths: [] }) }
+  })
+
   it('embeds managed note attachments in backups and materializes them on restore', async () => {
-    const attachment = { id: 'attachment-1', name: 'brief.txt', size: 5, mime: 'txt', path: 'C:/aerio-test/note-attachments/stored.txt' }
+    const attachment = { id: 'attachment-1', name: 'brief.txt', size: 5, mime: 'txt', path: join(mocks.app.getPath(), 'note-attachments', 'stored.txt') }
     const snapshot = {
       tasks: [], contacts: [],
       notes: [{ id: 'note', folder: 'Notes', title: 'Note', content: 'Body', tags: [], pinned: false, archived: false, updatedAt: '2026-08-08T10:00:00Z', attachments: [attachment] }]
@@ -484,7 +640,8 @@ describe.sequential('Electron main process', () => {
     mocks.setReadResult(JSON.stringify(exported))
     const restored = await invoke('productivity:local-import')
     expect(restored.notes[0].attachments[0]).toMatchObject({ id: 'attachment-1', name: 'brief.txt', size: 5 })
-    expect(restored.notes[0].attachments[0].path).toMatch(/^C:\\aerio-test\\note-attachments\\.+\.txt$/)
+    expect(dirname(restored.notes[0].attachments[0].path)).toBe(resolve(mocks.app.getPath(), 'note-attachments'))
+    expect(basename(restored.notes[0].attachments[0].path)).toMatch(/^.+\.txt$/)
     expect(mocks.fs.writeFileSync).toHaveBeenCalledWith(restored.notes[0].attachments[0].path, Buffer.from('hello'), { mode: 0o600 })
     expect(mocks.store.saveLocal).toHaveBeenCalledWith(restored)
 
@@ -840,6 +997,120 @@ describe.sequential('Electron main process', () => {
     expect(mocks.diagnosticLogger.log).toHaveBeenCalled()
   })
 
+  it('registers native sign-in startup only for packaged applications', () => {
+    const previous = invoke('preferences:load')
+    const save = (launchAtLogin: boolean) => invoke('preferences:save', { ...previous, settings: { ...previous.settings, launchAtLogin } })
+    mocks.app.setLoginItemSettings.mockClear()
+    mocks.setLinuxLoginItem.mockClear()
+    save(true)
+    expect(mocks.app.setLoginItemSettings).not.toHaveBeenCalled()
+    expect(mocks.setLinuxLoginItem).not.toHaveBeenCalled()
+    try {
+      mocks.app.isPackaged = true
+      save(true)
+      save(false)
+      if (process.platform === 'win32') {
+        expect(mocks.app.setLoginItemSettings.mock.calls).toEqual([
+          [{ openAtLogin: true, args: ['--aerio-login'] }],
+          [{ openAtLogin: false, args: ['--aerio-login'] }]
+        ])
+      } else if (process.platform === 'darwin') expect(mocks.app.setLoginItemSettings.mock.calls).toEqual([[{ openAtLogin: true }], [{ openAtLogin: false }]])
+      else expect(mocks.app.setLoginItemSettings).not.toHaveBeenCalled()
+      if (process.platform === 'linux') {
+        expect(mocks.setLinuxLoginItem.mock.calls.map(([enabled]) => enabled)).toEqual([true, false])
+        mocks.setLinuxLoginItem.mockImplementationOnce(() => { throw new Error('Startup registration failed') })
+        expect(() => save(true)).toThrow('Startup registration failed')
+        expect(invoke('preferences:load').settings.launchAtLogin).toBe(false)
+      } else expect(mocks.setLinuxLoginItem).not.toHaveBeenCalled()
+    } finally {
+      mocks.app.isPackaged = false
+      invoke('preferences:save', previous)
+    }
+  })
+
+  it('routes notifications to the correct conversation and respects preferences, platform support, and app lock', () => {
+    const previous = invoke('preferences:load')
+    const setEnabled = (notifications: boolean) => invoke('preferences:save', { ...previous, settings: { ...previous.settings, notifications } })
+    const emit = (payload: any) => mocks.emitWorker({ type: 'new-mail', payload })
+    const payload = { accountId: 'a1b2', threadId: 'notification-thread', count: 1, sender: 'Ada', subject: 'Notification fixture' }
+    try {
+      setEnabled(false)
+      const before = mocks.notifications.length
+      emit(payload)
+      expect(mocks.notifications).toHaveLength(before)
+      setEnabled(true)
+      mocks.Notification.isSupported.mockReturnValue(false)
+      emit(payload)
+      expect(mocks.notifications).toHaveLength(before)
+      mocks.Notification.isSupported.mockReturnValue(true)
+      emit(payload)
+      const notification = mocks.notifications.at(-1)
+      expect(notification.options).toMatchObject({ title: 'Ada', body: 'Notification fixture' })
+      expect(notification.show).toHaveBeenCalledOnce()
+      const main = mocks.windows.filter((window) => window.options.title === 'Aerio').at(-1)
+      main.minimized = true
+      notification.handlers.get('click')()
+      expect(main.restore).toHaveBeenCalled()
+      expect(main.show).toHaveBeenCalled()
+      expect(main.focus).toHaveBeenCalled()
+      expect(mocks.windows.at(-1).loadFile).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ query: expect.objectContaining({ accountId: 'a1b2', threadId: 'notification-thread' }) }))
+      const windows = mocks.windows.length
+      notification.handlers.get('click')()
+      expect(mocks.windows).toHaveLength(windows)
+      emit({ accountId: 'a1b2', count: 3 })
+      expect(mocks.notifications.at(-1).options).toMatchObject({ title: '3 new messages', body: 'Open Aerio to view your inbox' })
+      mocks.notifications.at(-1).handlers.get('click')()
+      expect(mocks.windows).toHaveLength(windows)
+      invoke('app-lock:enable', 'notification lock fixture')
+      invoke('app-lock:lock')
+      notification.handlers.get('click')()
+      expect(invoke('app-lock:status')).toEqual({ enabled: true, locked: true })
+      expect(mocks.windows).toHaveLength(windows)
+      invoke('app-lock:disable', 'notification lock fixture')
+    } finally {
+      mocks.Notification.isSupported.mockReturnValue(true)
+      invoke('preferences:save', previous)
+    }
+  })
+
+  it('opens and composes from the tray without bypassing the app lock', () => {
+    const main = mocks.windows.filter((window) => window.options.title === 'Aerio').at(-1)
+    const tray = mocks.trays[0]
+    const menu = tray.setContextMenu.mock.calls[0][0]
+    main.visible = false
+    main.minimized = true
+    tray.handlers.get('double-click')()
+    expect(main.visible).toBe(true)
+    expect(main.minimized).toBe(false)
+    main.webContents.send.mockClear()
+    menu.find((item: any) => item.label === 'Compose message').click()
+    expect(main.webContents.send).toHaveBeenCalledWith('command:compose')
+    invoke('app-lock:enable', 'tray lock fixture')
+    invoke('app-lock:lock')
+    main.webContents.send.mockClear()
+    menu.find((item: any) => item.label === 'Compose message').click()
+    expect(main.webContents.send).not.toHaveBeenCalledWith('command:compose')
+    expect(invoke('app-lock:status').locked).toBe(true)
+    invoke('app-lock:disable', 'tray lock fixture')
+    main.handlers.get('ready-to-show')?.()
+    expect(main.minimize).not.toHaveBeenCalled()
+  })
+
+  it('uses background polling when hidden/minimized/unfocused and resumes promptly on focus', () => {
+    const main = mocks.windows.filter((window) => window.options.title === 'Aerio').at(-1)
+    for (const state of [
+      { visible: true, focused: true, minimized: false, event: 'focus', intervalMs: 15_000, immediate: true },
+      { visible: false, focused: true, minimized: false, event: 'hide', intervalMs: 60_000, immediate: false },
+      { visible: true, focused: false, minimized: false, event: 'blur', intervalMs: 60_000, immediate: false },
+      { visible: true, focused: true, minimized: true, event: 'minimize', intervalMs: 60_000, immediate: false },
+      { visible: true, focused: true, minimized: false, event: 'restore', intervalMs: 15_000, immediate: true }
+    ]) {
+      Object.assign(main, { visible: state.visible, focused: state.focused, minimized: state.minimized })
+      main.handlers.get(state.event)()
+      expect(mocks.worker.request).toHaveBeenLastCalledWith({ type: 'polling', payload: { intervalMs: state.intervalMs, immediate: state.immediate } })
+    }
+  })
+
   it('covers renderer fallbacks, optional IPC results, and ownerless dialogs', async () => {
     const activeMain = mocks.windows.filter((window) => window.options.title === 'Aerio').at(-1)
     const openHandler = activeMain.webContents.handlers.get('window-open')!
@@ -885,8 +1156,36 @@ describe.sequential('Electron main process', () => {
     expect(mocks.windows.filter((window) => window.options.title === 'Aerio').at(-1).loadURL).toHaveBeenCalledWith('http://localhost:5173/')
     delete process.env.ELECTRON_RENDERER_URL
     invoke('preferences:save', { schemaVersion: 1, settings: { theme: 'system', density: 'comfortable', closeToTray: false, notifications: true, startModule: 'mail' } })
+    mocks.app.quit.mockClear()
     mocks.appHandlers.get('window-all-closed')?.()
-    expect(mocks.app.quit).toHaveBeenCalled()
+    if (process.platform === 'darwin') expect(mocks.app.quit).not.toHaveBeenCalled()
+    else expect(mocks.app.quit).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a taskbar window and locks when the tray cannot be used', async () => {
+    const previous = invoke('preferences:load')
+    const main = mocks.windows.filter((window) => window.options.title === 'Aerio').at(-1)
+    const tray = mocks.trays[0]
+    tray.isDestroyed.mockReturnValue(true)
+    main.hide.mockClear()
+    main.minimize.mockClear()
+    invoke('preferences:save', { ...previous, settings: { ...previous.settings, closeToTray: true } })
+    invoke('app-lock:enable', 'background fallback fixture')
+    try {
+      const close = { preventDefault: vi.fn() }
+      main.handlers.get('close')(close)
+      await vi.waitFor(() => expect(main.minimize).toHaveBeenCalledOnce())
+      expect(close.preventDefault).toHaveBeenCalledOnce()
+      expect(main.show).toHaveBeenCalled()
+      expect(main.hide).not.toHaveBeenCalled()
+      expect(invoke('app-lock:status').locked).toBe(true)
+      invoke('app-lock:unlock', 'background fallback fixture')
+    } finally {
+      tray.isDestroyed.mockReturnValue(false)
+      invoke('app-lock:disable', 'background fallback fixture')
+      invoke('preferences:save', previous)
+      main.restore()
+    }
   })
 
   it('forwards worker events, updates polling, and releases services during shutdown', async () => {
@@ -894,6 +1193,17 @@ describe.sequential('Electron main process', () => {
     expect(mocks.windows.some((window) => window.webContents.send.mock.calls.some(([channel, value]: any[]) => channel === 'mail:event' && value.type === 'sync-progress'))).toBe(true)
     mocks.windows.at(-1).handlers.get('focus')?.()
     await vi.waitFor(() => expect(mocks.worker.request).toHaveBeenCalledWith(expect.objectContaining({ type: 'polling' })))
+    invoke('preferences:save', { schemaVersion: 1, settings: { theme: 'system', density: 'comfortable', closeToTray: true, notifications: true, startModule: 'mail' } })
+    const main = mocks.windows.filter((window) => window.options.title === 'Aerio').at(-1)
+    const close = { preventDefault: vi.fn() }
+    main.handlers.get('close')(close)
+    expect(close.preventDefault).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(main.hide).toHaveBeenCalled())
+    mocks.trays[0].setContextMenu.mock.calls[0][0].find((item: any) => item.label === 'Quit Aerio').click()
+    expect(mocks.app.quit).toHaveBeenCalled()
+    close.preventDefault.mockClear()
+    main.handlers.get('close')(close)
+    expect(close.preventDefault).not.toHaveBeenCalled()
     mocks.appHandlers.get('before-quit')?.()
     mocks.appHandlers.get('will-quit')?.()
     expect(mocks.updateManager.stop).toHaveBeenCalled()

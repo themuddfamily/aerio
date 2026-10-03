@@ -154,6 +154,7 @@ export interface AerioDesktopApi {
   appLock: AppLockControls
   updates: AppUpdateControls
   productivity: import('./productivity-types').ProductivityDesktopApi
+  tasks: import('./task-provider-types').TaskDesktopApi
   window: WindowControls
   onWindowState(callback: (maximized: boolean) => void): () => void
   onComposeCommand(callback: () => void): () => void

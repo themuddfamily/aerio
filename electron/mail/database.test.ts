@@ -423,6 +423,107 @@ describe('MailDatabase', () => {
     reopened.close()
   })
 
+  it('preserves overdue sends, Undo Send cancellation, and uncertain in-flight delivery across a restart', () => {
+    const { database, directory, path } = setup()
+    const draft = (id: string) => ({ id, accountId: 'account-1', to: ['reader@example.com'], cc: [], bcc: [], subject: id, text: 'Body', attachmentPaths: [] })
+    const overdue = new Date(Date.now() - 60_000).toISOString()
+    database.saveDraft(draft('due'), { status: 'scheduled', deliveryAt: overdue })
+    database.saveDraft(draft('undone'), { status: 'send-pending', deliveryAt: overdue })
+    database.cancelDraftDelivery('undone')
+    database.saveDraft(draft('uncertain'), { status: 'syncing' })
+    database.close()
+    const reopened = new MailDatabase(path, join(directory, 'mail'))
+    try {
+      expect(reopened.queuedDrafts().map((row) => row.id)).toEqual(['due'])
+      expect(reopened.getDraftRecord('undone')).toMatchObject({ status: 'local' })
+      expect(reopened.getDraftRecord('uncertain')).toMatchObject({ status: 'failed', error: expect.stringContaining('Review it before retrying') })
+    } finally { reopened.close() }
+  })
+
+  it('releases an overdue snooze once after restart and preserves the queued inbox restoration through another restart', () => {
+    const { database, directory, path } = setup()
+    database.addInventory('account-1', [{ id: 'message-1', threadId: 'thread-1' }])
+    database.upsertMessage(message())
+    database.applyLocalAction({ accountId: 'account-1', threadIds: ['thread-1'], action: 'archive' }, 'archive', 0)
+    database.updateOperation('archive', 'succeeded')
+    database.snoozeThreads('account-1', ['thread-1'], new Date(Date.now() - 60_000).toISOString())
+    database.close()
+    const reopened = new MailDatabase(path, join(directory, 'mail'))
+    let restoreId: string | undefined
+    try {
+      const released = reopened.releaseDueSnoozes()
+      expect(released.map((snooze) => snooze.threadId)).toEqual(['thread-1'])
+      restoreId = released[0].operation.id
+      expect(reopened.releaseDueSnoozes()).toEqual([])
+    } finally { reopened.close() }
+    const restored = new MailDatabase(path, join(directory, 'mail'))
+    try {
+      expect(restored.releaseDueSnoozes()).toEqual([])
+      expect(restored.listThreads({ folder: 'inbox' }).items.map((thread) => thread.id)).toEqual(['thread-1'])
+      expect(restored.dueOperations().map((operation) => operation.id)).toEqual([restoreId])
+    } finally { restored.close() }
+  })
+
+  it('retains a due snooze and its archived labels when durable wake-up creation fails, then retries once', () => {
+    const { database } = setup()
+    const sqlite = (database as unknown as { db: DatabaseSync }).db
+    try {
+      database.addInventory('account-1', [{ id: 'message-1', threadId: 'thread-1' }])
+      database.upsertMessage(message({ labelIds: ['UNREAD'] }))
+      database.snoozeThreads('account-1', ['thread-1'], new Date(Date.now() - 60_000).toISOString())
+      sqlite.exec("CREATE TRIGGER fail_wake BEFORE INSERT ON gmail_operations BEGIN SELECT RAISE(ABORT, 'disk write failure'); END")
+      expect(database.releaseDueSnoozes()).toEqual([])
+      expect(sqlite.prepare('SELECT COUNT(*) AS count FROM mail_snoozes').get()?.count).toBe(1)
+      expect(database.listThreads({ folder: 'inbox' }).total).toBe(0)
+      expect(database.dueOperations()).toEqual([])
+      sqlite.exec('DROP TRIGGER fail_wake')
+      expect(database.releaseDueSnoozes()).toHaveLength(1)
+      expect(database.releaseDueSnoozes()).toEqual([])
+      expect(database.listThreads({ folder: 'inbox' }).total).toBe(1)
+      expect(database.dueOperations()).toHaveLength(1)
+    } finally { database.close() }
+  })
+
+  it('retains rules and recovers their interrupted provider operations without losing rollback state', () => {
+    const { database, directory, path } = setup()
+    database.addInventory('account-1', [{ id: 'message-1', threadId: 'thread-1' }])
+    database.upsertMessage(message())
+    const rule = database.saveRule({ accountId: 'account-1', name: 'Launch updates', enabled: true, match: 'all', conditions: [{ field: 'subject', operator: 'contains', value: 'launch' }], actions: [{ action: 'archive' }] })
+    database.applyLocalAction({ accountId: 'account-1', threadIds: ['thread-1'], action: 'archive' }, 'rule-operation', 0)
+    database.updateOperation('rule-operation', 'running')
+    database.close()
+    const reopened = new MailDatabase(path, join(directory, 'mail'))
+    try {
+      expect(reopened.matchingRulesForMessage(message()).map((matched) => matched.id)).toEqual([rule.id])
+      expect(reopened.dueOperations()).toEqual([expect.objectContaining({ id: 'rule-operation', status: 'queued', attempts: 1 })])
+      expect(reopened.listThreads({ folder: 'inbox' }).total).toBe(0)
+      expect(reopened.restoreOperationSnapshot('rule-operation', 'failed', 'Provider rejected archive')).toBe(true)
+      expect(reopened.listThreads({ folder: 'inbox' }).items[0]).toMatchObject({ unread: true })
+      expect(reopened.dueOperations()).toEqual([])
+    } finally { reopened.close() }
+  })
+
+  it('rechecks delivery eligibility and current contents after cancellation, rescheduling, editing, or deletion', () => {
+    const { database } = setup()
+    const input = { id: 'due-draft', accountId: 'account-1', to: ['reader@example.com'], cc: [], bcc: [], subject: 'Original', text: 'Body', attachmentPaths: [] }
+    const past = new Date(Date.now() - 60_000).toISOString()
+    const future = new Date(Date.now() + 60_000).toISOString()
+    try {
+      database.saveDraft(input, { status: 'scheduled', deliveryAt: past })
+      expect(database.getDueDraft(input.id)?.subject).toBe('Original')
+      database.cancelDraftDelivery(input.id)
+      expect(database.getDueDraft(input.id)).toBeUndefined()
+      database.saveDraft(input, { status: 'scheduled', deliveryAt: future })
+      expect(database.getDueDraft(input.id)).toBeUndefined()
+      database.saveDraft({ ...input, subject: 'Latest edit' }, { status: 'scheduled', deliveryAt: past })
+      expect(database.getDueDraft(input.id)?.subject).toBe('Latest edit')
+      database.updateDraftResult(input.id, { id: input.id, status: 'sent', updatedAt: new Date().toISOString() })
+      expect(database.getDueDraft(input.id)).toBeUndefined()
+      database.deleteDraftRecord(input.id)
+      expect(database.getDueDraft(input.id)).toBeUndefined()
+    } finally { database.close() }
+  })
+
   it('orders due deliveries by their intended send time', () => {
     const { database } = setup()
     const input = (id: string) => ({ id, accountId: 'account-1', to: ['reader@example.com'], cc: [], bcc: [], subject: id, text: 'Body', attachmentPaths: [] })

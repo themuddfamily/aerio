@@ -70,4 +70,10 @@ export class MailWorkerClient {
   async close() {
     try { await this.request({ type: 'shutdown' }) } finally { await this.worker.terminate() }
   }
+
+  async terminate() {
+    for (const request of this.pending.values()) request.reject(new Error('The mail worker was closed'))
+    this.pending.clear()
+    await this.worker.terminate()
+  }
 }

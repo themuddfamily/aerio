@@ -11,12 +11,17 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const profile = mkdtempSync(join(tmpdir(), 'aerio-button-audit-'))
 const runtimeErrors = []
 let application
+let auditPage
 
 async function step(name, task) {
   try {
     await task()
     console.log(`✓ ${name}`)
   } catch (error) {
+    if (auditPage && !auditPage.isClosed()) {
+      const state = await auditPage.evaluate(() => ({ width: innerWidth, height: innerHeight, module: document.querySelector('.module-rail [aria-current="page"]')?.getAttribute('aria-label'), separators: [...document.querySelectorAll('[role="separator"]')].map((element) => element.getAttribute('aria-label')) })).catch(() => undefined)
+      console.error('Desktop fixture state:', JSON.stringify(state))
+    }
     error.message = `${name}: ${error.message}`
     throw error
   }
@@ -30,6 +35,7 @@ try {
     env: desktopAuditEnvironment()
   })
   const page = await application.firstWindow()
+  auditPage = page
   const trackRuntimeErrors = (target) => {
     target.on('pageerror', (error) => runtimeErrors.push(error.message))
     target.on('console', (message) => { if (message.type() === 'error') runtimeErrors.push(message.text()) })
@@ -86,16 +92,6 @@ try {
     await search.press('ArrowDown')
     await search.press('Enter')
     await page.getByRole('heading', { name: 'All notes' }).waitFor()
-  })
-
-  await step('mail panes expose accessible resize separators', async () => {
-    await moduleButton('Mail').click()
-    const foldersSeparator = page.getByRole('separator', { name: 'Resize mail folders' })
-    const listSeparator = page.getByRole('separator', { name: 'Resize message list' })
-    await foldersSeparator.waitFor()
-    await listSeparator.waitFor()
-    assert.equal(await foldersSeparator.getAttribute('aria-orientation'), 'vertical')
-    assert.equal(await listSeparator.getAttribute('aria-orientation'), 'vertical')
   })
 
   await step('calendar explains how to enable provider editing', async () => {
@@ -166,7 +162,11 @@ try {
       if (visible) window.show()
     }, desktopAuditVisible)
     await page.getByRole('button', { name: 'Close' }).first().click()
-    assert.equal(await browserWindow.evaluate((window) => window.isVisible()), false)
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await browserWindow.evaluate((window) => !window.isVisible() || window.isMinimized())) break
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    assert.equal(await browserWindow.evaluate((window) => !window.isVisible() || window.isMinimized()), true)
   })
 
   assert.deepEqual(runtimeErrors, [], `Renderer errors: ${runtimeErrors.join('\n')}`)

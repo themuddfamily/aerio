@@ -3,10 +3,13 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
-import { arch, platform, release, tmpdir } from 'node:os'
+import { arch, homedir, platform, release, tmpdir } from 'node:os'
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createDefaultPreferences, defaultSettings } from '../src/preferences'
+import { setLinuxLoginItem } from './linux-login'
+import { linuxTrayHostAvailable } from './tray-availability'
+import { applicationMenuTemplate, registerMacLoginItem } from './mac-integration'
 import type { AppPreferences, Attachment, CalendarEvent, Contact, MessageWindowRequest, ModuleId, Settings } from '../src/types'
 import type {
   ApplyMailActionInput,
@@ -44,6 +47,12 @@ import { MailWorkerClient } from './mail/worker-client'
 import { DiagnosticLogger, type DiagnosticRecord } from './diagnostics'
 import { UpdateManager } from './update-manager'
 import { ProductivityStore } from './productivity/store'
+import { TaskStore } from './productivity/task-store'
+import { TaskService } from './productivity/task-service'
+import { GoogleTasksConnector } from './productivity/google-tasks-connector'
+import { MicrosoftTasksConnector } from './productivity/microsoft-tasks-connector'
+import type { ProviderTaskInput, TaskFieldPatch, TaskLocalMetadata, TaskResolution } from '../src/task-provider-types'
+import { parseTaskBackup } from './productivity/task-backup'
 import { MessageLocalStore } from './mail/message-local-store'
 import { registerMessageTools } from './mail/message-tools'
 import { GoogleProductivityConnector } from './productivity/google-connector'
@@ -74,8 +83,11 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 let mainWindow: BrowserWindow | null = null
+let initialWindow = true
 const messageWindows = new Map<string, BrowserWindow>()
 let tray: Tray | null = null
+let trayMonitor: NodeJS.Timeout | undefined
+let closeGeneration = 0
 let database: DatabaseSync | null = null
 let applicationLocked = false
 let failedUnlockAttempts = 0
@@ -89,6 +101,9 @@ let lastBoundsWrite: NodeJS.Timeout | undefined
 let diagnostics: DiagnosticLogger | null = null
 let updates: UpdateManager | null = null
 let productivityStore: ProductivityStore | null = null
+let taskService: TaskService | null = null
+let taskPolling: NodeJS.Timeout | undefined
+let taskNetworkOnline = true
 let messageLocalStore: MessageLocalStore | null = null
 let readyToOpenWindows = false
 const senderFaviconCache = new Map<string, { image: Buffer | null; expiresAt: number }>()
@@ -291,16 +306,18 @@ function validLocalModules(value: unknown): value is LocalModuleSnapshot {
   const input = value as Partial<LocalModuleSnapshot>
   if (!Array.isArray(input.tasks) || !Array.isArray(input.notes) || input.tasks.length > 100_000 || input.notes.length > 100_000) return false
   if (input.contacts !== undefined && (!Array.isArray(input.contacts) || input.contacts.length > 100_000)) return false
+  const uniqueIds = (records: { id: string }[]) => new Set(records.map((record) => record?.id)).size === records.length
+  if (!uniqueIds(input.tasks) || !uniqueIds(input.notes) || !uniqueIds(input.contacts ?? [])) return false
   const text = (candidate: unknown, max: number, required = false) => typeof candidate === 'string' && candidate.length <= max && (!required || Boolean(candidate.trim()))
   return input.tasks.every((task) => task && text(task.id, 300, true) && text(task.listId, 300, true) && text(task.title, 10_000, true) &&
       (task.notes === undefined || text(task.notes, 1_000_000)) && (task.due === undefined || (text(task.due, 100) && Number.isFinite(Date.parse(task.due)))) &&
       ['low', 'normal', 'high'].includes(task.priority) && typeof task.completed === 'boolean' && Array.isArray(task.subtasks) && task.subtasks.length <= 10_000 &&
-      task.subtasks.every((subtask) => subtask && text(subtask.id, 300, true) && text(subtask.title, 10_000, true) && typeof subtask.completed === 'boolean') &&
+      uniqueIds(task.subtasks) && task.subtasks.every((subtask) => subtask && text(subtask.id, 300, true) && text(subtask.title, 10_000, true) && typeof subtask.completed === 'boolean') &&
       (task.recurrence === undefined || ['none', 'daily', 'weekly', 'monthly'].includes(task.recurrence))) &&
     input.notes.every((note) => note && text(note.id, 300, true) && text(note.folder, 300, true) && text(note.title, 10_000, true) && text(note.content, 10_000_000) &&
       Array.isArray(note.tags) && note.tags.length <= 1_000 && note.tags.every((tag) => text(tag, 300, true)) && typeof note.pinned === 'boolean' && typeof note.archived === 'boolean' &&
       text(note.updatedAt, 100) && Number.isFinite(Date.parse(note.updatedAt)) && (note.color === undefined || text(note.color, 100)) &&
-      (note.attachments === undefined || (Array.isArray(note.attachments) && note.attachments.length <= 50 && note.attachments.every((attachment) =>
+      (note.attachments === undefined || (Array.isArray(note.attachments) && note.attachments.length <= 50 && uniqueIds(note.attachments) && note.attachments.every((attachment) =>
         attachment && text(attachment.id, 300, true) && text(attachment.name, 1_000, true) && Number.isSafeInteger(attachment.size) && attachment.size >= 0 && attachment.size <= NOTE_ATTACHMENT_MAX_BYTES &&
         text(attachment.path, 32_767, true) && (attachment.mime === undefined || text(attachment.mime, 300)))))) &&
     (input.contacts ?? []).every((contact) => contact && text(contact.id, 300, true) && text(contact.name, 10_000, true) && text(contact.email, 10_000) &&
@@ -327,7 +344,7 @@ interface LocalDataBackup {
 function localDataBackupFromUnknown(value: unknown): LocalDataBackup | undefined {
   if (!value || typeof value !== 'object') return
   const backup = value as Partial<LocalDataBackup>
-  if (backup.format !== 'aerio-local-data' || (backup.schemaVersion !== 1 && backup.schemaVersion !== 2) || typeof backup.exportedAt !== 'string' || !validLocalModules(backup.data)) return
+  if (backup.format !== 'aerio-local-data' || (backup.schemaVersion !== 1 && backup.schemaVersion !== 2) || typeof backup.exportedAt !== 'string' || !Number.isFinite(Date.parse(backup.exportedAt)) || !validLocalModules(backup.data)) return
   if (backup.schemaVersion === 1 && backup.data.notes.some((note) => (note.attachments?.length ?? 0) > 0)) return
   if (backup.schemaVersion === 2 && (!Array.isArray(backup.attachments) || backup.attachments.length > 5_000 || !backup.attachments.every((attachment) =>
     attachment && typeof attachment.id === 'string' && Boolean(attachment.id.trim()) && attachment.id.length <= 300 &&
@@ -337,20 +354,36 @@ function localDataBackupFromUnknown(value: unknown): LocalDataBackup | undefined
     typeof attachment.dataBase64 === 'string' && attachment.dataBase64.length <= Math.ceil(NOTE_ATTACHMENT_MAX_BYTES / 3) * 4 + 4 &&
     /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(attachment.dataBase64)))) return
   if (backup.schemaVersion === 2 && new Set(backup.attachments!.map((attachment) => attachment.id)).size !== backup.attachments!.length) return
+  if (backup.schemaVersion === 2) {
+    const archived = new Map(backup.attachments!.map((attachment) => [attachment.id, attachment]))
+    const referenced = new Set<string>()
+    for (const attachment of backup.data.notes.flatMap((note) => note.attachments ?? [])) {
+      const stored = archived.get(attachment.id)
+      if (!stored || stored.name !== attachment.name || stored.size !== attachment.size || stored.mime !== attachment.mime) return
+      referenced.add(attachment.id)
+    }
+    if (referenced.size !== archived.size) return
+  }
   return backup as LocalDataBackup
 }
 
 function createLocalDataBackup(snapshot: LocalModuleSnapshot): LocalDataBackup {
   const archived = new Map<string, ArchivedNoteAttachment>()
+  const sources = new Map<string, string>()
   let total = 0
   for (const attachment of snapshot.notes.flatMap((note) => note.attachments ?? [])) {
-    if (archived.has(attachment.id)) continue
+    const previous = archived.get(attachment.id)
+    if (previous) {
+      if (previous.name !== attachment.name || previous.size !== attachment.size || previous.mime !== attachment.mime || !attachment.path || sources.get(attachment.id) !== resolve(attachment.path)) throw new Error('Notes contain conflicting attachment references; fix them before exporting')
+      continue
+    }
     if (!attachment.path || !isManagedNoteAttachmentPath(attachment.path) || !existsSync(attachment.path)) throw new Error(`The note attachment “${attachment.name}” is unavailable`)
     const bytes = Buffer.from(readFileSync(attachment.path))
     if (bytes.byteLength !== attachment.size || bytes.byteLength > NOTE_ATTACHMENT_MAX_BYTES) throw new Error(`The note attachment “${attachment.name}” changed or is too large`)
     total += bytes.byteLength
     if (total > NOTE_BACKUP_ATTACHMENT_MAX_BYTES) throw new Error('Note attachments exceed the 100 MB backup limit')
     archived.set(attachment.id, { id: attachment.id, name: attachment.name, size: bytes.byteLength, mime: attachment.mime, dataBase64: bytes.toString('base64') })
+    sources.set(attachment.id, resolve(attachment.path))
   }
   return { format: 'aerio-local-data', schemaVersion: 2, exportedAt: new Date().toISOString(), data: snapshot, attachments: [...archived.values()] }
 }
@@ -378,9 +411,9 @@ function materializeLocalDataBackup(backup: LocalDataBackup): { snapshot: LocalM
           const extension = extname(stored.name)
           path = join(noteAttachmentsDirectory(), `${crypto.randomUUID()}${extension.length <= 12 ? extension : ''}`)
           mkdirSync(noteAttachmentsDirectory(), { recursive: true })
+          createdPaths.push(path)
           writeFileSync(path, bytes, { mode: 0o600 })
           paths.set(attachment.id, path)
-          createdPaths.push(path)
         }
         return { id: stored.id, name: stored.name, size: stored.size, mime: stored.mime, path }
       })
@@ -778,6 +811,17 @@ function savePreferences(preferences: AppPreferences) {
   if (!database) throw new Error('Aerio database is not ready')
   const normalized = preferencesFromUnknown(preferences)
   if (!normalized) throw new Error('Refusing to save invalid Aerio preferences')
+  // Register before acknowledging a preference save, so an unavailable or
+  // unowned startup entry cannot leave a falsely successful checkbox behind.
+  if (app.isPackaged) {
+    if (process.platform === 'win32') app.setLoginItemSettings({ openAtLogin: Boolean(normalized.settings.launchAtLogin), args: ['--aerio-login'] })
+    else if (process.platform === 'darwin' && (normalized.settings.launchAtLogin ||
+      Boolean(normalized.settings.launchAtLogin) !== Boolean(loadPreferences().settings.launchAtLogin))) registerMacLoginItem(app, Boolean(normalized.settings.launchAtLogin))
+    else if (process.platform === 'linux' && (normalized.settings.launchAtLogin ||
+      Boolean(normalized.settings.launchAtLogin) !== Boolean(loadPreferences().settings.launchAtLogin))) setLinuxLoginItem(Boolean(normalized.settings.launchAtLogin), {
+      home: homedir(), configHome: process.env.XDG_CONFIG_HOME, executable: process.execPath, appImage: process.env.APPIMAGE
+    })
+  }
   const updatedAt = new Date().toISOString()
   database.prepare(
     `INSERT INTO app_preferences (id, schema_version, payload, updated_at)
@@ -787,7 +831,6 @@ function savePreferences(preferences: AppPreferences) {
        payload = excluded.payload,
         updated_at = excluded.updated_at`
   ).run(normalized.schemaVersion, JSON.stringify(normalized), updatedAt)
-  if (app.isPackaged && process.platform === 'win32') app.setLoginItemSettings({ openAtLogin: Boolean(normalized.settings.launchAtLogin) })
   return { savedAt: updatedAt }
 }
 
@@ -1006,6 +1049,9 @@ function createMessageWindow(input: MessageWindowRequest) {
 }
 
 function createWindow() {
+  const startMinimized = initialWindow && (process.argv.includes('--aerio-login') ||
+    (process.platform === 'darwin' && app.isPackaged && app.getLoginItemSettings().wasOpenedAtLogin))
+  initialWindow = false
   mainWindow = new BrowserWindow({
     ...loadBounds(),
     minWidth: 1020,
@@ -1024,7 +1070,10 @@ function createWindow() {
   })
 
   mainWindow.on('ready-to-show', () => {
-    if (!hideTestWindows) mainWindow?.show()
+    if (!hideTestWindows) {
+      mainWindow?.show()
+      if (startMinimized) mainWindow?.minimize()
+    }
     const capturePath = process.env.AERIO_CAPTURE_PATH
     if (capturePath) {
       setTimeout(() => {
@@ -1038,9 +1087,9 @@ function createWindow() {
   })
   mainWindow.on('resize', saveBounds)
   mainWindow.on('move', saveBounds)
-  mainWindow.on('show', () => updateMailPolling(true))
+  mainWindow.on('show', () => { stopTrayMonitor(); closeGeneration++; updateMailPolling(true) })
   mainWindow.on('focus', () => updateMailPolling(true))
-  mainWindow.on('restore', () => updateMailPolling(true))
+  mainWindow.on('restore', () => { stopTrayMonitor(); closeGeneration++; updateMailPolling(true) })
   mainWindow.on('hide', () => { updateMailPolling(); lockApplication() })
   mainWindow.on('blur', () => updateMailPolling())
   mainWindow.on('minimize', () => updateMailPolling())
@@ -1048,7 +1097,7 @@ function createWindow() {
     const closeToTray = loadPreferences().settings.closeToTray
     if (!quitting && closeToTray) {
       event.preventDefault()
-      mainWindow?.hide()
+      void closeToBackground()
     }
   })
   mainWindow.on('closed', () => { mainWindow = null })
@@ -1071,22 +1120,115 @@ function openMainWindow(compose = false) {
   if (compose && !appLockStatus().locked) mainWindow.webContents.send('command:compose')
 }
 
+function stopTrayMonitor() {
+  if (trayMonitor) clearInterval(trayMonitor)
+  trayMonitor = undefined
+}
+
+function minimizeForBackground(window: BrowserWindow) {
+  // Retain a taskbar entry so a desktop without a tray can reopen Aerio.
+  if (!hideTestWindows) window.show()
+  window.minimize()
+}
+
+async function closeToBackground() {
+  const window = mainWindow
+  const generation = ++closeGeneration
+  if (!window) return
+  lockApplication()
+  const available = tray && !tray.isDestroyed() &&
+    (process.platform !== 'linux' || await linuxTrayHostAvailable())
+  if (quitting || window.isDestroyed() || mainWindow !== window || generation !== closeGeneration) return
+  if (!available) { minimizeForBackground(window); return }
+  window.hide()
+  if (process.platform === 'linux') {
+    stopTrayMonitor()
+    let probing = false
+    trayMonitor = setInterval(() => {
+      if (probing) return
+      probing = true
+      void linuxTrayHostAvailable().then((reachable) => {
+        if (!reachable && !quitting && mainWindow === window && !window.isDestroyed() && !window.isVisible()) {
+          minimizeForBackground(window)
+        }
+      }).finally(() => { probing = false })
+    }, 3_000)
+    trayMonitor.unref()
+  }
+}
+
 function createTray() {
-  const path = iconPath()
-  const image = path ? nativeImage.createFromPath(path).resize({ width: 20, height: 20 }) : nativeImage.createEmpty()
-  tray = new Tray(image)
-  tray.setToolTip('Aerio')
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Open Aerio', click: () => openMainWindow() },
-    { type: 'separator' },
-    { label: 'Compose message', click: () => openMainWindow(true) },
-    { type: 'separator' },
-    { label: 'Quit Aerio', click: () => { quitting = true; app.quit() } }
-  ]))
-  tray.on('double-click', () => openMainWindow())
+  try {
+    const path = process.platform === 'darwin'
+      ? join(app.isPackaged ? process.resourcesPath : app.getAppPath(), 'build', 'trayTemplate.png')
+      : iconPath()
+    let image = path ? nativeImage.createFromPath(path) : nativeImage.createEmpty()
+    if (image.isEmpty()) return
+    if (process.platform === 'darwin') image.setTemplateImage(true)
+    else image = image.resize({ width: 20, height: 20 })
+    tray = new Tray(image)
+    tray.setToolTip('Aerio')
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: 'Open Aerio', click: () => openMainWindow() },
+      { type: 'separator' },
+      { label: 'Compose message', click: () => openMainWindow(true) },
+      { type: 'separator' },
+      { label: 'Quit Aerio', click: () => { quitting = true; app.quit() } }
+    ]))
+    tray.on('double-click', () => openMainWindow())
+    if (process.platform === 'linux') tray.on('click', () => openMainWindow())
+  } catch {
+    try { tray?.destroy() } catch { /* Preserve the usable window even if native cleanup fails. */ }
+    tray = null
+    diagnostic({ level: 'warn', component: 'app', event: 'tray-unavailable', message: 'Background close will retain a taskbar window.' })
+  }
 }
 
 function registerIpc() {
+  const tasks = () => {
+    if (!taskService) throw new Error('Task storage is not ready')
+    return taskService
+  }
+  const taskId = (value: unknown) => {
+    if (typeof value !== 'string' || !value || value.length > 2048) throw new Error('Invalid task identity')
+    return value
+  }
+  ipcMain.handle('tasks:snapshot', () => tasks().snapshot())
+  ipcMain.handle('tasks:list:create', (_event, accountId: unknown, title: string) => tasks().createList(taskId(accountId), title))
+  ipcMain.handle('tasks:list:rename', (_event, listId: unknown, title: string) => tasks().renameList(taskId(listId), title))
+  ipcMain.handle('tasks:list:delete', (_event, listId: unknown) => tasks().deleteList(taskId(listId)))
+  ipcMain.handle('tasks:list:resolve', (_event, id: unknown, resolution: TaskResolution) => tasks().resolveList(taskId(id), resolution))
+  ipcMain.handle('tasks:export', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    const options: Electron.SaveDialogOptions = { title: 'Back up connected tasks', defaultPath: `Aerio-connected-tasks-${new Date().toISOString().slice(0, 10)}.json`, filters: [{ name: 'Aerio connected tasks', extensions: ['json'] }] }
+    const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return {}
+    const backup = await tasks().exportBackup()
+    const contents = `${JSON.stringify(backup, null, 2)}\n`
+    if (Buffer.byteLength(contents, 'utf8') > 150 * 1024 * 1024) throw new Error('Connected-task backups must be smaller than 150 MB')
+    writeFileSync(result.filePath, contents, { encoding: 'utf8', mode: 0o600 })
+    return { savedPath: result.filePath }
+  })
+  ipcMain.handle('tasks:import', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    const options: Electron.OpenDialogOptions = { title: 'Restore connected tasks', filters: [{ name: 'Aerio connected tasks', extensions: ['json'] }], properties: ['openFile'] }
+    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
+    const path = result.filePaths[0]
+    if (result.canceled || !path) return
+    const file = statSync(path)
+    if (!file.isFile() || file.size > 150 * 1024 * 1024) throw new Error('Choose a connected-task backup smaller than 150 MB')
+    let parsed: unknown
+    try { parsed = JSON.parse(readFileSync(path, 'utf8')) } catch { throw new Error('That file is not a readable connected-task backup') }
+    return tasks().restoreBackup(parseTaskBackup(parsed))
+  })
+  ipcMain.handle('tasks:sync', (_event, id: unknown) => tasks().sync(taskId(id)))
+  ipcMain.handle('tasks:create', (_event, accountId: unknown, listId: unknown, input: ProviderTaskInput, parentId: unknown, local?: TaskLocalMetadata) => tasks().create(taskId(accountId), taskId(listId), input, parentId === undefined ? undefined : taskId(parentId), local))
+  ipcMain.handle('tasks:update', (_event, id: unknown, patch: TaskFieldPatch, local?: TaskLocalMetadata) => tasks().update(taskId(id), patch, local))
+  ipcMain.handle('tasks:delete', (_event, id: unknown) => tasks().delete(taskId(id)))
+  ipcMain.handle('tasks:move', (_event, id: unknown, parentId: unknown) => tasks().move(taskId(id), parentId === undefined ? undefined : taskId(parentId)))
+  ipcMain.handle('tasks:local', (_event, id: unknown, local: TaskLocalMetadata) => tasks().setLocal(taskId(id), local))
+  ipcMain.handle('tasks:undo', (_event, id: unknown) => tasks().undo(taskId(id)))
+  ipcMain.handle('tasks:resolve', (_event, id: unknown, resolution: TaskResolution) => tasks().resolve(taskId(id), resolution))
   messageLocalStore = new MessageLocalStore(join(app.getPath('userData'), 'message-local.sqlite'))
   registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
@@ -1295,7 +1437,18 @@ function registerIpc() {
     if (!input || typeof input.accountId !== 'string' || typeof input.displayName !== 'string' || !input.displayName.trim() || input.displayName.length > 200) throw new Error('Enter a valid sender name')
     if (!/^#[0-9a-f]{6}$/i.test(input.color)) throw new Error('Choose a valid account colour')
     if (typeof input.signature !== 'string' || input.signature.length > 20_000) throw new Error('The signature is too long')
-    return requireMailWorker().request<MailAccountSummary>({ type: 'accounts:update', payload: { ...input, displayName: input.displayName.trim() } })
+    if (typeof input.syncEnabled !== 'boolean') throw new Error('Invalid account synchronization setting')
+    return (async () => {
+      if (!input.syncEnabled) await taskService?.stopAccount(input.accountId)
+      try {
+        const account = await requireMailWorker().request<MailAccountSummary>({ type: 'accounts:update', payload: { ...input, displayName: input.displayName.trim() } })
+        if (input.syncEnabled) taskService?.resumeAccount(input.accountId)
+        return account
+      } catch (error) {
+        if (!input.syncEnabled) taskService?.resumeAccount(input.accountId)
+        throw error
+      }
+    })()
   })
   ipcMain.handle('mail:accounts:verify', (_event, accountId: string) => {
     if (typeof accountId !== 'string' || !accountId) throw new Error('Invalid account id')
@@ -1309,6 +1462,7 @@ function registerIpc() {
     else await requireVault().authorizeMicrosoft({ accountId: account.id, email: account.email })
     await requireMailWorker().request({ type: 'accounts:verify', payload: { accountId } })
     await requireMailWorker().request({ type: 'sync:start', payload: { accountId } })
+    taskService?.resumeAccount(accountId)
   })
   ipcMain.handle('mail:accounts:imap-settings', (_event, accountId: string): ImapServerSettings => {
     if (accountProviders.get(accountId) === 'gmail' || accountProviders.get(accountId) === 'microsoft') throw new Error('This OAuth account does not use IMAP server settings')
@@ -1407,10 +1561,14 @@ function registerIpc() {
     }
   })
   ipcMain.handle('mail:accounts:disconnect', async (_event, accountId: string, mode: 'archive' | 'delete') => {
+    if (typeof accountId !== 'string' || !accountId || !['archive', 'delete'].includes(mode)) throw new Error('Invalid account disconnect request')
+    await taskService?.stopAccount(accountId)
     await requireVault().remove(accountId)
     await requireMailWorker().request({ type: 'accounts:disconnect', payload: { accountId, mode } })
     requireProductivityStore().removeAccount(accountId)
     accountProviders.delete(accountId)
+    if (mode === 'delete') await taskService?.removeAccount(accountId)
+    else await taskService?.accountChanged()
   })
   ipcMain.handle('mail:labels:list', (_event, accountIds?: string[]) =>
     requireMailWorker().request<MailLabel[]>({ type: 'labels:list', payload: { accountIds } }))
@@ -1514,8 +1672,12 @@ function registerIpc() {
     diagnostic({ level: 'info', component: 'app', event: 'diagnostics-exported' })
     return { savedPath: result.filePath }
   })
-  ipcMain.handle('mail:network', (_event, online: boolean) =>
-    requireMailWorker().request({ type: 'network', payload: { online } }))
+  ipcMain.handle('mail:network', (_event, online: boolean) => {
+    if (typeof online !== 'boolean') throw new Error('Invalid network state')
+    taskNetworkOnline = online
+    if (online) void taskService?.flush().catch(() => {})
+    return requireMailWorker().request({ type: 'network', payload: { online } })
+  })
   ipcMain.handle('mail:attachment:open', async (_event, accountId: string, messageId: string, attachmentId: string, filename: string) => {
     const directory = join(tmpdir(), 'aerio-attachments')
     mkdirSync(directory, { recursive: true })
@@ -1540,14 +1702,29 @@ if (hasSingleInstanceLock) app.on('second-instance', () => {
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
   diagnostics = new DiagnosticLogger(join(app.getPath('userData'), 'logs', 'aerio.jsonl'))
   diagnostic({ level: 'info', component: 'app', event: 'startup', details: { version: app.getVersion(), packaged: app.isPackaged } })
-  Menu.setApplicationMenu(null)
+  const menu = applicationMenuTemplate(process.platform, () => openMainWindow())
+  Menu.setApplicationMenu(menu ? Menu.buildFromTemplate(menu) : null)
   await initializePreferencesDatabase()
   await initializeMail()
   productivityStore = new ProductivityStore(join(app.getPath('userData'), 'productivity.sqlite'))
+  taskService = new TaskService(new TaskStore(join(app.getPath('userData'), 'provider-tasks.sqlite')), {
+    accounts: () => requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' }),
+    access: (id, provider) => provider === 'gmail'
+      ? { read: requireVault().hasGoogleTasksAccess(id), write: requireVault().hasGoogleTasksAccess(id, true) }
+      : { read: requireVault().hasMicrosoftTasksAccess(id), write: requireVault().hasMicrosoftTasksAccess(id, true) },
+    connector: (id, provider) => provider === 'gmail'
+      ? new GoogleTasksConnector(id, () => requireVault().accessToken(id), requireVault().hasGoogleTasksAccess(id, true))
+      : new MicrosoftTasksConnector(id, () => requireVault().microsoftAccessToken(id), requireVault().hasMicrosoftTasksAccess(id, true)),
+    online: () => taskNetworkOnline && net.isOnline(),
+    changed: (snapshot) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('tasks:changed', snapshot))
+  })
+  taskPolling = setInterval(() => { void taskService?.poll().catch(() => {}) }, 60_000)
+  taskPolling.unref()
   registerIpc()
   registerRemoteImageProtocol()
   readyToOpenWindows = true
   createWindow()
+  void taskService.poll().catch(() => {})
   if (!hideTestWindows) createTray()
   updates = new UpdateManager(
     (status) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('app:update:status-changed', status)),
@@ -1569,6 +1746,9 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   quitting = true
+  stopTrayMonitor()
+  if (taskPolling) clearInterval(taskPolling)
+  void taskService?.close().catch(() => {})
   updates?.stop()
   productivityStore?.close()
   messageLocalStore?.close()
@@ -1585,5 +1765,6 @@ process.on('unhandledRejection', (error) => diagnostic({ level: 'error', compone
 process.on('uncaughtExceptionMonitor', (error) => diagnostic({ level: 'error', component: 'app', event: 'uncaught-exception', message: error.message, details: { stack: error.stack } }))
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin' && !loadPreferences().settings.closeToTray) app.quit()
+  // A tray preference cannot keep a windowless, unreachable process alive.
+  if (process.platform !== 'darwin') app.quit()
 })

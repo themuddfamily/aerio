@@ -431,6 +431,7 @@ async function syncImapAccount(accountId: string) {
     const folders = await client.listFolders(connection)
     database!.replaceLabels(accountId, labelsForImapFolders(accountId, folders))
     const previous = database!.getProviderState<ImapProviderState>(accountId, { folders: {} })
+    previous.folders ??= {}
     const next: ImapProviderState = { folders: {} }
     if (!database!.getAccountHistory(accountId)) database!.resetInventory(accountId)
 
@@ -515,6 +516,7 @@ async function syncMicrosoftAccount(accountId: string) {
   const folders = await client.listFolders()
   database.replaceLabels(accountId, microsoftLabels(accountId, folders))
   const state = database.getProviderState<MicrosoftProviderState>(accountId, { deltaLinks: {} })
+  state.deltaLinks ??= {}
   const currentFolderIds = new Set(folders.map((folder) => folder.id))
   for (const priorFolderId of Object.keys(state.deltaLinks)) {
     if (currentFolderIds.has(priorFolderId)) continue
@@ -636,16 +638,23 @@ function labelsForAction(action: MailActionKind, labelId?: string) {
   return { add: [], remove: [] }
 }
 
+let operationsProcessing = false
+
 async function processOperations() {
+  if (operationsProcessing) return
+  operationsProcessing = true
+  try {
+    await runOperations()
+  } finally {
+    operationsProcessing = false
+  }
+}
+
+async function runOperations() {
   if (!database) return
   for (const snooze of database.releaseDueSnoozes()) {
-    try {
-      const operation = database.applyLocalAction({ accountId: snooze.accountId, threadIds: [snooze.threadId], action: 'unarchive' }, crypto.randomUUID(), 0)
-      emit({ type: 'operation', payload: operation })
-      emit({ type: 'mail-changed', payload: { accountId: snooze.accountId, threadIds: [snooze.threadId] } })
-    } catch {
-      // The thread may have been deleted remotely while it was snoozed.
-    }
+    emit({ type: 'operation', payload: snooze.operation })
+    emit({ type: 'mail-changed', payload: { accountId: snooze.accountId, threadIds: [snooze.threadId] } })
   }
   if (!online) return
   for (const row of database.dueOperations()) {
@@ -885,7 +894,12 @@ async function processQueuedDrafts() {
     const input = draftInputFromRow(row)
     if (draftRecipientsAreSyncable(input.to, input.cc, input.bcc)) await serializeDraft(String(row.id), () => saveDraft(input))
   }
-  for (const row of database.queuedDrafts()) await serializeDraft(String(row.id), () => deliverDraft(draftInputFromRow(row)))
+  for (const row of database.queuedDrafts()) await serializeDraft(String(row.id), async () => {
+    // A prior draft edit or another delivery can change this row while we wait.
+    if (!database || !online) return
+    const current = database.getDueDraft(String(row.id))
+    if (current) await deliverDraft(draftInputFromRow(current))
+  })
 }
 
 async function extractAttachment(accountId: string, messageId: string, attachmentIdValue: string, targetPath: string) {

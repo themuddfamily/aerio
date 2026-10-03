@@ -4,6 +4,8 @@
   "description": "A calm, modern desktop communications and productivity client.",
   "main": "dist-electron/main/main.js",
   "author": "Aerio",
+  "homepage": "https://github.com/themuddfamily/aerio",
+  "desktopName": "aerio.desktop",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -20,6 +22,7 @@
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "test:live-matrix": "node scripts/validate-live-provider-matrix.mjs",
+    "verify:live-evidence": "node scripts/validate-live-provider-matrix.mjs --require-evidence",
     "audit:buttons": "node scripts/audit-buttons.mjs",
     "audit:accessibility": "node scripts/desktop-accessibility-audit.mjs",
     "audit:context-menus": "node scripts/audit-context-menus.mjs",
@@ -27,23 +30,42 @@
     "test:message-tools": "npm run build && node scripts/desktop-message-tools-audit.mjs",
     "test:desktop": "node scripts/run-desktop-tests.mjs",
     "test:desktop:visible": "node scripts/run-desktop-tests.mjs --visible",
-    "test:desktop:checks": "npm run build && npm run audit:buttons && node scripts/desktop-button-audit.mjs && npm run test:context-menus && npm run audit:accessibility",
+    "test:recovery": "npm run build && node scripts/desktop-recovery-audit.mjs",
+    "test:backup": "npm run build && node scripts/desktop-backup-audit.mjs",
+    "test:app-lock": "npm run build && node scripts/desktop-app-lock-audit.mjs",
+    "test:preferences": "npm run build && node scripts/desktop-preferences-audit.mjs",
+    "test:platform:mac": "node scripts/native-platform-audit.mjs",
+    "test:platform:mac:containers": "node scripts/mac-container-audit.mjs",
+    "test:platform:linux": "node scripts/run-linux-native-audit.mjs",
+    "test:platform:linux:containers": "node scripts/run-linux-native-audit.mjs --containers",
+    "test:platform:linux:desktop": "node scripts/run-linux-native-audit.mjs --desktop",
+    "test:tasks": "npm run build && tsx scripts/desktop-tasks-audit.mjs && tsx scripts/desktop-tasks-write-audit.mjs && tsx scripts/desktop-tasks-consent-audit.mjs && tsx scripts/desktop-microsoft-tasks-audit.mjs",
+    "test:microsoft-tasks": "npm run build && tsx scripts/desktop-microsoft-tasks-audit.mjs",
+    "test:imap": "npm run build:main && tsx scripts/imap-smtp-integration.mjs",
+    "test:live": "tsx scripts/live-provider-runner.mjs",
+    "test:desktop:checks": "npm run build && npm run audit:buttons && node scripts/desktop-button-audit.mjs && npm run test:context-menus && npm run audit:accessibility && node scripts/desktop-recovery-audit.mjs && node scripts/desktop-backup-audit.mjs && node scripts/desktop-app-lock-audit.mjs && node scripts/desktop-preferences-audit.mjs && tsx scripts/desktop-tasks-audit.mjs && tsx scripts/desktop-tasks-write-audit.mjs && tsx scripts/desktop-tasks-consent-audit.mjs && tsx scripts/desktop-microsoft-tasks-audit.mjs",
     "verify:release": "node scripts/verify-release.mjs",
+    "verify:artifacts": "node scripts/verify-release-artifacts.mjs",
     "verify:built-oauth": "node scripts/verify-built-oauth.mjs",
+    "verify:platform-config": "node scripts/verify-platform-config.mjs",
+    "verify:platform-artifacts": "node scripts/verify-platform-artifacts.mjs",
     "icons": "node scripts/generate-icons.mjs",
-    "package:win": "npm run verify:release && npm run icons && npm run build && npm run verify:built-oauth && electron-builder --win nsis portable --publish never"
+    "package:win": "npm run verify:release && npm run icons && npm run build && npm run verify:built-oauth && electron-builder --win nsis portable --publish never && npm run verify:artifacts",
+    "package:mac": "npm run verify:release && npm run verify:platform-config && npm run icons && npm run build && npm run verify:built-oauth && electron-builder --mac dmg zip --publish never && npm run verify:platform-artifacts -- mac",
+    "package:linux": "npm run verify:release && npm run verify:platform-config && npm run icons && npm run build && npm run verify:built-oauth && electron-builder --linux AppImage deb --x64 --publish never && npm run verify:platform-artifacts -- linux release x64"
   },
   "dependencies": {
     "date-fns": "^4.4.0",
     "electron-updater": "^6.8.9",
+    "entities": "^8.0.0",
     "google-auth-library": "^11.0.0",
     "imapflow": "^1.6.6",
     "lucide-react": "^1.30.0",
-    "nodemailer": "^9.0.5",
+    "nodemailer": "^10.0.13",
     "postal-mime": "^2.7.6",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "sanitize-html": "^2.17.6",
+    "sanitize-html": "^2.18.0",
     "tldts": "^7.4.10"
   },
   "devDependencies": {
@@ -57,16 +79,26 @@
     "@types/react-dom": "^19.2.4",
     "@types/sanitize-html": "^2.16.1",
     "@vitejs/plugin-react": "^6.0.5",
-    "@vitest/coverage-v8": "^4.1.10",
-    "electron": "^43.3.0",
+    "@vitest/coverage-v8": "^4.1.11",
+    "electron": "^43.7.7",
     "electron-builder": "^26.15.3",
+    "hoodiecrow-imap": "^2.1.0",
+    "js-yaml": "^4.3.2",
     "jsdom": "^30.0.1",
     "playwright-core": "^1.62.1",
     "png-to-ico": "^3.0.2",
-    "sharp": "^0.35.3",
+    "selfsigned": "^5.5.0",
+    "sharp": "^0.35.5",
+    "smtp-server": "^3.19.16",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.2.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
+  },
+  "overrides": {
+    "hoodiecrow-imap": {
+      "minimist": "^1.2.8"
+    }
   },
   "build": {
     "appId": "com.aerio.desktop",
@@ -84,8 +116,49 @@
       {
         "from": "build/icon.png",
         "to": "build/icon.png"
+      },
+      {
+        "from": "build/trayTemplate.png",
+        "to": "build/trayTemplate.png"
+      },
+      {
+        "from": "build/trayTemplate@2x.png",
+        "to": "build/trayTemplate@2x.png"
       }
     ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity",
+      "darkModeSupport": true,
+      "hardenedRuntime": true,
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "linux": {
+      "icon": "build/icons",
+      "category": "Office",
+      "executableName": "aerio",
+      "syncDesktopName": true,
+      "maintainer": "Aerio",
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
     "win": {
       "icon": "build/icon.ico",
       "verifyUpdateCodeSignature": true,

@@ -1,6 +1,7 @@
 import sharp from 'sharp'
 import pngToIco from 'png-to-ico'
 import { mkdir, writeFile } from 'node:fs/promises'
+import { encodeIcns } from './icon-format.mjs'
 
 const svg = `
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
@@ -20,3 +21,12 @@ const sizes = [16, 24, 32, 48, 64, 128, 256]
 const buffers = await Promise.all(sizes.map((size) => sharp(Buffer.from(svg)).resize(size, size).png().toBuffer()))
 await writeFile('build/icon.png', await sharp(Buffer.from(svg)).resize(512, 512).png().toBuffer())
 await writeFile('build/icon.ico', await pngToIco(buffers))
+await mkdir('build/icons', { recursive: true })
+await Promise.all([...sizes, 512].map(async (size) => {
+  await writeFile(`build/icons/${size}x${size}.png`, await sharp(Buffer.from(svg)).resize(size, size).png().toBuffer())
+}))
+const macImages = new Map(await Promise.all([128, 256, 512, 1024].map(async (size) => [size, await sharp(Buffer.from(svg)).resize(size, size).png().toBuffer()])))
+await writeFile('build/icon.icns', encodeIcns(macImages))
+const templateSvg = `<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M260 662 439 297c30-61 116-61 146 0l179 365c25 51-12 110-69 110-31 0-59-18-73-46l-26-55H426l-26 55c-14 28-42 46-73 46-57 0-94-59-67-110Zm221-111h58l-29-74-29 74Z" fill="black"/></svg>`
+await writeFile('build/trayTemplate.png', await sharp(Buffer.from(templateSvg)).resize(22, 22).withMetadata({ density: 72 }).png().toBuffer())
+await writeFile('build/trayTemplate@2x.png', await sharp(Buffer.from(templateSvg)).resize(44, 44).withMetadata({ density: 144 }).png().toBuffer())

@@ -1,5 +1,5 @@
 import {
-  Archive, AtSign, CalendarClock, CheckSquare, ChevronDown, Clock3, Copy, Download, Edit3, ExternalLink, FileText, Filter, FolderInput, Forward, Inbox, LoaderCircle, Mail, MailOpen,
+  Archive, AtSign, CalendarClock, CheckSquare, ChevronDown, ChevronRight, Clock3, Copy, Download, Edit3, ExternalLink, FileText, Filter, FolderInput, Forward, Inbox, LoaderCircle, Mail, MailOpen,
   MoreVertical, Paperclip, Pause, Play, Plus, RefreshCw, Reply, ReplyAll, Search, Send, Settings2,
   Star, Tag, Tags, Trash2, Undo2, UserPlus, WifiOff, X
 } from 'lucide-react'
@@ -792,7 +792,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           <span className="mail-mark"><Mail size={28} /></span>
           <p className="eyebrow">Aerio mail</p>
           <h1>Your inboxes, together and available offline.</h1>
-          <p>Connect Gmail, Outlook, iCloud, Yahoo, Fastmail, Proton Bridge, or another IMAP/SMTP provider. Aerio protects credentials with Windows secure storage and blocks remote images until you load them.</p>
+          <p>Connect Gmail, Outlook, iCloud, Yahoo, Fastmail, Proton Bridge, or another IMAP/SMTP provider. Aerio protects credentials with OS secure storage and blocks remote images until you load them.</p>
           <button className="button primary onboarding-connect" onClick={() => setAccountSetup(true)}><UserPlus size={16} /> Add your first account</button>
           <small>OAuth providers open sign-in in your browser. iCloud, Yahoo, and Fastmail use provider-issued app passwords.</small>
         </section>
@@ -928,17 +928,19 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
             return <Fragment key={threadKey}>
               {startsDateGroup && <h2 className="mail-date-group"><span>{formatMailDateHeading(item.lastDate)}</span></h2>}
               <div className={`message-thread-stack ${listExpanded ? 'expanded' : ''}`}>
-              <div role="button" tabIndex={0} aria-current={selectedKey === threadKey ? 'true' : undefined} className={`message-row ${selectedKey === threadKey ? 'selected' : ''} ${checkedKeys.has(threadKey) ? 'checked' : ''} ${item.unread ? 'unread' : ''}`} onClick={() => openSummary(item)} onDoubleClick={() => openMessageWindow(item)} onKeyDown={(event) => { if (event.key === 'Enter' && event.shiftKey) { event.preventDefault(); openMessageWindow(item) } else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openSummary(item) } }} onContextMenu={(event) => showSummaryMenu(event, item)}>
-                <input className="message-select" type="checkbox" aria-label={`Select ${item.subject}`} checked={checkedKeys.has(threadKey)} readOnly onClick={(event) => { event.stopPropagation(); toggleChecked(item, index, event.shiftKey) }} />
+              <div role="button" tabIndex={0} aria-current={selectedKey === threadKey ? 'true' : undefined} aria-pressed={checkedKeys.has(threadKey)} className={`message-row ${selectedKey === threadKey ? 'selected' : ''} ${checkedKeys.has(threadKey) ? 'checked' : ''} ${item.unread ? 'unread' : ''}`} onClick={(event) => { if (event.ctrlKey || event.metaKey || event.shiftKey) toggleChecked(item, index, event.shiftKey); else openSummary(item) }} onDoubleClick={(event) => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey) openMessageWindow(item) }} onKeyDown={(event) => { if ((event.key === 'Enter' || event.key === ' ') && (event.ctrlKey || event.metaKey)) { event.preventDefault(); toggleChecked(item, index, event.shiftKey) } else if (event.key === 'Enter' && event.shiftKey) { event.preventDefault(); openMessageWindow(item) } else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openSummary(item) } }} onContextMenu={(event) => showSummaryMenu(event, item)}>
+                <span className="message-unread-dot" aria-hidden="true" />
                 <SenderAvatar email={item.senderEmail} name={item.participants[0]} fallbackColor={accounts.find((account) => account.id === item.accountId)?.color} />
                 <span className="message-copy">
                   <span className="message-meta"><strong>{item.participants.join(', ') || 'Unknown sender'}</strong><time dateTime={item.lastDate} title={formatMailArrivalTooltip(item.lastDate)}>{formatMailListTime(item.lastDate)}</time></span>
                   <span className="message-subject">{item.subject}</span>
-                  <span className="message-preview">{decodeHtmlEntities(item.snippet)}</span>
-                  {(itemLabels.length > 0 || item.snoozedUntil || item.hasAttachments || item.messageCount > 1) && <span className="message-tags">
+                  <span className="message-preview-line">
+                    <span className="message-preview">{decodeHtmlEntities(item.snippet)}</span>
+                    {item.messageCount > 1 && <button type="button" className={`thread-list-toggle ${listExpanded ? 'expanded' : ''}`} aria-label={`${listExpanded ? 'Collapse' : 'Expand'} ${item.messageCount} messages in ${item.subject}`} aria-expanded={listExpanded} onClick={(event) => { event.stopPropagation(); void toggleListThread(item) }} onDoubleClick={(event) => event.stopPropagation()}><span>{item.messageCount}</span><ChevronRight size={13} /></button>}
+                  </span>
+                  {(itemLabels.length > 0 || item.snoozedUntil || item.hasAttachments) && <span className="message-tags">
                     {itemLabels.map((label) => <em className="mail-label-badge" key={label.id} title={label.name}>{label.name}</em>)}
                     {item.snoozedUntil && <em>Snoozed until {new Date(item.snoozedUntil).toLocaleString()}</em>}
-                    {item.messageCount > 1 && <><em>{item.messageCount} messages</em><button type="button" className={`thread-list-toggle ${listExpanded ? 'expanded' : ''}`} aria-label={`${listExpanded ? 'Collapse' : 'Expand'} ${item.messageCount} messages in ${item.subject}`} aria-expanded={listExpanded} onClick={(event) => { event.stopPropagation(); void toggleListThread(item) }} onDoubleClick={(event) => event.stopPropagation()}><ChevronDown size={13} /></button></>}
                     {item.hasAttachments && <Paperclip size={13} />}
                   </span>}
                 </span>

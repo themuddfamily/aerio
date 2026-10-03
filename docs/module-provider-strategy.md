@@ -31,7 +31,7 @@ The first remote milestone should be one provider end to end, including create, 
 
 Aerio Notes are production local data, not disguised provider notes. Google Keep has no suitable general synchronization API. Microsoft OneNote has an API, but its page/section/HTML model is materially different from Aerio’s current plain note model.
 
-Local-data export/import, full-content search, and managed attachments are implemented for Notes. Attachments are copied into Aerio storage, limited to 25 MB each, included in validated backups, and deleted when no note references them. Aerio also offers an optional passphrase privacy lock at launch and when the workspace is sent to the tray; it is deliberately described as a screen lock rather than file encryption. A OneNote adapter can be evaluated later as an explicit connector with a documented conversion model; it should not redefine the local format.
+Local-data export/import, full-content search, and managed attachments are implemented for Notes. Attachments are copied into Aerio storage, limited to 25 MB each, included in validated backups, and deleted when no note references them. Aerio also offers an optional passphrase privacy lock at launch and when the workspace is sent to the tray; it is deliberately described as a screen lock rather than file encryption. The [OneNote adapter design](onenote-adapter-design.md) specifies a separate connector, safe HTML conversion, explicit local-note copies, attachment limits, and durable recovery. Its assessment is complete; the adapter is not implemented and the local format remains the product baseline.
 
 ## Chat: choose a transport before building UI promises
 
@@ -45,7 +45,7 @@ Before remote Chat is enabled, choose a supported transport and settle:
 - presence, notifications, calls, abuse controls, and retention;
 - multi-device conflict and offline behavior.
 
-Matrix is a plausible open-protocol candidate, while Teams or Google Chat would be separate enterprise connectors. No transport should be selected or presented as supported until those requirements and the intended user audience are agreed.
+The [Chat implementation proposal](chat-implementation-proposal.md) compares Matrix, Teams, Google Chat, and a custom service and recommends Matrix for a separate general-purpose connector. It defines identity, encrypted storage, device trust, history, media, recovery, notifications and retention, with SDK persistence and two-device interoperability as implementation gates. This is a recommendation; no Chat transport is implemented or presented as supported. Teams and Google Chat would remain separate enterprise connectors.
 
 ## Capability rule
 

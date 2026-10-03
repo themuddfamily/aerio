@@ -273,10 +273,32 @@ describe('IMAP actions and drafts', () => {
     expect(mailboxLock.release).toHaveBeenCalledOnce()
   })
 
-  it('uses a local ID when APPEND does not return a UID', async () => {
+  it('rejects an unidentified upload without deleting the previous draft or inventing an ID', async () => {
     client.append.mockResolvedValueOnce(false)
-    const id = await subject.saveDraft(Buffer.from('draft'), 'not-a-number')
-    expect(id).toMatch(/^[0-9a-f-]{36}$/)
+    await expect(subject.saveDraft(Buffer.from('draft'), '12')).rejects.toThrow(/did not identify/)
+    expect(client.messageDelete).not.toHaveBeenCalled()
+    expect(mailboxLock.release).toHaveBeenCalledOnce()
+  })
+
+  it('preserves the previous remote draft when appending its replacement fails', async () => {
+    client.append.mockRejectedValueOnce(new Error('Upload failed'))
+    await expect(subject.saveDraft(Buffer.from('draft'), '12')).rejects.toThrow(/Upload failed/)
+    expect(client.messageDelete).not.toHaveBeenCalled()
+    expect(mailboxLock.release).toHaveBeenCalledOnce()
+  })
+
+  it('resolves the remote draft UID by Message-ID when APPEND omits it', async () => {
+    client.append.mockResolvedValueOnce({ destination: 'Drafts' })
+    client.search = vi.fn().mockResolvedValue([91])
+    await expect(subject.saveDraft(Buffer.from('Message-ID: <unique@example.test>\r\n\r\nDraft'), '12')).resolves.toBe('91')
+    expect(client.search).toHaveBeenCalledWith({ header: { 'Message-ID': '<unique@example.test>' } }, { uid: true })
+    expect(client.messageDelete).toHaveBeenCalledWith(12, { uid: true })
+  })
+
+  it('rejects ambiguous draft UID matches while preserving the previous draft', async () => {
+    client.append.mockResolvedValueOnce({ destination: 'Drafts' })
+    client.search = vi.fn().mockResolvedValue([91, 92])
+    await expect(subject.saveDraft(Buffer.from('Message-ID: <duplicate@example.test>\r\n\r\nDraft'), '12')).rejects.toThrow(/did not identify/)
     expect(client.messageDelete).not.toHaveBeenCalled()
   })
 

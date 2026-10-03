@@ -1,0 +1,49 @@
+name: macOS build
+
+on:
+  push:
+    branches: [main, 'codex/native-validation-*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run test:imap
+      - run: npm run test:live-matrix
+      - run: npm run test:desktop
+      - name: Package and verify native macOS artifacts
+        run: npm run package:mac
+        env:
+          AERIO_REQUIRE_BUILTIN_OAUTH: '0'
+      - run: npm run test:platform:mac
+      - run: npm run test:platform:mac:containers
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aerio-macos-${{ matrix.arch }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/latest-mac.yml
+          if-no-files-found: error

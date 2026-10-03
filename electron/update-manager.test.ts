@@ -79,7 +79,7 @@ describe('UpdateManager', () => {
     expect(subject.status()).toMatchObject({ phase: 'available', availableVersion: '0.5.0' })
 
     mocks.autoUpdater.emit('download-progress', { percent: 120.4 })
-    expect(subject.status()).toMatchObject({ phase: 'downloading', progress: 100, message: 'Downloading update… 120%' })
+    expect(subject.status()).toMatchObject({ phase: 'downloading', progress: 100, message: 'Downloading update… 100%' })
     mocks.autoUpdater.emit('download-progress', { percent: -5 })
     expect(subject.status().progress).toBe(0)
 
@@ -151,6 +151,65 @@ describe('UpdateManager', () => {
     subject.install()
     expect(log).toHaveBeenCalledWith('update-installing', undefined, { version: '0.5.0' })
     expect(mocks.autoUpdater.quitAndInstall).toHaveBeenCalledWith(false, true)
+  })
+
+  it('orchestrates discovery, a pending download, and restart installation through the service events', async () => {
+    const { subject, broadcast } = create()
+    mocks.autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      mocks.autoUpdater.emit('checking-for-update')
+      mocks.autoUpdater.emit('update-available', { version: '0.5.0' })
+    })
+    await expect(subject.check()).resolves.toMatchObject({ phase: 'available', availableVersion: '0.5.0' })
+    expect(mocks.autoUpdater.downloadUpdate).not.toHaveBeenCalled()
+    let finish!: () => void
+    mocks.autoUpdater.downloadUpdate.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve }))
+    const downloading = subject.download()
+    mocks.autoUpdater.emit('download-progress', { percent: 42.5 })
+    expect(subject.status()).toMatchObject({ phase: 'downloading', progress: 42.5 })
+    expect(() => subject.install()).toThrow(/not finished/)
+    await expect(subject.download()).rejects.toThrow(/No update/)
+    expect(mocks.autoUpdater.downloadUpdate).toHaveBeenCalledOnce()
+    mocks.autoUpdater.emit('update-downloaded', { version: '0.5.0' })
+    finish()
+    await expect(downloading).resolves.toMatchObject({ phase: 'ready', availableVersion: '0.5.0', progress: 100 })
+    subject.install()
+    expect(mocks.autoUpdater.quitAndInstall).toHaveBeenCalledWith(false, true)
+    expect(broadcast.mock.calls.map(([status]) => status.phase)).toEqual(['checking', 'available', 'downloading', 'downloading', 'ready'])
+  })
+
+  it('recovers a failed download by rediscovering and downloading the update again', async () => {
+    const { subject } = create()
+    mocks.autoUpdater.emit('update-available', { version: '0.5.0' })
+    mocks.autoUpdater.downloadUpdate.mockRejectedValueOnce(new Error('connection lost'))
+    await expect(subject.download()).rejects.toThrow(/connection lost/)
+    expect(() => subject.install()).toThrow(/not finished/)
+    mocks.autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      mocks.autoUpdater.emit('checking-for-update')
+      mocks.autoUpdater.emit('update-available', { version: '0.5.0' })
+    })
+    await subject.check()
+    mocks.autoUpdater.downloadUpdate.mockImplementationOnce(async () => mocks.autoUpdater.emit('update-downloaded', { version: '0.5.0' }))
+    await expect(subject.download()).resolves.toMatchObject({ phase: 'ready', progress: 100 })
+    subject.install()
+    expect(mocks.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(2)
+    expect(mocks.autoUpdater.quitAndInstall).toHaveBeenCalledOnce()
+  })
+
+  it('keeps repeated startup scheduling cancellable without leaving an earlier check behind', async () => {
+    vi.useFakeTimers()
+    const { subject } = create()
+    subject.start()
+    await vi.advanceTimersByTimeAsync(1_000)
+    subject.start()
+    subject.stop()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(mocks.autoUpdater.checkForUpdates).not.toHaveBeenCalled()
+  })
+
+  it.each([NaN, Infinity, -Infinity])('keeps malformed download progress finite: %s', (percent) => {
+    const { subject } = create()
+    mocks.autoUpdater.emit('download-progress', { percent })
+    expect(subject.status()).toMatchObject({ progress: 0, message: 'Downloading update… 0%' })
   })
 
   it('remains inert and rejects operations when updates are unsupported', async () => {

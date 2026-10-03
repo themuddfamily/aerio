@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { ImapFlow, type ListResponse } from 'imapflow'
 import nodemailer from 'nodemailer'
+import PostalMime from 'postal-mime'
 import type { ImapAccountInput, MailActionKind } from '../../src/mail-types'
 
 export interface ImapFolder {
@@ -174,12 +175,25 @@ export class ImapSmtpClient {
     return this.withConnection(async (client) => {
       const folder = this.folderFor(await this.listFolders(client), '\\Drafts')
       if (!folder) throw new Error('The mail server does not expose a Drafts folder')
-      if (existingId && Number.isSafeInteger(Number(existingId))) {
-        const lock = await client.getMailboxLock(folder)
-        try { await client.messageDelete(Number(existingId), { uid: true }) } finally { lock.release() }
-      }
-      const result = await client.append(folder, raw, ['\\Draft', '\\Seen'])
-      return result && 'uid' in result ? String(result.uid) : crypto.randomUUID()
+      // Selecting the folder lets ImapFlow resolve the appended UID even when
+      // the server does not support UIDPLUS. A fabricated ID cannot be used
+      // to replace or delete that remote draft later.
+      const lock = await client.getMailboxLock(folder)
+      try {
+        const result = await client.append(folder, raw, ['\\Draft', '\\Seen'])
+        let uid = result && result.uid
+        if (result && !uid) {
+          const messageId = (await PostalMime.parse(raw)).messageId
+          const matches = messageId ? await client.search({ header: { 'Message-ID': messageId } }, { uid: true }) : false
+          if (matches && matches.length === 1) uid = matches[0]
+        }
+        if (!uid || !Number.isSafeInteger(uid) || uid <= 0) throw new Error('The mail server did not identify the saved draft')
+        // Preserve the previous draft if uploading its replacement fails.
+        if (existingId && Number.isSafeInteger(Number(existingId)) && Number(existingId) !== uid) {
+          await client.messageDelete(Number(existingId), { uid: true })
+        }
+        return String(uid)
+      } finally { lock.release() }
     })
   }
 

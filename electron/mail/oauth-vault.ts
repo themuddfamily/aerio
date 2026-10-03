@@ -11,6 +11,7 @@ import {
   type DesktopOAuthConfig
 } from './oauth-config'
 import { sendOAuthCallbackPage } from './oauth-callback-page'
+import { assertSecureCredentialStorage } from './secure-storage'
 
 interface StoredOAuthData {
   googleConfig?: DesktopOAuthConfig
@@ -32,9 +33,10 @@ const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
   'https://www.googleapis.com/auth/calendar.events',
-  'https://www.googleapis.com/auth/contacts'
+  'https://www.googleapis.com/auth/contacts',
+  'https://www.googleapis.com/auth/tasks'
 ]
-const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.ReadWrite', 'Contacts.ReadWrite']
+const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.ReadWrite', 'Contacts.ReadWrite', 'Tasks.ReadWrite']
 
 export class OAuthVault {
   private data: StoredOAuthData = { googleTokens: {}, googleCalendarWrite: {}, microsoftTokens: {}, imapAccounts: {} }
@@ -45,9 +47,7 @@ export class OAuthVault {
   }
 
   private ensureEncryption() {
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error('Windows secure storage is unavailable. Aerio will not save mail credentials without OS encryption.')
-    }
+    assertSecureCredentialStorage(safeStorage)
   }
 
   private load() {
@@ -248,6 +248,16 @@ export class OAuthVault {
     return scopes.has('https://www.googleapis.com/auth/contacts')
   }
 
+  hasGoogleTasksAccess(accountId: string, write = false) {
+    let credentials = this.data.googleTokens[accountId]
+    if (!credentials) {
+      this.load()
+      credentials = this.data.googleTokens[accountId]
+    }
+    const scopes = new Set((credentials?.scope ?? '').split(/\s+/).filter(Boolean))
+    return scopes.has('https://www.googleapis.com/auth/tasks') || (!write && scopes.has('https://www.googleapis.com/auth/tasks.readonly'))
+  }
+
   microsoftStatus(): MailCredentialStatus {
     const clientId = this.microsoftClientId()
     return {
@@ -349,7 +359,9 @@ export class OAuthVault {
     if (!clientId || !current) throw new Error('This Microsoft account needs to be connected again')
     const response = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: clientId, grant_type: 'refresh_token', refresh_token: current.refreshToken, scope: MICROSOFT_SCOPES.join(' ') })
+      // Refresh renews the granted permissions; added Tasks consent belongs in
+      // an interactive reconnect, not a legacy mailbox's token refresh.
+      body: new URLSearchParams({ client_id: clientId, grant_type: 'refresh_token', refresh_token: current.refreshToken, scope: current.scope ?? MICROSOFT_SCOPES.filter((scope) => scope !== 'Tasks.ReadWrite').join(' ') })
     })
     const token = await response.json() as { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string; error_description?: string }
     if (!response.ok || !token.access_token) throw new Error(token.error_description ?? 'Microsoft token refresh failed')
@@ -367,6 +379,13 @@ export class OAuthVault {
       credentials = this.data.microsoftTokens[accountId]
     }
     return new Set((credentials?.scope ?? '').split(/\s+/).filter(Boolean)).has('Calendars.ReadWrite')
+  }
+
+  hasMicrosoftTasksAccess(accountId: string, write = false) {
+    let credentials = this.data.microsoftTokens[accountId]
+    if (!credentials) { this.load(); credentials = this.data.microsoftTokens[accountId] }
+    const scopes = new Set((credentials?.scope ?? '').split(/\s+/).filter(Boolean))
+    return scopes.has('Tasks.ReadWrite') || (!write && scopes.has('Tasks.Read'))
   }
 
   hasMicrosoftContactsWriteAccess(accountId: string) {

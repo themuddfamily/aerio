@@ -101,11 +101,14 @@ function seedRealMailFixture() {
   database.close()
 
   const productivity = new ProductivityStore(join(profile, 'productivity.sqlite'))
+  const eventStart = new Date()
+  eventStart.setHours(10, 0, 0, 0)
+  const eventEnd = new Date(eventStart.getTime() + 60 * 60 * 1000)
   productivity.replaceAccount('context-audit-account', 'gmail', {
     calendars: [{ id: 'context-calendar', remoteId: 'primary', accountId: 'context-audit-account', provider: 'gmail', name: 'Audit calendar', color: '#1d7a62', primary: true, canWrite: true }],
     events: [{
       id: 'context-event', remoteId: 'remote-event', accountId: 'context-audit-account', provider: 'gmail', readOnly: true,
-      calendarId: 'context-calendar', title: 'Connected calendar review', start: '2026-08-01T10:00:00.000Z', end: '2026-08-01T11:00:00.000Z',
+      calendarId: 'context-calendar', title: 'Connected calendar review', start: eventStart.toISOString(), end: eventEnd.toISOString(),
       color: '#1d7a62', attendees: ['pilot@aerio.local'], reminderMinutes: 30, recurrence: 'none'
     }],
     contacts: [{
@@ -162,7 +165,7 @@ try {
   }
 
   await step('window and module chrome expose keyboard-accessible context menus', async () => {
-    await openMenu(page.locator('.titlebar-drag'))
+    await openMenu(page.locator('.brand-lockup').first())
     await expectItems('Minimize', 'Maximize', 'Close')
     assert.equal(await popup.getAttribute('role'), 'menu')
     assert.equal(await popup.locator('button').first().evaluate((button) => button === document.activeElement), true)
@@ -188,7 +191,7 @@ try {
     await page.keyboard.press('Control+K')
     const input = page.getByPlaceholder('Search Aerio…')
     await input.fill('context menu text')
-    await input.press('Control+A')
+    await input.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A')
     await openMenu(input)
     await expectItems('Undo', 'Redo', 'Cut', 'Copy', 'Paste', 'Delete', 'Select all')
     await dismiss()
@@ -250,6 +253,13 @@ try {
   await step('connected mail menus cover accounts, folders, labels, conversations, messages, and attachments', async () => {
     await moduleButton('Mail').click()
     await page.locator('.real-mail').waitFor()
+    // Pane controls belong to connected mail, rather than the transient first render of empty onboarding.
+    const foldersSeparator = page.getByRole('separator', { name: 'Resize mail folders' })
+    const listSeparator = page.getByRole('separator', { name: 'Resize message list' })
+    await foldersSeparator.waitFor()
+    await listSeparator.waitFor()
+    assert.equal(await foldersSeparator.getAttribute('aria-orientation'), 'vertical')
+    assert.equal(await listSeparator.getAttribute('aria-orientation'), 'vertical')
     const productivitySnapshot = await page.evaluate(() => window.aerio.productivity.snapshot())
     assert.equal(productivitySnapshot.events.length, 1, `Unexpected productivity snapshot: ${JSON.stringify(productivitySnapshot)}`)
 
@@ -357,21 +367,29 @@ try {
     const arrivalTime = expandedHeader.locator('time')
     assert.match(await arrivalTime.innerText(), /^[A-Z][a-z]{2} \d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/)
     assert.match(await arrivalTime.getAttribute('title'), /^[A-Z][a-z]+ \d{2}\/\d{2}\/\d{4} \d{2}:\d{2}:\d{2}$/)
-    const [timeBox, replyBox, chevronBox] = await Promise.all([
-      arrivalTime.boundingBox(),
-      expandedHeader.locator('.thread-message-reply').boundingBox(),
-      newestReply.locator('.thread-message-chevron').boundingBox()
-    ])
+    // Read one layout frame; separate protocol calls can straddle expansion/scroll updates.
+    const [timeBox, replyBox, chevronBox] = await expandedHeader.evaluate((header) =>
+      ['time', '.thread-message-reply', '.thread-message-chevron'].map((selector) => {
+        const element = header.querySelector(selector)
+        if (!element) return null
+        const bounds = element.getBoundingClientRect()
+        return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
+      }))
     assert(timeBox && replyBox && chevronBox)
     assert(replyBox.y > timeBox.y && chevronBox.y > timeBox.y, 'Reply and expand controls should sit below the received timestamp')
     assert(replyBox.x < chevronBox.x, 'Reply should appear before the expand control after their positions are swapped')
     await earlierReply.click()
     await page.getByRole('button', { name: 'Collapse message from Earlier Sender' }).waitFor()
+    // Expanding another message preserves existing expanded messages; each header toggles independently.
+    const stillExpandedNewest = page.getByRole('button', { name: 'Collapse message from Aerio Test Pilot' })
+    await stillExpandedNewest.waitFor()
+    assert.equal(await stillExpandedNewest.getAttribute('aria-expanded'), 'true')
+    await stillExpandedNewest.click()
     const collapsedNewestReply = page.getByRole('button', { name: 'Expand message from Aerio Test Pilot' })
     await collapsedNewestReply.waitFor()
     assert.equal(await collapsedNewestReply.getAttribute('aria-expanded'), 'false')
     await collapsedNewestReply.click()
-    await realMessage.getByRole('checkbox', { name: 'Select Real mail context audit' }).click()
+    await realMessage.click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] })
     const bulkToolbar = page.locator('.bulk-mail-toolbar')
     await bulkToolbar.getByText('1 selected', { exact: true }).waitFor()
     await bulkToolbar.getByRole('button', { name: 'Move' }).click()
