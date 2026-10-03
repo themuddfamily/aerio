@@ -41,6 +41,8 @@ try {
   assert.deepEqual(Buffer.from(backup.attachments.find((attachment) => attachment.id === file.id).dataBase64, 'base64'), bytes)
   await settings.getByRole('button', { name: 'Restore backup' }).click()
   await settings.getByText('Restored 1 task, 2 notes, and 1 contact.').waitFor()
+  // Verify restored paths survive the renderer's autosave interval.
+  await new Promise((resolve) => setTimeout(resolve, 450))
   const restored = await page.evaluate(() => window.aerio.productivity.localSnapshot())
   assert.deepEqual(restored.tasks, snapshot.tasks)
   assert.deepEqual(restored.contacts, snapshot.contacts)

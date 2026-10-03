@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ContextMenuProvider } from './components/ContextMenu'
@@ -9,7 +9,11 @@ import type { LocalModuleSnapshot, ProductivitySnapshot } from './productivity-t
 import App from './App'
 
 vi.mock('./components/TitleBar', () => ({ default: ({ children }: any) => <div data-testid="title-bar">{children}</div> }))
-vi.mock('./components/SettingsModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Settings mock"><button onClick={() => props.onChange({ ...props.preferences, settings: { ...props.preferences.settings, density: 'compact' } })}>Change density</button><button onClick={props.onClose}>Close settings</button></div> }))
+vi.mock('./components/SettingsModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Settings mock"><button onClick={() => props.onChange({ ...props.preferences, settings: { ...props.preferences.settings, density: 'compact' } })}>Change density</button><button onClick={async () => {
+  props.onLocalDataRestoreStart?.()
+  try { const snapshot = await api.productivity.importLocalData(); if (snapshot) props.onLocalDataRestored?.(snapshot) }
+  finally { props.onLocalDataRestoreEnd?.() }
+}}>Restore fixture</button><button onClick={props.onClose}>Close settings</button></div> }))
 vi.mock('./components/ProfileModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Profile mock"><span>{props.profile.displayName}</span><button onClick={() => props.onSave({ displayName: 'Saved Person', email: 'saved@example.test' })}>Save profile</button><button onClick={props.onClose}>Close profile</button></div> }))
 vi.mock('./views/ConnectedMailView', () => ({ default: (props: any) => <section aria-label="Mail mock"><span>Compose {props.composeRequest.id}:{props.composeRequest.initialTo ?? ''}</span><button onClick={() => props.onToast('Mail says hello')}>Mail toast</button></section> }))
 vi.mock('./views/CalendarView', () => ({ default: (props: any) => <section aria-label="Calendar mock"><span>Calendar query:{props.query}</span><span>{props.sourceMessage}</span><span>Writable:{[...props.writableCalendarIds].join(',')}</span><button onClick={() => void props.onSync()}>Sync calendar</button><button onClick={() => void props.onEnableEditing()}>Enable editing</button><button onClick={() => void props.onSaveProviderEvent(providerEvent, false)}>Create provider event</button><button onClick={() => void props.onSaveProviderEvent(providerEvent, true)}>Update provider event</button><button onClick={() => void props.onDeleteProviderEvent(providerEvent)}>Delete provider event</button></section> }))
@@ -65,6 +69,7 @@ const api = {
     chooseNoteAttachments: vi.fn(async () => []),
     openNoteAttachment: vi.fn(async () => ({})),
     localSnapshot: vi.fn(async () => localModules),
+    importLocalData: vi.fn<() => Promise<LocalModuleSnapshot | undefined>>(),
     saveLocal: vi.fn(async () => undefined)
   }
 }
@@ -92,6 +97,7 @@ beforeEach(() => {
   api.productivity.updateContact.mockImplementation(async (contact: any) => ({ contact, snapshot: productivity }))
   api.productivity.deleteContact.mockResolvedValue(productivity)
   api.productivity.localSnapshot.mockResolvedValue(localModules)
+  api.productivity.importLocalData.mockReset()
   api.productivity.saveLocal.mockResolvedValue(undefined)
   Object.defineProperty(window, 'aerio', { configurable: true, value: api })
   Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })) })
@@ -111,13 +117,34 @@ describe('App', () => {
   })
 
   it('locks an enabled workspace with Ctrl+L and lock-state events', async () => {
+    const user = userEvent.setup()
     api.appLock.status.mockResolvedValueOnce({ enabled: true, locked: false })
     renderApp()
     expect(await screen.findByRole('region', { name: 'Mail mock' })).toBeInTheDocument()
-    fireEvent.keyDown(window, { key: 'l', ctrlKey: true })
+    await user.keyboard('{Control>}l{/Control}')
     expect(api.appLock.lock).toHaveBeenCalled()
     appLockListener?.({ enabled: true, locked: true })
     expect(await screen.findByRole('heading', { name: 'Unlock Aerio' })).toBeInTheDocument()
+  })
+
+  it.each(['restored', 'cancelled'] as const)('protects pending local edits while a backup restore is %s', async (outcome) => {
+    const user = userEvent.setup()
+    let finishRestore!: (snapshot: LocalModuleSnapshot | undefined) => void
+    api.productivity.importLocalData.mockImplementation(() => new Promise((resolve) => { finishRestore = resolve }))
+    renderApp()
+    await screen.findByRole('region', { name: 'Mail mock' })
+    await act(() => new Promise((resolve) => setTimeout(resolve, 450)))
+    expect(api.productivity.saveLocal).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Tasks' }))
+    await user.click(screen.getByRole('button', { name: 'Change tasks' }))
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await user.click(screen.getByRole('button', { name: 'Restore fixture' }))
+    await act(() => new Promise((resolve) => setTimeout(resolve, 450)))
+    expect(api.productivity.saveLocal).not.toHaveBeenCalled()
+    await act(async () => { finishRestore(outcome === 'restored' ? { tasks: [], notes: [], contacts: [] } : undefined) })
+    await act(() => new Promise((resolve) => setTimeout(resolve, 450)))
+    if (outcome === 'restored') expect(api.productivity.saveLocal).not.toHaveBeenCalled()
+    else expect(api.productivity.saveLocal).toHaveBeenCalledWith(expect.objectContaining({ tasks: expect.arrayContaining([expect.objectContaining({ id: 'task-2' })]) }))
   })
 
   it('hydrates the shell, changes theme/settings/profile, navigates, and persists local modules', async () => {

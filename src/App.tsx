@@ -54,15 +54,23 @@ export default function App() {
   const [connectedAccounts, setConnectedAccounts] = useState<MailAccountSummary[]>([])
   const [productivity, setProductivity] = useState<ProductivitySnapshot>(emptyProductivity)
   const [localModules, setLocalModules] = useState<LocalModuleSnapshot>(emptyLocalModules)
+  const persistedLocalModules = useRef<LocalModuleSnapshot | undefined>(undefined)
+  const localSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const localRestoreActive = useRef(false)
+  const [localSaveRevision, setLocalSaveRevision] = useState(0)
+  const applyLocalSnapshot = useCallback((snapshot: LocalModuleSnapshot) => {
+    clearTimeout(localSaveTimer.current)
+    persistedLocalModules.current = snapshot
+    setLocalModules(snapshot)
+  }, [])
   useEffect(() => window.aerio.productivity.onChanged?.((data) => {
-    if (data.local) setLocalModules(data.local)
+    if (data.local) applyLocalSnapshot(data.local)
     if (data.snapshot) setProductivity(data.snapshot)
-  }), [])
+  }), [applyLocalSnapshot])
   const [productivitySyncing, setProductivitySyncing] = useState(false)
   const [commandIndex, setCommandIndex] = useState(0)
   const hydrated = useRef(false)
   const workspaceLoadStarted = useRef(false)
-  const localModulesHydrated = useRef(false)
   const productivitySyncingRef = useRef(false)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const commandDialogRef = useDialogFocus<HTMLElement>(() => {
@@ -89,10 +97,9 @@ export default function App() {
       // Cached provider data can be retried from the connected Calendar or Contacts view.
     })
     void window.aerio.productivity.localSnapshot().then((localSnapshot) => {
-      setLocalModules(localSnapshot)
-      queueMicrotask(() => { localModulesHydrated.current = true })
+      applyLocalSnapshot(localSnapshot)
     }).catch(() => showToast('Local Tasks and Notes could not be opened'))
-  }, [showToast])
+  }, [applyLocalSnapshot, showToast])
 
   const applyAppLockStatus = useCallback((status: AppLockStatus) => {
     setAppLock(status)
@@ -111,12 +118,13 @@ export default function App() {
   }, [applyAppLockStatus])
 
   useEffect(() => {
-    if (!localModulesHydrated.current) return
-    const timer = setTimeout(() => {
+    if (!persistedLocalModules.current || localModules === persistedLocalModules.current || localRestoreActive.current) return
+    localSaveTimer.current = setTimeout(() => {
+      if (localRestoreActive.current) return
       void window.aerio.productivity.saveLocal(localModules).catch(() => showToast('Local Tasks or Notes could not be saved'))
     }, 350)
-    return () => clearTimeout(timer)
-  }, [localModules, showToast])
+    return () => clearTimeout(localSaveTimer.current)
+  }, [localModules, localSaveRevision, showToast])
 
   const syncProductivity = useCallback(async (options?: { quiet?: boolean }) => {
     if (productivitySyncingRef.current) return
@@ -440,7 +448,10 @@ export default function App() {
       </div>
 
       {profileOpen && <ProfileModal profile={profile} onSave={(nextProfile) => setPreferences({ ...preferences, settings: { ...preferences.settings, profile: nextProfile } })} onClose={() => setProfileOpen(false)} onToast={showToast} />}
-      {settingsOpen && <SettingsModal preferences={preferences} onChange={setPreferences} onLocalDataRestored={setLocalModules} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsModal preferences={preferences} onChange={setPreferences} onLocalDataRestored={applyLocalSnapshot}
+        onLocalDataRestoreStart={() => { localRestoreActive.current = true; clearTimeout(localSaveTimer.current) }}
+        onLocalDataRestoreEnd={() => { localRestoreActive.current = false; setLocalSaveRevision((revision) => revision + 1) }}
+        onClose={() => setSettingsOpen(false)} />}
       {infoOpen && <AppInfoModal kind={infoOpen} onClose={() => setInfoOpen(undefined)} />}
       {commandsOpen && (
         <div className="command-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) setCommandsOpen(false) }}>

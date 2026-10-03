@@ -10,9 +10,11 @@ interface SettingsModalProps {
   onChange(next: AppPreferences): void
   onClose(): void
   onLocalDataRestored?(snapshot: LocalModuleSnapshot): void
+  onLocalDataRestoreStart?(): void
+  onLocalDataRestoreEnd?(): void
 }
 
-export default function SettingsModal({ preferences, onChange, onClose, onLocalDataRestored }: SettingsModalProps) {
+export default function SettingsModal({ preferences, onChange, onClose, onLocalDataRestored, onLocalDataRestoreStart, onLocalDataRestoreEnd }: SettingsModalProps) {
   const [health, setHealth] = useState<MailDiagnosticHealth>()
   const [diagnosticStatus, setDiagnosticStatus] = useState<'idle' | 'checking' | 'exporting'>('idle')
   const [diagnosticMessage, setDiagnosticMessage] = useState('')
@@ -127,6 +129,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
 
   const importLocalData = async () => {
     if (!window.confirm('Restore Contacts, Tasks, and Notes from a backup? This replaces the current local Contacts, Tasks, Notes, and note attachments.')) return
+    onLocalDataRestoreStart?.()
     setLocalDataStatus('importing')
     setLocalDataMessage('')
     try {
@@ -139,6 +142,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
     } catch (error) {
       setLocalDataMessage(error instanceof Error ? error.message : 'Local data could not be restored.')
     } finally {
+      onLocalDataRestoreEnd?.()
       setLocalDataStatus('idle')
     }
   }
