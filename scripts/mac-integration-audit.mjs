@@ -45,8 +45,11 @@ export async function auditMacIntegration(application, page, preferences) {
   await page.evaluate(() => window.aerio.appLock.unlock('mac-native-fixture-passphrase'))
   await page.evaluate(() => window.aerio.appLock.disable('mac-native-fixture-passphrase'))
   await page.evaluate((value) => window.aerio.savePreferences(value), preferences)
-  await window.evaluate((window) => window.setBounds({ width: 1140, height: 760 }))
+  const workArea = await application.evaluate(({ screen }, bounds) => screen.getDisplayMatching(bounds).workArea, await window.evaluate((window) => window.getBounds()))
+  const expectedSize = { width: Math.min(1140, workArea.width), height: Math.min(760, workArea.height) }
+  await window.evaluate((window, bounds) => window.setBounds(bounds), { ...expectedSize, x: workArea.x, y: workArea.y })
   await new Promise((resolve) => setTimeout(resolve, 600))
+  assert.deepEqual(await window.evaluate((window) => ({ width: window.getBounds().width, height: window.getBounds().height })), expectedSize)
   const closed = page.waitForEvent('close')
   await window.evaluate((window) => window.close())
   await closed
@@ -56,7 +59,7 @@ export async function auditMacIntegration(application, page, preferences) {
   page = await activated
   await page.getByRole('button', { name: 'Settings', exact: true }).waitFor()
   assert.deepEqual(await page.evaluate(() => window.aerio.loadPreferences()), preferences)
-  assert.deepEqual(await (await application.browserWindow(page)).evaluate((window) => ({ width: window.getBounds().width, height: window.getBounds().height })), { width: 1140, height: 760 })
+  assert.deepEqual(await (await application.browserWindow(page)).evaluate((window) => ({ width: window.getBounds().width, height: window.getBounds().height })), expectedSize)
   const menuClosed = page.waitForEvent('close')
   await (await application.browserWindow(page)).evaluate((window) => window.close())
   await menuClosed
