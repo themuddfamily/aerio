@@ -105,10 +105,22 @@ try {
   await waitUntil(() => page.evaluate(async () => !(await window.aerio.loadPreferences()).settings.closeToTray), 'persisted close-to-tray setting')
   await settings.getByRole('button', { name: 'Close', exact: true }).click()
   const exited = new Promise((resolve) => application.process().once('exit', resolve))
-  await page.getByRole('button', { name: 'Close', exact: true }).first().click()
+  const closed = page.waitForEvent('close', { timeout: 10_000 })
+  // A fast native exit can close the renderer before Playwright acknowledges its click.
+  await page.getByRole('button', { name: 'Close', exact: true }).first().click().catch((error) => {
+    if (!/Target page, context or browser has been closed/.test(error.message)) throw error
+  })
+  await closed
+  if (process.platform === 'darwin') {
+    assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 0)
+    assert.equal(application.process().exitCode, null)
+    await application.close()
+  }
   await Promise.race([exited, new Promise((_, reject) => { const timeout = setTimeout(() => reject(new Error('Close without tray did not exit')), 10_000); timeout.unref() })])
   application = undefined
-  console.log('✓ disabling close-to-tray causes a real process exit')
+  console.log(process.platform === 'darwin'
+    ? '✓ disabling close-to-tray closes the last window; macOS stays available until full quit'
+    : '✓ disabling close-to-tray causes a real process exit')
 } finally {
   if (application) await application.close().catch(() => undefined)
   const location = relative(tmpdir(), profile)

@@ -585,7 +585,7 @@ describe('ConnectedMailView', () => {
       await user.click(screen.getByRole('button', { name: 'Clear mail search' }))
       expect(await screen.findByText('Local draft')).toBeInTheDocument()
     }
-  })
+  }, 15_000) // Five complete filter/reset interactions also run on slower native CI hosts.
 
   it('renders read-only conversation and menu states for archived accounts', async () => {
     const user = userEvent.setup()
