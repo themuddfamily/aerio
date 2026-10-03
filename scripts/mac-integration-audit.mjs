@@ -46,7 +46,11 @@ export async function auditMacIntegration(application, page, preferences) {
   await page.evaluate(() => window.aerio.appLock.disable('mac-native-fixture-passphrase'))
   await page.evaluate((value) => window.aerio.savePreferences(value), preferences)
   const workArea = await application.evaluate(({ screen }, bounds) => screen.getDisplayMatching(bounds).workArea, await window.evaluate((window) => window.getBounds()))
-  const expectedSize = { width: Math.min(1140, workArea.width), height: Math.min(760, workArea.height) }
+  const [minimumWidth, minimumHeight] = await window.evaluate((window) => window.getMinimumSize())
+  const expectedSize = {
+    width: Math.min(workArea.width, Math.max(minimumWidth, Math.min(1140, workArea.width - 24))),
+    height: Math.min(workArea.height, Math.max(minimumHeight, Math.min(760, workArea.height - 24)))
+  }
   await window.evaluate((window, bounds) => window.setBounds(bounds), { ...expectedSize, x: workArea.x, y: workArea.y })
   await new Promise((resolve) => setTimeout(resolve, 600))
   assert.deepEqual(await window.evaluate((window) => ({ width: window.getBounds().width, height: window.getBounds().height })), expectedSize)
