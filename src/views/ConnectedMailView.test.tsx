@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MailAccountSummary, MailDraftRecord, MailPage, MailThreadDetail, SyncProgress } from '../mail-types'
@@ -125,8 +125,8 @@ beforeEach(() => {
 describe('ConnectedMailView', () => {
   it('shows unread counts for every non-empty folder and scopes them to the selected account', async () => {
     const user = userEvent.setup()
-    renderMail()
-    expect(await screen.findByRole('button', { name: 'Inbox 2 unread conversations' })).toBeInTheDocument()
+    await act(async () => { renderMail() })
+    expect(screen.getByRole('button', { name: 'Inbox 2 unread conversations' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Starred 1 unread conversation' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Archive 1 unread conversation' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'All mail 3 unread conversations' })).toBeInTheDocument()
