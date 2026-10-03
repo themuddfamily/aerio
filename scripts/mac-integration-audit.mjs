@@ -73,7 +73,11 @@ export async function auditMacIntegration(application, page, preferences) {
   await page.getByRole('button', { name: 'Settings', exact: true }).waitFor()
   await (await application.browserWindow(page)).evaluate((window) => { window.show(); window.focus() })
   const exited = application.waitForEvent('close', { timeout: 10_000 })
-  await page.keyboard.press('Meta+q').catch((error) => { if (!/closed/i.test(error.message)) throw error })
+  // Renderer-injected keys do not establish native application-menu shortcut behavior.
+  // Exercise Cocoa's Quit action through the application's real responder chain.
+  await application.evaluate(({ Menu }) => Menu.sendActionToFirstResponder('terminate:')).catch((error) => {
+    if (!/closed/i.test(error.message)) throw error
+  })
   await exited
-  console.log('Native macOS menus/editing, lock-preserving tray/Dock reopening, last-window lifecycle, saved bounds and Cmd+Q exit passed.')
+  console.log('Native macOS menus/editing, lock-preserving tray/Dock reopening, last-window lifecycle, saved bounds and Cocoa Quit action passed; physical Cmd+Q is unverified.')
 }
