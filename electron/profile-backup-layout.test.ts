@@ -146,6 +146,27 @@ describe('full profile layout', () => {
     } finally { restored.close() }
   })
 
+  it('carries POP3 settings and UIDL checkpoints, so a restored account asks for its password but never downloads twice', async () => {
+    const profile = makeProfile()
+    const mail = new MailDatabase(join(profile, 'aerio.sqlite'), join(profile, 'mail'))
+    mail.upsertAccount({ ...account, id: 'pop3-1', provider: 'pop3', email: 'pop@example.com' })
+    const server = { username: 'pop', pop3Host: 'pop.example.com', pop3Port: 995, pop3Security: 'tls' as const, smtpHost: 'smtp.example.com', smtpPort: 465, smtpSecurity: 'tls' as const }
+    mail.pop3.saveSettings('pop3-1', { server, retention: { leaveOnServer: true, deleteAfterDays: 7, removeWhenDeleted: false }, destination: { kind: 'account' } })
+    mail.pop3.recordStored('pop3-1', 'uidl-1', { messageAccountId: 'pop3-1', messageId: 'm1', size: 10 })
+    mail.close()
+    const { path } = await backupOf(profile)
+    expect(Object.fromEntries((await previewProfileBackup(path, profile, PROFILE_BACKUP_LAYOUT)).counts.map((item) => [item.label, item.count]))).toMatchObject({ 'POP3 download checkpoints': 1 })
+    await stageProfileRestore({ backupPath: path, userData: profile, layout: PROFILE_BACKUP_LAYOUT })
+    applyPendingProfileRestore(profile)
+    const restored = new MailDatabase(join(profile, 'aerio.sqlite'), join(profile, 'mail'))
+    try {
+      expect(restored.getAccount('pop3-1')).toMatchObject({ status: 'needs-auth' })
+      expect(restored.pop3.settings('pop3-1')).toMatchObject({ server, retention: { deleteAfterDays: 7 } })
+      expect(JSON.stringify(restored.pop3.settings('pop3-1'))).not.toContain('password')
+      expect(restored.pop3.row('pop3-1', 'uidl-1')).toMatchObject({ state: 'stored', messageId: 'm1' })
+    } finally { restored.close() }
+  })
+
   it('does not restore an app lock from the backup onto a device without one', async () => {
     const profile = makeProfile()
     const { path } = await backupOf(profile)

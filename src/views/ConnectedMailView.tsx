@@ -483,7 +483,9 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     try {
       if (keep) {
         await window.aerio.mail.accounts.disconnect(account.id, 'archive')
-      } else if (window.confirm(`Delete all downloaded mail for ${account.email}? The provider mailbox itself will not be changed.`)) {
+      } else if (window.confirm(account.provider === 'pop3'
+        ? `Delete all mail stored for ${account.email} on this computer? The POP3 server is not changed, but messages already removed from it, plus your local Sent mail and folders, cannot be recovered.`
+        : `Delete all downloaded mail for ${account.email}? The provider mailbox itself will not be changed.`)) {
         await window.aerio.mail.accounts.disconnect(account.id, 'delete')
       } else return
       await refreshAccounts()

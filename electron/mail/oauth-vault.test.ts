@@ -282,6 +282,18 @@ describe('OAuthVault storage and configuration', () => {
     expect(new OAuthVault(vaultPath).imapCredential('imap-1')).toMatchObject({ email: 'person@example.test' })
   })
 
+  it('stores POP3 passwords encrypted, routes POP3 credential requests, and removes them with the account', async () => {
+    const vault = new OAuthVault(vaultPath)
+    const pop3 = { email: 'person@example.test', username: 'person', password: 'pop-secret', pop3Host: 'pop.example.test', pop3Port: 995, pop3Security: 'tls' as const, smtpHost: 'smtp.example.test', smtpPort: 465, smtpSecurity: 'tls' as const }
+    expect(vault.pop3Config('pop-1')).toBeUndefined()
+    expect(() => vault.pop3Credential('pop-1')).toThrow(/Authentication failed: this POP3 account needs its password/)
+    vault.storePop3('pop-1', pop3)
+    expect(new OAuthVault(vaultPath).pop3Config('pop-1')).toEqual(pop3)
+    await expect(vault.credential('pop-1', 'pop3')).resolves.toEqual({ type: 'pop3', config: pop3 })
+    await vault.remove('pop-1')
+    expect(new OAuthVault(vaultPath).pop3Config('pop-1')).toBeUndefined()
+  })
+
   it('reloads once before reporting a missing IMAP credential', () => {
     const vault = new OAuthVault(vaultPath)
     expect(() => vault.imapCredential('missing')).toThrow('needs to be connected again')

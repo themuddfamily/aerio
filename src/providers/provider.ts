@@ -87,7 +87,15 @@ export const providerCatalog: Record<ProviderId, ProviderCapabilities> = {
   yahoo: imapCapabilities('yahoo', 'Yahoo Mail'),
   fastmail: imapCapabilities('fastmail', 'Fastmail'),
   imap: imapCapabilities('imap', 'IMAP/SMTP'),
-  'proton-bridge': imapCapabilities('proton-bridge', 'Proton Mail Bridge')
+  'proton-bridge': imapCapabilities('proton-bridge', 'Proton Mail Bridge'),
+  pop3: {
+    id: 'pop3',
+    name: 'POP3/SMTP',
+    modules: {
+      mail: remoteReady('Mail downloads over POP3 into folders kept on this device and sends over SMTP.'),
+      ...localProductivity
+    }
+  }
 }
 
 export function capabilitiesFor(provider: ProviderId) {

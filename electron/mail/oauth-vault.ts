@@ -4,6 +4,7 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { OAuth2Client, CodeChallengeMethod, type Credentials } from 'google-auth-library'
 import { safeStorage, shell } from 'electron'
 import type { MailCredentialStatus, ImapAccountInput, ImapServerSettings, MailProviderId } from '../../src/mail-types'
+import type { Pop3ConnectionConfig } from '../../src/pop3-types'
 import {
   parseDesktopOAuthConfig,
   parseMicrosoftClientId,
@@ -21,6 +22,8 @@ interface StoredOAuthData {
   microsoftConfig?: { clientId: string }
   microsoftTokens: Record<string, MicrosoftTokenSet>
   imapAccounts: Record<string, ImapAccountInput>
+  /** POP3 connection settings and passwords (E38). */
+  pop3Accounts?: Record<string, Pop3ConnectionConfig>
 }
 
 interface MicrosoftTokenSet {
@@ -81,7 +84,8 @@ export class OAuthVault {
         googleCalendarWrite: parsed.googleCalendarWrite ?? {},
         microsoftConfig: parsed.microsoftConfig,
         microsoftTokens: parsed.microsoftTokens ?? {},
-        imapAccounts: parsed.imapAccounts ?? {}
+        imapAccounts: parsed.imapAccounts ?? {},
+        pop3Accounts: parsed.pop3Accounts ?? {}
       }
     } catch {
       // Keep any credentials already held in memory. This also prevents a
@@ -478,9 +482,27 @@ export class OAuthVault {
     }
   }
 
+  storePop3(accountId: string, config: Pop3ConnectionConfig) {
+    this.data.pop3Accounts = { ...(this.data.pop3Accounts ?? {}), [accountId]: config }
+    this.save()
+  }
+
+  /** The stored POP3 connection, or undefined when it was never saved here (for example after a profile restore). */
+  pop3Config(accountId: string) {
+    if (!this.data.pop3Accounts?.[accountId]) this.load()
+    return this.data.pop3Accounts?.[accountId]
+  }
+
+  pop3Credential(accountId: string) {
+    const config = this.pop3Config(accountId)
+    if (!config) throw new Error('Authentication failed: this POP3 account needs its password entered again')
+    return config
+  }
+
   async credential(accountId: string, provider: MailProviderId) {
     if (provider === 'gmail') return { type: 'oauth' as const, accessToken: await this.accessToken(accountId) }
     if (provider === 'microsoft') return { type: 'oauth' as const, accessToken: await this.microsoftAccessToken(accountId) }
+    if (provider === 'pop3') return { type: 'pop3' as const, config: this.pop3Credential(accountId) }
     return { type: 'imap' as const, config: this.imapCredential(accountId) }
   }
 
@@ -499,6 +521,7 @@ export class OAuthVault {
     delete this.data.googleCalendarWrite[accountId]
     delete this.data.microsoftTokens[accountId]
     delete this.data.imapAccounts[accountId]
+    if (this.data.pop3Accounts) delete this.data.pop3Accounts[accountId]
     this.accessCache.delete(accountId)
     this.save()
   }

@@ -7,7 +7,8 @@ export const PROVIDER_PRESETS: MailProviderPreset[] = [
   { id: 'yahoo', name: 'Yahoo Mail & AOL', description: 'IMAP and SMTP using a Yahoo app password.', auth: 'app-password', imapHost: 'imap.mail.yahoo.com', imapPort: 993, imapSecurity: 'tls', smtpHost: 'smtp.mail.yahoo.com', smtpPort: 465, smtpSecurity: 'tls', passwordHint: 'Yahoo app password' },
   { id: 'fastmail', name: 'Fastmail', description: 'IMAP and SMTP using a Fastmail app password.', auth: 'app-password', imapHost: 'imap.fastmail.com', imapPort: 993, imapSecurity: 'tls', smtpHost: 'smtp.fastmail.com', smtpPort: 465, smtpSecurity: 'tls', passwordHint: 'Fastmail app password' },
   { id: 'proton-bridge', name: 'Proton Mail Bridge', description: 'Connect to the local IMAP/SMTP service exposed by Proton Mail Bridge.', auth: 'bridge', imapHost: '127.0.0.1', imapPort: 1143, imapSecurity: 'starttls', smtpHost: '127.0.0.1', smtpPort: 1025, smtpSecurity: 'starttls', usernameHint: 'Bridge username', passwordHint: 'Bridge password' },
-  { id: 'imap', name: 'Other IMAP/SMTP', description: 'Any standards-compatible mail provider or custom domain.', auth: 'password', imapPort: 993, imapSecurity: 'tls', smtpPort: 465, smtpSecurity: 'tls' }
+  { id: 'imap', name: 'Other IMAP/SMTP', description: 'Any standards-compatible mail provider or custom domain.', auth: 'password', imapPort: 993, imapSecurity: 'tls', smtpPort: 465, smtpSecurity: 'tls' },
+  { id: 'pop3', name: 'POP3 and SMTP', description: 'Download mail over POP3 into folders kept on this computer, and send over SMTP.', auth: 'password', smtpPort: 465, smtpSecurity: 'tls' }
 ]
 
 export function validateImapAccount(input: ImapAccountInput) {

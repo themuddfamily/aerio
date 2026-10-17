@@ -45,7 +45,25 @@ export function imapMessageLabels(folder: ImapFolder, flags: Set<string>) {
 }
 
 export class ImapSmtpClient {
-  constructor(private readonly config: ImapAccountInput) {}
+  /** `trust` adds a CA for a disposable test certificate; it never disables verification. */
+  constructor(private readonly config: ImapAccountInput, private readonly trust: { ca?: string } = {}) {}
+
+  private smtp() {
+    return nodemailer.createTransport({
+      host: this.config.smtpHost,
+      port: this.config.smtpPort,
+      secure: this.config.smtpSecurity === 'tls',
+      requireTLS: this.config.smtpSecurity === 'starttls',
+      auth: { user: this.config.username, pass: this.config.password },
+      tls: { rejectUnauthorized: !this.config.allowInvalidCertificates, ...this.trust },
+      connectionTimeout: 30_000
+    })
+  }
+
+  /** Checks only the SMTP server (POP3 accounts have no IMAP server). */
+  async verifySmtp() {
+    await this.smtp().verify()
+  }
 
   private imap(verifyOnly = false) {
     return new ImapFlow({
@@ -66,15 +84,7 @@ export class ImapSmtpClient {
   async verify() {
     const imap = this.imap(true)
     await imap.connect()
-    await nodemailer.createTransport({
-      host: this.config.smtpHost,
-      port: this.config.smtpPort,
-      secure: this.config.smtpSecurity === 'tls',
-      requireTLS: this.config.smtpSecurity === 'starttls',
-      auth: { user: this.config.username, pass: this.config.password },
-      tls: { rejectUnauthorized: !this.config.allowInvalidCertificates },
-      connectionTimeout: 30_000
-    }).verify()
+    await this.smtp().verify()
   }
 
   async withConnection<T>(callback: (client: ImapFlow) => Promise<T>) {
@@ -276,15 +286,7 @@ export class ImapSmtpClient {
 
   /** `envelopeFrom` lets an alias identity use its own SMTP sender; the server decides whether it is allowed. */
   async send(raw: Buffer, recipients: string[], options?: MailSendOptions, envelopeFrom = this.config.email) {
-    const transport = nodemailer.createTransport({
-      host: this.config.smtpHost,
-      port: this.config.smtpPort,
-      secure: this.config.smtpSecurity === 'tls',
-      requireTLS: this.config.smtpSecurity === 'starttls',
-      auth: { user: this.config.username, pass: this.config.password },
-      tls: { rejectUnauthorized: !this.config.allowInvalidCertificates },
-      connectionTimeout: 30_000
-    })
+    const transport = this.smtp()
     // Nodemailer only adds DSN parameters when the SMTP server advertises DSN.
     const dsn = options?.requestDeliveryReceipt ? { return: 'headers' as const, notify: ['success', 'failure', 'delay'] as ('success' | 'failure' | 'delay')[], recipient: envelopeFrom } : undefined
     await transport.sendMail({ envelope: { from: envelopeFrom, to: recipients }, raw, ...(dsn ? { dsn } : {}) })

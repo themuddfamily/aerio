@@ -1,4 +1,4 @@
-import { Cloud, Mail, Shield } from 'lucide-react'
+import { Cloud, Inbox, Mail, Shield } from 'lucide-react'
 import type { MailProviderId } from '../mail-types'
 
 interface Props {
@@ -25,6 +25,7 @@ export default function ProviderLogo({ provider, size = 24 }: Props) {
   else if (provider === 'yahoo') logo = <span className="provider-letter-logo yahoo-provider-logo">Y!</span>
   else if (provider === 'fastmail') logo = <img className="fastmail-provider-logo" src={FASTMAIL_ICON} alt="" />
   else if (provider === 'proton-bridge') logo = <Shield color="#6d4aff" fill="#6d4aff22" />
+  else if (provider === 'pop3') logo = <Inbox />
   else logo = <Mail />
   return <span className="provider-logo-art" style={{ width: size, height: size }} aria-hidden="true">{logo}</span>
 }

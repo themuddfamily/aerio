@@ -385,6 +385,13 @@ const api: AerioDesktopApi = {
       resolve: (jobId, keys, decision) => ipcRenderer.invoke('mail:import:resolve', jobId, keys, decision),
       transfer: (input) => ipcRenderer.invoke('mail:local:transfer', input)
     },
+    pop3: {
+      test: (input) => ipcRenderer.invoke('mail:pop3:test', input),
+      connect: (input) => ipcRenderer.invoke('mail:pop3:connect', input),
+      settings: (accountId) => ipcRenderer.invoke('mail:pop3:settings', accountId),
+      update: (accountId, input) => ipcRenderer.invoke('mail:pop3:update', accountId, input),
+      status: (accountId) => ipcRenderer.invoke('mail:pop3:status', accountId)
+    },
     sync: {
       start: (accountId) => ipcRenderer.invoke('mail:sync:start', accountId),
       pause: (accountId) => ipcRenderer.invoke('mail:sync:pause', accountId),

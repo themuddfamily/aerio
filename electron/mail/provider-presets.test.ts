@@ -4,7 +4,7 @@ import { PROVIDER_PRESETS, validateImapAccount } from './provider-presets'
 describe('mail provider presets', () => {
   it('covers the common OAuth, app-password, bridge, and generic providers', () => {
     expect(PROVIDER_PRESETS.map((preset) => preset.id)).toEqual([
-      'gmail', 'microsoft', 'icloud', 'yahoo', 'fastmail', 'proton-bridge', 'imap'
+      'gmail', 'microsoft', 'icloud', 'yahoo', 'fastmail', 'proton-bridge', 'imap', 'pop3'
     ])
     expect(PROVIDER_PRESETS.find((preset) => preset.id === 'icloud')).toMatchObject({ imapPort: 993, smtpPort: 587 })
     expect(PROVIDER_PRESETS.find((preset) => preset.id === 'proton-bridge')).toMatchObject({ imapHost: '127.0.0.1', smtpHost: '127.0.0.1' })

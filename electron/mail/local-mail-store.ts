@@ -169,12 +169,12 @@ export class LocalMailStore {
     return this.mail.getAccount(accountId)?.provider === 'local'
   }
 
-  // Marks queued Local Folders changes as done once their undo window passes:
+  // Marks queued Local Folders (and POP3 account) changes as done once their undo window passes:
   // the change is already applied to the local copy and has no server.
   completeDueOperations() {
     const rows = this.db.prepare(`
       SELECT o.id,o.account_id,o.kind FROM gmail_operations o JOIN gmail_accounts a ON a.id=o.account_id
-      WHERE a.provider='local' AND o.status='queued' AND o.execute_after<=?
+      WHERE a.provider IN ('local','pop3') AND o.status='queued' AND o.execute_after<=?
     `).all(nowIso()) as Row[]
     const update = this.db.prepare(`UPDATE gmail_operations SET status='succeeded',updated_at=? WHERE id=?`)
     for (const row of rows) update.run(nowIso(), String(row.id))

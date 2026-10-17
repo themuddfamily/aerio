@@ -241,6 +241,17 @@ describe('preload bridge', () => {
     for (const action of ['pause', 'resume', 'cancel', 'dismiss', 'items']) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(`mail:import:${action}`, 'job-1')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:import:resolve', 'job-1', ['0:0'], 'discard')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:local:transfer', expect.objectContaining({ mode: 'copy' }))
+    const pop3 = mail.pop3!
+    const pop3Input = { email: 'a@example.com', username: 'a', password: 'p', pop3Host: 'pop.example.com', pop3Port: 995, pop3Security: 'tls' as const, smtpHost: 'smtp.example.com', smtpPort: 465, smtpSecurity: 'tls' as const, retention: { leaveOnServer: true, removeWhenDeleted: false }, destination: { kind: 'account' as const } }
+    await pop3.test(pop3Input)
+    await pop3.connect(pop3Input)
+    await pop3.settings('pop3-1')
+    await pop3.update('pop3-1', pop3Input)
+    await pop3.status('pop3-1')
+    for (const channel of ['mail:pop3:test', 'mail:pop3:connect']) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel, pop3Input)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:pop3:settings', 'pop3-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:pop3:update', 'pop3-1', pop3Input)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:pop3:status', 'pop3-1')
     await mail.templates.list('welcome')
     await mail.templates.save({ kind: 'snippet', name: 'Hi', html: 'Hi' })
     await mail.templates.delete('template-1')

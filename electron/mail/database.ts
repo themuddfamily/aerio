@@ -46,6 +46,7 @@ import { listContactHistoryPage } from './contact-history'
 import { MailDraftOpenPgpStore } from './openpgp-draft-store'
 import { MailDraftSmimeStore } from './smime-draft-store'
 import { LocalMailStore } from './local-mail-store'
+import { Pop3Store } from './pop3-store'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -110,6 +111,7 @@ export class MailDatabase {
   readonly ruleLedger: RuleRunLedger
   readonly attachmentText: AttachmentTextStore
   readonly mailMerge: MailMergeStore
+  readonly pop3: Pop3Store
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -128,6 +130,7 @@ export class MailDatabase {
     this.ruleLedger = new RuleRunLedger(this.db)
     this.attachmentText = new AttachmentTextStore(this.db)
     this.mailMerge = new MailMergeStore(this.db)
+    this.pop3 = new Pop3Store(this.db)
   }
 
   close() {
@@ -142,8 +145,13 @@ export class MailDatabase {
     return statement
   }
 
+  private transactionDepth = 0
+
+  /** Runs `callback` in one transaction; a nested call joins the outer one. */
   transaction<T>(callback: () => T): T {
+    if (this.transactionDepth) return callback()
     this.db.exec('BEGIN IMMEDIATE')
+    this.transactionDepth += 1
     try {
       const result = callback()
       this.db.exec('COMMIT')
@@ -151,6 +159,8 @@ export class MailDatabase {
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
+    } finally {
+      this.transactionDepth -= 1
     }
   }
 
@@ -1303,7 +1313,8 @@ export class MailDatabase {
   }
 
   draftsToSync() {
-    return this.stmt(`SELECT * FROM gmail_drafts WHERE status='local' ORDER BY updated_at LIMIT 20`).all() as DatabaseRow[]
+    // POP3 drafts never sync: the protocol has no server Drafts folder.
+    return this.stmt(`SELECT * FROM gmail_drafts WHERE status='local' AND account_id NOT IN (SELECT id FROM gmail_accounts WHERE provider='pop3') ORDER BY updated_at LIMIT 20`).all() as DatabaseRow[]
   }
 
   updateDraftResult(id: string, result: MailDraftResult) {

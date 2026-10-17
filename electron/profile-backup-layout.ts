@@ -76,7 +76,9 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
         { label: 'Quick actions', count: countRows(db, 'mail_quick_actions') },
         { label: 'Saved searches', count: countRows(db, 'mail_saved_searches') },
         { label: 'Reply watches', count: countRows(db, 'mail_reply_watches', `status='pending'`) },
-        { label: 'Unfinished mail merges', count: countRows(db, 'mail_merge_jobs', MAIL_MERGE_ACTIVE) }
+        { label: 'Unfinished mail merges', count: countRows(db, 'mail_merge_jobs', MAIL_MERGE_ACTIVE) },
+        // POP3 UIDL checkpoints: a restored account does not download these messages again.
+        { label: 'POP3 download checkpoints', count: countRows(db, 'pop3_uidls') }
       ]
     },
     {
