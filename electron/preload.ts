@@ -189,6 +189,7 @@ const api: AerioDesktopApi = {
       progress: () => ipcRenderer.invoke('mail:sync:progress')
     },
     attachments: {
+      list: (query) => ipcRenderer.invoke('mail:attachments:list', query),
       open: (accountId, messageId, attachmentId, filename) => ipcRenderer.invoke('mail:attachment:open', accountId, messageId, attachmentId, filename),
       save: (accountId, messageId, attachmentId, filename) => ipcRenderer.invoke('mail:attachment:save', accountId, messageId, attachmentId, filename)
     },

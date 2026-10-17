@@ -7,6 +7,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import MailComposeModal from '../components/MailComposeModal'
 import MailAccountSetupModal from '../components/MailAccountSetupModal'
 import MailAccountSettingsModal from '../components/MailAccountSettingsModal'
+import MailAttachmentsModal from '../components/MailAttachmentsModal'
 import MailOrganizeModal from '../components/MailOrganizeModal'
 import MailMessageSourceModal from '../components/MailMessageSourceModal'
 import MailRulesModal from '../components/MailRulesModal'
@@ -114,6 +115,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [rulesOpen, setRulesOpen] = useState(false)
   const [replyWatchesOpen, setReplyWatchesOpen] = useState(false)
   const [foldersOpen, setFoldersOpen] = useState<string | true>()
+  const [attachmentsOpen, setAttachmentsOpen] = useState(false)
   const [sourceViewer, setSourceViewer] = useState<{ mode: 'headers' | 'source'; subject: string; content: string }>()
   const [remoteImages, setRemoteImages] = useState(false)
   const [accountSetup, setAccountSetup] = useState(false)
@@ -890,6 +892,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           ], label.name)}><Tag size={15} /><span>{label.name}</span></button> })}</div>}
         <MailSavedSearchList searches={savedSearches.searches} view={searchView} onOpen={openSavedSearch} onEdit={setSavingSearch} onReplace={(item) => void replaceSavedSearch(item)} onDelete={(item) => { if (window.confirm(`Delete the saved search “${item.name}”? Mail is not affected.`)) void savedSearches.remove(item) }} />
         <div className="mail-sidebar-footer">
+          <button onClick={() => setAttachmentsOpen(true)}><Paperclip size={14} /> All attachments</button>
           <button onClick={() => setRulesOpen(true)}><Filter size={14} /> Mail rules</button>
           <button onClick={() => setReplyWatchesOpen(true)}><Eye size={14} /> Reply watches</button>
           <button disabled={!accounts.some((account) => !account.archived)} onClick={() => setFoldersOpen(accountId === 'all' ? true : accountId)}><FolderInput size={14} /> Folders &amp; labels</button>
@@ -1044,6 +1047,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       {snoozeItems && <MailSnoozeModal count={snoozeItems.length} onApply={(until) => applySnooze(snoozeItems, until)} onClose={() => setSnoozeItems(undefined)} />}
       {savingSearch && <MailSaveSearchModal accounts={accounts} labels={labels} initial={savingSearch} onClose={() => setSavingSearch(undefined)} onSave={async (input) => { const saved = await savedSearches.save(input); openSavedSearch(saved); onToast(`Saved “${saved.name}”`) }} />}
       {replyWatchesOpen && <MailReplyWatchesModal accounts={accounts} onToast={onToast} onClose={() => setReplyWatchesOpen(false)} />}
+      {attachmentsOpen && <MailAttachmentsModal accounts={accounts} onToast={onToast} onClose={() => setAttachmentsOpen(false)} />}
       {rulesOpen && <MailRulesModal accounts={accounts} labels={labels} onToast={onToast} onClose={() => setRulesOpen(false)} />}
       {foldersOpen && <MailFolderManagerModal accounts={accounts} labels={labels} initialAccountId={foldersOpen === true ? undefined : foldersOpen} onToast={onToast} onClose={() => setFoldersOpen(undefined)} onChanged={(changedAccount, result) => {
         setLabels((items) => [...items.filter((label) => label.accountId !== changedAccount), ...result.labels])

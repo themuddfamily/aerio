@@ -111,6 +111,53 @@ export interface MailAttachment {
   contentId?: string
 }
 
+export type MailAttachmentFileType = 'pdf' | 'calendar' | 'spreadsheet' | 'presentation' | 'document' | 'archive' | 'image' | 'audio' | 'video' | 'other'
+
+/** Filters for the cross-account attachments workspace. Dates are inclusive YYYY-MM-DD bounds. */
+export interface MailAttachmentQuery {
+  accountIds?: string[]
+  /** Defaults to true: archived accounts keep their offline attachments. */
+  includeArchivedAccounts?: boolean
+  /** Defaults to false: inline images referenced by Content-ID (logos, signatures) are hidden. */
+  includeInline?: boolean
+  search?: string
+  sender?: string
+  recipient?: string
+  dateFrom?: string
+  dateTo?: string
+  fileTypes?: MailAttachmentFileType[]
+  minSize?: number
+  maxSize?: number
+  cursor?: string
+  pageSize?: number
+}
+
+export interface MailAttachmentListItem {
+  accountId: string
+  threadId: string
+  messageId: string
+  attachmentId: string
+  filename: string
+  mimeType: string
+  size: number
+  fileType: MailAttachmentFileType
+  date: string
+  fromName: string
+  fromEmail: string
+  to: string[]
+  cc: string[]
+  subject: string
+  /** False when the stored original message is missing, so open/save cannot extract it. */
+  available: boolean
+  accountArchived: boolean
+}
+
+export interface MailAttachmentPage {
+  items: MailAttachmentListItem[]
+  nextCursor?: string
+  total: number
+}
+
 export interface MailMessageDetail {
   local?: MailMessageLocalData
   accountId: string
@@ -585,6 +632,7 @@ export interface MailDesktopApi {
     progress(): Promise<SyncProgress[]>
   }
   attachments: {
+    list(query: MailAttachmentQuery): Promise<MailAttachmentPage>
     open(accountId: string, messageId: string, attachmentId: string, filename: string): Promise<{ error?: string }>
     save(accountId: string, messageId: string, attachmentId: string, filename: string): Promise<{ savedPath?: string; error?: string }>
   }

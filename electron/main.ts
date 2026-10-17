@@ -34,6 +34,7 @@ import type {
   ImapServerSettings,
   ImapServerSettingsUpdate,
   MailPage,
+  MailAttachmentPage,
   MailFolderUnreadCounts,
   MailAccountUnreadCounts,
   MailAccountSettingsInput,
@@ -52,6 +53,7 @@ import { ImapSmtpClient } from './mail/imap-client'
 import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
 import { MailWorkerClient } from './mail/worker-client'
 import { validateCreateFolder, validateDeleteFolder, validateFolderReference, validateUpdateFolder } from './mail/folder-validation'
+import { normalizeAttachmentQuery } from './mail/attachment-index'
 import { DiagnosticLogger, type DiagnosticRecord } from './diagnostics'
 import { UpdateManager } from './update-manager'
 import { ProductivityStore } from './productivity/store'
@@ -1762,6 +1764,8 @@ function registerIpc() {
     if (online) void taskService?.flush().catch(() => {})
     return requireMailWorker().request({ type: 'network', payload: { online } })
   })
+  ipcMain.handle('mail:attachments:list', (_event, query: unknown) =>
+    requireMailWorker().request<MailAttachmentPage>({ type: 'attachments:list', payload: normalizeAttachmentQuery(query) }))
   ipcMain.handle('mail:attachment:open', async (_event, accountId: string, messageId: string, attachmentId: string, filename: string) => {
     const directory = join(tmpdir(), 'aerio-attachments')
     mkdirSync(directory, { recursive: true })

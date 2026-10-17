@@ -13,6 +13,7 @@ vi.mock('../components/MailAccountSetupModal', () => ({ default: (props: any) =>
 vi.mock('../components/MailAccountSettingsModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Account settings mock"><span>{props.account.email}</span><button onClick={() => props.onSaved({ ...props.account, displayName: 'Updated' })}>Save account</button><button onClick={props.onClose}>Close settings</button></div> }))
 vi.mock('../components/MailOrganizeModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Organize mock"><button onClick={() => props.onApply([{ accountId: props.items[0].accountId, threadIds: props.items.map((item: any) => item.id), action: props.mode === 'move' ? 'move' : 'label', labelId: 'project' }])}>Apply organize</button><button onClick={props.onClose}>Close organize</button></div> }))
 vi.mock('../components/MailMessageSourceModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Source mock"><span>{props.mode}:{props.content}</span><button onClick={props.onClose}>Close source</button></div> }))
+vi.mock('../components/MailAttachmentsModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Attachments mock"><span>{props.accounts.length} accounts</span><button onClick={props.onClose}>Close attachments</button></div> }))
 vi.mock('../components/MailRulesModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Rules mock"><button onClick={props.onClose}>Close rules</button></div> }))
 vi.mock('../components/MailSearchFiltersPanel', () => ({ default: (props: any) => <div role="dialog" aria-label="Filters mock">
   <button onClick={() => props.onApply({ subject: 'Launch' })}>Apply filters</button>
@@ -277,6 +278,8 @@ describe('ConnectedMailView', () => {
     await user.click(screen.getByRole('button', { name: 'Close setup' }))
     await user.click(screen.getByRole('button', { name: /Mail rules/ })); expect(screen.getByRole('dialog', { name: 'Rules mock' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Close rules' }))
+    await user.click(screen.getByRole('button', { name: /All attachments/ })); expect(screen.getByRole('dialog', { name: 'Attachments mock' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Close attachments' })); expect(screen.queryByRole('dialog', { name: 'Attachments mock' })).not.toBeInTheDocument()
     await user.click(screen.getByTitle('Settings for me@example.test')); expect(screen.getByRole('dialog', { name: 'Account settings mock' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Close settings' }))
     await user.click(screen.getByRole('button', { name: /Offline storage/ })); expect(onToast).toHaveBeenCalledWith('2 KB stored offline · 4 KB free')
