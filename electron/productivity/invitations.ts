@@ -59,7 +59,8 @@ export function createInvitationService(options: InvitationServiceOptions) {
   // The synced provider event for this UID in the same account: the matching occurrence for an instance
   // invitation, otherwise any instance (its series master is what gets answered).
   const providerEvent = (accountId: string, message: ItipMessage) => {
-    const candidates = options.productivity().snapshot().events.filter((event) => event.accountId === accountId && event.icalUid === message.event.uid)
+    const candidates = options.productivity().snapshot().events.filter((event) =>
+      event.accountId === accountId && (event.provider === 'gmail' || event.provider === 'microsoft') && event.icalUid === message.event.uid)
     if (message.event.recurrenceId) return candidates.find((event) => sameOccurrence(event.originalStart ?? event.start, message.event.recurrenceId))
     return candidates.find((event) => !event.seriesId) ?? candidates[0]
   }
@@ -249,6 +250,7 @@ export function createInvitationService(options: InvitationServiceOptions) {
     const snapshot = options.productivity().snapshot()
     const event: SyncedCalendarEvent | undefined = snapshot.events.find((item) => item.id === eventId)
     if (!event) throw new Error('That event is no longer available')
+    if (event.provider !== 'gmail' && event.provider !== 'microsoft') throw new Error('This calendar has no response API; answer the invitation email instead')
     const calendar = snapshot.calendars.find((item) => item.id === event.calendarId)
     if (!calendar) throw new Error('That calendar is no longer available')
     const addresses = await options.addresses(event.accountId)

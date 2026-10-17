@@ -6,10 +6,12 @@ import type {
   WorkerEventMessage,
   WorkerResponse,
   WorkerCredentialRequest,
+  WorkerOpenPgpRequest,
   AccountCredential
 } from '../mail-protocol'
 
-type WorkerMessage = WorkerResponse | WorkerEventMessage | WorkerCredentialRequest
+type WorkerMessage = WorkerResponse | WorkerEventMessage | WorkerCredentialRequest | WorkerOpenPgpRequest
+export type OpenPgpProtector = (request: Omit<WorkerOpenPgpRequest, 'kind' | 'id'>) => Promise<string>
 
 export class MailWorkerClient {
   private readonly worker: Worker
@@ -18,7 +20,8 @@ export class MailWorkerClient {
   constructor(
     workerPath: string,
     private readonly credentialProvider: (accountId: string) => Promise<AccountCredential>,
-    private readonly eventHandler: (event: MailWorkerEvent) => void
+    private readonly eventHandler: (event: MailWorkerEvent) => void,
+    private readonly openPgpProtector?: OpenPgpProtector
   ) {
     this.worker = new Worker(workerPath)
     this.worker.on('message', (message: WorkerMessage) => void this.onMessage(message))
@@ -46,6 +49,16 @@ export class MailWorkerClient {
         this.worker.postMessage({ kind: 'credential-response', id: message.id, credential })
       } catch (error) {
         this.worker.postMessage({ kind: 'credential-response', id: message.id, error: error instanceof Error ? error.message : String(error) })
+      }
+      return
+    }
+    if (message.kind === 'openpgp-request') {
+      try {
+        if (!this.openPgpProtector) throw new Error('OpenPGP is not available. The message was not sent; your draft is kept.')
+        const { kind: _kind, id: _id, ...request } = message
+        this.worker.postMessage({ kind: 'openpgp-response', id: message.id, message: await this.openPgpProtector(request) })
+      } catch (error) {
+        this.worker.postMessage({ kind: 'openpgp-response', id: message.id, error: error instanceof Error ? error.message : String(error) })
       }
       return
     }

@@ -133,7 +133,7 @@ export default function MailFolderManagerModal({ accounts, labels, initialAccoun
     </Modal>
   }
 
-  return <Modal title={noun === 'label' ? 'Manage labels' : 'Manage folders'} subtitle="Changes are made on the mail provider" width="medium" onClose={onClose}>
+  return <Modal title={noun === 'label' ? 'Manage labels' : 'Manage folders'} subtitle={account?.provider === 'local' ? 'Local Folders are stored only on this computer' : 'Changes are made on the mail provider'} width="medium" onClose={onClose}>
     {!editor ? <>
       <div className="mail-rules-list mail-folder-list">
         {writable.length > 1 && <label className="field"><span>Account</span><select value={accountId} onChange={(event) => setAccountId(event.target.value)}>{writable.map((item) => <option key={item.id} value={item.id}>{item.email}</option>)}</select></label>}

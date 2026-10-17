@@ -8,10 +8,23 @@ import { isIanaTimeZone, resolveTimeZoneName, wallTimeInZone, windowsTimeZoneNam
 import { eventAttendees, fromGraphAttendee, participant, toGraphAttendee, withAttendees, type GraphAttendee } from '../../src/lib/event-attendees'
 import type { EventResponseInput } from '../../src/invitation-types'
 import { mapMicrosoftRichContact, microsoftRichContactBody, microsoftRichContactSelect, type GraphRichContact } from './microsoft-contacts'
+import { conferenceWrite } from '../../src/lib/online-meetings'
+import {
+  assertConferenceCreatable, assertConferenceRemovable, graphOnlineMeetingSelect, graphTeamsMeeting, mapGraphConference, microsoftConferenceSupport,
+  type GraphOnlineMeetingFields
+} from './online-meetings'
 
 interface GraphPage<T> { value: T[]; '@odata.nextLink'?: string; '@odata.deltaLink'?: string }
-interface GraphCalendar { id: string; name?: string; color?: string; isDefaultCalendar?: boolean; canEdit?: boolean }
-interface GraphEvent {
+interface GraphCalendar {
+  id: string
+  name?: string
+  color?: string
+  isDefaultCalendar?: boolean
+  canEdit?: boolean
+  allowedOnlineMeetingProviders?: string[]
+  defaultOnlineMeetingProvider?: string
+}
+interface GraphEvent extends GraphOnlineMeetingFields {
   id: string
   '@removed'?: { reason?: string }
   subject?: string
@@ -136,6 +149,7 @@ export function mapMicrosoftEvent(accountId: string, calendar: SyncedCalendar, e
   const organizer = participant(event.organizer?.emailAddress?.address, event.organizer?.emailAddress?.name, event.isOrganizer)
   // `uid` is shared by a series master and its occurrences; iCalUId differs per occurrence.
   const icalUid = event.uid ?? event.iCalUId
+  const conference = mapGraphConference(event)
   return withAttendees({
     id: `${accountId}:microsoft-event:${calendar.remoteId}:${event.id}`,
     remoteId: event.id,
@@ -158,7 +172,8 @@ export function mapMicrosoftEvent(accountId: string, calendar: SyncedCalendar, e
     ...(event.seriesMasterId ? { seriesId: event.seriesMasterId } : {}),
     ...(event.seriesMasterId && event.originalStart ? { originalStart: event.isAllDay ? allDayDate(event.originalStart, zone) : new Date(utc(event.originalStart)!).toISOString() } : {}),
     ...(organizer ? { organizer } : {}),
-    ...(icalUid ? { icalUid } : {})
+    ...(icalUid ? { icalUid } : {}),
+    ...(conference ? { conference } : {})
   } satisfies SyncedCalendarEvent, details)
 }
 
@@ -202,7 +217,7 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
     previous: ProviderProductivityData = { calendars: [], events: [], contacts: [] },
     checkpoints: Record<string, string> = {}
   ): Promise<ProviderProductivitySyncResult> {
-    const remoteCalendars = await this.pages<GraphCalendar>('https://graph.microsoft.com/v1.0/me/calendars?$select=id,name,color,isDefaultCalendar,canEdit')
+    const remoteCalendars = await this.pages<GraphCalendar>('https://graph.microsoft.com/v1.0/me/calendars?$select=id,name,color,isDefaultCalendar,canEdit,allowedOnlineMeetingProviders,defaultOnlineMeetingProvider')
     const calendars: SyncedCalendar[] = remoteCalendars.map((calendar) => ({
       id: `${this.accountId}:microsoft-calendar:${calendar.id}`,
       remoteId: calendar.id,
@@ -211,7 +226,8 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
       name: calendar.name?.trim() || 'Calendar',
       color: graphColor(calendar.color),
       primary: Boolean(calendar.isDefaultCalendar),
-      canWrite: this.calendarWriteAuthorized && Boolean(calendar.canEdit)
+      canWrite: this.calendarWriteAuthorized && Boolean(calendar.canEdit),
+      conferences: microsoftConferenceSupport(calendar.allowedOnlineMeetingProviders, calendar.defaultOnlineMeetingProvider, this.calendarWriteAuthorized && Boolean(calendar.canEdit))
     }))
     const from = new Date(); from.setUTCFullYear(from.getUTCFullYear() - 1)
     const to = new Date(); to.setUTCFullYear(to.getUTCFullYear() + 2)
@@ -284,20 +300,50 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
     return page.value[0]?.parentFolderId
   }
 
+  // A Teams request sends its stable request id as transactionId, so Graph recognizes a retried POST of the
+  // same meeting instead of creating a second event and meeting.
   async createEvent(calendar: SyncedCalendar, event: CalendarEvent) {
     this.assertWritable(calendar)
+    const write = conferenceWrite(event)
+    if (write.kind === 'create') assertConferenceCreatable(calendar, write.provider)
+    const body = {
+      ...microsoftEventBody(event),
+      ...(write.kind === 'create' ? { ...graphTeamsMeeting, transactionId: write.requestId } : {})
+    }
     const remote = await retryingJson<GraphEvent>(this.provider, this.eventsUrl(calendar), this.token, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(microsoftEventBody(event))
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     })
     return this.mapWrittenEvent(calendar, remote)
   }
 
+  // Online meeting fields are only sent to add a meeting, so unrelated edits never touch an existing one. The
+  // body is only rewritten when the notes changed: Aerio reads bodyPreview, and rewriting the body would drop
+  // the HTML (including Teams join details) it does not show.
   async updateEvent(calendar: SyncedCalendar, current: SyncedCalendarEvent, event: CalendarEvent) {
     this.assertWritable(calendar)
-    const remote = await retryingJson<GraphEvent>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(current.remoteId)}`, this.token, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(microsoftEventBody(event, { instance: Boolean(current.seriesId) }))
+    const url = `${this.eventsUrl(calendar)}/${encodeURIComponent(current.remoteId)}`
+    const meeting = await this.meetingPatch(calendar, `https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(current.remoteId)}`, event, current.conference)
+    const { body: content, ...fields } = microsoftEventBody(event, { instance: Boolean(current.seriesId) })
+    const notesChanged = (current.description ?? '') !== (event.description ?? '')
+    const remote = await retryingJson<GraphEvent>(this.provider, url, this.token, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...fields, ...(notesChanged ? { body: content } : {}), ...meeting })
     })
     return this.mapWrittenEvent(calendar, remote)
+  }
+
+  // Teams fields for a PATCH. Before adding a meeting the event is re-read, so one created by an earlier attempt
+  // whose response was lost, or by another client, is kept rather than requested again.
+  private async meetingPatch(calendar: SyncedCalendar, url: string, event: CalendarEvent, known?: CalendarEvent['conference']) {
+    const write = conferenceWrite(event, known)
+    if (write.kind === 'keep') return {}
+    if (write.kind === 'remove') {
+      assertConferenceRemovable({ ...calendar, conferences: calendar.conferences ?? microsoftConferenceSupport([], undefined, false) })
+      return {}
+    }
+    assertConferenceCreatable(calendar, write.provider)
+    const latest = await retryingJson<GraphEvent>(this.provider, `${url}?$select=${graphOnlineMeetingSelect}`, this.token)
+    if (conferenceWrite(event, mapGraphConference(latest)).kind !== 'create') return {}
+    return graphTeamsMeeting
   }
 
   // Applies an occurrence edit to the series master, or ends the master's range before the occurrence and
@@ -311,13 +357,19 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
       const remaining = rule.count !== undefined ? Math.max(1, rule.count - occurrencesBefore({ ...timing, recurrenceRule: formatRecurrenceRule(rule) } as CalendarEvent, split)) : undefined
       await this.endSeriesBefore(master, timing, split)
       const successor = { ...event, seriesId: undefined, originalStart: undefined, recurrenceExceptions: undefined, recurrenceRule: formatRecurrenceRule({ ...rule, count: remaining }) }
+      // Graph cannot copy a meeting to another event: a Teams master gives the new series its own Teams meeting.
+      const write = conferenceWrite(event, mapGraphConference(master))
+      if (write.kind === 'create') assertConferenceCreatable(calendar, write.provider)
+      const teams = write.kind === 'create' || (write.kind === 'keep' && master.isOnlineMeeting && master.onlineMeetingProvider === 'teamsForBusiness')
       await retryingJson<GraphEvent>(this.provider, this.eventsUrl(calendar), this.token, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(microsoftEventBody(successor))
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...microsoftEventBody(successor), ...(teams ? graphTeamsMeeting : {}) })
       })
       return
     }
     const shifted = shiftSeriesTiming(timing, split, event)
-    await this.patchMaster(master, microsoftEventBody({ ...event, ...shifted, seriesId: undefined }, { instance: true }))
+    const meeting = await this.meetingPatch(calendar, `https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(master.id)}`, event, mapGraphConference(master))
+    await this.patchMaster(master, { ...microsoftEventBody({ ...event, ...shifted, seriesId: undefined }, { instance: true }), ...meeting })
   }
 
   async deleteEventSeries(calendar: SyncedCalendar, current: SyncedCalendarEvent, scope: 'following' | 'series') {

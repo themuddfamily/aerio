@@ -4505,6 +4505,140 @@ kbd {
 .csv-mapping-row > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .csv-mapping-row > small { color: var(--muted); }
 
+/* Mail merge */
+.mail-merge-body { display: grid; gap: 12px; max-height: 64vh; padding: 16px 20px; overflow-y: auto; color: var(--text-soft); font-size: 11px; }
+.mail-merge-tabs { display: flex; gap: 6px; }
+.mail-merge-tabs button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--text-soft); background: var(--surface-2); font-size: 10.5px; }
+.mail-merge-tabs button.active { border-color: var(--accent); color: var(--accent-text); background: var(--accent-soft); }
+.mail-merge-search { display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-2); }
+.mail-merge-search input { flex: 1; min-width: 0; min-height: 34px; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 11px; }
+.mail-merge-contacts { display: grid; max-height: 34vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }
+.mail-merge-contacts label { display: flex; align-items: center; gap: 10px; padding: 7px 11px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.mail-merge-contacts label:last-child { border-bottom: 0; }
+.mail-merge-file { justify-self: start; position: relative; cursor: pointer; }
+.mail-merge-file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.mail-merge-summary, .mail-merge-note { margin: 0; line-height: 1.5; }
+.mail-merge-note { color: var(--muted); font-size: 10px; }
+.modal-footer .mail-merge-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-merge-warning { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--danger); line-height: 1.45; }
+.mail-merge-warning > svg { flex: none; margin-top: 2px; }
+.mail-merge-stepper { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text); font-weight: 600; }
+.mail-merge-preview-headers { display: grid; gap: 4px; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.mail-merge-preview-headers div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
+.mail-merge-preview-headers dt { color: var(--muted); font-weight: 600; }
+.mail-merge-preview-headers dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.mail-merge-preview-body { min-height: 160px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); line-height: 1.55; overflow-wrap: anywhere; }
+.mail-merge-preview-text { white-space: pre-wrap; }
+.mail-merge-checklist { display: grid; gap: 8px; margin: 0; padding-left: 18px; line-height: 1.5; }
+.mail-merge-checklist li.mail-merge-warning { margin-left: -18px; }
+.mail-merge-limits { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.mail-merge-progress-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text); }
+.mail-merge-progress { width: 100%; height: 8px; accent-color: var(--accent); }
+.mail-merge-review { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--danger); border-radius: 10px; background: var(--danger-soft); color: var(--text); }
+.mail-merge-review p { display: flex; align-items: flex-start; gap: 6px; margin: 0; line-height: 1.45; }
+.mail-merge-review-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.mail-merge-recipients { display: grid; border: 1px solid var(--line); border-radius: 10px; }
+.mail-merge-recipient { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 5px 11px; border-bottom: 1px solid var(--line); }
+.mail-merge-recipient:last-child { border-bottom: 0; }
+.mail-merge-status { flex: none; color: var(--muted); font-size: 9.5px; font-weight: 650; }
+.mail-merge-recipient.status-sent .mail-merge-status { color: var(--success); }
+.mail-merge-recipient.status-failed .mail-merge-status,
+.mail-merge-recipient.status-ambiguous .mail-merge-status { color: var(--danger); }
+
+/* OpenPGP mail: composer control, message banner, and key manager. */
+.mail-openpgp-options .mail-send-options-panel { width: 320px; }
+.mail-openpgp-options.attention > summary { color: var(--danger); }
+.mail-openpgp-check { display: grid; gap: 4px; }
+.mail-openpgp-check p { margin: 0; display: grid; gap: 4px; }
+.mail-openpgp-check select { font: inherit; }
+.mail-openpgp-unlock { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+.mail-openpgp-unlock input { flex: 1; min-width: 140px; }
+
+.openpgp-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-bottom: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.openpgp-notice > svg { flex-shrink: 0; margin-top: 3px; color: var(--muted); }
+.openpgp-notice > div { flex: 1; min-width: 0; }
+.openpgp-notice.openpgp-good > svg { color: var(--success); }
+.openpgp-notice.openpgp-bad { border-color: var(--danger); background: var(--danger-soft); }
+.openpgp-notice.openpgp-bad > svg { color: var(--danger); }
+.openpgp-notice p { margin: 0; }
+.openpgp-notice small { color: var(--muted); }
+.openpgp-signatures { margin: 2px 0; padding-left: 16px; }
+.openpgp-signatures small { display: block; font-family: ui-monospace, monospace; }
+.openpgp-signatures .openpgp-bad { color: var(--danger); }
+.openpgp-decrypted { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: var(--message-font-size, 14px); color: var(--text); }
+.openpgp-attachments { display: grid; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; font-size: 12px; }
+.openpgp-attachments li { display: flex; align-items: center; gap: 6px; }
+
+.openpgp-form { display: grid; gap: 8px; margin: 8px 0; }
+.openpgp-key-list { display: grid; gap: 8px; margin: 8px 0; padding: 0; list-style: none; }
+.openpgp-key-list > li { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.openpgp-key-list > li.inactive { opacity: 0.7; }
+.openpgp-key-list > li > div:first-child { display: grid; gap: 2px; }
+.openpgp-key-list small { color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.openpgp-key-list code { font-size: 12px; letter-spacing: 0.02em; overflow-wrap: anywhere; }
+
+/* CalDAV/CardDAV accounts (Settings) */
+.dav-account-list, .dav-collection-list, .dav-review ul { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.dav-account-list > li { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.dav-account-heading, .dav-review li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.dav-account-heading > span, .dav-review li > span { min-width: 0; display: flex; flex-direction: column; }
+.dav-account-heading small, .dav-review small, .dav-collection-list small { color: var(--muted); font-size: 9.5px; }
+.dav-account-heading .settings-actions, .dav-review .settings-actions { margin: 0; }
+.dav-account-list > li > small.diagnostic-error { display: block; color: var(--danger); font-size: 9.5px; }
+.dav-collection-list .toggle-row { margin: 0; }
+.dav-color { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 50%; vertical-align: middle; }
+.dav-password-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-top: 6px; }
+.dav-review { display: grid; gap: 4px; margin: 8px 0; padding: 9px 10px; border: 1px solid var(--warning, var(--line)); border-radius: 8px; background: var(--surface-2); }
+.dav-review li { padding: 6px 0; border-top: 1px solid var(--line); }
+.dav-add { margin-top: 10px; }
+/* Mail import and Local Folders */
+.mail-import { gap: 10px; }
+.mail-import-local { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 8px; background: var(--surface-2); color: var(--text-soft); font-size: 10.5px; }
+.mail-import-local p { margin: 0; line-height: 1.45; }
+.mail-import-choose { display: flex; flex-wrap: wrap; gap: 6px; }
+.mail-import-hint { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.mail-import-chosen { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.mail-import-chosen li { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 6px; border-radius: 6px; background: var(--surface-2); font-size: 10.5px; }
+.mail-import-chosen li span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-import-unsupported { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--danger); font-size: 10px; line-height: 1.45; }
+.mail-import-jobs > article { align-items: flex-start; }
+.mail-import-job .rule-copy { flex: 1; gap: 2px; }
+.mail-import-job progress { width: 100%; height: 6px; margin-top: 4px; }
+.mail-import-job-actions { display: flex; align-items: center; gap: 4px; }
+.mail-import-review > article.imported, .mail-import-review > article.discarded { opacity: .62; }
+.mail-import-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.local-folders-sidebar .sidebar-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Cloud attachments (E20) */
+.compose-rich-body a[data-aerio-cloud-link] { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); text-decoration: none; font-weight: 600; }
+.cloud-attach-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 16px 8px; padding: 8px 12px; border: 1px solid color-mix(in srgb, #d79a36 45%, var(--line)); border-radius: 8px; background: color-mix(in srgb, #d79a36 10%, var(--surface)); font-size: 12px; }
+.cloud-attach-notice .text-button, .cloud-attach-pending .text-button { display: inline-flex; align-items: center; gap: 4px; }
+.cloud-attach-panel { display: grid; gap: 8px; margin: 0 16px 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 13px; }
+.cloud-attach-panel header { display: flex; justify-content: space-between; align-items: center; }
+.cloud-attach-panel header strong { display: inline-flex; gap: 6px; align-items: center; }
+.cloud-attach-panel p { margin: 0; }
+.cloud-attach-panel .muted { color: var(--muted); font-size: 12px; }
+.cloud-attach-consent { display: grid; gap: 6px; justify-items: start; }
+.cloud-attach-pending { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.cloud-attach-pending li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cloud-attach-file, .cloud-attach-actions, .cloud-attach-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cloud-attach-scope { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.cloud-attach-scope legend { padding: 0 4px; color: var(--muted); font-size: 12px; }
+.cloud-attach-scope label { display: inline-flex; align-items: center; gap: 5px; }
+.cloud-attach-summary { color: var(--muted); }
+.cloud-attach-progress progress { flex: 1; min-width: 120px; }
+.cloud-attach-error { color: var(--danger); }
 /* Recurrence and time zones (E24) */
 .recurrence-field { display: flex; flex-direction: column; gap: 8px; }
 .recurrence-custom { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
@@ -4535,6 +4669,48 @@ kbd {
 .compose-rich-body img { max-width: 100%; height: auto; }
 .compose-rich-body table { border-collapse: collapse; }
 .compose-rich-body td, .compose-rich-body th { min-width: 2em; vertical-align: top; }
+
+/* Scheduling assistant */
+.scheduling-open { justify-self: start; }
+.scheduling-assistant { display: grid; gap: 10px; min-width: 0; }
+.scheduling-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.scheduling-day { min-width: 120px; text-align: center; }
+.scheduling-assistant .field-label.inline { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; }
+.scheduling-assistant .field-label.grow { flex: 1; min-width: 200px; }
+.scheduling-notice { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line); font-size: 13px; }
+.scheduling-notice > svg { flex: none; margin-top: 2px; color: var(--danger); }
+.scheduling-notice p { margin: 0; flex: 1; }
+.scheduling-timeline-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; max-height: 340px; }
+.scheduling-timeline { border-collapse: collapse; font-size: 11px; }
+.scheduling-timeline th, .scheduling-timeline td { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.scheduling-person { position: sticky; left: 0; z-index: 1; min-width: 220px; max-width: 260px; padding: 4px 8px; background: var(--surface); text-align: left; font-weight: 500; }
+.scheduling-person select { margin-left: 6px; font-size: 11px; padding: 1px 4px; }
+.scheduling-name { display: inline-block; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.scheduling-unknown-reason { display: block; color: var(--muted); font-weight: 400; }
+.scheduling-hour { min-width: 26px; padding: 3px 2px; color: var(--muted); font-weight: 500; text-align: left; white-space: nowrap; }
+.scheduling-secondary .scheduling-hour { color: var(--text-soft); font-style: italic; }
+.scheduling-cell { display: table-cell; width: 26px; height: 30px; cursor: pointer; background: var(--surface); }
+.scheduling-legend .scheduling-cell { display: inline-block; width: 14px; height: 12px; margin-right: 5px; vertical-align: middle; border: 1px solid var(--line-strong); }
+.scheduling-cell.outside-hours { background: var(--surface-3); }
+.scheduling-cell.status-busy { background: #4a67c9; }
+.scheduling-cell.status-tentative { background: repeating-linear-gradient(90deg, #8ea2e6 0 4px, var(--surface) 4px 7px); }
+.scheduling-cell.status-oof { background: #8a4fb4; }
+.scheduling-cell.status-workingElsewhere { background: repeating-linear-gradient(0deg, #9ccbb5 0 3px, var(--surface) 3px 6px); }
+/* Unknown is hatched so it can never be mistaken for free time. */
+.scheduling-cell.status-unknown { background: repeating-linear-gradient(45deg, var(--line-strong) 0 3px, var(--surface-2) 3px 7px); }
+.scheduling-cell.proposed { box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
+.scheduling-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 12px; }
+.scheduling-add { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.scheduling-suggestions h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-size: 13px; }
+.scheduling-suggestion-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.scheduling-suggestion { display: grid; gap: 2px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); text-align: left; cursor: pointer; }
+.scheduling-suggestion small { color: var(--muted); }
+.scheduling-suggestion:hover, .scheduling-suggestion.active { border-color: var(--accent); background: var(--accent-soft); }
+.scheduling-caveat { margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+.scheduling-hours summary { cursor: pointer; font-size: 13px; }
+.scheduling-hours-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.scheduling-proposed { font-size: 13px; color: var(--text-soft); }
+.scheduling-hours .checkbox-row { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; }
 /* Rich contacts and distribution lists */
 .contact-field-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0; }
 .contact-field-list legend { margin-bottom: 6px; color: var(--muted); font-size: 10px; font-weight: 600; }
@@ -4558,3 +4734,44 @@ img.avatar.contact-photo { object-fit: cover; }
 .sidebar-label:has(.icon-button) { display: flex; align-items: center; }
 .sidebar-label .icon-button { width: 22px; height: 22px; margin-left: auto; }
 .recipient-list-suggestion .avatar { font-variant-numeric: tabular-nums; }
+
+/* Online meetings in the event editor (E25) */
+.event-conference { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 13px; }
+.event-conference-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.event-conference-row .spacer { flex: 1; }
+.event-conference-host { color: var(--muted); overflow-wrap: anywhere; }
+.event-conference .text-button { display: inline-flex; align-items: center; gap: 4px; }
+.event-conference .recurrence-note { margin: 0; }
+.event-conference-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 8px; border: 1px solid color-mix(in srgb, #d79a36 45%, var(--line)); border-radius: 6px; background: color-mix(in srgb, #d79a36 10%, var(--surface)); }
+/* Contact duplicates, merge preview, and communication history (E28). */
+.contact-duplicates-modal, .contact-merge-modal { width: min(820px, 96vw); }
+.contact-duplicates { display: grid; gap: 14px; max-height: min(640px, calc(100vh - 200px)); overflow: auto; }
+.duplicate-list, .merge-journal ul, .contact-history-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.duplicate-candidate { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 6px; }
+.duplicate-candidate.confidence-high { border-left: 3px solid var(--accent); }
+.duplicate-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.duplicate-pair span, .contact-history-list button > span { display: grid; min-width: 0; }
+.duplicate-pair small, .contact-history-list small { color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.duplicate-reasons { margin: 0; font-size: 12px; }
+.duplicate-reasons em { font-style: normal; font-weight: 600; margin-right: 4px; }
+.duplicate-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.merge-journal h3 { margin: 4px 0 8px; font-size: 13px; }
+.merge-journal li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; justify-content: space-between; font-size: 12px; }
+.merge-journal li small { flex-basis: 100%; color: var(--text-soft); }
+.merge-survivor { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.merge-fields { width: 100%; border-collapse: collapse; font-size: 13px; }
+.merge-fields th, .merge-fields td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.merge-photo { width: 36px; height: 36px; }
+.merge-lists { display: grid; gap: 4px; margin: 0; font-size: 13px; }
+.merge-lists div { display: grid; grid-template-columns: 90px 1fr; gap: 8px; }
+.merge-lists dd { margin: 0; overflow-wrap: anywhere; }
+.merge-warning { color: var(--text-soft); }
+.linked-contacts { display: grid; gap: 2px; }
+.contact-history { grid-column: 1 / -1; margin-top: 14px; display: grid; gap: 8px; }
+.contact-history-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.contact-history-accounts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; }
+.archived-badge { font-style: normal; color: var(--text-soft); }
+.contact-history-list button { width: 100%; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; text-align: left; background: transparent; border: 0; border-radius: 8px; padding: 6px 8px; color: inherit; cursor: pointer; }
+.contact-history-list button:hover { background: var(--accent-soft); }
+.contact-history-list li.unavailable { opacity: 0.65; }
+.contact-history-meta { white-space: nowrap; }

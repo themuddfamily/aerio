@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CalendarEvent } from '../types'
 import type { SyncedCalendarEvent } from '../productivity-types'
-import EventAttendeesField, { attendeeFieldValues, attendeesFromFields, type AttendeeFieldValues } from './EventAttendeesField'
+import EventAttendeesField, { applyAttendeeSelection, attendeeFieldText, attendeeFieldValues, attendeesFromFields, type AttendeeFieldValues } from './EventAttendeesField'
 
 const event = (overrides: Partial<CalendarEvent> = {}): CalendarEvent => ({
   id: 'e', calendarId: 'c', title: 'Meeting', start: '2026-10-05T08:00:00.000Z', end: '2026-10-05T09:00:00.000Z', color: '#000',
@@ -38,6 +38,17 @@ describe('attendee fields', () => {
       { email: 'room@example.test', kind: 'room', role: 'non-participant' },
       { email: 'projector@example.test', kind: 'resource', role: 'non-participant' }
     ])
+  })
+})
+
+describe('scheduling assistant hand-off', () => {
+  it('passes every address and keeps optional and resource fields when a selection comes back', () => {
+    const values = attendeeFieldValues(meeting)
+    expect(attendeeFieldText(values)).toBe('chair@example.test, a@example.test, opt@example.test, room@example.test')
+    expect(attendeeFieldText({ required: '', optional: 'o@example.test', resources: ' ' })).toBe('o@example.test')
+    expect(applyAttendeeSelection(values, ['chair@example.test', 'OPT@example.test', 'room@example.test', 'new@example.test'])).toEqual({
+      required: 'chair@example.test, new@example.test', optional: 'OPT@example.test', resources: 'room@example.test'
+    })
   })
 })
 

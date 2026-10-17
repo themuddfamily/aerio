@@ -47,8 +47,8 @@ describe('Google meeting details', () => {
     const created = await connector.createEvent(googleCalendar, meeting)
     await connector.updateEvent(googleCalendar, created, meeting)
     expect(calls(fetchMock).map(([url, method]) => [url, method])).toEqual([
-      ['https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all', 'POST'],
-      ['https://www.googleapis.com/calendar/v3/calendars/primary/events/e1?sendUpdates=all', 'PATCH']
+      ['https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all', 'POST'],
+      ['https://www.googleapis.com/calendar/v3/calendars/primary/events/e1?conferenceDataVersion=1&sendUpdates=all', 'PATCH']
     ])
   })
 

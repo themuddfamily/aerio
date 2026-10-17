@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, safeStorage, shell, Tray } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
@@ -37,6 +37,7 @@ import type {
   ImapServerSettingsUpdate,
   MailPage,
   MailAttachmentPage,
+  MailContactHistoryPage,
   MailFolderUnreadCounts,
   MailAccountUnreadCounts,
   MailAccountSettingsInput,
@@ -57,6 +58,8 @@ import { MailWorkerClient } from './mail/worker-client'
 import { validateCreateFolder, validateDeleteFolder, validateFolderReference, validateUpdateFolder } from './mail/folder-validation'
 import { registerMailRuleHandlers } from './mail/server-rule-ipc'
 import { normalizeAttachmentQuery } from './mail/attachment-index'
+import { normalizeContactHistoryQuery } from './mail/contact-history'
+import { registerContactMerge } from './productivity/contact-merge-ipc'
 import { DiagnosticLogger, type DiagnosticRecord } from './diagnostics'
 import { UpdateManager } from './update-manager'
 import { ProductivityStore } from './productivity/store'
@@ -72,13 +75,24 @@ import { AiAssistantStore, registerAiAssistant } from './mail/ai-assistant'
 import { MailTemplateStore, parseMailTemplateBackup, type MailTemplateBackup } from './mail/template-store'
 import { registerMailTemplates } from './mail/template-tools'
 import { registerMailIdentities, validateDraftSender } from './mail/identity-ipc'
+import { registerMailMerge } from './mail/mail-merge-ipc'
 import { AutomaticRepliesService, registerAutomaticReplies } from './mail/automatic-replies'
+import { AvailabilityService, registerAvailability } from './productivity/availability'
+import { CloudAttachmentService, CloudAttachmentStateStore, registerCloudAttachments } from './mail/cloud-attachments'
+import { assertSecureCredentialStorage } from './mail/secure-storage'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import { InterchangeStore } from './productivity/interchange-store'
 import { registerCalendarContactInterchange } from './productivity/interchange-ipc'
 import { InvitationStore } from './productivity/invitation-store'
 import { registerMeetingInvitations } from './productivity/invitation-ipc'
+import { DavStore } from './productivity/dav-store'
+import { DavCredentialVault } from './productivity/dav-credentials'
+import { DavService } from './productivity/dav-service'
+import { registerDavAccounts } from './productivity/dav-ipc'
+import { carryPendingConferences } from './productivity/online-meetings'
+import { validEventConference } from '../src/lib/online-meetings'
+import { registerMailImport } from './mail/mail-import-ipc'
 import { validContactInterchangeFields, validContactLists, validEventInterchangeFields } from '../src/lib/interchange-validation'
 import { contactEditConflict } from '../src/lib/contact-fields'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
@@ -95,6 +109,9 @@ import { fetchRemoteImage } from './mail/remote-image-fetch'
 import { applyPendingProfileRestore, finalizeProfileRestore } from './profile-backup'
 import { PROFILE_BACKUP_LAYOUT } from './profile-backup-layout'
 import { registerProfileBackup } from './profile-backup-tools'
+import { OpenPgpKeyring } from './mail/openpgp-keyring'
+import { assertOpenPgpSendable, registerOpenPgp } from './mail/openpgp-ipc'
+import { normalizeOpenPgpOptions } from './mail/openpgp-draft-store'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -127,6 +144,7 @@ let failedUnlockAttempts = 0
 let unlockBlockedUntil = 0
 let oauthVault: OAuthVault | null = null
 let mailWorker: MailWorkerClient | null = null
+let openPgpKeyring: OpenPgpKeyring | null = null
 const accountProviders = new Map<string, MailAccountSummary['provider']>()
 const approvedAttachmentPaths = new Set<string>()
 let quitting = false
@@ -137,6 +155,9 @@ let productivityStore: ProductivityStore | null = null
 let interchangeStore: InterchangeStore | null = null
 let invitationStore: InvitationStore | null = null
 let interchangeService: ReturnType<typeof registerCalendarContactInterchange> | null = null
+let davStore: DavStore | null = null
+let davService: DavService | null = null
+let davIpc: ReturnType<typeof registerDavAccounts> | null = null
 let taskService: TaskService | null = null
 let taskPolling: NodeJS.Timeout | undefined
 let taskNetworkOnline = true
@@ -234,6 +255,11 @@ function requireMailWorker() {
   return mailWorker
 }
 
+function requireOpenPgp() {
+  if (!openPgpKeyring) throw new Error('OpenPGP is not ready. The message was not sent; your draft is kept.')
+  return openPgpKeyring
+}
+
 function requireVault() {
   if (!oauthVault) throw new Error('Secure mail storage is not ready')
   return oauthVault
@@ -260,6 +286,7 @@ function validateDraft(input: MailDraftInput, forSend = false) {
   if (input.attachmentPaths.length > 50) throw new Error('A message cannot contain more than 50 attachments')
   validateDraftSender(input, forSend)
   input.sendOptions = normalizeSendOptions(input.sendOptions)
+  input.openPgp = normalizeOpenPgpOptions(input.openPgp)
   if (input.attachmentPaths.some((path) => typeof path !== 'string' || !approvedAttachmentPaths.has(path))) {
     throw new Error('A draft referenced a file that was not selected through Aerio')
   }
@@ -452,7 +479,22 @@ function materializeLocalDataBackup(backup: LocalDataBackup): { snapshot: LocalM
   }
 }
 
+function requireDavService() {
+  if (!davService) throw new Error('Calendar and contacts accounts are not ready')
+  return davService
+}
+
+function broadcastProductivity() {
+  if (!productivityStore) return
+  const snapshot = productivityStore.snapshot()
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { snapshot })
+}
+
 async function syncProductivity(accountId: string): Promise<ProductivitySnapshot> {
+  if (davService?.hasAccount(accountId)) {
+    try { await davService.sync(accountId) } finally { davIpc?.broadcast() }
+    return requireProductivityStore().snapshot()
+  }
   const provider = accountProviders.get(accountId)
   if (provider !== 'gmail' && provider !== 'microsoft') throw new Error('This mail connection does not provide Calendar or Contacts APIs')
   const store = requireProductivityStore()
@@ -471,7 +513,9 @@ async function syncProductivity(accountId: string): Promise<ProductivitySnapshot
       requireVault().hasMicrosoftContactsWriteAccess(accountId)
     )
   try {
-    const data = await connector.sync(store.accountData(accountId), store.checkpoints(accountId))
+    const previous = store.accountData(accountId)
+    const data = await connector.sync(previous, store.checkpoints(accountId))
+    data.events = carryPendingConferences(previous.events, data.events)
     store.replaceAccount(accountId, provider, data, data.checkpoints)
     diagnostic({
       level: 'info', component: 'provider', event: 'productivity-sync-complete', accountId,
@@ -500,7 +544,7 @@ function validCalendarEvent(value: unknown): value is CalendarEvent {
   if (!validText(event.color, 100) || !Array.isArray(event.attendees) || event.attendees.length > 1_000 || !event.attendees.every((item) => validText(item, 500))) return false
   if (!Number.isInteger(event.reminderMinutes) || Number(event.reminderMinutes) < 0 || Number(event.reminderMinutes) > 40_320) return false
   if (!(event.recurrence === undefined || event.recurrence === 'none' || event.recurrence === 'daily' || event.recurrence === 'weekly' || event.recurrence === 'monthly')) return false
-  return validEventInterchangeFields(event)
+  return validEventInterchangeFields(event) && validEventConference(event.conference)
 }
 
 function validContact(value: unknown): value is Contact {
@@ -557,6 +601,12 @@ async function createProductivityEvent(input: CalendarEvent) {
   const store = requireProductivityStore()
   const calendar = store.snapshot().calendars.find((item) => item.id === input.calendarId)
   if (!calendar) throw new Error('That calendar is no longer available')
+  if (calendar.provider === 'dav') {
+    if (!calendar.canWrite) throw new Error('This calendar is read-only')
+    await requireDavService().createEvent(calendar, input)
+    davIpc?.broadcast()
+    return store.snapshot()
+  }
   if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
   const saved = await writableCalendarConnector(calendar).createEvent(calendar, input)
   store.upsertEvent(saved)
@@ -602,6 +652,14 @@ async function updateProductivityEvent(input: CalendarEvent, scope?: RecurrenceE
   if (!calendar) throw new Error('That calendar is no longer available')
   if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
   if (current.provider !== calendar.provider || current.accountId !== calendar.accountId) throw new Error('The event’s calendar connection changed; synchronize before editing')
+  if (calendar.provider === 'dav') {
+    await requireDavService().updateEvent(current, input)
+    davIpc?.broadcast()
+    return store.snapshot()
+  }
+  // A requested meeting is stored with its request id before the write, so a failed or interrupted save is
+  // retried under the same id (and the editor reopens with it) instead of requesting a second meeting.
+  if (input.conference?.status === 'pending' && input.conference.requestId && !current.conference) store.upsertEvent({ ...current, conference: input.conference })
   const saved = await writableCalendarConnector(calendar).updateEvent(calendar, current, input)
   store.upsertEvent(saved)
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-updated', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
@@ -621,6 +679,11 @@ async function deleteProductivityEvent(eventId: string, scope?: RecurrenceEditSc
   if (!calendar) throw new Error('That calendar is no longer available')
   if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
   if (current.provider !== calendar.provider || current.accountId !== calendar.accountId) throw new Error('The event’s calendar connection changed; synchronize before deleting')
+  if (calendar.provider === 'dav') {
+    await requireDavService().deleteEvent(current)
+    davIpc?.broadcast()
+    return store.snapshot()
+  }
   await writableCalendarConnector(calendar).deleteEvent(calendar, current)
   store.deleteEvent(current.id)
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-deleted', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
@@ -697,6 +760,11 @@ async function updateProductivityContactGroupMembers(groupId: string, addIds: st
 }
 
 async function createProductivityContact(accountId: string, input: Contact) {
+  if (davService?.hasAccount(accountId)) {
+    const contact = await davService.createContact(accountId, input)
+    davIpc?.broadcast()
+    return { contact, snapshot: requireProductivityStore().snapshot() }
+  }
   const provider = accountProviders.get(accountId)
   if (provider !== 'gmail' && provider !== 'microsoft') throw new Error('Choose a connected Google or Microsoft account')
   const store = requireProductivityStore()
@@ -710,6 +778,12 @@ async function updateProductivityContact(input: Contact) {
   const store = requireProductivityStore()
   const current = store.snapshot().contacts.find((contact) => contact.id === input.id)
   if (!current) throw new Error('That contact is no longer available')
+  if (current.provider === 'dav') {
+    if (current.readOnly) throw new Error('This address book is read-only')
+    const contact = await requireDavService().updateContact(current, input)
+    davIpc?.broadcast()
+    return { contact, snapshot: store.snapshot() }
+  }
   if (current.readOnly) throw new Error('Reconnect this account once to enable Contacts editing')
   const conflict = contactEditConflict(current, input as Contact & { revision?: unknown })
   if (conflict) throw new Error(conflict)
@@ -723,6 +797,12 @@ async function deleteProductivityContact(contactId: string) {
   const store = requireProductivityStore()
   const current = store.snapshot().contacts.find((contact) => contact.id === contactId)
   if (!current) throw new Error('That contact is no longer available')
+  if (current.provider === 'dav') {
+    if (current.readOnly) throw new Error('This address book is read-only')
+    await requireDavService().deleteContact(current)
+    davIpc?.broadcast()
+    return store.snapshot()
+  }
   if (current.readOnly) throw new Error('Reconnect this account once to enable Contacts editing')
   await writableContactsConnector(current.accountId, current.provider).deleteContact(current)
   store.deleteContact(current.id)
@@ -788,6 +868,8 @@ function updateMailPolling(immediate = false) {
 async function initializeMail() {
   const userData = app.getPath('userData')
   oauthVault = new OAuthVault(join(userData, 'oauth-vault.dat'), builtInOAuthClients)
+  // Deliberately outside the profile-backup allowlist: keys leave only by explicit export.
+  openPgpKeyring = new OpenPgpKeyring(join(userData, 'openpgp-keyring.dat'), { storage: safeStorage, isLocked: () => applicationLocked })
   mailWorker = new MailWorkerClient(
     join(import.meta.dirname, 'mail-worker.js'),
     (accountId) => requireVault().credential(accountId, accountProviders.get(accountId) ?? 'gmail'),
@@ -803,7 +885,8 @@ async function initializeMail() {
       if (event.type === 'reply-watch') showReplyWatchNotification(event.payload)
       mainWindow?.webContents.send('mail:event', event)
       for (const window of messageWindows.values()) if (!window.isDestroyed()) window.webContents.send('mail:event', event)
-    }
+    },
+    (request) => requireOpenPgp().protect(request.message, request)
   )
   await mailWorker.request({
     type: 'initialize',
@@ -1045,6 +1128,7 @@ function disableAppLock(passphrase: unknown) {
 function lockApplication() {
   if (!loadAppLockRecord()) return appLockStatus()
   applicationLocked = true
+  openPgpKeyring?.lock()
   for (const window of messageWindows.values()) window.close()
   return publishAppLockStatus()
 }
@@ -1370,6 +1454,8 @@ function registerIpc() {
     return mailTemplateStore
   }, approveAttachment: (path) => approvedAttachmentPaths.add(path) })
   registerMailIdentities({ worker: requireMailWorker })
+  registerMailMerge({ worker: requireMailWorker, validateMessage: (draft) => validateDraft(draft) })
+  registerOpenPgp({ keyring: requireOpenPgp(), worker: requireMailWorker })
   registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
   } })
@@ -1381,6 +1467,32 @@ function registerIpc() {
     grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider)
   })
   registerAutomaticReplies(ipcMain, () => automaticReplies)
+  const availability = new AvailabilityService({
+    calendars: () => requireProductivityStore().snapshot().calendars,
+    accountEmail: async (accountId) => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId)?.email,
+    googleToken: (accountId) => requireVault().accessToken(accountId),
+    microsoftToken: (accountId) => requireVault().microsoftAccessToken(accountId),
+    grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider)
+  })
+  registerAvailability(ipcMain, () => availability)
+  const cloudAttachments = new CloudAttachmentService({
+    account: async (accountId) => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId),
+    googleToken: (accountId) => requireVault().accessToken(accountId),
+    microsoftToken: (accountId) => requireVault().microsoftAccessToken(accountId),
+    grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider),
+    authorize: async (account, scopes) => {
+      const expected = { accountId: account.id, email: account.email }
+      if (account.provider === 'gmail') await requireVault().authorize(expected, { additionalScopes: scopes })
+      else await requireVault().authorizeMicrosoft(expected, { additionalScopes: scopes })
+    },
+    isApprovedPath: (path) => approvedAttachmentPaths.has(path),
+    // Upload session URLs are short-lived capabilities; keep them encrypted at rest.
+    state: new CloudAttachmentStateStore(join(app.getPath('userData'), 'cloud-uploads.dat'), {
+      encode: (value) => { assertSecureCredentialStorage(safeStorage); return safeStorage.encryptString(value).toString('base64') },
+      decode: (value) => { assertSecureCredentialStorage(safeStorage); return safeStorage.decryptString(Buffer.from(value, 'base64')) }
+    })
+  })
+  registerCloudAttachments(ipcMain, () => cloudAttachments)
   ipcMain.handle('preferences:load', () => loadPreferences())
   ipcMain.handle('preferences:save', (_event, preferences: AppPreferences) => savePreferences(preferences))
   ipcMain.handle('app-lock:status', () => appLockStatus())
@@ -1571,6 +1683,11 @@ function registerIpc() {
     if (!validId(groupId) || !ids(add) || !ids(remove) || add.length + remove.length === 0) throw new Error('Choose contacts to add or remove')
     return updateProductivityContactGroupMembers(groupId, add, remove)
   })
+  registerContactMerge(ipcMain, () => ({
+    store: requireProductivityStore(),
+    connector: (accountId, provider) => writableContactsConnector(accountId, provider as 'gmail' | 'microsoft'),
+    log: (event, accountId, details) => diagnostic({ level: 'info', component: 'provider', event, accountId, details })
+  }), validContact)
   ipcMain.handle('app:update:status', () => updates?.status() ?? ({
     phase: 'unsupported',
     currentVersion: app.getVersion(),
@@ -1802,10 +1919,16 @@ function registerIpc() {
   })
   ipcMain.handle('mail:drafts:save', (_event, input: MailDraftInput) =>
     requireMailWorker().request({ type: 'drafts:save', payload: validateDraft(input) }))
-  ipcMain.handle('mail:drafts:send', (_event, input: MailDraftInput) =>
-    requireMailWorker().request({ type: 'drafts:send', payload: validateDraft(input, true) }))
-  ipcMain.handle('mail:drafts:schedule', (_event, input: MailDraftInput, deliveryAt: string) =>
-    requireMailWorker().request({ type: 'drafts:schedule', payload: { input: validateDraft(input, true), deliveryAt: validateFutureDate(deliveryAt, 'Scheduled send time') } }))
+  // Sign/Encrypt drafts are checked before queuing; delivery checks again and never falls back to plaintext.
+  ipcMain.handle('mail:drafts:send', (_event, input: MailDraftInput) => {
+    const draft = validateDraft(input, true)
+    return assertOpenPgpSendable(requireOpenPgp(), requireMailWorker(), draft).then(() => requireMailWorker().request({ type: 'drafts:send', payload: draft }))
+  })
+  ipcMain.handle('mail:drafts:schedule', (_event, input: MailDraftInput, deliveryAt: string) => {
+    const draft = validateDraft(input, true)
+    const at = validateFutureDate(deliveryAt, 'Scheduled send time')
+    return assertOpenPgpSendable(requireOpenPgp(), requireMailWorker(), draft).then(() => requireMailWorker().request({ type: 'drafts:schedule', payload: { input: draft, deliveryAt: at } }))
+  })
   ipcMain.handle('mail:drafts:cancel-send', (_event, id: string) => {
     if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid queued message id')
     return requireMailWorker().request<MailDraftResult>({ type: 'drafts:cancel-send', payload: { id } })
@@ -1915,10 +2038,13 @@ function registerIpc() {
     if (typeof online !== 'boolean') throw new Error('Invalid network state')
     taskNetworkOnline = online
     if (online) void taskService?.flush().catch(() => {})
+    if (online) void davIpc?.flushNow()
     return requireMailWorker().request({ type: 'network', payload: { online } })
   })
   ipcMain.handle('mail:attachments:list', (_event, query: unknown) =>
     requireMailWorker().request<MailAttachmentPage>({ type: 'attachments:list', payload: normalizeAttachmentQuery(query) }))
+  ipcMain.handle('mail:contact-history:messages', (_event, query: unknown) =>
+    requireMailWorker().request<MailContactHistoryPage>({ type: 'contacts:history', payload: normalizeContactHistoryQuery(query) }))
   ipcMain.handle('mail:attachment:open', async (_event, accountId: string, messageId: string, attachmentId: string, filename: string) => {
     const directory = join(tmpdir(), 'aerio-attachments')
     mkdirSync(directory, { recursive: true })
@@ -1971,6 +2097,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   taskPolling = setInterval(() => { void taskService?.poll().catch(() => {}) }, 60_000)
   taskPolling.unref()
   registerIpc()
+  registerMailImport({ ipcMain, worker: requireMailWorker, localAccount: (account) => accountProviders.set(account.id, account.provider) })
   profileBackups = registerProfileBackup({
     userData: app.getPath('userData'),
     appVersion: app.getVersion(),
@@ -1995,7 +2122,8 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     sendMail: (input) => requireMailWorker().request<void>({ type: 'invitations:send', payload: input }),
     respondProvider: async (calendar, remoteId, addresses, input) => {
       if (calendar.provider === 'gmail') await googleCalendarConnector(calendar.accountId).respondToEvent(calendar, remoteId, addresses, input)
-      else await microsoftCalendarConnector(calendar.accountId).respondToEvent(calendar, remoteId, input)
+      else if (calendar.provider === 'microsoft') await microsoftCalendarConnector(calendar.accountId).respondToEvent(calendar, remoteId, input)
+      else throw new Error('This calendar has no response API; answer the invitation email instead')
     },
     addresses: async (accountId) => (await requireMailWorker().request<MailSenderIdentity[]>({ type: 'identities:list', payload: { accountIds: [accountId] } })).map((identity) => identity.email),
     sync: syncProductivity,
@@ -2016,6 +2144,15 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     },
     diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
   })
+  davStore = new DavStore(join(app.getPath('userData'), 'dav.sqlite'))
+  davService = new DavService({
+    store: davStore,
+    productivity: requireProductivityStore,
+    credentials: new DavCredentialVault(join(app.getPath('userData'), 'dav-credentials.dat'), safeStorage),
+    online: () => taskNetworkOnline && net.isOnline(),
+    diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
+  })
+  davIpc = registerDavAccounts({ service: requireDavService, productivityChanged: broadcastProductivity })
   registerRemoteImageProtocol()
   readyToOpenWindows = true
   createWindow()
@@ -2047,6 +2184,9 @@ app.on('before-quit', () => {
   void taskService?.close().catch(() => {})
   updates?.stop()
   interchangeService?.dispose()
+  davIpc?.dispose()
+  davStore?.close()
+  davStore = null
   interchangeStore?.close()
   interchangeStore = null
   invitationStore?.close()

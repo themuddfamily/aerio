@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => {
   let messageHandler: ((message: any) => void) | undefined
   let credential: any = { type: 'oauth', accessToken: 'token' }
   let credentialError: string | undefined
+  let openPgpReply: (message: any) => { message?: string; error?: string } = () => ({ message: 'PROTECTED' })
   const port = {
     on: vi.fn((_event: string, handler: (message: any) => void) => { messageHandler = handler }),
     postMessage: vi.fn((message: any) => {
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => {
       if (message.kind === 'credential-request') queueMicrotask(() => messageHandler?.({
         kind: 'credential-response', id: message.id, credential, error: credentialError
       }))
+      if (message.kind === 'openpgp-request') queueMicrotask(() => messageHandler?.({ kind: 'openpgp-response', id: message.id, ...openPgpReply(message) }))
     })
   }
 
@@ -77,6 +79,7 @@ const mocks = vi.hoisted(() => {
   method('hasMessage', () => false)
   method('rawExists', () => true)
   method('listAttachments', () => ({ items: [], total: 0 }))
+  method('listContactHistory', () => ({ items: [], total: 0 }))
   method('upsertMessage')
   method('upsertLabels')
   method('replaceLabels')
@@ -123,6 +126,9 @@ const mocks = vi.hoisted(() => {
     process: vi.fn((): any[] => [])
   }
   method('recoverInterruptedFolderOperations', () => [])
+  // Replaced with a real SQLite-backed store in the mail merge test.
+  db.mailMerge = { recoverInterrupted: vi.fn(() => []), pruneSendLog: vi.fn(), dueJobs: vi.fn(() => []) } as any
+  db.openPgp = { get: vi.fn((): any => ({})) }
 
   const gmail = {
     copyToLabel: vi.fn().mockResolvedValue(undefined),
@@ -180,6 +186,7 @@ const mocks = vi.hoisted(() => {
     extractor: { extract: vi.fn().mockResolvedValue({ status: 'indexed', text: 'x', truncated: false }), close: vi.fn().mockResolvedValue(undefined), options: undefined as any },
     setCredential(value: any) { credential = value; credentialError = undefined },
     setCredentialError(value: string) { credential = undefined; credentialError = value },
+    setOpenPgpReply(value: typeof openPgpReply) { openPgpReply = value },
     emit(message: any) { messageHandler?.(message) }
   }
 })
@@ -211,6 +218,16 @@ vi.mock('./mail/attachment-extract-runner', () => ({
   AttachmentExtractRunner: vi.fn(function (options: any) { mocks.extractor.options = options; return mocks.extractor })
 }))
 vi.mock('./mail/mime-builder', () => ({ createMime: vi.fn(() => 'mime'), createMimeBuffer: vi.fn(() => Buffer.from('mime')) }))
+const localMocks = vi.hoisted(() => {
+  const job = { id: 'job-1', accountId: 'local-folders', status: 'queued' }
+  const service = {
+    start: vi.fn(() => job), list: vi.fn(() => [job]), pause: vi.fn(() => job), resume: vi.fn(() => job), cancel: vi.fn(() => job),
+    dismiss: vi.fn(), items: vi.fn(() => []), resolve: vi.fn(async () => job), pump: vi.fn(async () => undefined), halt: vi.fn()
+  }
+  return { job, service, deps: [] as any[], transfer: vi.fn(async (): Promise<any> => ({ copied: 1, skipped: 0, missing: 0 })) }
+})
+vi.mock('./mail/mail-import', () => ({ MailImportService: vi.fn(function (deps: any) { localMocks.deps.push(deps); return localMocks.service }) }))
+vi.mock('./mail/local-folders', () => ({ transferToLocalFolders: localMocks.transfer }))
 
 import './mail-worker'
 
@@ -385,6 +402,8 @@ describe.sequential('mail worker protocol routing', () => {
     await expect(request({ type: 'attachment:extract', payload: { accountId: 'account-1', messageId: 'pruned', attachmentId: 'a', targetPath: 'out' } })).resolves.toMatchObject({ error: { message: 'The original message is not available offline' } })
     await expect(request({ type: 'attachments:list', payload: { fileTypes: ['pdf'] } })).resolves.toMatchObject({ result: { items: [], total: 0 } })
     expect(mocks.db.listAttachments).toHaveBeenCalledWith({ fileTypes: ['pdf'] })
+    await expect(request({ type: 'contacts:history', payload: { addresses: ['ada@example.test'] } })).resolves.toMatchObject({ result: { items: [], total: 0 } })
+    expect(mocks.db.listContactHistory).toHaveBeenCalledWith({ addresses: ['ada@example.test'] })
     await request({ type: 'network', payload: { online: false } })
     await request({ type: 'network', payload: { online: true } })
     await request({ type: 'polling', payload: { intervalMs: 50, immediate: true } })
@@ -1341,6 +1360,107 @@ describe.sequential('mail worker protocol routing', () => {
     await vi.waitFor(() => expect(watches.activateForDraft).toHaveBeenCalledWith('watched-delivery', expect.objectContaining({ messageIdHeader: '<sent-id@aerio.local>', threadId: 'gmail-thread' })))
   })
 
+  it('protects OpenPGP deliveries in the main process and never falls back to plaintext', async () => {
+    const row = (id: string, remote: string | null = null) => ({ id, account_id: 'account-1', thread_id: null, in_reply_to: null, references_json: '[]', to_json: '["ada@example.test"]', cc_json: '[]', bcc_json: '["hidden@example.test"]', subject: 'Secret', body_text: 'Body', body_html: null, attachment_paths_json: '[]', gmail_draft_id: remote })
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.getDraft.mockReturnValue(undefined)
+    mocks.db.openPgp.get.mockImplementation((id: string) => id.startsWith('pgp') ? { openPgp: { sign: true, encrypt: true } } : {})
+    try {
+      mocks.gmail.sendMessage.mockClear()
+      queueDeliveries([row('pgp-ok')])
+      await request({ type: 'network', payload: { online: true } })
+      await vi.waitFor(() => expect(mocks.gmail.sendMessage).toHaveBeenCalledWith(Buffer.from('PROTECTED').toString('base64url'), undefined))
+      expect(mocks.posted.find((message) => message.kind === 'openpgp-request')).toMatchObject({ message: 'mime', recipients: ['ada@example.test', 'hidden@example.test'], options: { sign: true, encrypt: true }, from: expect.stringContaining('person@example.test') })
+
+      mocks.setOpenPgpReply(() => ({ error: 'No OpenPGP public key for: ada@example.test. The message was not sent; your draft is kept.' }))
+      mocks.gmail.sendMessage.mockClear()
+      queueDeliveries([row('pgp-missing-key')])
+      await request({ type: 'network', payload: { online: true } })
+      await vi.waitFor(() => expect(mocks.db.updateDraftResult).toHaveBeenCalledWith('pgp-missing-key', expect.objectContaining({ status: 'failed', error: expect.stringMatching(/No OpenPGP public key.*draft is kept/) })))
+      expect(mocks.gmail.sendMessage).not.toHaveBeenCalled()
+      expect(mocks.posted).toContainEqual({ kind: 'event', event: { type: 'draft-delivery', payload: expect.objectContaining({ id: 'pgp-missing-key', status: 'failed' }) } })
+
+      // Microsoft never sends the stored provider draft, which holds plaintext.
+      mocks.setOpenPgpReply(() => ({ message: 'PROTECTED' }))
+      mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'microsoft' })
+      mocks.db.getDraft.mockReturnValue({ gmail_draft_id: 'remote-plain' })
+      mocks.microsoft.send.mockClear()
+      queueDeliveries([row('pgp-ms', 'remote-plain')])
+      await request({ type: 'network', payload: { online: true } })
+      await vi.waitFor(() => expect(mocks.microsoft.send).toHaveBeenCalledWith(Buffer.from('PROTECTED'), undefined, undefined))
+      await vi.waitFor(() => expect(mocks.microsoft.deleteDraft).toHaveBeenCalledWith('remote-plain'))
+
+      // Encrypted drafts are never uploaded to the provider.
+      mocks.db.getAccount.mockReturnValue(mocks.account)
+      mocks.db.getDraft.mockReturnValue(undefined)
+      mocks.gmail.createDraft.mockClear()
+      await expect(request({ type: 'drafts:save', payload: { id: 'pgp-draft', accountId: 'account-1', to: ['ada@example.test'], cc: [], bcc: [], subject: 'S', text: 'B', references: [], attachmentPaths: [], openPgp: { encrypt: true } } })).resolves.toMatchObject({ result: { status: 'local' } })
+      expect(mocks.gmail.createDraft).not.toHaveBeenCalled()
+    } finally {
+      mocks.setOpenPgpReply(() => ({ message: 'PROTECTED' }))
+      mocks.db.openPgp.get.mockImplementation(() => ({}))
+      mocks.db.getAccount.mockReturnValue(mocks.account)
+    }
+  })
+
+  it('routes Local Folders and import commands without any provider calls', async () => {
+    const local = { ...mocks.account, id: 'local-folders', provider: 'local', email: 'Local Folders', syncEnabled: false }
+    let exists = false
+    mocks.db.localMail = {
+      account: vi.fn(() => exists ? local : undefined),
+      ensureAccount: vi.fn(() => { exists = true; return local }),
+      completeDueOperations: vi.fn(() => [{ id: 'local-op', accountId: 'local-folders', kind: 'read' }]),
+      nextQueuedJob: vi.fn(() => undefined)
+    }
+    mocks.posted.length = 0
+    await expect(request({ type: 'local:ensure' })).resolves.toMatchObject({ result: local })
+    expect(mocks.posted.some((message) => message.event?.type === 'accounts-changed')).toBe(true)
+
+    await expect(request({ type: 'import:start', payload: { paths: ['a.mbox'], duplicates: 'review', mboxVariant: 'mboxrd' } })).resolves.toMatchObject({ result: localMocks.job })
+    expect(localMocks.service.start).toHaveBeenCalledWith({ paths: ['a.mbox'], duplicates: 'review', mboxVariant: 'mboxrd' })
+    for (const type of ['import:pause', 'import:resume', 'import:cancel', 'import:dismiss'] as const) await request({ type, payload: { id: 'job-1' } })
+    expect(localMocks.service.pause).toHaveBeenCalledWith('job-1')
+    expect(localMocks.service.dismiss).toHaveBeenCalledWith('job-1')
+    await expect(request({ type: 'import:list' })).resolves.toMatchObject({ result: [localMocks.job] })
+    await request({ type: 'import:items', payload: { jobId: 'job-1' } })
+    await request({ type: 'import:resolve', payload: { jobId: 'job-1', keys: ['0:0'], decision: 'import' } })
+    expect(localMocks.service.resolve).toHaveBeenCalledWith('job-1', ['0:0'], 'import')
+
+    // The worker wires imports to its normal store path, progress events and disk checks.
+    const deps = localMocks.deps.at(-1)
+    deps.emit(localMocks.job)
+    expect(mocks.posted).toContainEqual({ kind: 'event', event: { type: 'import-progress', payload: localMocks.job } })
+    expect(deps.freeBytes()).toBeGreaterThan(0)
+    deps.changed('local-folders', true)
+    expect(mocks.posted).toContainEqual({ kind: 'event', event: { type: 'mail-changed', payload: { accountId: 'local-folders' } } })
+
+    const trashOperation = { id: 'trash-op', accountId: 'account-1', kind: 'trash', status: 'queued' }
+    localMocks.transfer.mockResolvedValueOnce({ copied: 1, skipped: 0, missing: 0, trashOperation })
+    await expect(request({ type: 'local:transfer', payload: { sourceAccountId: 'account-1', threadIds: ['thread-1'], destinationLabelId: 'folder:local-1', mode: 'move' } })).resolves.toMatchObject({ result: { copied: 1 } })
+    expect(mocks.posted).toContainEqual({ kind: 'event', event: { type: 'operation', payload: trashOperation } })
+
+    mocks.db.getAccount.mockReturnValue(local)
+    mocks.gmail.getProfile.mockClear()
+    await expect(request({ type: 'accounts:verify', payload: { accountId: 'local-folders' } })).resolves.toMatchObject({ result: undefined })
+    expect(mocks.gmail.getProfile).not.toHaveBeenCalled()
+    await expect(request({ type: 'sync:rebuild', payload: { accountId: 'local-folders' } })).resolves.toMatchObject({ error: { message: expect.stringMatching(/nothing to download/) } })
+    await expect(request({ type: 'receipts:inspect', payload: { accountId: 'local-folders', messageId: 'm', policy: 'always' } })).resolves.toMatchObject({ result: {} })
+    await expect(request({ type: 'receipts:respond', payload: { accountId: 'local-folders', messageId: 'm', decision: 'send', policy: 'ask' } })).resolves.toMatchObject({ error: { message: expect.stringMatching(/do not send read receipts/) } })
+    await request({ type: 'mail:copy', payload: { accountId: 'local-folders', threadId: 't', messageId: 'm', destination: 'folder:local-2' } })
+    expect(localMocks.transfer).toHaveBeenLastCalledWith(expect.anything(), { sourceAccountId: 'local-folders', threadIds: ['t'], messageIds: ['m'], destinationLabelId: 'folder:local-2', mode: 'copy' })
+    mocks.db.setAccountStatus.mockClear()
+    await request({ type: 'sync:start', payload: { accountId: 'local-folders' } })
+    expect(mocks.db.setAccountStatus).not.toHaveBeenCalled()
+
+    // Queued Local Folders changes complete without a provider request.
+    mocks.db.dueOperations.mockReturnValueOnce([{ id: 'late-local', account_id: 'local-folders', kind: 'star', thread_ids_json: '["t"]', label_id: null }]).mockReturnValue([])
+    mocks.db.updateOperation.mockClear()
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(mocks.db.updateOperation).toHaveBeenCalledWith('late-local', 'succeeded'))
+    expect(mocks.posted).toContainEqual({ kind: 'event', event: { type: 'operation', payload: { id: 'local-op', accountId: 'local-folders', kind: 'read', status: 'succeeded' } } })
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+  })
+
   it('runs attachment-content indexing in an isolated extractor worker', async () => {
     // Without the built extractor entry (as under Vitest), indexing stays off.
     expect(mocks.indexer.options).toBeUndefined()
@@ -1376,8 +1496,65 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.fs.existsSync.mockReturnValue(false)
   })
 
+  it('runs a mail merge as single-recipient Gmail sends, recovering in-flight rows on initialize', async () => {
+    const { DatabaseSync } = await import('node:sqlite')
+    const { MailMergeStore } = await import('./mail/mail-merge-store')
+    const sqlite = new DatabaseSync(':memory:')
+    sqlite.exec(`PRAGMA foreign_keys=ON; CREATE TABLE gmail_accounts(id TEXT PRIMARY KEY); INSERT INTO gmail_accounts(id) VALUES('account-1')`)
+    const store = new MailMergeStore(sqlite)
+    const stub = mocks.db.mailMerge
+    mocks.db.mailMerge = store
+    // A delivery left `sending` by a previous run is held for review on startup.
+    store.create('old-job', { accountId: 'account-1', subject: 'Old', text: 'Old', attachmentPaths: [], recipients: [{ email: 'old@example.test' }], limits: { perMinute: 60, dailyCap: 100 } })
+    store.claim('old-job', 0)
+    mocks.setCredential({ type: 'oauth', accessToken: 'token' })
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    await request({ type: 'initialize', payload: { databasePath: 'mail.db', contentPath: 'C:\\content' } })
+    expect(store.summary('old-job')).toMatchObject({ status: 'needs-review', counts: { ambiguous: 1 } })
+
+    const { createMime } = await import('./mail/mime-builder')
+    vi.mocked(createMime).mockClear()
+    mocks.gmail.sendMessage.mockClear()
+    mocks.fs.copyFileSync.mockClear()
+    // Only the merge's own attachment copies exist on disk.
+    mocks.fs.existsSync.mockImplementation((path?: unknown) => String(path).includes('mail-merge'))
+    const created = await request({ type: 'merge:create', payload: {
+      accountId: 'account-1', subject: 'Hi {{firstName|there}}', text: 'Hello {{firstName|there}}', html: '<p>{{company|}}</p>',
+      attachmentPaths: ['C:\\content\\drafts\\d\\0-0123456789-report.pdf'],
+      recipients: [{ email: 'ada@example.test', firstName: 'Ada', company: '<b>A&B</b>' }, { email: 'grace@example.test' }, { email: 'ADA@example.test' }, { email: 'bad' }],
+      limits: { perMinute: 60, dailyCap: 100_000 }
+    } })
+    expect(created.result).toMatchObject({ status: 'running', total: 2, limits: { perMinute: 60, dailyCap: 2_000 } })
+    expect(mocks.fs.copyFileSync).toHaveBeenCalledWith('C:\\content\\drafts\\d\\0-0123456789-report.pdf', expect.stringMatching(/mail-merge.+0-report\.pdf$/))
+    await vi.waitFor(() => expect(mocks.gmail.sendMessage).toHaveBeenCalledTimes(2), { timeout: 5_000 })
+    const deliveries = vi.mocked(createMime).mock.calls.map(([input]) => input)
+    expect(deliveries.map((input) => [input.to, input.cc, input.bcc, input.subject])).toEqual([
+      [['"Ada" <ada@example.test>'], [], [], 'Hi Ada'],
+      [['grace@example.test'], [], [], 'Hi there']
+    ])
+    expect(deliveries[0].html).toBe('<p>&lt;b&gt;A&amp;B&lt;/b&gt;</p>')
+    await vi.waitFor(() => expect(store.summary(created.result.id)).toMatchObject({ status: 'completed', counts: { sent: 2 } }))
+    expect(mocks.posted.some((message) => message.kind === 'event' && message.event.type === 'mail-merge' && message.event.payload.status === 'completed')).toBe(true)
+
+    // Review, controls, and deletion route to the store.
+    expect((await request({ type: 'merge:resolve', payload: { id: 'old-job', positions: [0], resolution: 'skip' } })).result).toMatchObject({ status: 'completed' })
+    expect((await request({ type: 'merge:list' })).result).toHaveLength(2)
+    expect((await request({ type: 'merge:get', payload: { id: 'old-job' } })).result.recipients[0].status).toBe('skipped')
+    expect((await request({ type: 'merge:cancel', payload: { id: created.result.id } })).result.status).toBe('completed')
+    await request({ type: 'merge:delete', payload: { id: 'old-job' } })
+    expect(store.get('old-job')).toBeUndefined()
+    await expect(request({ type: 'merge:create', payload: { accountId: 'account-1', subject: 'S', text: 'T', attachmentPaths: [], recipients: [{ email: 'bad' }], limits: { perMinute: 1, dailyCap: 1 } } }))
+      .resolves.toMatchObject({ error: { message: expect.stringMatching(/at least one recipient/) } })
+    mocks.db.mailMerge = stub
+    mocks.fs.existsSync.mockImplementation(() => false)
+    sqlite.close()
+  }, 15_000)
+
   it('shuts down cleanly', async () => {
+    // Touch the import service so shutdown has a running service to halt.
+    await request({ type: 'import:list' })
     await expect(request({ type: 'shutdown' })).resolves.toMatchObject({ result: undefined })
+    expect(localMocks.service.halt).toHaveBeenCalled()
     expect(mocks.indexer.stop).toHaveBeenCalled()
     expect(mocks.extractor.close).toHaveBeenCalled()
     expect(mocks.db.close).toHaveBeenCalledOnce()

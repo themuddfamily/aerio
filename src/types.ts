@@ -14,7 +14,7 @@ export interface Account {
   email: string
   initials: string
   color: string
-  provider: 'gmail' | 'microsoft' | 'outlook' | 'imap' | 'local'
+  provider: 'gmail' | 'microsoft' | 'outlook' | 'imap' | 'local' | 'dav'
 }
 
 export interface Attachment {
@@ -57,6 +57,9 @@ export interface CalendarEvent {
   organizer?: EventParticipant
   attendeeDetails?: EventAttendee[]
   sequence?: number
+  // Online meeting (E25). Absent means "no change requested" on writes: connectors never drop an existing
+  // conference unless status is 'removed'. See src/lib/online-meetings.ts.
+  conference?: EventConference
 }
 
 // RFC 5545 ROLE, CUTYPE, and PARTSTAT values in Aerio's vocabulary.
@@ -77,6 +80,24 @@ export interface EventAttendee extends EventParticipant {
   response?: AttendeeResponse
   // RSVP=TRUE: the organizer asked this attendee to reply.
   rsvp?: boolean
+}
+
+export type ConferenceProvider = 'googleMeet' | 'teams' | 'skype' | 'zoom' | 'webex' | 'other'
+
+export interface EventConference {
+  provider: ConferenceProvider
+  // 'pending' on a write asks the connector to create a meeting; on a read it means the provider has not
+  // finished creating it. 'removed' asks the connector to detach the meeting.
+  status: 'pending' | 'ready' | 'failed' | 'removed'
+  // Stable id for the creation request, generated once when the meeting is added and reused by every retry
+  // (Google createRequest.requestId, Graph transactionId) so retries never create a second meeting.
+  requestId?: string
+  joinUrl?: string
+  conferenceId?: string
+  // Provider display name, e.g. "Google Meet" or a third-party add-on name.
+  name?: string
+  phone?: string
+  pin?: string
 }
 
 export type RecurrenceEditScope = 'occurrence' | 'following' | 'series'
@@ -242,5 +263,8 @@ export interface AerioDesktopApi {
   onComposeCommand(callback: () => void): () => void
   mail: import('./mail-types').MailDesktopApi
   ai: import('./ai-assistant-types').AiAssistantApi
+  openPgp?: import('./openpgp-types').OpenPgpApi
   interchange: import('./interchange-types').InterchangeDesktopApi
+  dav: import('./dav-types').DavDesktopApi
+  contactMerge?: import('./contact-merge-types').ContactMergeDesktopApi
 }

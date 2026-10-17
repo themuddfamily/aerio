@@ -1,4 +1,4 @@
-import { CalendarClock, Copy, Paperclip, Save, Send, Sparkles, Trash2, X } from 'lucide-react'
+import { CalendarClock, Cloud, Copy, Paperclip, Save, Send, Sparkles, Trash2, Users, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MailAccountSummary, MailDraftInput, MailDraftRecord, MailThreadDetail, MailRecipientSuggestion, MailSendOptions } from '../mail-types'
 import { formatFileSize } from '../lib/domain'
@@ -9,12 +9,16 @@ import MailTemplatePicker from './MailTemplatePicker'
 import { primaryIdentityId, type MailSenderIdentity, type MailSignature } from '../mail-identity-types'
 import { defaultIdentityId, identityLabel, LEGACY_SIGNATURE_ID, replaceSignatureBlock, replyIdentityId, signatureBlockHtml, signatureBlockUnchanged, signatureForIdentity, QUOTE_ATTRIBUTE, type ComposerSignature } from '../lib/mail-signature'
 import MailSendOptionsControl from './MailSendOptionsControl'
+import MailComposeOpenPgpControl from './MailComposeOpenPgpControl'
+import type { MailOpenPgpOptions } from '../openpgp-types'
 import MailFormattingToolbar, { useRichEditorInput } from './MailFormattingToolbar'
 import { ReplyWatchControl, armReplyWatch, replyWatchDeadline, type ReplyWatchSetting } from './MailReplyWatches'
 import { describeExpansion, expandRecipientLists, recipientListLabel, recipientListPreview, suggestRecipientLists, type RecipientList } from '../lib/distribution-lists'
 import { useRecipientLists } from './use-recipient-lists'
 import { MailAiComposeAssist } from './MailAiComposeAssist'
 import { aiFeatureAvailable, useAiAssistantStatus } from '../lib/use-ai-assistant'
+import { cloudAttachmentsAvailable, confirmCloudLinks, MailCloudAttachments } from './MailCloudAttachments'
+import MailMergeModal from './MailMerge'
 
 interface MailComposeModalProps {
   accounts: MailAccountSummary[]
@@ -104,6 +108,7 @@ ${signature}` : ''}${forwardedText}`
   const [html, setHtml] = useState(initialHtml)
   const [attachments, setAttachments] = useState<{ name: string; size: number; path: string }[]>(() => (draft?.attachmentPaths ?? []).map((path) => ({ name: fileName(path), size: 0, path })))
   const [sendOptions, setSendOptions] = useState<MailSendOptions | undefined>(draft?.sendOptions)
+  const [openPgp, setOpenPgp] = useState<MailOpenPgpOptions | undefined>(draft?.openPgp)
   const [replyWatch, setReplyWatch] = useState<ReplyWatchSetting>({ enabled: false, deadline: '' })
   const [scheduledFor, setScheduledFor] = useState(() => localDateTimeValue(draft?.status === 'scheduled' ? draft.deliveryAt : undefined))
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'sending' | 'closing' | 'failed'>(draft?.status === 'failed' ? 'failed' : draft ? 'saved' : 'idle')
@@ -125,6 +130,8 @@ ${signature}` : ''}${forwardedText}`
   const listSuggestions = recipientField ? suggestRecipientLists(fieldValue(recipientField).split(/[;,]/).at(-1) ?? '', recipientLists) : []
   const ai = useAiAssistantStatus()
   const [aiOpen, setAiOpen] = useState(false)
+  const [cloudOpen, setCloudOpen] = useState(false)
+  const [mergeOpen, setMergeOpen] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
   const editorHtmlRef = useRef(initialHtml)
   const firstRender = useRef(true)
@@ -148,8 +155,9 @@ ${signature}` : ''}${forwardedText}`
     attachmentPaths: attachments.map((item) => item.path),
     fromIdentityId: identityId !== primaryIdentityId(accountId) ? identityId : undefined,
     replyTo: replyToField.trim() ? splitAddresses(replyToField) : undefined,
-    ...(sendOptions ? { sendOptions } : {})
-  }), [accountId, attachments, bcc, cc, draft?.inReplyTo, draft?.references, draft?.threadId, draftId, forward, html, identityId, replyMessage, replyTo?.id, replyToField, sendOptions, subject, text, to])
+    ...(sendOptions ? { sendOptions } : {}),
+    ...(openPgp ? { openPgp } : {})
+  }), [accountId, attachments, bcc, cc, draft?.inReplyTo, draft?.references, draft?.threadId, draftId, forward, html, identityId, openPgp, replyMessage, replyTo?.id, replyToField, sendOptions, subject, text, to])
   const fingerprint = useMemo(() => JSON.stringify(input), [input])
   const initialFingerprint = useRef(fingerprint)
   const latestFingerprint = useRef(fingerprint)
@@ -377,6 +385,7 @@ ${signature}` : ''}${forwardedText}`
       onToast('Choose a reply deadline in the future')
       return
     }
+    if (!(await confirmCloudLinks(accountId, editorRef.current))) return
     setStatus('sending')
     try {
       const result = deliveryAt
@@ -463,18 +472,23 @@ ${signature}` : ''}${forwardedText}`
             { label: 'Copy filename', icon: Copy, action: () => copyText(file.name) },
             { label: 'Remove attachment', icon: Trash2, separatorBefore: true, danger: true, action: () => setAttachments((items) => items.filter((_, itemIndex) => index !== itemIndex)) }
           ], file.name)}><Paperclip size={14} /><strong>{file.name}</strong>{file.size > 0 && <small>{formatFileSize(file.size)}</small>}<button aria-label={`Remove ${file.name}`} onClick={() => setAttachments((items) => items.filter((_, itemIndex) => index !== itemIndex))}><X size={13} /></button></span>)}</div>}
+          <MailCloudAttachments open={cloudOpen} accountId={accountId} provider={currentAccount?.provider} attachments={attachments} recipients={[...input.to, ...input.cc, ...input.bcc]} editorRef={editorRef} onOpenChange={setCloudOpen} onEditorChange={updateEditor} onRemoveAttachment={(path) => setAttachments((items) => items.filter((item) => item.path !== path))} onToast={onToast} />
         </div>
         <footer className="compose-footer">
           <button className="icon-button" title="Attach files" onClick={() => void chooseAttachments()}><Paperclip size={18} /></button>
+          {cloudAttachmentsAvailable(currentAccount?.provider) && <button className={`icon-button ${cloudOpen ? 'active' : ''}`} title="Share a file as a cloud link" aria-pressed={cloudOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setCloudOpen((value) => !value)}><Cloud size={18} /></button>}
           <button className="button ghost small" disabled={status === 'saving' || status === 'sending'} onClick={() => void saveNow(input, true)}><Save size={15} /> Save draft</button>
           {conflict && <button className="button ghost small" disabled={status === 'saving' || status === 'sending'} onClick={() => void saveAsCopy()}><Copy size={15} /> Save as copy</button>}
           <button className="button ghost small danger-subtle" disabled={status === 'sending'} onClick={() => void discard()}><Trash2 size={15} /> Discard</button>
           <MailSendOptionsControl provider={accounts.find((account) => account.id === accountId)?.provider} value={sendOptions} disabled={status === 'sending'} onChange={setSendOptions} />
+          <MailComposeOpenPgpControl accountId={accountId} fromIdentityId={input.fromIdentityId} recipients={[...input.to, ...input.cc, ...input.bcc]} value={openPgp} disabled={status === 'sending'} onChange={setOpenPgp} />
+          {window.aerio.mail.merge && !replyTo && <button className="button ghost small" title={openPgp?.sign || openPgp?.encrypt ? 'Mail merge does not sign or encrypt; turn off OpenPGP first' : 'Send a personalized copy to each recipient'} disabled={status === 'sending' || Boolean(openPgp?.sign || openPgp?.encrypt)} onClick={() => setMergeOpen(true)}><Users size={15} /> Mail merge</button>}
           <span className="spacer" />
           <ReplyWatchControl value={replyWatch} onChange={setReplyWatch} />
           <label className="mail-schedule-field" title="Schedule delivery"><CalendarClock size={15} /><input aria-label="Scheduled delivery time" type="datetime-local" min={localDateTimeValue(new Date(Date.now() + 60_000).toISOString())} value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} />{scheduledFor && <button type="button" aria-label="Clear scheduled delivery" onClick={() => setScheduledFor('')}><X size={13} /></button>}</label>
           <button className="button primary" disabled={status === 'sending' || status === 'closing'} onClick={() => void send()}><Send size={16} /> {status === 'sending' ? scheduledFor ? 'Scheduling…' : 'Queuing…' : scheduledFor ? 'Schedule' : 'Send'}</button>
         </footer>
+        {mergeOpen && <MailMergeModal accounts={accounts} message={{ accountId, fromIdentityId: input.fromIdentityId, replyTo: input.replyTo, subject, text, html: input.html, attachmentPaths: input.attachmentPaths, sendOptions }} initialList={to} ignoredCopies={input.cc.length + input.bcc.length} onToast={onToast} onClose={() => setMergeOpen(false)} />}
     </ModalShell>
   )
 }

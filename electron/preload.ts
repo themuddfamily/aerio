@@ -91,7 +91,17 @@ const api: AerioDesktopApi = {
     localSnapshot: () => ipcRenderer.invoke('productivity:local-snapshot'),
     saveLocal: (snapshot) => ipcRenderer.invoke('productivity:local-save', snapshot),
     exportLocalData: () => ipcRenderer.invoke('productivity:local-export'),
-    importLocalData: () => ipcRenderer.invoke('productivity:local-import')
+    importLocalData: () => ipcRenderer.invoke('productivity:local-import'),
+    availability: (request) => ipcRenderer.invoke('productivity:availability', request)
+  },
+  contactMerge: {
+    merges: () => ipcRenderer.invoke('contacts:merges'),
+    mergeProvider: (input) => ipcRenderer.invoke('contacts:merge-provider', input),
+    recordLocalMerge: (record) => ipcRenderer.invoke('contacts:merge-local-record', record),
+    undo: (entryId) => ipcRenderer.invoke('contacts:merge-undo', entryId),
+    associations: () => ipcRenderer.invoke('contacts:associations'),
+    associate: (kind, firstId, secondId) => ipcRenderer.invoke('contacts:associate', kind, firstId, secondId),
+    removeAssociation: (id) => ipcRenderer.invoke('contacts:association-remove', id)
   },
   interchange: {
     snapshot: () => ipcRenderer.invoke('interchange:snapshot'),
@@ -110,6 +120,21 @@ const api: AerioDesktopApi = {
     subscribe: (input) => ipcRenderer.invoke('interchange:subscribe', input),
     refresh: (calendarId) => ipcRenderer.invoke('interchange:refresh', calendarId),
     removeCalendar: (calendarId) => ipcRenderer.invoke('interchange:calendar-remove', calendarId)
+  },
+  dav: {
+    snapshot: () => ipcRenderer.invoke('dav:snapshot'),
+    onChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, snapshot: import('../src/dav-types').DavSnapshot) => callback(snapshot)
+      ipcRenderer.on('dav:changed', listener)
+      return () => ipcRenderer.removeListener('dav:changed', listener)
+    },
+    addAccount: (input) => ipcRenderer.invoke('dav:account-add', input),
+    updatePassword: (accountId, password) => ipcRenderer.invoke('dav:account-password', accountId, password),
+    removeAccount: (accountId) => ipcRenderer.invoke('dav:account-remove', accountId),
+    sync: (accountId) => ipcRenderer.invoke('dav:sync', accountId),
+    syncAll: () => ipcRenderer.invoke('dav:sync-all'),
+    setCollectionEnabled: (collectionId, enabled) => ipcRenderer.invoke('dav:collection-enabled', collectionId, enabled),
+    resolve: (reviewId, resolution) => ipcRenderer.invoke('dav:resolve', reviewId, resolution)
   },
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
@@ -137,6 +162,22 @@ const api: AerioDesktopApi = {
     search: (requestId, request) => ipcRenderer.invoke('ai:search', requestId, request),
     cancel: (requestId) => ipcRenderer.invoke('ai:cancel', requestId)
   },
+  openPgp: {
+    status: () => ipcRenderer.invoke('openpgp:status'),
+    generate: (input) => ipcRenderer.invoke('openpgp:generate', input),
+    importText: (armored, passphrase) => ipcRenderer.invoke('openpgp:import-text', armored, passphrase),
+    importFile: (passphrase) => ipcRenderer.invoke('openpgp:import-file', passphrase),
+    exportPublic: (fingerprint) => ipcRenderer.invoke('openpgp:export-public', fingerprint),
+    exportPrivate: (fingerprint, passphrase) => ipcRenderer.invoke('openpgp:export-private', fingerprint, passphrase),
+    delete: (fingerprint) => ipcRenderer.invoke('openpgp:delete', fingerprint),
+    setVerification: (fingerprint, state) => ipcRenderer.invoke('openpgp:verification', fingerprint, state),
+    unlock: (fingerprint, passphrase) => ipcRenderer.invoke('openpgp:unlock', fingerprint, passphrase),
+    forgetPassphrases: () => ipcRenderer.invoke('openpgp:forget'),
+    preflight: (input) => ipcRenderer.invoke('openpgp:preflight', input),
+    inspect: (ref) => ipcRenderer.invoke('openpgp:inspect', ref),
+    decrypt: (ref, passphrase) => ipcRenderer.invoke('openpgp:decrypt', ref, passphrase),
+    saveAttachment: (ref, index) => ipcRenderer.invoke('openpgp:save-attachment', ref, index)
+  },
   mail: {
     messageTools: {
       updateLocal: (ref, updates) => ipcRenderer.invoke('mail:message:local', ref, updates),
@@ -155,6 +196,21 @@ const api: AerioDesktopApi = {
       get: (accountId) => ipcRenderer.invoke('mail:automatic-replies:get', accountId),
       update: (accountId, settings) => ipcRenderer.invoke('mail:automatic-replies:update', accountId, settings),
       disable: (accountId) => ipcRenderer.invoke('mail:automatic-replies:disable', accountId)
+    },
+    cloudAttachments: {
+      status: (accountId) => ipcRenderer.invoke('mail:cloud:status', accountId),
+      connect: (accountId) => ipcRenderer.invoke('mail:cloud:connect', accountId),
+      upload: (uploadId, accountId, path, share) => ipcRenderer.invoke('mail:cloud:upload', uploadId, accountId, path, share),
+      cancel: (uploadId) => ipcRenderer.invoke('mail:cloud:cancel', uploadId),
+      pending: (accountId) => ipcRenderer.invoke('mail:cloud:pending', accountId),
+      resume: (uploadId) => ipcRenderer.invoke('mail:cloud:resume', uploadId),
+      discard: (uploadId) => ipcRenderer.invoke('mail:cloud:discard', uploadId),
+      verify: (accountId, urls) => ipcRenderer.invoke('mail:cloud:verify', accountId, urls),
+      onProgress: (callback) => {
+        const listener = (_event: Electron.IpcRendererEvent, value: import('../src/cloud-attachment-types').CloudUploadProgress) => callback(value)
+        ipcRenderer.on('mail:cloud:progress', listener)
+        return () => ipcRenderer.removeListener('mail:cloud:progress', listener)
+      }
     },
     credentials: {
       status: () => ipcRenderer.invoke('gmail:credentials:status'),
@@ -217,6 +273,16 @@ const api: AerioDesktopApi = {
         delete: (id) => ipcRenderer.invoke('mail:signatures:delete', id)
       }
     },
+    merge: {
+      list: () => ipcRenderer.invoke('mail:merge:list'),
+      get: (id) => ipcRenderer.invoke('mail:merge:get', id),
+      create: (input) => ipcRenderer.invoke('mail:merge:create', input),
+      pause: (id) => ipcRenderer.invoke('mail:merge:pause', id),
+      resume: (id) => ipcRenderer.invoke('mail:merge:resume', id),
+      cancel: (id) => ipcRenderer.invoke('mail:merge:cancel', id),
+      resolve: (id, positions, resolution) => ipcRenderer.invoke('mail:merge:resolve', id, positions, resolution),
+      delete: (id) => ipcRenderer.invoke('mail:merge:delete', id)
+    },
     replyWatches: {
       list: (accountIds) => ipcRenderer.invoke('mail:reply-watches:list', accountIds),
       create: (input) => ipcRenderer.invoke('mail:reply-watches:create', input),
@@ -256,6 +322,19 @@ const api: AerioDesktopApi = {
       delete: (id) => ipcRenderer.invoke('mail:quick-actions:delete', id),
       run: (id, targets) => ipcRenderer.invoke('mail:quick-actions:run', id, targets)
     },
+    imports: {
+      ensureLocalFolders: () => ipcRenderer.invoke('mail:local:ensure'),
+      choose: (kind) => ipcRenderer.invoke('mail:import:choose', kind),
+      start: (input) => ipcRenderer.invoke('mail:import:start', input),
+      list: () => ipcRenderer.invoke('mail:import:list'),
+      pause: (id) => ipcRenderer.invoke('mail:import:pause', id),
+      resume: (id) => ipcRenderer.invoke('mail:import:resume', id),
+      cancel: (id) => ipcRenderer.invoke('mail:import:cancel', id),
+      dismiss: (id) => ipcRenderer.invoke('mail:import:dismiss', id),
+      items: (jobId) => ipcRenderer.invoke('mail:import:items', jobId),
+      resolve: (jobId, keys, decision) => ipcRenderer.invoke('mail:import:resolve', jobId, keys, decision),
+      transfer: (input) => ipcRenderer.invoke('mail:local:transfer', input)
+    },
     sync: {
       start: (accountId) => ipcRenderer.invoke('mail:sync:start', accountId),
       pause: (accountId) => ipcRenderer.invoke('mail:sync:pause', accountId),
@@ -267,6 +346,9 @@ const api: AerioDesktopApi = {
       list: (query) => ipcRenderer.invoke('mail:attachments:list', query),
       open: (accountId, messageId, attachmentId, filename) => ipcRenderer.invoke('mail:attachment:open', accountId, messageId, attachmentId, filename),
       save: (accountId, messageId, attachmentId, filename) => ipcRenderer.invoke('mail:attachment:save', accountId, messageId, attachmentId, filename)
+    },
+    contactHistory: {
+      messages: (query) => ipcRenderer.invoke('mail:contact-history:messages', query)
     },
     storage: () => ipcRenderer.invoke('mail:storage'),
     diagnostics: {

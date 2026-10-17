@@ -1,6 +1,7 @@
-import type { Attachment, CalendarEvent, Contact, ContactList, Note, RecurrenceEditScope, Task } from './types'
+import type { Attachment, CalendarEvent, ConferenceProvider, Contact, ContactList, Note, RecurrenceEditScope, Task } from './types'
 
-export type ProductivityProvider = 'gmail' | 'microsoft'
+// 'dav' covers CalDAV/CardDAV accounts (iCloud, Fastmail, Nextcloud, generic servers); see dav-types.ts.
+export type ProductivityProvider = 'gmail' | 'microsoft' | 'dav'
 export type ProductivityModule = 'calendar' | 'contacts'
 export type ProductivitySyncPhase = 'idle' | 'syncing' | 'ready' | 'error'
 
@@ -13,6 +14,20 @@ export interface SyncedCalendar {
   color: string
   primary: boolean
   canWrite: boolean
+  // Online meeting capability reported by the provider (E25); absent on calendars synced before E25.
+  conferences?: CalendarConferenceSupport
+}
+
+export interface CalendarConferenceSupport {
+  // Raw provider values: Google conferenceProperties.allowedConferenceSolutionTypes or Graph
+  // allowedOnlineMeetingProviders.
+  allowed: string[]
+  // Raw default provider when the provider reports one (Graph defaultOnlineMeetingProvider).
+  defaultProvider?: string
+  // Providers Aerio can create on this calendar with the current consent.
+  creatable: ConferenceProvider[]
+  // Whether an existing meeting can be detached from an event (Graph cannot turn isOnlineMeeting off).
+  canRemove: boolean
 }
 
 export interface SyncedCalendarEvent extends CalendarEvent {
@@ -121,4 +136,6 @@ export interface ProductivityDesktopApi {
   saveLocal(snapshot: LocalModuleSnapshot): Promise<void>
   exportLocalData(): Promise<LocalDataBackupResult>
   importLocalData(): Promise<LocalModuleSnapshot | undefined>
+  /** Free/busy lookup for the scheduling assistant, answered by the calendar's provider. */
+  availability?(request: import('./scheduling-types').AvailabilityRequest): Promise<import('./scheduling-types').AvailabilityResult>
 }

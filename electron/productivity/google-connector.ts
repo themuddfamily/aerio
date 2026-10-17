@@ -11,9 +11,14 @@ import {
   attachGooglePhotos, googleContactGroupFields, googlePhotoBytes, googleRichContactBody, googleRichContactFields, googleUpdatePersonFields,
   mapGoogleContactGroup, mapGoogleRichContact, type GoogleContactGroup, type GoogleRichPerson
 } from './google-contacts'
+import { conferenceWrite } from '../../src/lib/online-meetings'
+import {
+  assertConferenceCreatable, assertConferenceRemovable, googleConferenceCopy, googleConferenceSupport, googleCreateRequest, googleEventIdForRequest,
+  mapGoogleConference, type GoogleConferenceData
+} from './online-meetings'
 
 interface GooglePage<T> { items?: T[]; connections?: T[]; nextPageToken?: string; nextSyncToken?: string }
-interface GoogleCalendar { id: string; summary?: string; backgroundColor?: string; primary?: boolean; accessRole?: string }
+interface GoogleCalendar { id: string; summary?: string; backgroundColor?: string; primary?: boolean; accessRole?: string; conferenceProperties?: { allowedConferenceSolutionTypes?: string[] } }
 interface GoogleEvent {
   id: string
   status?: string
@@ -30,6 +35,8 @@ interface GoogleEvent {
   recurrence?: string[]
   recurringEventId?: string
   originalStartTime?: { dateTime?: string; date?: string; timeZone?: string }
+  conferenceData?: GoogleConferenceData
+  hangoutLink?: string
 }
 interface GooglePerson {
   resourceName: string
@@ -115,6 +122,7 @@ export function mapGoogleEvent(accountId: string, calendar: SyncedCalendar, even
   if (!start || !end || event.status === 'cancelled') return
   const details = (event.attendees ?? []).flatMap((attendee) => fromGoogleAttendee(attendee) ?? [])
   const organizer = participant(event.organizer?.email, event.organizer?.displayName, event.organizer?.self)
+  const conference = mapGoogleConference(event.conferenceData, event.hangoutLink)
   return withAttendees({
     id: `${accountId}:google-event:${calendar.remoteId}:${event.id}`,
     remoteId: event.id,
@@ -138,12 +146,14 @@ export function mapGoogleEvent(accountId: string, calendar: SyncedCalendar, even
     ...(event.originalStartTime?.dateTime ?? event.originalStartTime?.date ? { originalStart: event.originalStartTime?.dateTime ?? event.originalStartTime?.date } : {}),
     ...(organizer ? { organizer } : {}),
     ...(event.iCalUID ? { icalUid: event.iCalUID } : {}),
-    ...(Number.isInteger(event.sequence) ? { sequence: event.sequence } : {})
+    ...(Number.isInteger(event.sequence) ? { sequence: event.sequence } : {}),
+    ...(conference ? { conference } : {})
   } satisfies SyncedCalendarEvent, details)
 }
 
 // Meetings with guests tell them about changes (sendUpdates=all); events without guests keep the default.
-const notifyAttendees = (...events: Pick<CalendarEvent, 'attendees'>[]) => events.some((event) => event.attendees.length) ? '?sendUpdates=all' : ''
+const notifyAttendees = (separator: '?' | '&', ...events: Pick<CalendarEvent, 'attendees'>[]) =>
+  events.some((event) => event.attendees.length) ? `${separator}sendUpdates=all` : ''
 
 // Synced feeds use singleEvents=true, so a stored series master (returned by a write) is replaced by its
 // instances on the next sync instead of being kept alongside them.
@@ -197,7 +207,8 @@ export class GoogleProductivityConnector implements ProductivityConnector {
       name: calendar.summary?.trim() || 'Calendar',
       color: calendar.backgroundColor ?? '#6558e8',
       primary: Boolean(calendar.primary),
-      canWrite: this.calendarWriteAuthorized && (calendar.accessRole === 'owner' || calendar.accessRole === 'writer')
+      canWrite: this.calendarWriteAuthorized && (calendar.accessRole === 'owner' || calendar.accessRole === 'writer'),
+      conferences: googleConferenceSupport(calendar.conferenceProperties?.allowedConferenceSolutionTypes, this.calendarWriteAuthorized && (calendar.accessRole === 'owner' || calendar.accessRole === 'writer'))
     }))
     const from = new Date(); from.setUTCFullYear(from.getUTCFullYear() - 1)
     const to = new Date(); to.setUTCFullYear(to.getUTCFullYear() + 2)
@@ -273,24 +284,61 @@ export class GoogleProductivityConnector implements ProductivityConnector {
     }
   }
 
+  // Every event write sends conferenceDataVersion=1: without it Google ignores conferenceData in the body, and
+  // writes that omit conferenceData keep the event's existing conference.
   async createEvent(calendar: SyncedCalendar, event: CalendarEvent) {
     this.assertWritable(calendar)
-    const remote = await retryingJson<GoogleEvent>(this.provider, `${this.eventsUrl(calendar)}${notifyAttendees(event)}`, this.token, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(googleEventBody(event))
-    })
-    return this.mapWrittenEvent(calendar, remote)
+    const write = conferenceWrite(event)
+    if (write.kind === 'create') assertConferenceCreatable(calendar, write.provider)
+    const id = write.kind === 'create' ? googleEventIdForRequest(write.requestId) : undefined
+    const body = { ...googleEventBody(event), ...(write.kind === 'create' ? { id, conferenceData: googleCreateRequest(write.requestId) } : {}) }
+    try {
+      const remote = await retryingJson<GoogleEvent>(this.provider, `${this.eventsUrl(calendar)}?conferenceDataVersion=1${notifyAttendees('&', event)}`, this.token, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      return this.mapWrittenEvent(calendar, remote)
+    } catch (error) {
+      // The insert was retried after an attempt that reached Google: reuse that event rather than add another.
+      if (!id || write.kind !== 'create' || !(error instanceof ProductivityApiError) || error.status !== 409) throw error
+      const url = `${this.eventsUrl(calendar)}/${encodeURIComponent(id)}`
+      const existing = await retryingJson<GoogleEvent>(this.provider, url, this.token)
+      if (existing.status === 'cancelled') throw new Error('This meeting request was already used by a deleted event; add the meeting again')
+      if (mapGoogleConference(existing.conferenceData, existing.hangoutLink)) return this.mapWrittenEvent(calendar, existing)
+      const patched = await retryingJson<GoogleEvent>(this.provider, `${url}?conferenceDataVersion=1`, this.token, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conferenceData: googleCreateRequest(write.requestId) })
+      })
+      return this.mapWrittenEvent(calendar, patched)
+    }
   }
 
   async updateEvent(calendar: SyncedCalendar, current: SyncedCalendarEvent, event: CalendarEvent) {
     this.assertWritable(calendar)
-    const remote = await retryingJson<GoogleEvent>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(current.remoteId)}${notifyAttendees(event, current)}`, this.token, {
+    const url = `${this.eventsUrl(calendar)}/${encodeURIComponent(current.remoteId)}`
+    const conference = await this.conferencePatch(calendar, url, event, current.conference)
+    const remote = await retryingJson<GoogleEvent>(this.provider, `${url}?conferenceDataVersion=1${notifyAttendees('&', event, current)}`, this.token, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(googleEventBody(event, { instance: Boolean(current.seriesId) }))
+      body: JSON.stringify({ ...googleEventBody(event, { instance: Boolean(current.seriesId) }), ...conference })
     })
     return this.mapWrittenEvent(calendar, remote)
+  }
+
+  // conferenceData for a PATCH: omitted (Google keeps the current conference), a createRequest, or null to
+  // detach it. Before creating, the event is re-read so a conference added by an earlier attempt whose response
+  // was lost, or by another client, is kept instead of replaced.
+  private async conferencePatch(calendar: SyncedCalendar, url: string, event: CalendarEvent, known?: CalendarEvent['conference']) {
+    const write = conferenceWrite(event, known)
+    if (write.kind === 'keep') return {}
+    if (write.kind === 'remove') {
+      assertConferenceRemovable(calendar)
+      return { conferenceData: null }
+    }
+    assertConferenceCreatable(calendar, write.provider)
+    const latest = await retryingJson<GoogleEvent>(this.provider, url, this.token)
+    if (conferenceWrite(event, mapGoogleConference(latest.conferenceData, latest.hangoutLink)).kind !== 'create') return {}
+    return { conferenceData: googleCreateRequest(write.requestId) }
   }
 
   // Applies an occurrence edit to the whole series, or splits the series at the occurrence ("this and
@@ -304,13 +352,18 @@ export class GoogleProductivityConnector implements ProductivityConnector {
       const remaining = rule.count !== undefined ? Math.max(1, rule.count - occurrencesBefore({ ...timing, recurrenceRule: formatRecurrenceRule(rule) } as CalendarEvent, split)) : undefined
       await this.patchMaster(calendar, master, { recurrence: replaceGoogleRecurrenceRule(master.recurrence, formatRecurrenceRule({ ...rule, count: undefined, until: untilBefore(split, isAllDayEvent(timing as CalendarEvent)) })) })
       const successor = { ...event, seriesId: undefined, originalStart: undefined, recurrenceExceptions: undefined, recurrenceRule: formatRecurrenceRule({ ...rule, count: remaining }) }
-      await retryingJson<GoogleEvent>(this.provider, this.eventsUrl(calendar), this.token, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(googleEventBody(successor))
+      // The new series keeps the master's meeting (copied with conferenceDataVersion=1) unless it was removed.
+      const write = conferenceWrite(event, mapGoogleConference(master.conferenceData, master.hangoutLink))
+      if (write.kind === 'create') assertConferenceCreatable(calendar, write.provider)
+      const conferenceData = write.kind === 'create' ? googleCreateRequest(write.requestId) : write.kind === 'remove' ? undefined : googleConferenceCopy(master.conferenceData)
+      await retryingJson<GoogleEvent>(this.provider, `${this.eventsUrl(calendar)}?conferenceDataVersion=1`, this.token, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...googleEventBody(successor), ...(conferenceData ? { conferenceData } : {}) })
       })
       return
     }
     const shifted = shiftSeriesTiming(timing, split, event)
-    await this.patchMaster(calendar, master, googleEventBody({ ...event, ...shifted, seriesId: undefined }, { instance: true }))
+    const conference = await this.conferencePatch(calendar, `${this.eventsUrl(calendar)}/${encodeURIComponent(master.id)}`, event, mapGoogleConference(master.conferenceData, master.hangoutLink))
+    await this.patchMaster(calendar, master, { ...googleEventBody({ ...event, ...shifted, seriesId: undefined }, { instance: true }), ...conference })
   }
 
   async deleteEventSeries(calendar: SyncedCalendar, current: SyncedCalendarEvent, scope: 'following' | 'series') {
@@ -336,14 +389,14 @@ export class GoogleProductivityConnector implements ProductivityConnector {
   }
 
   private async patchMaster(calendar: SyncedCalendar, master: GoogleEvent, body: object) {
-    await retryingJson<GoogleEvent>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(master.id)}`, this.token, {
+    await retryingJson<GoogleEvent>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(master.id)}?conferenceDataVersion=1`, this.token, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     })
   }
 
   async deleteEvent(calendar: SyncedCalendar, event: SyncedCalendarEvent) {
     this.assertWritable(calendar)
-    await retryingJson<void>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(event.remoteId)}${notifyAttendees(event)}`, this.token, { method: 'DELETE' })
+    await retryingJson<void>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(event.remoteId)}${notifyAttendees('?', event)}`, this.token, { method: 'DELETE' })
   }
 
   // RSVP as an attendee: events.patch with the full attendee list (Google replaces the array) where only

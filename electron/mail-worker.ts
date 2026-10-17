@@ -22,6 +22,7 @@ import type {
   WorkerRequest,
   WorkerResponse,
   WorkerCredentialResponse,
+  WorkerOpenPgpResponse,
   AccountCredential
 } from './mail-protocol'
 import { MailDatabase, type ParsedMailMessage } from './mail/database'
@@ -35,6 +36,8 @@ import { messageIdFromMime } from './mail/reply-watches'
 import { mailRuleTriggersForLabels } from '../src/lib/mail-rules'
 import { parseMessageSource } from './mail/message-source'
 import { runMailQuickAction } from './mail/quick-actions'
+import { MailImportService } from './mail/mail-import'
+import { transferToLocalFolders } from './mail/local-folders'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createCalendarMimeBuffer, createMime, createMimeBuffer } from './mail/mime-builder'
 import { calendarPartsFromRaw } from './mail/invitation-parts'
@@ -43,6 +46,10 @@ import { createReceiptService } from './mail/receipts'
 import { AttachmentContentIndexer } from './mail/attachment-text-indexer'
 import { AttachmentExtractRunner } from './mail/attachment-extract-runner'
 import { supportedSendOptions } from '../src/lib/mail-send-options'
+import type { MailMergeJobInput } from '../src/mail-merge-types'
+import { clampMailMergeLimits, MAIL_MERGE_MAX_RECIPIENTS, normalizeMergeRecipients } from '../src/lib/mail-merge'
+import { MailMergeNotSubmittedError, MailMergeRunner } from './mail/mail-merge-runner'
+import { MAIL_MERGE_DAY_MS } from './mail/mail-merge-store'
 import {
   BACKGROUND_MAIL_POLL_INTERVAL_MS,
   clampMailPollingInterval,
@@ -58,11 +65,14 @@ let attachmentExtractor: AttachmentExtractRunner | undefined
 let contentPath = ''
 let online = true
 let operationTimer: NodeJS.Timeout | undefined
+let mailMergeTimer: NodeJS.Timeout | undefined
+let mailMergeRunnerInstance: MailMergeRunner | undefined
 let pollTimer: NodeJS.Timeout | undefined
 const paused = new Set<string>()
 const syncing = new Set<string>()
 const syncScheduled = new Set<string>()
 const credentialRequests = new Map<string, { resolve: (value: AccountCredential) => void; reject: (error: Error) => void }>()
+const openPgpRequests = new Map<string, { resolve: (value: string) => void; reject: (error: Error) => void }>()
 const nextRequestAt = new Map<string, number>()
 const draftQueues = new Map<string, Promise<unknown>>()
 const lastAutomaticSyncAt = new Map<string, number>()
@@ -104,6 +114,25 @@ async function getCredential(accountId: string) {
   })
 }
 
+const openPgpRequested = (input: MailDraftInput) => Boolean(input.openPgp?.sign || input.openPgp?.encrypt)
+
+/**
+ * Signs and/or encrypts an outgoing message in the main process when the
+ * draft asks for it. Any failure throws, so delivery aborts and the draft is
+ * kept: a protected draft is never sent as plaintext.
+ */
+async function protectOutgoing(mime: Buffer, input: MailDraftInput, from: string | undefined) {
+  const options = input.openPgp
+  if (!options || !openPgpRequested(input)) return mime
+  if (!from) throw new Error('The sender address is unknown, so the message cannot be signed or encrypted. The message was not sent; your draft is kept.')
+  const id = crypto.randomUUID()
+  const message = await new Promise<string>((resolve, reject) => {
+    openPgpRequests.set(id, { resolve, reject })
+    port.postMessage({ kind: 'openpgp-request', id, message: mime.toString('utf8'), from, recipients: [...input.to, ...input.cc, ...input.bcc], options })
+  })
+  return Buffer.from(message, 'utf8')
+}
+
 async function rateLimit(accountId: string) {
   const now = Date.now()
   const slot = Math.max(now, nextRequestAt.get(accountId) ?? now)
@@ -142,6 +171,38 @@ function folderManager() {
     folderManagerInstance = new MailFolderManager({ database: db, online: () => online, gmail: clientFor, microsoft: microsoftClientFor, imap: imapClientFor })
   }
   return folderManagerInstance
+}
+
+// Imports run here, off the UI and main threads; messages go through the
+// same parse-and-store path as synchronized mail.
+let importServiceInstance: MailImportService | undefined
+let importChangedAt = 0
+function importService() {
+  if (!database) throw new Error('Database is not initialized')
+  if (!importServiceInstance) {
+    const db = database
+    importServiceInstance = new MailImportService({
+      database: db,
+      store: (accountId, message) => parseRawAndStore(accountId, message),
+      freeBytes: () => {
+        const stats = statfsSync(contentPath)
+        return Number(stats.bavail) * Number(stats.bsize)
+      },
+      emit: (job) => emit({ type: 'import-progress', payload: job }),
+      changed: (accountId, final) => {
+        // Imports touch thousands of messages; refresh open views at most every 2 s.
+        if (!final && Date.now() - importChangedAt < 2_000) return
+        importChangedAt = Date.now()
+        emit({ type: 'mail-changed', payload: { accountId } })
+      }
+    })
+  }
+  return importServiceInstance
+}
+
+function localStoreDeps() {
+  if (!database) throw new Error('Database is not initialized')
+  return { database, store: (accountId: string, message: Parameters<typeof parseRawAndStore>[1]) => parseRawAndStore(accountId, message) }
 }
 
 function addressList(value?: Address[]) {
@@ -612,6 +673,8 @@ async function syncMicrosoftAccount(accountId: string) {
 
 async function syncAccount(accountId: string, forceFull = false) {
   if (!database || syncing.has(accountId) || syncScheduled.has(accountId)) return
+  // Local Folders have no server to synchronize with.
+  if (database.getAccount(accountId)?.provider === 'local') return
   syncScheduled.add(accountId)
   while (syncing.size >= 2) {
     await sleep(500)
@@ -692,6 +755,10 @@ async function runOperations() {
     emit({ type: 'mail-changed', payload: { accountId: snooze.accountId, threadIds: [snooze.threadId] } })
   }
   processReplyWatches()
+  // Local Folders changes are already applied and need no network.
+  for (const done of database.localMail?.completeDueOperations() ?? []) {
+    emit({ type: 'operation', payload: { id: done.id, accountId: done.accountId, kind: done.kind as MailActionKind, status: 'succeeded' } })
+  }
   if (!online) return
   for (const row of database.dueOperations()) {
     const id = String(row.id)
@@ -699,6 +766,11 @@ async function runOperations() {
     const kind = String(row.kind) as MailActionKind
     const threadIds = JSON.parse(String(row.thread_ids_json)) as string[]
     const labelId = row.label_id ? String(row.label_id) : undefined
+    if (database.getAccount(accountId)?.provider === 'local') {
+      database.updateOperation(id, 'succeeded')
+      emit({ type: 'operation', payload: { id, accountId, kind, status: 'succeeded' } })
+      continue
+    }
     database.updateOperation(id, 'running')
     emit({ type: 'operation', payload: { id, accountId, kind, status: 'running' } })
     try {
@@ -795,7 +867,8 @@ function draftInputFromRow(row: Record<string, string | number | bigint | null>)
     html: row.body_html ? String(row.body_html) : undefined,
     attachmentPaths: JSON.parse(String(row.attachment_paths_json)),
     ...(row.send_options_json ? { sendOptions: JSON.parse(String(row.send_options_json)) } : {}),
-    ...database!.identities.draftSender(String(row.id))
+    ...database!.identities.draftSender(String(row.id)),
+    ...database!.openPgp.get(String(row.id))
   }
 }
 
@@ -862,7 +935,8 @@ async function assertRemoteDraftUnchanged(accountId: string, provider: MailAccou
 async function saveDraft(input: MailDraftInput) {
   if (!database) throw new Error('Database is not initialized')
   input = stageDraftAttachments(input)
-  const canSync = online && draftRecipientsAreSyncable(input.to, input.cc, input.bcc)
+  // An encrypted draft stays on this device: syncing it would store plaintext with the provider.
+  const canSync = online && !input.openPgp?.encrypt && draftRecipientsAreSyncable(input.to, input.cc, input.bcc)
   let result = database.saveDraft(input, { status: canSync ? 'syncing' : 'local' })
   if (!canSync) return result
   try {
@@ -898,6 +972,40 @@ async function saveDraft(input: MailDraftInput) {
   return result
 }
 
+/**
+ * Hands one built message to the provider, sending the remote draft when one
+ * exists. Returns the Message-ID and provider thread of what was actually sent
+ * so reply watches can match on them.
+ */
+async function transmitMessage(input: MailDraftInput, provider: MailAccountSummary['provider'], sender: ReturnType<typeof senderFor>, remoteDraftId?: string): Promise<{ messageIdHeader?: string; threadId?: string }> {
+  const from = sender?.from
+  if (provider === 'gmail') {
+    const raw = openPgpRequested(input) ? (await protectOutgoing(createMimeBuffer(input, from), input, from)).toString('base64url') : createMime(input, from)
+    const reference = remoteDraftId
+      ? await clientFor(input.accountId).sendDraft(remoteDraftId, raw)
+      : await clientFor(input.accountId).sendMessage(raw, input.threadId)
+    return { messageIdHeader: messageIdFromMime(raw), threadId: reference?.threadId }
+  }
+  if (provider === 'microsoft') {
+    // Exchange assigns its own Message-ID; the watch adopts it from the synced Sent copy.
+    const mime = await protectOutgoing(createMimeBuffer(input, from), input, from)
+    if (openPgpRequested(input)) {
+      // Sending the stored provider draft would send its plaintext, so send the protected MIME instead.
+      const client = microsoftClientFor(input.accountId)
+      await client.send(mime, undefined, input.sendOptions)
+      if (remoteDraftId) await client.deleteDraft(remoteDraftId).catch(() => undefined)
+    } else await microsoftClientFor(input.accountId).send(mime, remoteDraftId, input.sendOptions)
+    return { threadId: input.threadId }
+  }
+  const client = await imapClientFor(input.accountId)
+  const recipients = [...input.to, ...input.cc, ...input.bcc]
+  const mime = await protectOutgoing(createMimeBuffer(input, from, true), input, from)
+  // An alias also becomes the SMTP envelope sender; the server decides whether it is allowed.
+  await (sender?.identity ? client.send(mime, recipients, input.sendOptions, sender.identity.email) : client.send(mime, recipients, input.sendOptions))
+  if (remoteDraftId) await client.deleteDraft(remoteDraftId)
+  return { messageIdHeader: messageIdFromMime(mime) }
+}
+
 async function deliverDraft(input: MailDraftInput) {
   if (!database) throw new Error('Database is not initialized')
   input = stageDraftAttachments(input)
@@ -908,31 +1016,10 @@ async function deliverDraft(input: MailDraftInput) {
   try {
     const row = database.getDraft(result.id)
     sender = senderFor(input, true)
-    const from = sender?.from
     // The stored draft keeps the user's choice; only what the provider can honor is sent.
     input = { ...input, sendOptions: supportedSendOptions(input.sendOptions, provider) }
     if (row?.gmail_draft_id) await assertRemoteDraftUnchanged(input.accountId, provider, String(row.gmail_draft_id), row.remote_revision ? String(row.remote_revision) : undefined)
-    // Reply watches match on the Message-ID and provider thread of what was actually sent.
-    let sent: { messageIdHeader?: string; threadId?: string }
-    if (provider === 'gmail') {
-      const raw = createMime({ ...input, id: result.id }, from)
-      const reference = row?.gmail_draft_id
-        ? await clientFor(input.accountId).sendDraft(String(row.gmail_draft_id), raw)
-        : await clientFor(input.accountId).sendMessage(raw, input.threadId)
-      sent = { messageIdHeader: messageIdFromMime(raw), threadId: reference?.threadId }
-    } else if (provider === 'microsoft') {
-      // Exchange assigns its own Message-ID; the watch adopts it from the synced Sent copy.
-      await microsoftClientFor(input.accountId).send(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined, input.sendOptions)
-      sent = { threadId: input.threadId }
-    } else {
-      const client = await imapClientFor(input.accountId)
-      const recipients = [...input.to, ...input.cc, ...input.bcc]
-      const mime = createMimeBuffer({ ...input, id: result.id }, from, true)
-      // An alias also becomes the SMTP envelope sender; the server decides whether it is allowed.
-      await (sender?.identity ? client.send(mime, recipients, input.sendOptions, sender.identity.email) : client.send(mime, recipients, input.sendOptions))
-      if (row?.gmail_draft_id) await client.deleteDraft(String(row.gmail_draft_id))
-      sent = { messageIdHeader: messageIdFromMime(mime) }
-    }
+    const sent = await transmitMessage({ ...input, id: result.id }, provider, sender, row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined)
     result = { ...result, status: 'sent', updatedAt: new Date().toISOString() }
     database.replyWatches.activateForDraft(result.id, { ...sent, sentAt: result.updatedAt })
     removeDraftFiles(result.id)
@@ -997,6 +1084,83 @@ async function processQueuedDrafts() {
     const current = database.getDueDraft(String(row.id))
     if (current) await deliverDraft(draftInputFromRow(current))
   })
+}
+
+/**
+ * Sends one mail merge delivery. Problems found before the provider is
+ * contacted are marked as not submitted so the recipient stays queued.
+ */
+async function sendMergeDelivery(input: MailDraftInput) {
+  let provider: MailAccountSummary['provider']
+  let sender: ReturnType<typeof senderFor>
+  try {
+    const account = database?.getAccount(input.accountId)
+    if (!account || account.archived) throw new Error('Connect this account before sending')
+    if (account.status === 'needs-auth') throw new Error('Reconnect this account before sending')
+    provider = account.provider
+    sender = senderFor(input, true)
+    input = { ...input, sendOptions: supportedSendOptions(input.sendOptions, provider) }
+    const missing = input.attachmentPaths.find((path) => !existsSync(path))
+    if (missing) throw new Error(`An attachment is no longer available: ${basename(missing).replace(/^\d+-/, '')}`)
+    // Fails here, before submission, when the account's credentials are unavailable.
+    await getCredential(input.accountId)
+  } catch (error) {
+    throw new MailMergeNotSubmittedError(error)
+  }
+  try {
+    return await transmitMessage(input, provider, sender)
+  } catch (error) {
+    const rejected = sender ? describeSenderRejection(error, provider, sender) : undefined
+    throw rejected ? new MailMergeNotSubmittedError(rejected) : error
+  }
+}
+
+function mailMergeRunner() {
+  if (!database) throw new Error('Database is not initialized')
+  const store = database.mailMerge
+  mailMergeRunnerInstance ??= new MailMergeRunner({
+    store,
+    online: () => online,
+    send: sendMergeDelivery,
+    emit: (summary) => {
+      emit({ type: 'mail-merge', payload: summary })
+      if (summary.status === 'completed' && summary.counts.sent > 0) {
+        emit({ type: 'mail-changed', payload: { accountId: summary.accountId } })
+        if (!paused.has(summary.accountId)) void syncAccount(summary.accountId)
+      }
+    }
+  })
+  return mailMergeRunnerInstance
+}
+
+function createMailMerge(input: MailMergeJobInput) {
+  if (!database) throw new Error('Database is not initialized')
+  const account = database.getAccount(input.accountId)
+  if (!account || account.archived) throw new Error('Connect this account before starting a mail merge')
+  const { recipients } = normalizeMergeRecipients(input.recipients)
+  if (!recipients.length) throw new Error('Add at least one recipient with a complete email address')
+  if (recipients.length > MAIL_MERGE_MAX_RECIPIENTS) throw new Error(`A mail merge can have at most ${MAIL_MERGE_MAX_RECIPIENTS.toLocaleString('en-US')} recipients`)
+  // Refuse an unusable From address now rather than after the first delivery.
+  senderFor({ ...input, to: [], cc: [], bcc: [] }, true)
+  const id = crypto.randomUUID()
+  // Attachments are copied so discarding the source draft cannot remove them mid-merge.
+  const directory = join(contentPath, 'mail-merge', safeDraftPart(id))
+  mkdirSync(directory, { recursive: true })
+  const attachmentPaths = input.attachmentPaths.map((source, index) => {
+    const target = join(directory, `${index}-${safeDraftPart(basename(source).replace(/^\d+(?:-[a-f0-9]{10})?-/, ''))}`)
+    copyFileSync(source, target)
+    return target
+  })
+  const job = database.mailMerge.create(id, { ...input, recipients, attachmentPaths, limits: clampMailMergeLimits(input.limits, account.provider, account.email) })
+  emit({ type: 'mail-merge', payload: job })
+  void mailMergeRunner().tick().catch(() => undefined)
+  return job
+}
+
+function deleteMailMerge(id: string) {
+  if (!database) throw new Error('Database is not initialized')
+  database.mailMerge.delete(id)
+  rmSync(join(contentPath, 'mail-merge', safeDraftPart(id)), { recursive: true, force: true })
 }
 
 async function extractAttachment(accountId: string, messageId: string, attachmentIdValue: string, targetPath: string) {
@@ -1128,10 +1292,20 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     database = new MailDatabase(command.payload.databasePath, contentPath)
     startAttachmentIndexing(database.attachmentText)
     folderManagerInstance = undefined
+    importServiceInstance = undefined
+    // Imports that were queued (not running) when Aerio closed continue now;
+    // interrupted ones wait for the user to resume them.
+    if (database.localMail?.nextQueuedJob()) void importService().pump()
     // Re-read provider folders for any folder change cut off by a restart.
     for (const accountId of database.recoverInterruptedFolderOperations()) void folderManager().refresh(accountId).catch(() => undefined)
+    // Deliveries cut off by a restart may have been sent; they wait for review instead of resending.
+    database.mailMerge.recoverInterrupted()
+    database.mailMerge.pruneSendLog(new Date(Date.now() - 2 * MAIL_MERGE_DAY_MS).toISOString())
+    mailMergeRunnerInstance = undefined
     clearInterval(operationTimer)
     clearInterval(pollTimer)
+    clearInterval(mailMergeTimer)
+    mailMergeTimer = setInterval(() => void mailMergeRunner().tick().catch(() => undefined), 1_000)
     operationTimer = setInterval(() => void processOperations(), 2_000)
     schedulePolling(BACKGROUND_MAIL_POLL_INTERVAL_MS)
     return
@@ -1147,6 +1321,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'accounts:verify') {
     const account = database.getAccount(command.payload.accountId)
     if (!account) throw new Error('Account not found')
+    if (account.provider === 'local') return
     if (account.provider === 'gmail') await clientFor(account.id).getProfile()
     else if (account.provider === 'microsoft') await microsoftClientFor(account.id).listFolders()
     else await (await imapClientFor(account.id)).verify()
@@ -1182,6 +1357,12 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'mail:copy') {
     const { accountId, threadId, messageId, destination } = command.payload
     const account = database.getAccount(accountId)
+    if (account?.provider === 'local') {
+      // A copy between Local Folders duplicates the stored message locally.
+      await transferToLocalFolders(localStoreDeps(), { sourceAccountId: accountId, threadIds: [threadId], messageIds: [messageId], destinationLabelId: destination, mode: 'copy' })
+      emit({ type: 'mail-changed', payload: { accountId } })
+      return
+    }
     if (!account || account.archived) throw new Error('Connect this account before copying messages')
     if (!online) throw new Error('Copying messages requires an internet connection')
     const target = database.listLabels([accountId]).find((label) => label.id === destination)
@@ -1201,6 +1382,12 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     if (!paused.has(accountId)) void syncAccount(accountId)
     emit({ type: 'mail-changed', payload: { accountId } })
     return
+  }
+  // Imported and copied mail never sends read receipts: it was read elsewhere,
+  // often long ago, and Local Folders cannot send mail.
+  if ((command.type === 'receipts:inspect' || command.type === 'receipts:respond') && database.getAccount(command.payload.accountId)?.provider === 'local') {
+    if (command.type === 'receipts:respond') throw new Error('Messages in Local Folders do not send read receipts')
+    return {}
   }
   if (command.type === 'receipts:inspect') {
     return receiptService().inspect(command.payload.accountId, command.payload.messageId, command.payload.policy)
@@ -1365,6 +1552,21 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'signatures:list') return database.identities.listSignatures()
   if (command.type === 'signatures:save') return database.identities.saveSignature(command.payload)
   if (command.type === 'signatures:delete') return database.identities.deleteSignature(command.payload.id)
+  if (command.type === 'merge:list') return database.mailMerge.list()
+  if (command.type === 'merge:get') return database.mailMerge.get(command.payload.id)
+  if (command.type === 'merge:create') return createMailMerge(command.payload)
+  if (command.type === 'merge:pause' || command.type === 'merge:resume' || command.type === 'merge:cancel') {
+    const store = database.mailMerge
+    const summary = command.type === 'merge:pause' ? store.pause(command.payload.id) : command.type === 'merge:resume' ? store.resume(command.payload.id) : store.cancel(command.payload.id)
+    emit({ type: 'mail-merge', payload: summary })
+    return summary
+  }
+  if (command.type === 'merge:resolve') {
+    const job = database.mailMerge.resolve(command.payload.id, command.payload.positions, command.payload.resolution)
+    emit({ type: 'mail-merge', payload: job })
+    return job
+  }
+  if (command.type === 'merge:delete') return deleteMailMerge(command.payload.id)
   if (command.type === 'saved-searches:list') return database.listSavedSearches()
   if (command.type === 'saved-searches:save') return database.saveSavedSearch(command.payload)
   if (command.type === 'saved-searches:delete') return database.deleteSavedSearch(command.payload.id)
@@ -1382,7 +1584,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'sync:start') {
     const accounts = command.payload.accountId
       ? database.listAccounts().filter((item) => item.id === command.payload.accountId)
-      : database.listAccounts().filter((item) => !item.archived)
+      : database.listAccounts().filter((item) => !item.archived && item.provider !== 'local')
     for (const account of accounts) void syncAccount(account.id)
     return
   }
@@ -1406,6 +1608,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'sync:rebuild') {
     const account = database.getAccount(command.payload.accountId)
     if (!account) throw new Error('Account not found')
+    if (account.provider === 'local') throw new Error('Local Folders are stored only on this computer, so there is nothing to download again')
     if (!account.syncEnabled) throw new Error('Enable synchronization for this account before rebuilding it')
     paused.delete(account.id)
     database.resetForFullSync(account.id)
@@ -1414,10 +1617,38 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   }
   if (command.type === 'diagnostics:health') return database.diagnosticHealth()
   if (command.type === 'attachments:list') return database.listAttachments(command.payload)
+  if (command.type === 'contacts:history') return database.listContactHistory(command.payload)
   if (command.type === 'attachment:extract') {
     await extractAttachment(command.payload.accountId, command.payload.messageId, command.payload.attachmentId, command.payload.targetPath)
     return
   }
+  if (command.type === 'local:ensure') {
+    const existed = Boolean(database.localMail.account())
+    const account = database.localMail.ensureAccount()
+    if (!existed) emit({ type: 'accounts-changed', payload: database.listAccounts() })
+    return account
+  }
+  if (command.type === 'local:transfer') {
+    const result = await transferToLocalFolders(localStoreDeps(), command.payload)
+    if (result.trashOperation) emit({ type: 'operation', payload: result.trashOperation })
+    emit({ type: 'mail-changed', payload: { accountId: command.payload.sourceAccountId, threadIds: command.payload.threadIds } })
+    const local = database.localMail.account()
+    if (local) emit({ type: 'mail-changed', payload: { accountId: local.id } })
+    return result
+  }
+  if (command.type === 'import:start') {
+    const hadLocal = Boolean(database.localMail.account())
+    const job = importService().start(command.payload)
+    if (!hadLocal) emit({ type: 'accounts-changed', payload: database.listAccounts() })
+    return job
+  }
+  if (command.type === 'import:list') return importService().list()
+  if (command.type === 'import:pause') return importService().pause(command.payload.id)
+  if (command.type === 'import:resume') return importService().resume(command.payload.id)
+  if (command.type === 'import:cancel') return importService().cancel(command.payload.id)
+  if (command.type === 'import:dismiss') return importService().dismiss(command.payload.id)
+  if (command.type === 'import:items') return importService().items(command.payload.jobId)
+  if (command.type === 'import:resolve') return importService().resolve(command.payload.jobId, command.payload.keys, command.payload.decision)
   if (command.type === 'network') {
     online = command.payload.online
     emit({ type: 'connectivity', payload: { online } })
@@ -1435,15 +1666,29 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'shutdown') {
     clearInterval(operationTimer)
     clearInterval(pollTimer)
+    clearInterval(mailMergeTimer)
+    mailMergeRunnerInstance = undefined
+    // A running import stops at its next message; it resumes from its saved
+    // cursor after the user chooses Resume on the next start.
+    importServiceInstance?.halt()
     await stopAttachmentIndexing()
     database.close()
     database = undefined
     folderManagerInstance = undefined
+    importServiceInstance = undefined
     return
   }
 }
 
-port.on('message', (message: WorkerRequest | WorkerCredentialResponse) => {
+port.on('message', (message: WorkerRequest | WorkerCredentialResponse | WorkerOpenPgpResponse) => {
+  if (message.kind === 'openpgp-response') {
+    const pending = openPgpRequests.get(message.id)
+    if (!pending) return
+    openPgpRequests.delete(message.id)
+    if (typeof message.message === 'string') pending.resolve(message.message)
+    else pending.reject(new Error(message.error ?? 'The message could not be signed or encrypted. The message was not sent; your draft is kept.'))
+    return
+  }
   if (message.kind === 'credential-response') {
     const pending = credentialRequests.get(message.id)
     if (!pending) return

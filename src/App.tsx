@@ -16,6 +16,7 @@ import ConnectedMailView from './views/ConnectedMailView'
 import CalendarInterchangePanel from './components/CalendarInterchangePanel'
 import ContactInterchangePanel from './components/ContactInterchangePanel'
 import type { InterchangeSnapshot } from './interchange-types'
+import type { DavSnapshot } from './dav-types'
 import type { Account, AppLockStatus, AppPreferences, AppState, CalendarEvent, Contact, ContactList, ModuleId, RecurrenceEditScope } from './types'
 import type { MailAccountSummary, MailQuickAction } from './mail-types'
 import { quickActionShortcutLabel } from './lib/mail-quick-actions'
@@ -65,6 +66,12 @@ export default function App() {
   // Local calendars and read-only internet subscriptions from file interchange.
   const [interchange, setInterchange] = useState<InterchangeSnapshot>(emptyInterchange)
   useEffect(() => window.aerio.interchange?.onChanged(setInterchange), [])
+  // CalDAV/CardDAV accounts; their calendars and contacts arrive through the productivity snapshot.
+  const [dav, setDav] = useState<DavSnapshot>()
+  useEffect(() => {
+    void window.aerio.dav?.snapshot().then(setDav).catch(() => undefined)
+    return window.aerio.dav?.onChanged(setDav)
+  }, [])
   const persistedLocalModules = useRef<LocalModuleSnapshot | undefined>(undefined)
   const localSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const localRestoreActive = useRef(false)
@@ -148,7 +155,8 @@ export default function App() {
       const accounts = (await window.aerio.mail.accounts.list()).filter((account) => !account.archived)
       setConnectedAccounts(accounts)
       const supported = accounts.filter((account) => account.provider === 'gmail' || account.provider === 'microsoft')
-      if (!supported.length) {
+      const davAccounts = (await window.aerio.dav?.snapshot().catch(() => undefined))?.accounts.filter((account) => account.status !== 'needs-auth') ?? []
+      if (!supported.length && !davAccounts.length) {
         if (!options?.quiet) showToast('Connect Google or Microsoft to synchronize Calendar and Contacts')
         return
       }
@@ -157,6 +165,10 @@ export default function App() {
       for (const account of supported) {
         try { latest = await window.aerio.productivity.sync(account.id) }
         catch (error) { failures.push(error instanceof Error ? error.message : `${account.email} could not synchronize`) }
+      }
+      for (const account of davAccounts) {
+        try { latest = await window.aerio.productivity.sync(account.id) }
+        catch (error) { failures.push(error instanceof Error ? error.message : `${account.name} could not synchronize`) }
       }
       if (failures.length) latest = await window.aerio.productivity.snapshot()
       setProductivity(latest)
@@ -425,9 +437,11 @@ export default function App() {
     notes: localModules.notes
   }
   const writableCalendarIds = new Set([...productivity.calendars.filter((calendar) => calendar.canWrite).map((calendar) => calendar.id), ...localCalendarIds])
-  const providerContactAccounts = connectedAccounts.flatMap((account) => !account.archived && (account.provider === 'gmail' || account.provider === 'microsoft')
+  const providerContactAccounts = connectedAccounts.flatMap((account): { id: string; email: string; provider: import('./productivity-types').ProductivityProvider }[] => !account.archived && (account.provider === 'gmail' || account.provider === 'microsoft')
     ? [{ id: account.id, email: account.email, provider: account.provider }]
-    : [])
+    : []).concat((dav?.accounts ?? [])
+    .filter((account) => dav?.collections.some((collection) => collection.accountId === account.id && collection.kind === 'addressbook' && collection.enabled && !collection.readOnly))
+    .map((account) => ({ id: account.id, email: account.name, provider: 'dav' as const })))
   const updateConnectedLocal = (next: AppState) => setLocalModules((current) => ({ ...current, tasks: next.tasks, notes: next.notes }))
   const productivityMessage = productivity.sync.some((item) => item.phase === 'error')
     ? productivity.sync.find((item) => item.phase === 'error')?.error ?? 'A provider needs attention.'
@@ -503,6 +517,7 @@ export default function App() {
               onDeleteProviderEvent={deleteProviderEvent}
               syncing={productivitySyncing}
               sourceMessage={productivityMessage}
+              conferenceCalendars={productivity.calendars}
               interchangePanel={window.aerio.interchange && <CalendarInterchangePanel
                 api={window.aerio.interchange}
                 snapshot={interchange}
@@ -530,6 +545,10 @@ export default function App() {
               syncing={productivitySyncing}
               sourceMessage={productivityMessage}
               listActions={contactListActions}
+              mergeApi={window.aerio.contactMerge}
+              onProviderSnapshot={setProductivity}
+              historyMail={window.aerio.mail}
+              onOpenMessage={(request) => void window.aerio.window.openMessage(request)}
               interchangePanel={window.aerio.interchange && <ContactInterchangePanel
                 api={window.aerio.interchange}
                 contacts={connectedState.contacts}

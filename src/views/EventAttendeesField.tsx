@@ -23,6 +23,23 @@ export function attendeeFieldValues(event?: CalendarEvent): AttendeeFieldValues 
   }
 }
 
+// Every address in the three fields as one comma list, for the scheduling assistant.
+export const attendeeFieldText = (values: AttendeeFieldValues) => [values.required, values.optional, values.resources].filter((value) => value.trim()).join(', ')
+
+// Applies the scheduling assistant's attendee list: addresses keep their optional or resource field, new
+// ones become required, and addresses removed in the assistant are dropped.
+export function applyAttendeeSelection(values: AttendeeFieldValues, emails: string[]): AttendeeFieldValues {
+  const inField = (field: string) => new Set(split(field).map(attendeeKey))
+  const optional = inField(values.optional)
+  const resources = inField(values.resources)
+  const group = (test: (key: string) => boolean) => emails.filter((email) => test(attendeeKey(email))).join(', ')
+  return {
+    required: group((key) => !optional.has(key) && !resources.has(key)),
+    optional: group((key) => optional.has(key) && !resources.has(key)),
+    resources: group((key) => resources.has(key))
+  }
+}
+
 // Rebuilds structured attendees from the fields, keeping what the editor does not show (names, responses,
 // chair and non-participant roles, room versus resource) for addresses that stay in the same field.
 export function attendeesFromFields(values: AttendeeFieldValues, original?: CalendarEvent): EventAttendee[] {

@@ -25,6 +25,8 @@ import type {
   MailPage,
   MailAttachmentPage,
   MailAttachmentQuery,
+  MailContactHistoryPage,
+  MailContactHistoryQuery,
   MailFolderUnreadCounts,
   MailAccountUnreadCounts,
   MailAccountSettingsInput,
@@ -36,6 +38,7 @@ import type {
   SyncProgress
 } from '../src/mail-types'
 import type { MailSenderIdentity, MailSenderIdentityInput, MailSignature, MailSignatureInput } from '../src/mail-identity-types'
+import type { MailMergeJob, MailMergeJobInput, MailMergeJobSummary, MailMergeResolution } from '../src/mail-merge-types'
 
 export type MailWorkerCommand =
   | { type: 'initialize'; payload: { databasePath: string; contentPath: string } }
@@ -87,6 +90,14 @@ export type MailWorkerCommand =
   | { type: 'signatures:list' }
   | { type: 'signatures:save'; payload: MailSignatureInput }
   | { type: 'signatures:delete'; payload: { id: string } }
+  | { type: 'merge:list' }
+  | { type: 'merge:get'; payload: { id: string } }
+  | { type: 'merge:create'; payload: MailMergeJobInput }
+  | { type: 'merge:pause'; payload: { id: string } }
+  | { type: 'merge:resume'; payload: { id: string } }
+  | { type: 'merge:cancel'; payload: { id: string } }
+  | { type: 'merge:resolve'; payload: { id: string; positions: number[]; resolution: MailMergeResolution } }
+  | { type: 'merge:delete'; payload: { id: string } }
   | { type: 'saved-searches:list' }
   | { type: 'saved-searches:save'; payload: MailSavedSearchInput }
   | { type: 'saved-searches:delete'; payload: { id: string } }
@@ -102,7 +113,15 @@ export type MailWorkerCommand =
   | { type: 'storage:stats' }
   | { type: 'diagnostics:health' }
   | { type: 'attachments:list'; payload: MailAttachmentQuery }
+  | { type: 'contacts:history'; payload: MailContactHistoryQuery }
   | { type: 'attachment:extract'; payload: { accountId: string; messageId: string; attachmentId: string; targetPath: string } }
+  | { type: 'local:ensure' }
+  | { type: 'local:transfer'; payload: import('../src/mail-types').MailLocalTransferInput }
+  | { type: 'import:start'; payload: import('../src/mail-types').MailImportStartInput }
+  | { type: 'import:list' }
+  | { type: 'import:pause' | 'import:resume' | 'import:cancel' | 'import:dismiss'; payload: { id: string } }
+  | { type: 'import:items'; payload: { jobId: string } }
+  | { type: 'import:resolve'; payload: { jobId: string; keys: string[]; decision: 'import' | 'discard' } }
   | { type: 'network'; payload: { online: boolean } }
   | { type: 'polling'; payload: { intervalMs: number; immediate?: boolean } }
   | { type: 'shutdown' }
@@ -122,6 +141,9 @@ export type MailWorkerResult =
   | MailSenderIdentity[]
   | MailSignature
   | MailSignature[]
+  | MailMergeJob
+  | MailMergeJobSummary
+  | MailMergeJobSummary[]
   | MailQuickAction
   | MailQuickAction[]
   | MailQuickActionRunResult
@@ -133,6 +155,7 @@ export type MailWorkerResult =
   | MailMessageSource
   | MailPage
   | MailAttachmentPage
+  | MailContactHistoryPage
   | MailFolderUnreadCounts
   | MailAccountUnreadCounts
   | PendingOperation
@@ -147,6 +170,10 @@ export type MailWorkerResult =
   | import('../src/invitation-types').InvitationMessageSource
   | import('../src/mail-types').MailFolderMutationResult
   | import('../src/mail-types').MailFolderDeletePreview
+  | import('../src/mail-types').MailImportJob
+  | import('../src/mail-types').MailImportJob[]
+  | import('../src/mail-types').MailImportItem[]
+  | import('../src/mail-types').MailLocalTransferResult
 
 export interface WorkerRequest {
   kind: 'request'
@@ -175,6 +202,23 @@ export interface WorkerCredentialResponse {
   kind: 'credential-response'
   id: string
   credential?: AccountCredential
+  error?: string
+}
+
+/** Asks the main process to sign and/or encrypt an outgoing message; crypto never runs in the worker. */
+export interface WorkerOpenPgpRequest {
+  kind: 'openpgp-request'
+  id: string
+  message: string
+  from: string
+  recipients: string[]
+  options: import('../src/openpgp-types').MailOpenPgpOptions
+}
+
+export interface WorkerOpenPgpResponse {
+  kind: 'openpgp-response'
+  id: string
+  message?: string
   error?: string
 }
 

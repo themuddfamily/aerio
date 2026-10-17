@@ -178,7 +178,7 @@ const mocks = vi.hoisted(() => {
     ipcHandlers, appHandlers, protocolHandlers, windows, notifications, trays, FakeBrowserWindow, FakeDatabaseSync,
     setLinuxLoginItem: vi.fn(),
     linuxTrayHostAvailable: vi.fn(async () => true),
-    vault, worker, MailWorkerClient, store, google, microsoft, updateManager, taskService, diagnosticLogger, imapClient, image,
+    vault, worker, openPgp: { lock: vi.fn(), protect: vi.fn() }, assertOpenPgpSendable: vi.fn(async () => undefined), MailWorkerClient, store, google, microsoft, updateManager, taskService, diagnosticLogger, imapClient, image,
     get accounts() { return accounts }, set accounts(value: any[]) { accounts = value },
     failWorker(error: Error) { workerFailure = error }, emitWorker(event: any) { workerEvent?.(event) },
     setOpenResult(value: any) { dialogOpenResult = value }, setSaveResult(value: any) { dialogSaveResult = value },
@@ -233,7 +233,8 @@ const mocks = vi.hoisted(() => {
 vi.mock('electron', () => ({
   app: mocks.app, BrowserWindow: mocks.FakeBrowserWindow, dialog: mocks.dialog, ipcMain: mocks.ipcMain,
   Menu: mocks.Menu, nativeImage: mocks.nativeImage, net: mocks.net, Notification: mocks.Notification,
-  protocol: mocks.protocol, shell: mocks.shell, Tray: mocks.Tray
+  protocol: mocks.protocol, shell: mocks.shell, Tray: mocks.Tray,
+  safeStorage: { isEncryptionAvailable: () => true, getSelectedStorageBackend: () => 'basic_text', encryptString: (value: string) => Buffer.from(value), decryptString: (value: Buffer) => value.toString() }
 }))
 vi.mock('node:fs', () => mocks.fs)
 vi.mock('node:dns/promises', () => ({ lookup: mocks.lookup }))
@@ -243,6 +244,8 @@ vi.mock('./tray-availability', () => ({ linuxTrayHostAvailable: mocks.linuxTrayH
 vi.mock('./mail/oauth-vault', () => ({ OAuthVault: vi.fn(function () { return mocks.vault }) }))
 vi.mock('./mail/worker-client', () => ({ MailWorkerClient: mocks.MailWorkerClient }))
 vi.mock('./mail/ai-assistant', () => ({ AiAssistantStore: vi.fn(), registerAiAssistant: vi.fn() }))
+vi.mock('./mail/openpgp-keyring', () => ({ OpenPgpKeyring: vi.fn(function () { return mocks.openPgp }) }))
+vi.mock('./mail/openpgp-ipc', () => ({ registerOpenPgp: vi.fn(), assertOpenPgpSendable: mocks.assertOpenPgpSendable }))
 vi.mock('./mail/imap-client', () => ({ ImapSmtpClient: vi.fn(function () { return mocks.imapClient }) }))
 vi.mock('./mail/provider-presets', () => ({ PROVIDER_PRESETS: [{ id: 'gmail' }], validateImapAccount: mocks.validateImap }))
 vi.mock('./diagnostics', () => ({ DiagnosticLogger: vi.fn(function () { return mocks.diagnosticLogger }) }))
@@ -251,6 +254,14 @@ vi.mock('./productivity/store', () => ({ ProductivityStore: vi.fn(function () { 
 vi.mock('./productivity/task-service', () => ({ TaskService: vi.fn(function () { return mocks.taskService }) }))
 vi.mock('./productivity/google-connector', () => ({ GoogleProductivityConnector: vi.fn(function () { return mocks.google }) }))
 vi.mock('./productivity/microsoft-connector', () => ({ MicrosoftProductivityConnector: vi.fn(function () { return mocks.microsoft }) }))
+const davMocks = vi.hoisted(() => ({
+  store: { close: vi.fn() },
+  service: { hasAccount: vi.fn(() => false) },
+  ipc: { broadcast: vi.fn(), flushNow: vi.fn(async () => undefined), dispose: vi.fn() }
+}))
+vi.mock('./productivity/dav-store', () => ({ DavStore: vi.fn(function () { return davMocks.store }) }))
+vi.mock('./productivity/dav-service', () => ({ DavService: vi.fn(function () { return davMocks.service }) }))
+vi.mock('./productivity/dav-ipc', () => ({ registerDavAccounts: vi.fn(() => davMocks.ipc) }))
 const templateMocks = vi.hoisted(() => {
   const prepared = { count: 1, commit: vi.fn(), rollback: vi.fn() }
   const backup = { format: 'aerio-mail-templates', schemaVersion: 1, exportedAt: '2026-10-01T00:00:00Z', templates: [], attachments: [] }
@@ -373,6 +384,8 @@ describe.sequential('Electron main process', () => {
     expect(() => invoke('app-lock:enable', 'short')).toThrow(/8 to 256/)
     expect(invoke('app-lock:enable', 'correct horse battery staple')).toEqual({ enabled: true, locked: false })
     expect(invoke('app-lock:lock')).toEqual({ enabled: true, locked: true })
+    // Locking also drops every cached OpenPGP passphrase.
+    expect(mocks.openPgp.lock).toHaveBeenCalled()
     expect(mocks.windows[0].webContents.send).toHaveBeenCalledWith('app-lock:status-changed', { enabled: true, locked: true })
     expect(() => invoke('window:open-message', { source: 'connected', accountId: 'a1b2', threadId: 'thread', title: 'Locked' })).toThrow(/Unlock Aerio/)
     const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
@@ -447,6 +460,12 @@ describe.sequential('Electron main process', () => {
     const sendable = { ...draft, to: ['reader@example.test'] }
     await invoke('mail:drafts:send', sendable)
     await invoke('mail:drafts:schedule', sendable, new Date(Date.now() + 60_000).toISOString())
+    // A Sign/Encrypt draft that cannot be protected is never handed to the worker.
+    mocks.assertOpenPgpSendable.mockRejectedValueOnce(new Error('No OpenPGP public key for: reader@example.test.'))
+    mocks.worker.request.mockClear()
+    await expect(invoke('mail:drafts:send', { ...sendable, openPgp: { encrypt: true, ignored: 1 } })).rejects.toThrow(/No OpenPGP public key/)
+    expect(mocks.assertOpenPgpSendable).toHaveBeenLastCalledWith(mocks.openPgp, mocks.worker, expect.objectContaining({ openPgp: { encrypt: true } }))
+    expect(mocks.worker.request).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'drafts:send' }))
     await expect(invoke('mail:drafts:list', ['a1b2'])).resolves.toHaveLength(1)
     await expect(invoke('mail:drafts:get', 'draft-1')).resolves.toMatchObject({ id: 'draft-1' })
     await invoke('mail:drafts:stage-message-attachments', 'draft', 'a1b2', 'message')
@@ -942,6 +961,15 @@ describe.sequential('Electron main process', () => {
     expect(mocks.google.deleteContact).toHaveBeenCalledWith(current)
   })
 
+  it('routes contact history through the mail worker and registers the contact merge handlers', async () => {
+    await invoke('mail:contact-history:messages', { addresses: ['Ada@Example.test', 'nope'], accountIds: ['a1b2'], pageSize: 999 })
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'contacts:history', payload: { addresses: ['ada@example.test'], accountIds: ['a1b2'], includeArchivedAccounts: true, cursor: undefined, pageSize: 100 } })
+    for (const channel of ['contacts:merges', 'contacts:merge-provider', 'contacts:merge-local-record', 'contacts:merge-undo', 'contacts:associations', 'contacts:associate', 'contacts:association-remove']) {
+      expect(mocks.ipcHandlers.has(channel), channel).toBe(true)
+    }
+    expect(() => invoke('contacts:merge-provider', { survivorId: 'a', loserId: 'a', merged: {} })).toThrow(/review the merged details/)
+  })
+
   it('rejects provider contact edits made against an older revision', async () => {
     await invoke('mail:accounts:connect')
     const current = { id: 'abcdef:google-contact:people/existing', remoteId: 'people/existing', accountId: 'abcdef', provider: 'gmail', readOnly: false, revision: 'etag-2', name: 'Ada', email: '', group: 'Google', favorite: false, color: '#4d8f78' }
@@ -1394,6 +1422,42 @@ describe.sequential('Electron main process', () => {
       invoke('app-lock:disable', 'background fallback fixture')
       invoke('preferences:save', previous)
       main.restore()
+    }
+  })
+
+  it('routes CalDAV/CardDAV calendars and contacts to the DAV service instead of Google or Microsoft', async () => {
+    const calendar = { id: 'dav-1:cal', remoteId: 'https://dav.example.com/cal/', accountId: 'dav-1', provider: 'dav', name: 'Work', color: '#000000', primary: true, canWrite: true }
+    const readOnly = { ...calendar, id: 'dav-1:shared', canWrite: false }
+    const davEvent = { id: 'dav-1:cal:e', calendarId: calendar.id, title: 'Standup', start: '2026-10-20T09:00:00.000Z', end: '2026-10-20T10:00:00.000Z', color: '#000000', attendees: [], reminderMinutes: 0, remoteId: 'https://dav.example.com/cal/e.ics', accountId: 'dav-1', provider: 'dav', readOnly: false }
+    const contact = { id: 'dav-1:book:c', name: 'Ada', email: '', group: 'Contacts', favorite: false, color: '#000000', remoteId: 'https://dav.example.com/book/c.vcf', accountId: 'dav-1', provider: 'dav', readOnly: false, folderId: 'dav-1:book' }
+    const service = Object.assign(davMocks.service, {
+      hasAccount: vi.fn((id: string): boolean => id === 'dav-1'), sync: vi.fn(async () => undefined),
+      createEvent: vi.fn(async () => undefined), updateEvent: vi.fn(async () => undefined), deleteEvent: vi.fn(async () => undefined),
+      createContact: vi.fn(async () => contact), updateContact: vi.fn(async () => contact), deleteContact: vi.fn(async () => undefined)
+    })
+    const originalSnapshot = mocks.store.snapshot.getMockImplementation()!
+    mocks.store.snapshot.mockReturnValue({ calendars: [calendar, readOnly], events: [davEvent], contacts: [contact], sync: [] } as any)
+    try {
+      await invoke('productivity:sync', 'dav-1')
+      expect(service.sync).toHaveBeenCalledWith('dav-1')
+      expect(davMocks.ipc.broadcast).toHaveBeenCalled()
+      await invoke('productivity:event-create', { ...davEvent, id: 'event-new' })
+      expect(service.createEvent).toHaveBeenCalledWith(calendar, expect.objectContaining({ id: 'event-new' }))
+      await expect(invoke('productivity:event-create', { ...davEvent, id: 'event-new', calendarId: readOnly.id })).rejects.toThrow(/read-only/)
+      await invoke('productivity:event-update', { ...davEvent, title: 'Moved' })
+      expect(service.updateEvent).toHaveBeenCalledWith(davEvent, expect.objectContaining({ title: 'Moved' }))
+      await invoke('productivity:event-delete', davEvent.id)
+      expect(service.deleteEvent).toHaveBeenCalledWith(davEvent)
+      await expect(invoke('productivity:contact-create', 'dav-1', { ...contact, id: 'contact-new' })).resolves.toMatchObject({ contact })
+      await invoke('productivity:contact-update', { ...contact, title: 'Analyst' })
+      expect(service.updateContact).toHaveBeenCalledWith(contact, expect.objectContaining({ title: 'Analyst' }))
+      await invoke('productivity:contact-delete', contact.id)
+      expect(service.deleteContact).toHaveBeenCalledWith(contact)
+      expect(mocks.google.sync).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ dav: expect.anything() }))
+    } finally {
+      mocks.store.snapshot.mockReset()
+      mocks.store.snapshot.mockImplementation(originalSnapshot)
+      service.hasAccount.mockImplementation(() => false)
     }
   })
 

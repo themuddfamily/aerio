@@ -7,6 +7,7 @@ import type {
   MailAccountSummary,
   MailAttachment,
   MailAttachmentPage,
+  MailContactHistoryPage,
   MailDraftInput,
   MailDraftRecord,
   MailDraftResult,
@@ -39,7 +40,11 @@ import { ReplyWatchStore } from './reply-watches'
 import { RuleRunLedger, readRawHeaders } from './rule-ledger'
 import { mailRuleMatches as evaluateMailRule, mailRuleNeedsHeaders, mailRuleTrigger, type MailRuleMessage } from '../../src/lib/mail-rules'
 import { AttachmentTextStore } from './attachment-text-store'
+import { MailMergeStore } from './mail-merge-store'
 import { listAttachmentPage } from './attachment-index'
+import { listContactHistoryPage } from './contact-history'
+import { MailDraftOpenPgpStore } from './openpgp-draft-store'
+import { LocalMailStore } from './local-mail-store'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -96,10 +101,13 @@ export class MailDatabase {
   readonly contentPath: string
   private readonly db: DatabaseSync
   readonly identities: MailIdentityStore
+  readonly openPgp: MailDraftOpenPgpStore
   private statements = new Map<string, StatementSync>()
   readonly replyWatches: ReplyWatchStore
+  readonly localMail: LocalMailStore
   readonly ruleLedger: RuleRunLedger
   readonly attachmentText: AttachmentTextStore
+  readonly mailMerge: MailMergeStore
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -111,9 +119,12 @@ export class MailDatabase {
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;')
     this.migrate()
     this.identities = new MailIdentityStore(this.db)
+    this.openPgp = new MailDraftOpenPgpStore(this.db)
     this.replyWatches = new ReplyWatchStore(this.db)
+    this.localMail = new LocalMailStore(this.db, this)
     this.ruleLedger = new RuleRunLedger(this.db)
     this.attachmentText = new AttachmentTextStore(this.db)
+    this.mailMerge = new MailMergeStore(this.db)
   }
 
   close() {
@@ -1201,6 +1212,7 @@ export class MailDatabase {
       sendOptionsJson(input.sendOptions)
     )
     this.identities.saveDraftSender(id, input)
+    this.openPgp.save(id, input.openPgp)
     const stored = this.getDraft(id)
     return {
       id,
@@ -1236,6 +1248,7 @@ export class MailDatabase {
       html: row.body_html ? String(row.body_html) : undefined,
       attachmentPaths: json<string[]>(String(row.attachment_paths_json), []),
       ...this.identities.draftSender(String(row.id)),
+      ...this.openPgp.get(String(row.id)),
       ...(sendOptions ? { sendOptions } : {}),
       status: String(row.status) as MailDraftRecord['status'],
       updatedAt: String(row.updated_at),
@@ -1568,6 +1581,10 @@ export class MailDatabase {
 
   listAttachments(query: unknown): MailAttachmentPage {
     return listAttachmentPage(this.db, query, (path) => this.rawExists(path))
+  }
+
+  listContactHistory(query: unknown): MailContactHistoryPage {
+    return listContactHistoryPage(this.db, query)
   }
 
   storageStats(freeBytes: number): MailStorageStats {

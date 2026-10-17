@@ -3,7 +3,9 @@ import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { MailDatabase } from './mail/database'
 import { MessageLocalStore } from './mail/message-local-store'
+import { holdMailMergesForRestore, MAIL_MERGE_ACTIVE } from './mail/mail-merge-store'
 import { MailTemplateStore } from './mail/template-store'
+import { DavStore, prepareRestoredDavDatabase } from './productivity/dav-store'
 import { InterchangeStore } from './productivity/interchange-store'
 import { InvitationStore } from './productivity/invitation-store'
 import { ProductivityStore } from './productivity/store'
@@ -11,6 +13,7 @@ import { TaskStore } from './productivity/task-store'
 import { countRows, PROFILE_PREVIEW_LABELS, profileTableExists, type ProfileBackupLayout } from './profile-backup'
 
 export const RESTORED_SEND_HOLD_MESSAGE = 'Held after restoring a profile backup. Review this message and send it again if it is still needed.'
+export const RESTORED_MERGE_HOLD_MESSAGE = 'Held after restoring a profile backup. This message may have been sent after the backup was taken; check Sent, then resend or skip.'
 export const RESTORED_ACCOUNT_MESSAGE = 'Restored from a profile backup. Sign in again to resume synchronization.'
 const OUTGOING = `status IN ('queued','send-pending','scheduled','syncing')`
 const ACTIVE_TASK_WRITE = `status IN ('queued','running','failed','conflict','review')`
@@ -59,6 +62,7 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
         new MailDatabase(path, join(dirname(path), 'mail')).close()
         withDatabase(path, (db) => {
           context.report.heldSends += Number(db.prepare(`UPDATE gmail_drafts SET status='failed',delivery_at=NULL,error=?,updated_at=? WHERE ${OUTGOING}`).run(RESTORED_SEND_HOLD_MESSAGE, new Date().toISOString()).changes)
+          context.report.heldSends += holdMailMergesForRestore(db, RESTORED_MERGE_HOLD_MESSAGE)
           context.report.accountsToReauthorize += Number(db.prepare(`UPDATE gmail_accounts SET status='needs-auth',error=? WHERE archived=0`).run(RESTORED_ACCOUNT_MESSAGE).changes)
         })
       },
@@ -71,7 +75,8 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
         { label: 'Mail rules', count: countRows(db, 'mail_rules') },
         { label: 'Quick actions', count: countRows(db, 'mail_quick_actions') },
         { label: 'Saved searches', count: countRows(db, 'mail_saved_searches') },
-        { label: 'Reply watches', count: countRows(db, 'mail_reply_watches', `status='pending'`) }
+        { label: 'Reply watches', count: countRows(db, 'mail_reply_watches', `status='pending'`) },
+        { label: 'Unfinished mail merges', count: countRows(db, 'mail_merge_jobs', MAIL_MERGE_ACTIVE) }
       ]
     },
     {
@@ -101,6 +106,19 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
           { label: 'Local calendars and subscriptions', count: countRows(db, 'interchange_calendars') }
         ]
       }
+    },
+    {
+      // DAV app passwords live in dav-credentials.dat, which is not in this allowlist.
+      file: 'dav.sqlite',
+      label: 'CalDAV/CardDAV accounts, calendar and contact cache, and pending writes',
+      prepareRestore: (path, context) => {
+        new DavStore(path).close()
+        context.report.accountsToReauthorize += withDatabase(path, (db) => prepareRestoredDavDatabase(db).accounts)
+      },
+      summarize: (db) => [
+        { label: 'Calendar and contacts accounts (CalDAV/CardDAV)', count: countRows(db, 'dav_accounts') },
+        { label: 'Pending calendar and contact changes', count: countRows(db, 'dav_operations', `status IN ('queued','held')`) }
+      ]
     },
     {
       file: 'provider-tasks.sqlite',

@@ -16,6 +16,7 @@ The layout is an allowlist. Only these profile entries are copied:
 | `mail-templates.sqlite` | QuickText snippets and templates |
 | `productivity.sqlite` | Local Tasks, Notes, and Contacts, local calendars and internet-calendar subscriptions, plus the provider calendar/contact cache |
 | `provider-tasks.sqlite` | The connected-task cache, durable task/list operations, and resolution history |
+| `dav.sqlite` | CalDAV/CardDAV accounts (no passwords), discovered collections with sync tokens and ctags, the resource cache with ETags, and pending writes |
 | `mail/` | Downloaded `.eml` files and staged draft attachments |
 | `note-attachments/`, `template-attachments/` | Managed attachment copies |
 
@@ -24,6 +25,8 @@ Writable local mail folders (roadmap E18) don't exist yet. When they're added, t
 ### Never included
 
 - `oauth-vault.dat`: OAuth access and refresh tokens, IMAP/SMTP passwords, and the secure-storage (DPAPI/Keychain/libsecret) encryption around them. The engine also refuses any file with this name inside a managed folder, and rejects any manifest that lists one.
+- `openpgp-keyring.dat`: OpenPGP public keys and passphrase-protected private keys, wrapped with the same secure storage. It is on the same forbidden list and stays as it is on the device during a restore. Export keys from Settings › OpenPGP keys to move them ([OpenPGP mail](openpgp-mail.md)).
+- `dav-credentials.dat`: CalDAV/CardDAV app passwords encrypted with OS secure storage. On restore, DAV accounts ask for the password again, and writes that were still queued are held for review instead of being sent.
 - The app-lock passphrase verifier. Backups delete it under `secure_delete` and `VACUUM`, so the bytes don't survive in free pages. On restore, the current device keeps its own app lock, or keeps having none.
 - Diagnostic logs, window bounds, update caches, `profile-backup.json` (the schedule itself), and earlier restore staging or rollback copies.
 
@@ -44,6 +47,7 @@ Retention only deletes folders whose manifest is valid. Unrelated or corrupt fol
    - If the backup came from a different profile folder, absolute managed paths are rebased in every text column of ordinary tables. Both raw and JSON-escaped forms are handled. Full-text index and shadow tables are skipped.
    - Each store is opened with its normal constructor (`MailDatabase`, `ProductivityStore`, `InterchangeStore`, `MessageLocalStore`, `MailTemplateStore`, `TaskStore`). This applies every idempotent schema upgrade, so an older backup is migrated before it can replace anything. A failed migration aborts the restore, and live data is untouched.
    - **Queued sends are held.** Drafts in `queued`, `send-pending` (undo window), `scheduled`, or `syncing` become `failed`. They get the error *"Held after restoring a profile backup. Review this message and send it again if it is still needed."* and their delivery time is cleared, so the worker's due-send query can never pick them up. Ordinary local drafts stay drafts.
+   - **Unfinished mail merges are held.** Every `pending` or `sending` recipient of a running, paused, or in-review [mail merge](mail-merge.md) becomes `ambiguous` and its merge waits for review, since the backup may predate deliveries made later. These recipients are counted with the held sends.
    - **Connected task writes are held.** `provider-tasks.sqlite` goes through the connected-task backup round trip, so every active task and list operation becomes `review`/`restored-write` and checkpoints are cleared. This matches [connected-task restore](task-provider-integration.md#connected-task-backups).
    - **Accounts need reauthorization.** Every active account is set to `needs-auth` with an explanatory error. At the next launch, Aerio's normal recovery verifies each one with this device's vault. Accounts whose credentials are still present resume on their own; the others show *Reconnect*.
    - Queued mailbox-state operations (read/star/label/move/archive/trash) are restored as queued. They're idempotent label changes and represent intent the user already expressed.
