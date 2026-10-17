@@ -5,9 +5,12 @@ import { createHash } from 'node:crypto'
 import type { MailImportItem, MailImportJob, MailImportStartInput } from '../../src/mail-types'
 import { mailImportExtension, mailImportSourceKind, unsupportedMailImportReason } from '../../src/lib/local-folders'
 import type { MailDatabase } from './database'
-import { importMetadata, importThreadId, sha256 } from './import-headers'
+import { importMetadata, importThreadId, sha256, type ImportFlags } from './import-headers'
 import type { MailImportCursor, MailImportPlanEntry, StoredImportJob } from './local-mail-store'
 import { mboxSeparatorDate, readMbox, readMboxRange } from './mbox'
+import { PstArchive } from './pst'
+import { looksLikePst } from './pst-header'
+import { PstMessageTooLargeError, pstMessageToMime } from './pst-mime'
 
 export const MAIL_IMPORT_LIMITS = {
   /** Largest single message accepted; bigger ones are reported as failed. */
@@ -66,10 +69,10 @@ const IGNORED_FILES = /^(\..*|.*\.(msf|dat|json|plist|toc|db|sqlite|log|html?)|t
 /**
  * Turns the chosen files and folders into an ordered list of sources, each
  * mapped to the Local Folders path it is imported into. Folder structure is
- * kept: directories become folders, mbox files become folders named after
- * the file, Thunderbird `.sbd` and Apple Mail `.mbox` directories nest their
- * children under the matching mailbox, and EML files land in the folder for
- * the directory that contains them.
+ * kept: directories become folders, mbox and Outlook data files become
+ * folders named after the file, Thunderbird `.sbd` and Apple Mail `.mbox`
+ * directories nest their children under the matching mailbox, and EML files
+ * land in the folder for the directory that contains them.
  */
 export function planMailImport(paths: string[], limits = MAIL_IMPORT_LIMITS): MailImportPlan {
   const entries: MailImportPlanEntry[] = []
@@ -86,7 +89,12 @@ export function planMailImport(paths: string[], limits = MAIL_IMPORT_LIMITS): Ma
     }
     const name = basename(path)
     const extension = mailImportExtension(path)
-    if (mailImportSourceKind(path) === 'eml') return add({ kind: 'eml', path, folder: folder.length ? folder : ['Imported messages'], size })
+    const kind = mailImportSourceKind(path)
+    if (kind === 'eml') return add({ kind: 'eml', path, folder: folder.length ? folder : ['Imported messages'], size })
+    // An Outlook data file becomes a folder named after the file, holding
+    // the folder tree from inside the file. Unreadable files are reported
+    // when the job reaches them, like a damaged mbox.
+    if (kind === 'pst' || (explicit && !extension && looksLikePst(path))) return add({ kind: 'pst', path, folder: [...folder, name.replace(/\.(pst|ost)$/i, '') || name], size })
     if (!explicit) {
       if (IGNORED_FILES.test(name)) return
       if (extension !== 'mbox' && extension !== 'mbx' && !startsWithFromLine(path)) return
@@ -183,7 +191,7 @@ export class MailImportService {
     if (input.parentLabelId && !this.deps.database.listLabels([account.id]).some((label) => label.id === input.parentLabelId)) throw new Error('The destination folder no longer exists')
     const plan = planMailImport(input.paths, this.limits)
     if (!plan.entries.length) {
-      throw new Error(plan.unsupported[0]?.reason ?? 'No MBOX or EML files were found in the chosen items')
+      throw new Error(plan.unsupported[0]?.reason ?? 'No MBOX, EML or Outlook data files were found in the chosen items')
     }
     const job = this.store.createJob({
       accountId: account.id,
@@ -293,26 +301,28 @@ export class MailImportService {
       // Let the worker answer other mail requests between messages.
       await new Promise((resolve) => setImmediate(resolve))
     }
-    const folderFor = (entry: MailImportPlanEntry) => {
-      const key = entry.folder.join('\u0000')
+    const folderFor = (segments: string[]) => {
+      const key = segments.join('\u0000')
       let labelId = folders.get(key)
       if (!labelId) {
-        labelId = this.store.ensureFolderPath(job.accountId, job.options.parentLabelId, entry.folder)
+        labelId = this.store.ensureFolderPath(job.accountId, job.options.parentLabelId, segments)
         folders.set(key, labelId)
         this.deps.changed(job.accountId)
       }
       return labelId
     }
 
-    const importOne = async (raw: Buffer, entry: MailImportPlanEntry, key: string, labelId: string, extra: { contentOffset?: number; storedBytes?: number; fallbackDate?: string }) => {
+    const importOne = async (raw: Buffer, entry: MailImportPlanEntry, key: string, labelId: string, extra: { contentOffset?: number; storedBytes?: number; fallbackDate?: string; flags?: ImportFlags }) => {
       const metadata = importMetadata(raw)
       const base = { key, sourcePath: entry.path, sourceKind: entry.kind, contentOffset: extra.contentOffset, storedBytes: extra.storedBytes, subject: metadata.subject, from: metadata.from, date: metadata.date ?? extra.fallbackDate, size: raw.length, messageIdHeader: metadata.messageId }
-      if (metadata.flags.deleted) {
+      // Outlook items carry their read/flag state as MAPI properties, not headers.
+      const flags = extra.flags ?? metadata.flags
+      if (flags.deleted) {
         counts.skipped += 1
         return
       }
       const id = messageIdFor(job.id, key)
-      const labelIds = [labelId, ...flagLabels(metadata.flags)]
+      const labelIds = [labelId, ...flagLabels(flags)]
       const hash = sha256(raw)
       // Replayed after a crash: the message was stored before the cursor moved.
       if (this.deps.database.hasMessage(job.accountId, id)) {
@@ -320,8 +330,9 @@ export class MailImportService {
         counts.imported += 1
         return
       }
-      // Also a replay: the duplicate was recorded before the cursor moved.
-      if (this.store.hasItem(job.id, key)) {
+      // Also a replay: the duplicate was recorded before the cursor moved. (A
+      // message that failed to store is simply tried again.)
+      if (this.store.hasItem(job.id, key, 'duplicate')) {
         counts.duplicates += 1
         return
       }
@@ -349,6 +360,8 @@ export class MailImportService {
         })
         this.store.addFingerprint(job.accountId, id, hash, metadata.messageId)
         counts.imported += 1
+        // A failure recorded just before a crash, now stored on the retry.
+        if (this.store.hasItem(job.id, key, 'failed')) this.store.setItemStatus(job.id, key, 'imported', 'Imported when the import resumed')
         this.deps.changed(job.accountId)
       } catch (error) {
         this.store.addItem(job.id, { ...base, status: 'failed', reason: error instanceof Error ? error.message : String(error) })
@@ -356,19 +369,90 @@ export class MailImportService {
       }
     }
 
-    const fail = (entry: MailImportPlanEntry, key: string, reason: string, size = entry.size) => {
-      this.store.addItem(job.id, { key, status: 'failed', reason, sourcePath: entry.path, sourceKind: entry.kind, subject: basename(entry.path), size })
+    const fail = (entry: MailImportPlanEntry, key: string, reason: string, size = entry.size, subject = basename(entry.path)) => {
+      this.store.addItem(job.id, { key, status: 'failed', reason, sourcePath: entry.path, sourceKind: entry.kind, subject, size })
       counts.failed += 1
+    }
+
+    // Outlook data files: the cursor is the PST folder plus the next item in
+    // it, and the byte offset only estimates progress through the file.
+    const importPst = async (entry: MailImportPlanEntry, index: number, resume?: MailImportCursor) => {
+      let archive: PstArchive
+      try {
+        archive = new PstArchive(entry.path)
+      } catch (error) {
+        fail(entry, `${index}:file`, readError(error))
+        return
+      }
+      try {
+        const pstFolders = archive.folders({ maxDepth: this.limits.maxDepth })
+        const resuming = resume?.folder !== undefined
+        if (!resuming) {
+          // Counted once per file, not again when an import resumes.
+          counts.skipped += archive.nonMailItems
+          archive.problems.forEach((problem, number) => fail(entry, `${index}:folders:${number}`, problem, 0))
+        }
+        const before = [0]
+        for (const folder of pstFolders) before.push(before.at(-1)! + folder.count)
+        const total = Math.max(1, before.at(-1)!)
+        const progress = (folder: number, message: number) => Math.min(entry.size, Math.floor(entry.size * Math.min(total, before[folder] + message) / total))
+        for (let folderIndex = resuming ? resume.folder! : 0; folderIndex < pstFolders.length; folderIndex += 1) {
+          const first = resuming && folderIndex === resume.folder ? resume.message ?? 0 : 0
+          save({ entry: index, offset: progress(folderIndex, first), folder: folderIndex, message: first }, entry.path)
+          let labelId: string
+          try {
+            labelId = folderFor([...entry.folder, ...pstFolders[folderIndex].path])
+          } catch (error) {
+            fail(entry, `${index}:${folderIndex}:folder`, error instanceof Error ? error.message : String(error), 0, pstFolders[folderIndex].path.join('/'))
+            continue
+          }
+          for (const record of archive.messages(folderIndex, first)) {
+            // A stop here leaves the cursor on this item, so it is read again on resume.
+            await checkpoint()
+            const key = `${index}:${folderIndex}:${record.index}`
+            if (record.error) {
+              fail(entry, key, record.error, 0)
+            } else if (!record.message) {
+              counts.skipped += 1
+            } else {
+              const message = record.message
+              let raw: Buffer | undefined
+              try {
+                raw = pstMessageToMime(message, { maxBytes: this.limits.maxMessageBytes, seed: String(record.nodeId ?? key) })
+              } catch (error) {
+                fail(entry, key, error instanceof PstMessageTooLargeError ? tooLarge(this.limits.maxMessageBytes) : `This Outlook message could not be converted (${readError(error)})`, message.size, message.subject || basename(entry.path))
+              }
+              const date = message.deliveryTime ?? message.creationTime
+              if (raw) await importOne(raw, entry, key, labelId, { contentOffset: folderIndex, storedBytes: record.index, fallbackDate: date && date.getTime() > 0 ? date.toISOString() : undefined, flags: { read: message.read, flagged: message.flagged } })
+            }
+            save({ entry: index, offset: progress(folderIndex, record.index + 1), folder: folderIndex, message: record.index + 1 }, entry.path)
+          }
+        }
+      } catch (error) {
+        if (error instanceof ImportStop) throw error
+        fail(entry, `${index}:file`, readError(error))
+      } finally {
+        archive.close()
+      }
     }
 
     try {
       for (let index = cursor.entry; index < job.plan.length; index += 1) {
         const entry = job.plan[index]
+        if (entry.kind === 'pst') {
+          const resume = index === cursor.entry ? cursor : undefined
+          save(resume?.folder !== undefined ? { ...resume } : { entry: index, offset: 0 }, entry.path)
+          await checkpoint()
+          await importPst(entry, index, resume)
+          if (control.stop) throw new ImportStop(control.stop)
+          save({ entry: index + 1, offset: 0 })
+          continue
+        }
         const start = index === cursor.entry ? cursor.offset : 0
         save({ entry: index, offset: start }, entry.path)
         let labelId: string
         try {
-          labelId = folderFor(entry)
+          labelId = folderFor(entry.folder)
         } catch (error) {
           fail(entry, `${index}:folder`, error instanceof Error ? error.message : String(error))
           continue
@@ -426,34 +510,51 @@ export class MailImportService {
     const wanted = new Set(keys)
     const items = this.store.listItems(jobId, 100_000).filter((item) => wanted.has(item.key) && item.status === 'duplicate')
     let imported = 0
-    for (const item of items) {
-      if (decision === 'discard') {
-        this.store.setItemStatus(jobId, item.key, 'discarded')
-        continue
+    // Outlook data files are opened once per review, not once per message.
+    const archives = new Map<string, PstArchive>()
+    const readPst = (item: (typeof items)[number]) => {
+      let archive = archives.get(item.source)
+      if (!archive) {
+        archive = new PstArchive(item.source)
+        archives.set(item.source, archive)
+        archive.folders({ maxDepth: this.limits.maxDepth })
       }
-      try {
-        const raw = item.sourceKind === 'eml' ? await readFile(item.source) : await readMboxRange(item.source, item.contentOffset, item.storedBytes, job.options.mboxVariant)
-        const hash = sha256(raw)
-        if (item.sha256 && hash !== item.sha256) throw new Error('The source file changed since it was imported')
-        const id = messageIdFor(jobId, item.key)
-        const metadata = importMetadata(raw)
-        const folder = item.labelIds.find((label) => label.startsWith('folder:'))
-        if (folder && !this.deps.database.listLabels([job.accountId]).some((label) => label.id === folder)) throw new Error('The destination folder no longer exists')
-        await this.deps.store(job.accountId, {
-          id,
-          threadId: importThreadId(metadata.threadRoot ?? `local:${id}`),
-          historyId: `import:${jobId}`,
-          raw,
-          labelIds: item.labelIds,
-          internalDate: metadata.date ?? item.date,
-          sizeEstimate: raw.length
-        })
-        this.store.addFingerprint(job.accountId, id, hash, metadata.messageId)
-        this.store.setItemStatus(jobId, item.key, 'imported', 'Imported after review')
-        imported += 1
-      } catch (error) {
-        this.store.setItemStatus(jobId, item.key, 'failed', readError(error))
+      const record = archive.message(item.contentOffset, item.storedBytes)
+      if (!record?.message) throw new Error('The source file changed since it was imported')
+      return pstMessageToMime(record.message, { maxBytes: this.limits.maxMessageBytes, seed: String(record.nodeId ?? item.key) })
+    }
+    try {
+      for (const item of items) {
+        if (decision === 'discard') {
+          this.store.setItemStatus(jobId, item.key, 'discarded')
+          continue
+        }
+        try {
+          const raw = item.sourceKind === 'pst' ? readPst(item) : item.sourceKind === 'eml' ? await readFile(item.source) : await readMboxRange(item.source, item.contentOffset, item.storedBytes, job.options.mboxVariant)
+          const hash = sha256(raw)
+          if (item.sha256 && hash !== item.sha256) throw new Error('The source file changed since it was imported')
+          const id = messageIdFor(jobId, item.key)
+          const metadata = importMetadata(raw)
+          const folder = item.labelIds.find((label) => label.startsWith('folder:'))
+          if (folder && !this.deps.database.listLabels([job.accountId]).some((label) => label.id === folder)) throw new Error('The destination folder no longer exists')
+          await this.deps.store(job.accountId, {
+            id,
+            threadId: importThreadId(metadata.threadRoot ?? `local:${id}`),
+            historyId: `import:${jobId}`,
+            raw,
+            labelIds: item.labelIds,
+            internalDate: metadata.date ?? item.date,
+            sizeEstimate: raw.length
+          })
+          this.store.addFingerprint(job.accountId, id, hash, metadata.messageId)
+          this.store.setItemStatus(jobId, item.key, 'imported', 'Imported after review')
+          imported += 1
+        } catch (error) {
+          this.store.setItemStatus(jobId, item.key, 'failed', readError(error))
+        }
       }
+    } finally {
+      for (const archive of archives.values()) archive.close()
     }
     if (imported) this.store.adjustImported(jobId, imported)
     const updated = this.job(jobId)

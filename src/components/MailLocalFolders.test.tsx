@@ -26,7 +26,7 @@ beforeEach(() => {
   listener = undefined
   api = {
     ensureLocalFolders: vi.fn().mockResolvedValue(local),
-    choose: vi.fn().mockResolvedValue({ paths: ['C:\\mail\\Inbox.mbox'], unsupported: [{ path: 'C:\\mail\\Outlook.pst', reason: 'Outlook data files (.pst/.ost) cannot be imported yet.' }] }),
+    choose: vi.fn().mockResolvedValue({ paths: ['C:\\mail\\Inbox.mbox'], unsupported: [{ path: 'C:\\mail\\Secret.pst', reason: 'This Outlook data file uses high encryption.' }] }),
     start: vi.fn().mockResolvedValue(job({ status: 'queued', imported: 0, duplicates: 0, pendingReview: 0, skipped: 0 })),
     list: vi.fn().mockResolvedValue([]),
     pause: vi.fn().mockResolvedValue(job({ status: 'paused' })),
@@ -44,7 +44,7 @@ beforeEach(() => {
 })
 
 describe('MailImportModal', () => {
-  it('creates Local Folders, explains unsupported PST files and starts an import with the chosen options', async () => {
+  it('creates Local Folders, explains unsupported files and starts an import with the chosen options', async () => {
     const onToast = vi.fn()
     const onChanged = vi.fn()
     render(<MailImportModal accounts={[account()]} labels={[]} onClose={vi.fn()} onToast={onToast} onLocalFoldersChanged={onChanged} />)
@@ -53,9 +53,9 @@ describe('MailImportModal', () => {
     expect(onToast).toHaveBeenCalledWith('Local Folders created')
 
     expect(screen.getByRole('button', { name: /^Import$/ })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: /Choose MBOX or EML files/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Choose MBOX, EML or PST files/ }))
     expect(await screen.findByText('Inbox.mbox')).toBeInTheDocument()
-    expect(screen.getByRole('alert')).toHaveTextContent('Outlook.pst — Outlook data files (.pst/.ost) cannot be imported yet.')
+    expect(screen.getByRole('alert')).toHaveTextContent('Secret.pst — This Outlook data file uses high encryption.')
     fireEvent.change(screen.getByLabelText('Duplicates'), { target: { value: 'import' } })
     fireEvent.change(screen.getByLabelText('MBOX format'), { target: { value: 'mboxo' } })
     fireEvent.click(screen.getByRole('button', { name: /^Import$/ }))

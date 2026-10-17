@@ -9,8 +9,13 @@ import type {
   MailLocalTransferInput,
   MailLocalTransferResult
 } from '../../src/mail-types'
-import { MAIL_IMPORT_EXTENSIONS, unsupportedMailImportReason } from '../../src/lib/local-folders'
+import { MAIL_IMPORT_EXTENSIONS, mailImportSourceKind, unsupportedMailImportReason } from '../../src/lib/local-folders'
 import type { MailWorkerCommand, MailWorkerResult } from '../mail-protocol'
+import { pstHeaderProblem } from './pst-header'
+
+const pstProblem = (path: string) => {
+  try { return pstHeaderProblem(path) } catch { return undefined }
+}
 
 interface MailImportWorker {
   request<T extends MailWorkerResult = void>(command: MailWorkerCommand): Promise<T>
@@ -52,7 +57,10 @@ export function validateLocalTransfer(input: unknown): MailLocalTransferInput {
 export function chooseResult(paths: string[]): MailImportChooseResult {
   const result: MailImportChooseResult = { paths: [], unsupported: [] }
   for (const path of paths) {
-    const reason = statSync(path, { throwIfNoEntry: false })?.isDirectory() ? undefined : unsupportedMailImportReason(path)
+    // Outlook files with an unreadable header (or high encryption) are
+    // explained right away rather than failing once the import starts.
+    const reason = statSync(path, { throwIfNoEntry: false })?.isDirectory() ? undefined
+      : unsupportedMailImportReason(path) ?? (mailImportSourceKind(path) === 'pst' ? pstProblem(path) : undefined)
     if (reason) result.unsupported.push({ path, reason })
     else result.paths.push(path)
   }
@@ -75,9 +83,9 @@ export function registerMailImport(options: MailImportIpcOptions) {
     const result = await show(owner, kind === 'folder'
       ? { title: 'Import a mail folder', properties: ['openDirectory'] }
       : {
-        title: 'Import MBOX or EML files',
+        title: 'Import MBOX, EML or Outlook files',
         properties: ['openFile', 'multiSelections'],
-        filters: [{ name: 'Mail archives', extensions: MAIL_IMPORT_EXTENSIONS }, { name: 'All files', extensions: ['*'] }]
+        filters: [{ name: 'Mail archives and Outlook data files', extensions: MAIL_IMPORT_EXTENSIONS }, { name: 'All files', extensions: ['*'] }]
       })
     if (result.canceled) return { paths: [], unsupported: [] } satisfies MailImportChooseResult
     const chosen = chooseResult(result.filePaths)
