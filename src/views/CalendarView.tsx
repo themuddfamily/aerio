@@ -12,6 +12,7 @@ import type { AppState, CalendarEvent, RecurrenceEditScope } from '../types'
 import Modal from '../components/Modal'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { preserveEventInterchangeFields } from '../lib/interchange-plan'
+import { SchedulingAssistantButton } from '../components/SchedulingAssistant'
 import {
   addDaysIso, eventRecurrenceRule, expandCalendarEvents, formatRecurrenceRule, isAllDayEvent,
   isRecurringEvent, parseRecurrenceRule, simpleRecurrenceFor
@@ -558,6 +559,8 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
         />
         <label className="field-label"><MapPin size={14} /> Location<input value={location} disabled={readOnly} onChange={(e) => setLocation(e.target.value)} placeholder="Add a place or video link" /></label>
         <label className="field-label"><Users size={14} /> Attendees<input value={attendees} disabled={readOnly} onChange={(e) => setAttendees(e.target.value)} placeholder="Separate email addresses with commas" /></label>
+        {!readOnly && !allDay && <SchedulingAssistantButton calendarId={calendarId} organizerEmail={state.accounts.find((account) => account.id === calendarId)?.email} start={start} end={end} inputTimeZone={zone} attendees={attendees}
+          onApply={(selection) => { setStart(selection.start); setEnd(selection.end); setAttendees(selection.attendees.join(', ')) }} />}
         <label className="field-label">Notes<textarea value={description} disabled={readOnly} onChange={(e) => setDescription(e.target.value)} /></label>
         {pendingScope ? (
           <footer className="modal-footer">
