@@ -155,6 +155,12 @@ describe('preload bridge', () => {
     await mail.rules.save({ name: 'Rule' })
     await mail.rules.delete('rule-1')
     await mail.rules.run('rule-1')
+    await mail.templates.list('welcome')
+    await mail.templates.save({ kind: 'snippet', name: 'Hi', html: 'Hi' })
+    await mail.templates.delete('template-1')
+    await mail.templates.use('template-1')
+    await mail.templates.exportBackup()
+    await mail.templates.importBackup()
     await mail.sync.start('account-1')
     await mail.sync.pause('account-1')
     await mail.sync.resume('account-1')
@@ -170,7 +176,8 @@ describe('preload bridge', () => {
     for (const expected of [
       'gmail:credentials:status', 'mail:credentials:microsoft-configure', 'mail:providers:presets',
       'mail:accounts:connect-imap', 'mail:accounts:imap-update', 'mail:threads:list', 'mail:folders:unread-counts', 'mail:accounts:unread-counts', 'mail:message:source',
-      'mail:drafts:schedule', 'mail:rules:run', 'mail:sync:rebuild', 'mail:attachment:save', 'mail:diagnostics:export'
+      'mail:drafts:schedule', 'mail:rules:run', 'mail:sync:rebuild', 'mail:attachment:save', 'mail:diagnostics:export',
+      'mail:templates:list', 'mail:templates:save', 'mail:templates:delete', 'mail:templates:use', 'mail:templates:export', 'mail:templates:import'
     ]) expect(channels).toContain(expected)
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:snooze', 'account-1', ['thread-1'], '2026-08-09T10:00:00Z')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:attachment:open', 'account-1', 'message-1', 'attachment-1', 'file.txt')

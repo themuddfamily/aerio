@@ -243,6 +243,22 @@ vi.mock('./productivity/store', () => ({ ProductivityStore: vi.fn(function () { 
 vi.mock('./productivity/task-service', () => ({ TaskService: vi.fn(function () { return mocks.taskService }) }))
 vi.mock('./productivity/google-connector', () => ({ GoogleProductivityConnector: vi.fn(function () { return mocks.google }) }))
 vi.mock('./productivity/microsoft-connector', () => ({ MicrosoftProductivityConnector: vi.fn(function () { return mocks.microsoft }) }))
+const templateMocks = vi.hoisted(() => {
+  const prepared = { count: 1, commit: vi.fn(), rollback: vi.fn() }
+  const backup = { format: 'aerio-mail-templates', schemaVersion: 1, exportedAt: '2026-10-01T00:00:00Z', templates: [], attachments: [] }
+  const template = { id: 'template', kind: 'template', name: 'T', subject: '', html: '', text: '', attachments: [{ id: 'f', name: 'f.txt', size: 1, path: 'C:/aerio/template-attachments/f.txt' }], createdAt: '', updatedAt: '' }
+  return {
+    backup, prepared, template,
+    store: {
+      cleanupOrphanedFiles: vi.fn(), close: vi.fn(), list: vi.fn(() => [template]), save: vi.fn((input: any) => ({ ...template, ...input })), delete: vi.fn(),
+      markUsed: vi.fn(() => template), exportBackup: vi.fn(() => backup), restore: vi.fn(() => 1), prepareRestore: vi.fn(() => prepared)
+    }
+  }
+})
+vi.mock('./mail/template-store', () => ({
+  MailTemplateStore: vi.fn(function () { return templateMocks.store }),
+  parseMailTemplateBackup: (value: any) => value?.format === 'aerio-mail-templates' ? value : undefined
+}))
 
 const event = () => ({ sender: mocks.windows[0]?.webContents ?? {} })
 const invoke = (channel: string, ...args: any[]) => {
@@ -536,6 +552,49 @@ describe.sequential('Electron main process', () => {
     await expect(invoke('mail:diagnostics:export')).resolves.toEqual({})
     mocks.shell.openPath.mockResolvedValueOnce('No application')
     await expect(invoke('mail:attachment:open', 'a1b2', 'message', 'attachment', 'file.txt')).resolves.toEqual({ error: 'No application' })
+  })
+
+  it('routes mail templates, authorizes used template attachments for drafts, and backs templates up with local data', async () => {
+    expect(invoke('mail:templates:list', 'weekly')).toEqual([templateMocks.template])
+    expect(templateMocks.store.list).toHaveBeenCalledWith('weekly')
+    expect(() => invoke('mail:templates:list', 'x'.repeat(501))).toThrow(/too long/)
+    expect(() => invoke('mail:templates:delete', '')).toThrow(/valid template/)
+    invoke('mail:templates:delete', 'template')
+    invoke('mail:templates:save', { kind: 'snippet', name: 'S', html: '' })
+    const draft = { id: 'draft', accountId: 'a1b2', to: [], cc: [], bcc: [], subject: '', text: '', attachmentPaths: [templateMocks.template.attachments[0].path] }
+    expect(() => invoke('mail:drafts:save', draft)).toThrow(/not selected through Aerio/)
+    invoke('mail:templates:use', 'template')
+    await expect(invoke('mail:drafts:save', draft)).resolves.toMatchObject({ command: 'drafts:save' })
+
+    mocks.setSaveResult({ canceled: false, filePath: 'C:/templates.json' })
+    await expect(invoke('mail:templates:export')).resolves.toEqual({ savedPath: 'C:/templates.json' })
+    mocks.setOpenResult({ canceled: false, filePaths: ['C:/templates.json'] })
+    mocks.setStatResult({ size: 1024, isFile: () => true })
+    mocks.setReadResult(JSON.stringify(templateMocks.backup))
+    await expect(invoke('mail:templates:import')).resolves.toEqual({ restored: 1 })
+    expect(templateMocks.store.restore).toHaveBeenCalledWith(templateMocks.backup, 'merge')
+    mocks.setReadResult(JSON.stringify({ format: 'other' }))
+    await expect(invoke('mail:templates:import')).rejects.toThrow(/invalid or was created/)
+
+    const local = { tasks: [], notes: [], contacts: [] }
+    mocks.store.localSnapshot.mockReturnValueOnce(local as any)
+    mocks.setSaveResult({ canceled: false, filePath: 'C:/local.json' })
+    await invoke('productivity:local-export')
+    const exported = JSON.parse(mocks.fs.writeFileSync.mock.calls.find(([path]) => path === 'C:/local.json')![1])
+    expect(exported.mailTemplates).toEqual(templateMocks.backup)
+    mocks.setReadResult(JSON.stringify(exported))
+    templateMocks.prepared.commit.mockClear(); templateMocks.prepared.rollback.mockClear()
+    await invoke('productivity:local-import')
+    expect(templateMocks.store.prepareRestore).toHaveBeenCalledWith(templateMocks.backup, 'replace')
+    expect(templateMocks.prepared.commit).toHaveBeenCalled()
+    mocks.store.saveLocal.mockImplementationOnce(() => { throw new Error('disk full') })
+    templateMocks.prepared.commit.mockClear()
+    await expect(invoke('productivity:local-import')).rejects.toThrow('disk full')
+    expect(templateMocks.prepared.rollback).toHaveBeenCalled()
+    expect(templateMocks.prepared.commit).not.toHaveBeenCalled()
+    mocks.setReadResult(JSON.stringify({ ...exported, mailTemplates: { format: 'tampered' } }))
+    await expect(invoke('productivity:local-import')).rejects.toThrow(/invalid|unsupported/)
+    mocks.setOpenResult({ canceled: true, filePaths: [] }); mocks.setSaveResult({ canceled: true })
   })
 
   it('exports and restores validated local-data backups', async () => {

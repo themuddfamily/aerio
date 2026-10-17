@@ -38,7 +38,7 @@ export function useDialogFocus<T extends HTMLElement>(onClose: () => void, activ
     const onKeyDown = (event: KeyboardEvent) => {
       const dialog = dialogRef.current
       if (!dialog) return
-      if (event.target instanceof targetWindow.Element && event.target.closest('[role="menu"]')) return
+      if (event.target instanceof targetWindow.Element && event.target.closest('[role="menu"], [data-local-escape]')) return
       if (event.key === 'Escape' && closeEnabledRef.current) {
         event.preventDefault()
         event.stopPropagation()

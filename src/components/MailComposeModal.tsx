@@ -5,6 +5,7 @@ import { formatFileSize } from '../lib/domain'
 import { isCompleteMailAddress } from '../lib/mail-address'
 import { copyText, useContextMenu } from './ContextMenu'
 import { ModalShell } from './Modal'
+import MailTemplatePicker from './MailTemplatePicker'
 
 interface MailComposeModalProps {
   accounts: MailAccountSummary[]
@@ -334,6 +335,10 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
             <button className="icon-button" title="Underline" onMouseDown={(event) => event.preventDefault()} onClick={() => format('underline')}><Underline size={15} /></button>
             <button className="icon-button" title="Bulleted list" onMouseDown={(event) => event.preventDefault()} onClick={() => format('insertUnorderedList')}><List size={15} /></button>
             <button className="icon-button" title="Add link" onMouseDown={(event) => event.preventDefault()} onClick={addLink}><Link size={15} /></button>
+            <MailTemplatePicker editorRef={editorRef} subject={subject} attachments={attachments} onEditorChange={updateEditor} onToast={onToast} onApplyTemplate={(changes) => {
+              if (changes.subject) setSubject(changes.subject)
+              setAttachments((current) => [...current, ...changes.attachments.filter((item) => !current.some((existing) => existing.path.toLowerCase() === item.path.toLowerCase()))])
+            }} />
           </div>
           <div
             ref={bindEditor}

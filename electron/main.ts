@@ -55,6 +55,8 @@ import type { ProviderTaskInput, TaskFieldPatch, TaskLocalMetadata, TaskResoluti
 import { parseTaskBackup } from './productivity/task-backup'
 import { MessageLocalStore } from './mail/message-local-store'
 import { registerMessageTools } from './mail/message-tools'
+import { MailTemplateStore, parseMailTemplateBackup, type MailTemplateBackup } from './mail/template-store'
+import { registerMailTemplates } from './mail/template-tools'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
@@ -105,6 +107,7 @@ let taskService: TaskService | null = null
 let taskPolling: NodeJS.Timeout | undefined
 let taskNetworkOnline = true
 let messageLocalStore: MessageLocalStore | null = null
+let mailTemplateStore: MailTemplateStore | null = null
 let readyToOpenWindows = false
 const senderFaviconCache = new Map<string, { image: Buffer | null; expiresAt: number }>()
 const senderFaviconCandidateRequests = new Map<string, Promise<Buffer | null>>()
@@ -339,6 +342,8 @@ interface LocalDataBackup {
   exportedAt: string
   data: LocalModuleSnapshot
   attachments?: ArchivedNoteAttachment[]
+  /** Optional so older backups still restore; when present it replaces local mail templates. */
+  mailTemplates?: MailTemplateBackup
 }
 
 function localDataBackupFromUnknown(value: unknown): LocalDataBackup | undefined {
@@ -346,6 +351,7 @@ function localDataBackupFromUnknown(value: unknown): LocalDataBackup | undefined
   const backup = value as Partial<LocalDataBackup>
   if (backup.format !== 'aerio-local-data' || (backup.schemaVersion !== 1 && backup.schemaVersion !== 2) || typeof backup.exportedAt !== 'string' || !Number.isFinite(Date.parse(backup.exportedAt)) || !validLocalModules(backup.data)) return
   if (backup.schemaVersion === 1 && backup.data.notes.some((note) => (note.attachments?.length ?? 0) > 0)) return
+  if (backup.mailTemplates !== undefined && !parseMailTemplateBackup(backup.mailTemplates)) return
   if (backup.schemaVersion === 2 && (!Array.isArray(backup.attachments) || backup.attachments.length > 5_000 || !backup.attachments.every((attachment) =>
     attachment && typeof attachment.id === 'string' && Boolean(attachment.id.trim()) && attachment.id.length <= 300 &&
     typeof attachment.name === 'string' && Boolean(attachment.name.trim()) && attachment.name.length <= 1_000 &&
@@ -385,7 +391,10 @@ function createLocalDataBackup(snapshot: LocalModuleSnapshot): LocalDataBackup {
     archived.set(attachment.id, { id: attachment.id, name: attachment.name, size: bytes.byteLength, mime: attachment.mime, dataBase64: bytes.toString('base64') })
     sources.set(attachment.id, resolve(attachment.path))
   }
-  return { format: 'aerio-local-data', schemaVersion: 2, exportedAt: new Date().toISOString(), data: snapshot, attachments: [...archived.values()] }
+  return {
+    format: 'aerio-local-data', schemaVersion: 2, exportedAt: new Date().toISOString(), data: snapshot, attachments: [...archived.values()],
+    ...(mailTemplateStore ? { mailTemplates: mailTemplateStore.exportBackup() } : {})
+  }
 }
 
 function materializeLocalDataBackup(backup: LocalDataBackup): { snapshot: LocalModuleSnapshot; createdPaths: string[] } {
@@ -1230,6 +1239,12 @@ function registerIpc() {
   ipcMain.handle('tasks:undo', (_event, id: unknown) => tasks().undo(taskId(id)))
   ipcMain.handle('tasks:resolve', (_event, id: unknown, resolution: TaskResolution) => tasks().resolve(taskId(id), resolution))
   messageLocalStore = new MessageLocalStore(join(app.getPath('userData'), 'message-local.sqlite'))
+  mailTemplateStore = new MailTemplateStore(join(app.getPath('userData'), 'mail-templates.sqlite'), join(app.getPath('userData'), 'template-attachments'), (path) => approvedAttachmentPaths.has(path))
+  try { mailTemplateStore.cleanupOrphanedFiles() } catch { /* Orphaned template files are retried on the next launch. */ }
+  registerMailTemplates({ store: () => {
+    if (!mailTemplateStore) throw new Error('Template storage is not ready')
+    return mailTemplateStore
+  }, approveAttachment: (path) => approvedAttachmentPaths.add(path) })
   registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
   } })
@@ -1352,17 +1367,26 @@ function registerIpc() {
     catch { throw new Error('That file is not a readable Aerio local-data backup') }
     const backup = localDataBackupFromUnknown(parsed)
     if (!backup) throw new Error('That backup is invalid or was created by an unsupported Aerio version')
-    const { snapshot: restored, createdPaths } = materializeLocalDataBackup(backup)
+    const templates = backup.mailTemplates && mailTemplateStore ? mailTemplateStore.prepareRestore(backup.mailTemplates, 'replace') : undefined
+    let materialized: ReturnType<typeof materializeLocalDataBackup>
+    try { materialized = materializeLocalDataBackup(backup) }
+    catch (error) {
+      templates?.rollback()
+      throw error
+    }
+    const { snapshot: restored, createdPaths } = materialized
     const store = requireProductivityStore()
     const previous = store.localSnapshot()
     try { store.saveLocal(restored) }
     catch (error) {
+      templates?.rollback()
       for (const path of createdPaths) {
         try { if (existsSync(path)) unlinkSync(path) } catch { /* Do not mask the storage error. */ }
       }
       throw error
     }
     cleanupRemovedNoteAttachments(previous, restored)
+    templates?.commit()
     return restored
   })
   ipcMain.handle('productivity:sync', (_event, accountId: string) => {
@@ -1752,6 +1776,7 @@ app.on('before-quit', () => {
   updates?.stop()
   productivityStore?.close()
   messageLocalStore?.close()
+  mailTemplateStore?.close()
   diagnostic({ level: 'info', component: 'app', event: 'shutdown' })
   void mailWorker?.close()
 })

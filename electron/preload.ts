@@ -145,6 +145,14 @@ const api: AerioDesktopApi = {
       delete: (id) => ipcRenderer.invoke('mail:drafts:delete', id),
       stageMessageAttachments: (draftId, accountId, messageId) => ipcRenderer.invoke('mail:drafts:stage-message-attachments', draftId, accountId, messageId)
     },
+    templates: {
+      list: (query) => ipcRenderer.invoke('mail:templates:list', query),
+      save: (input) => ipcRenderer.invoke('mail:templates:save', input),
+      delete: (id) => ipcRenderer.invoke('mail:templates:delete', id),
+      use: (id) => ipcRenderer.invoke('mail:templates:use', id),
+      exportBackup: () => ipcRenderer.invoke('mail:templates:export'),
+      importBackup: () => ipcRenderer.invoke('mail:templates:import')
+    },
     rules: {
       list: (accountIds) => ipcRenderer.invoke('mail:rules:list', accountIds),
       save: (input) => ipcRenderer.invoke('mail:rules:save', input),
