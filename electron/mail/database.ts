@@ -46,6 +46,8 @@ import { listContactHistoryPage } from './contact-history'
 import { MailDraftOpenPgpStore } from './openpgp-draft-store'
 import { MailDraftSmimeStore } from './smime-draft-store'
 import { LocalMailStore } from './local-mail-store'
+import { MAIL_PIN_JOIN, MAIL_THREAD_CURSOR_CLAUSE, MAIL_THREAD_CURSOR_PARAMS, MAIL_THREAD_ORDER, MailPinStore, decodeMailThreadCursor, encodeMailThreadCursor, mailThreadCursorParams } from './mail-pins'
+import { isLocalOnlyMailAction } from '../../src/lib/mail-pins'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -110,6 +112,7 @@ export class MailDatabase {
   readonly ruleLedger: RuleRunLedger
   readonly attachmentText: AttachmentTextStore
   readonly mailMerge: MailMergeStore
+  readonly pins: MailPinStore
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -128,6 +131,7 @@ export class MailDatabase {
     this.ruleLedger = new RuleRunLedger(this.db)
     this.attachmentText = new AttachmentTextStore(this.db)
     this.mailMerge = new MailMergeStore(this.db)
+    this.pins = new MailPinStore(this.db)
   }
 
   close() {
@@ -990,16 +994,15 @@ export class MailDatabase {
       params.push(search.exclude)
     }
     if (query.cursor) {
-      const cursor = json<{ date: string; id: string; accountId: string }>(Buffer.from(query.cursor, 'base64url').toString('utf8'), { date: '', id: '', accountId: '' })
-      where.push('(t.last_date < ? OR (t.last_date=? AND (t.id<? OR (t.id=? AND t.account_id<?))))')
-      params.push(cursor.date, cursor.date, cursor.id, cursor.id, cursor.accountId)
+      where.push(MAIL_THREAD_CURSOR_CLAUSE)
+      params.push(...mailThreadCursorParams(decodeMailThreadCursor(query.cursor)))
     }
-    const sql = `SELECT t.*,(SELECT snoozed_until FROM mail_snoozes s WHERE s.account_id=t.account_id AND s.thread_id=t.id) snoozed_until FROM gmail_threads t JOIN gmail_accounts a ON a.id=t.account_id ${join} WHERE ${where.join(' AND ')} ORDER BY t.last_date DESC,t.id DESC,t.account_id DESC LIMIT ?`
+    const sql = `SELECT t.*,p.pinned_at pinned_at,(SELECT snoozed_until FROM mail_snoozes s WHERE s.account_id=t.account_id AND s.thread_id=t.id) snoozed_until FROM gmail_threads t JOIN gmail_accounts a ON a.id=t.account_id ${join} ${MAIL_PIN_JOIN} WHERE ${where.join(' AND ')} ORDER BY ${MAIL_THREAD_ORDER} LIMIT ?`
     const rows = this.db.prepare(sql).all(...params, pageSize + 1) as DatabaseRow[]
     const hasMore = rows.length > pageSize
     const visible = rows.slice(0, pageSize)
-    const countParams = params.slice(0, params.length - (query.cursor ? 5 : 0))
-    const countWhere = where.filter((part) => !part.startsWith('(t.last_date <'))
+    const countParams = params.slice(0, params.length - (query.cursor ? MAIL_THREAD_CURSOR_PARAMS : 0))
+    const countWhere = where.filter((part) => part !== MAIL_THREAD_CURSOR_CLAUSE)
     const total = Number((this.db.prepare(`SELECT COUNT(DISTINCT t.account_id||':'||t.id) total FROM gmail_threads t JOIN gmail_accounts a ON a.id=t.account_id ${join} WHERE ${countWhere.join(' AND ')}`).get(...countParams) as DatabaseRow).total)
     const items = visible.map((row) => ({
       accountId: String(row.account_id),
@@ -1017,13 +1020,15 @@ export class MailDatabase {
       hasAttachments: Boolean(row.has_attachments),
       messageCount: Number(row.message_count),
       labelIds: json<string[]>(String(row.label_ids_json), []),
-      snoozedUntil: row.snoozed_until ? String(row.snoozed_until) : undefined
+      snoozedUntil: row.snoozed_until ? String(row.snoozed_until) : undefined,
+      pinned: Boolean(row.pinned_at),
+      pinnedAt: row.pinned_at ? String(row.pinned_at) : undefined
     }))
     const last = items.at(-1)
     return {
       items,
       total,
-      nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ date: last.lastDate, id: last.id, accountId: last.accountId })).toString('base64url') : undefined
+      nextCursor: hasMore && last ? encodeMailThreadCursor({ pinnedAt: last.pinnedAt ?? '', date: last.lastDate, id: last.id, accountId: last.accountId }) : undefined
     }
   }
 
@@ -1078,7 +1083,8 @@ export class MailDatabase {
     const inverses: Record<MailActionKind, MailActionKind> = {
       archive: 'unarchive', unarchive: 'archive', read: 'unread', unread: 'read',
       star: 'unstar', unstar: 'star', important: 'unimportant', unimportant: 'important',
-      trash: 'untrash', untrash: 'trash', label: 'unlabel', unlabel: 'label', move: 'move'
+      trash: 'untrash', untrash: 'trash', label: 'unlabel', unlabel: 'label', move: 'move',
+      pin: 'unpin', unpin: 'pin'
     }
     return inverses[action]
   }
@@ -1087,6 +1093,7 @@ export class MailDatabase {
     if (!this.getAccount(input.accountId)) throw new Error('Account not found')
     if (!input.threadIds.length) throw new Error('Select at least one conversation')
     if ((input.action === 'label' || input.action === 'unlabel' || input.action === 'move') && !input.labelId) throw new Error(input.action === 'move' ? 'Choose a destination' : 'Choose a label')
+    if (isLocalOnlyMailAction(input.action)) return this.applyPinAction(input, operationId, delayMs)
     const provider = this.getAccount(input.accountId)!.provider
     const destinationLabel = input.labelId ? this.stmt('SELECT name FROM gmail_labels WHERE account_id=? AND id=?').get(input.accountId, input.labelId) as DatabaseRow | undefined : undefined
     const created = nowIso()
@@ -1134,6 +1141,7 @@ export class MailDatabase {
     const row = this.stmt('SELECT * FROM gmail_operations WHERE id=?').get(operationId) as DatabaseRow | undefined
     if (!row || row.status === 'cancelled' || row.status === 'failed') return false
     const inverse = String(row.inverse_kind) as MailActionKind
+    if (isLocalOnlyMailAction(String(row.kind))) return this.undoPinOperation(operationId, row, inverse)
     const input: ApplyMailActionInput = {
       accountId: String(row.account_id),
       threadIds: json<string[]>(String(row.thread_ids_json), []),
@@ -1145,6 +1153,38 @@ export class MailDatabase {
       return true
     }
     this.applyLocalAction(input, crypto.randomUUID(), 0)
+    return true
+  }
+
+  /** Pins are local-only: applied immediately, recorded as succeeded, and never dispatched to a provider. */
+  private applyPinAction(input: ApplyMailActionInput, operationId: string, delayMs: number): PendingOperation {
+    const created = nowIso()
+    const undoUntil = new Date(Date.now() + delayMs).toISOString()
+    this.transaction(() => {
+      for (const threadId of input.threadIds) {
+        if (!this.stmt('SELECT 1 FROM gmail_threads WHERE account_id=? AND id=?').get(input.accountId, threadId)) throw new Error(`Conversation ${threadId} was not found`)
+      }
+      const before = this.pins.set(input.accountId, input.threadIds, input.action === 'pin', created)
+      this.stmt(`
+        INSERT INTO gmail_operations(id,account_id,thread_ids_json,kind,label_id,inverse_kind,status,execute_after,undo_until,created_at,updated_at)
+        VALUES(?,?,?,?,NULL,?,'succeeded',?,?,?,?)
+      `).run(operationId, input.accountId, JSON.stringify(input.threadIds), input.action, this.inverseAction(input.action), created, undoUntil, created, created)
+      this.pins.recordUndo(operationId, input.accountId, before)
+    })
+    return { id: operationId, accountId: input.accountId, kind: input.action, status: 'succeeded', undoUntil }
+  }
+
+  private undoPinOperation(operationId: string, row: DatabaseRow, inverse: MailActionKind) {
+    const restored = this.transaction(() => {
+      if (!this.pins.restore(operationId)) return false
+      this.stmt('UPDATE gmail_operations SET status=?,updated_at=? WHERE id=?').run('cancelled', nowIso(), operationId)
+      return true
+    })
+    if (restored) return true
+    // The exact snapshot has expired; fall back to the inverse change like provider actions do.
+    const threadIds = json<string[]>(String(row.thread_ids_json), []).filter((threadId) => this.stmt('SELECT 1 FROM gmail_threads WHERE account_id=? AND id=?').get(String(row.account_id), threadId))
+    if (!threadIds.length) return false
+    this.applyPinAction({ accountId: String(row.account_id), threadIds, action: inverse }, crypto.randomUUID(), 0)
     return true
   }
 

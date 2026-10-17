@@ -11,7 +11,7 @@ The layout is an allowlist. Only these profile entries are copied:
 | Entry | Contents |
 | --- | --- |
 | `aerio-state.sqlite` | Application preferences (the app-lock verifier is removed) |
-| `aerio.sqlite` | Mail accounts (metadata only), folders/labels, cached messages, the search index, drafts, outgoing/scheduled sends, queued mail changes, the folder-change journal, snoozes, rules, Quick Actions, saved searches, read-receipt history, reply watches |
+| `aerio.sqlite` | Mail accounts (metadata only), folders/labels, cached messages, the search index, drafts, outgoing/scheduled sends, queued mail changes, the folder-change journal, snoozes, rules, Quick Actions, saved searches, read-receipt history, reply watches, conversation pins |
 | `message-local.sqlite` | Per-message categories, display preferences, and links to notes/tasks |
 | `mail-templates.sqlite` | QuickText snippets and templates |
 | `productivity.sqlite` | Local Tasks, Notes, and Contacts, local calendars and internet-calendar subscriptions, plus the provider calendar/contact cache |
@@ -43,7 +43,7 @@ Retention only deletes folders whose manifest is valid. Unrelated or corrupt fol
 
 ## Restore
 
-1. **Preview** fully re-hashes the backup and checks each database's integrity. It then shows counts: accounts, cached messages, drafts, sends that will be held, queued mail changes, rules, saved searches, reply watches, templates, local Tasks/Notes/Contacts, connected tasks, and pending task writes. Warnings cover held sends, reauthorization, a different source profile folder, an older format, and databases missing from the backup. The main process only restores a folder that passed preview in this session.
+1. **Preview** fully re-hashes the backup and checks each database's integrity. It then shows counts: accounts, cached messages, drafts, sends that will be held, queued mail changes, rules, saved searches, reply watches, pinned conversations, templates, local Tasks/Notes/Contacts, connected tasks, and pending task writes. Warnings cover held sends, reauthorization, a different source profile folder, an older format, and databases missing from the backup. The main process only restores a folder that passed preview in this session.
 2. **Staging** copies the backup into `<profile>/.profile-restore/staging`, hashing as it copies. This verifies the staged bytes themselves, not just the source, so corruption after preview is still caught. Then, on the staged copies only:
    - If the backup came from a different profile folder, absolute managed paths are rebased in every text column of ordinary tables. Both raw and JSON-escaped forms are handled. Full-text index and shadow tables are skipped.
    - Each store is opened with its normal constructor (`MailDatabase`, `ProductivityStore`, `InterchangeStore`, `MessageLocalStore`, `MailTemplateStore`, `TaskStore`). This applies every idempotent schema upgrade, so an older backup is migrated before it can replace anything. A failed migration aborts the restore, and live data is untouched.

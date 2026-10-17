@@ -1,6 +1,6 @@
 import {
   Archive, AtSign, CalendarClock, CheckSquare, ChevronDown, ChevronRight, Clock3, Copy, Download, Edit3, ExternalLink, Eye, FileText, Filter, FolderInput, Forward, Inbox, LoaderCircle, Mail, MailOpen,
-  MoreVertical, Paperclip, Pause, Play, Plus, RefreshCw, Reply, ReplyAll, Search, Send, Settings2,
+  MoreVertical, Paperclip, Pause, Pin, PinOff, Play, Plus, RefreshCw, Reply, ReplyAll, Search, Send, Settings2,
   Star, Tag, Tags, Trash2, Undo2, UserPlus, Users, WifiOff, X
 } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -58,6 +58,7 @@ import { formatFileSize } from '../lib/domain'
 import { decodeHtmlEntities } from '../lib/html-entities'
 import { formatMailArrivalTooltip, formatMailDateHeading, formatMailListTime, mailDateGroupKey } from '../lib/mail-date'
 import { visibleMailLabels } from '../lib/mail-labels'
+import { isLocalOnlyMailAction, mailListGroupStart, pendingOperationsMessage, pinActionFor, threadIdsByAccount } from '../lib/mail-pins'
 import { isMailboxRefreshing, shouldShowDetailedSync } from '../lib/mail-sync'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 
@@ -66,6 +67,8 @@ interface ConnectedMailViewProps {
   composeRequest?: { id: number; initialTo?: string }
   searchRequest?: { id: number; query: string }
   quickActionRequest?: { id: number; quickActionId: string }
+  /** Command-palette request to pin or unpin the checked conversations, or the open one. */
+  pinRequest?: { id: number; action: 'pin' | 'unpin' }
 }
 
 const emptyPage: MailPage = { items: [], total: 0 }
@@ -86,7 +89,7 @@ function shortDate(date: string) {
     : new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(value)
 }
 
-export default function ConnectedMailView({ onToast, composeRequest = { id: 0 }, searchRequest = { id: 0, query: '' }, quickActionRequest = { id: 0, quickActionId: '' } }: ConnectedMailViewProps) {
+export default function ConnectedMailView({ onToast, composeRequest = { id: 0 }, searchRequest = { id: 0, query: '' }, quickActionRequest = { id: 0, quickActionId: '' }, pinRequest = { id: 0, action: 'pin' } }: ConnectedMailViewProps) {
   const { showContextMenu } = useContextMenu()
   const mailPanes = useResizableMailPanes()
   const [accounts, setAccounts] = useState<MailAccountSummary[]>([])
@@ -107,6 +110,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [quickActionsOpen, setQuickActionsOpen] = useState(false)
   // Requests that existed before this view mounted were meant for an earlier instance.
   const handledQuickActionRequest = useRef(quickActionRequest.id)
+  const handledPinRequest = useRef(pinRequest.id)
   const [selectedKey, setSelectedKey] = useState('')
   const [thread, setThread] = useState<MailThreadDetail>()
   const [expandedMessageId, setExpandedMessageId] = useState<string>()
@@ -315,7 +319,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
         void loadAccountUnreadCounts()
       }
       if (event.type === 'operation' && event.payload.status === 'failed') onToast(event.payload.error ?? 'The mail provider rejected the change')
-      if (event.type === 'operation' && event.payload.status === 'succeeded') setPending((items) => items.filter((item) => item.id !== event.payload.id))
+      // Pins are applied locally and succeed at once; their undo stays offered until it expires.
+      if (event.type === 'operation' && event.payload.status === 'succeeded' && !isLocalOnlyMailAction(event.payload.kind)) setPending((items) => items.filter((item) => item.id !== event.payload.id))
       if (event.type === 'draft-delivery') {
         setPendingSend((current) => current?.id === event.payload.id ? undefined : current)
         if (event.payload.status === 'sent') onToast('Message sent')
@@ -588,6 +593,31 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     return () => window.removeEventListener('keydown', onKeyDown)
   })
 
+  // Pin state is local-only, so archived (read-only) accounts can still be pinned.
+  const togglePin = async (items: MailThreadSummary[], action = pinActionFor(items)) => {
+    if (!items.length) {
+      onToast(`Select a conversation to ${action}`)
+      return
+    }
+    try {
+      const operations: PendingOperation[] = []
+      for (const [targetAccount, threadIds] of threadIdsByAccount(items)) operations.push(await window.aerio.mail.mail.action({ accountId: targetAccount, threadIds, action }))
+      setPending(operations)
+      if (items === checkedItems) setCheckedKeys(new Set())
+      await loadPage()
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : `The conversation could not be ${action === 'pin' ? 'pinned' : 'unpinned'}`)
+    }
+  }
+
+  useEffect(() => {
+    if (!pinRequest.id || handledPinRequest.current === pinRequest.id) return
+    handledPinRequest.current = pinRequest.id
+    void togglePin(checkedItems.length ? checkedItems : selected ? [selected] : [], pinRequest.action)
+    // Only a new palette request triggers a change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinRequest.id])
+
   const applyBulkAction = async (action: MailActionKind) => {
     const groups = new Map<string, string[]>()
     for (const item of checkedItems) groups.set(item.accountId, [...(groups.get(item.accountId) ?? []), item.id])
@@ -801,6 +831,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       { label: 'Forward', icon: Forward, disabled: readOnly, action: () => composeFromSummary(item, true) },
       { label: item.unread ? 'Mark as read' : 'Mark as unread', icon: item.unread ? MailOpen : Mail, separatorBefore: true, disabled: readOnly, action: () => applyAction(item.unread ? 'read' : 'unread', item.accountId, [item.id]) },
       { label: item.starred ? 'Remove star' : 'Add star', icon: Star, checked: item.starred, disabled: readOnly, action: () => applyAction(item.starred ? 'unstar' : 'star', item.accountId, [item.id]) },
+      { label: item.pinned ? 'Unpin conversation' : 'Pin to top', icon: item.pinned ? PinOff : Pin, checked: Boolean(item.pinned), action: () => togglePin(checkedKeys.has(`${item.accountId}:${item.id}`) ? checkedItems : [item], item.pinned ? 'unpin' : 'pin') },
       { label: item.important ? 'Mark as not important' : 'Mark as important', icon: Tag, checked: item.important, disabled: readOnly, action: () => applyAction(item.important ? 'unimportant' : 'important', item.accountId, [item.id]) },
       ...(!item.trashed ? [{ label: inInbox ? 'Archive' : 'Move to inbox', icon: inInbox ? Archive : Inbox, separatorBefore: true, disabled: readOnly, action: () => applyAction(inInbox ? 'archive' : inSpam ? 'move' : 'unarchive', item.accountId, [item.id], true, inSpam ? 'INBOX' : undefined) }] satisfies ContextMenuItem[] : []),
       { label: 'Move to…', icon: FolderInput, disabled: readOnly, action: () => { setCheckedKeys(new Set([`${item.accountId}:${item.id}`])); setOrganizeMode('move') } },
@@ -1038,6 +1069,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           <button className="button ghost small" onClick={() => void applyBulkAction('archive')}><Archive size={15} /> Archive</button>
           <button className="button ghost small" onClick={() => void applyBulkAction('read')}><MailOpen size={15} /> Read</button>
           <button className="button ghost small" onClick={() => void applyBulkAction('star')}><Star size={15} /> Star</button>
+          {pinActionFor(checkedItems) === 'pin' ? <button className="button ghost small" onClick={() => void togglePin(checkedItems, 'pin')}><Pin size={15} /> Pin</button> : <button className="button ghost small" onClick={() => void togglePin(checkedItems, 'unpin')}><PinOff size={15} /> Unpin</button>}
           <button className="button ghost small" onClick={() => folder === 'snoozed' ? void unsnoozeMany(checkedItems) : setSnoozeItems(checkedItems)}>{folder === 'snoozed' ? <Inbox size={15} /> : <Clock3 size={15} />} {folder === 'snoozed' ? 'Return now' : 'Snooze'}</button>
           <button className="button ghost small" onClick={() => setOrganizeMode('move')}><FolderInput size={15} /> Move</button>
           <button className="button ghost small" onClick={() => setOrganizeMode('label')}><Tags size={15} /> Labels</button>
@@ -1080,11 +1112,12 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
             const listDetail = listThreadDetails[threadKey]
             const itemLabels = visibleMailLabels(item.accountId, item.labelIds, labels).slice(0, 3)
             const previous = page.items[index - 1]
-            const startsDateGroup = !previous || mailDateGroupKey(previous.lastDate) !== mailDateGroupKey(item.lastDate)
+            const groupStart = mailListGroupStart(previous, item, mailDateGroupKey)
             return <Fragment key={threadKey}>
-              {startsDateGroup && <h2 className="mail-date-group"><span>{formatMailDateHeading(item.lastDate)}</span></h2>}
+              {groupStart === 'pinned' && <h2 className="mail-date-group mail-pinned-group"><span><Pin size={12} /> Pinned</span></h2>}
+              {groupStart === 'date' && <h2 className="mail-date-group"><span>{formatMailDateHeading(item.lastDate)}</span></h2>}
               <div className={`message-thread-stack ${listExpanded ? 'expanded' : ''}`}>
-              <div role="button" tabIndex={0} aria-current={selectedKey === threadKey ? 'true' : undefined} aria-pressed={checkedKeys.has(threadKey)} className={`message-row ${selectedKey === threadKey ? 'selected' : ''} ${checkedKeys.has(threadKey) ? 'checked' : ''} ${item.unread ? 'unread' : ''}`} onClick={(event) => { if (event.ctrlKey || event.metaKey || event.shiftKey) toggleChecked(item, index, event.shiftKey); else openSummary(item) }} onDoubleClick={(event) => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey) openMessageWindow(item) }} onKeyDown={(event) => { if ((event.key === 'Enter' || event.key === ' ') && (event.ctrlKey || event.metaKey)) { event.preventDefault(); toggleChecked(item, index, event.shiftKey) } else if (event.key === 'Enter' && event.shiftKey) { event.preventDefault(); openMessageWindow(item) } else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openSummary(item) } }} onContextMenu={(event) => showSummaryMenu(event, item)}>
+              <div role="button" tabIndex={0} aria-current={selectedKey === threadKey ? 'true' : undefined} aria-pressed={checkedKeys.has(threadKey)} className={`message-row ${selectedKey === threadKey ? 'selected' : ''} ${checkedKeys.has(threadKey) ? 'checked' : ''} ${item.unread ? 'unread' : ''} ${item.pinned ? 'pinned' : ''}`} onClick={(event) => { if (event.ctrlKey || event.metaKey || event.shiftKey) toggleChecked(item, index, event.shiftKey); else openSummary(item) }} onDoubleClick={(event) => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey) openMessageWindow(item) }} onKeyDown={(event) => { if ((event.key === 'Enter' || event.key === ' ') && (event.ctrlKey || event.metaKey)) { event.preventDefault(); toggleChecked(item, index, event.shiftKey) } else if (event.key === 'Enter' && event.shiftKey) { event.preventDefault(); openMessageWindow(item) } else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openSummary(item) } }} onContextMenu={(event) => showSummaryMenu(event, item)}>
                 <span className="message-unread-dot" aria-hidden="true" />
                 <SenderAvatar email={item.senderEmail} name={item.participants[0]} fallbackColor={accounts.find((account) => account.id === item.accountId)?.color} />
                 <span className="message-copy">
@@ -1100,7 +1133,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
                     {item.hasAttachments && <Paperclip size={13} />}
                   </span>}
                 </span>
-                <span className="row-flags">{item.starred && <Star size={13} fill="currentColor" />}</span>
+                <span className="row-flags">{item.pinned && <Pin size={13} aria-label="Pinned" />}{item.starred && <Star size={13} fill="currentColor" />}</span>
               </div>
               {listExpanded && <div className="thread-list-region">
                 {listThreadLoadingKey === threadKey && !listDetail && <div className="thread-list-loading"><LoaderCircle className="spin" size={14} /> Loading thread…</div>}
@@ -1128,6 +1161,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
               <button className="reader-toolbar-action" disabled={selectedAccount?.archived} title={selected.trashed ? 'Restore from Trash' : 'Move to Trash'} onClick={() => void applyAction(selected.trashed ? 'untrash' : 'trash')}>{selected.trashed ? <Undo2 size={17} /> : <Trash2 size={17} />}<span>{selected.trashed ? 'Restore' : 'Trash'}</span></button>
               <span className="toolbar-divider" />
               <button className={`reader-toolbar-action ${selected.starred ? 'active' : ''}`} disabled={selectedAccount?.archived} title={selected.starred ? 'Unstar' : 'Star'} onClick={() => void applyAction(selected.starred ? 'unstar' : 'star')}><Star size={17} fill={selected.starred ? 'currentColor' : 'none'} /><span>{selected.starred ? 'Unstar' : 'Star'}</span></button>
+              <button className={`reader-toolbar-action ${selected.pinned ? 'active' : ''}`} title={selected.pinned ? 'Unpin conversation' : 'Pin to top'} onClick={() => void togglePin([selected], selected.pinned ? 'unpin' : 'pin')}>{selected.pinned ? <PinOff size={17} /> : <Pin size={17} />}<span>{selected.pinned ? 'Unpin' : 'Pin'}</span></button>
               <MailQuickActionButtons quickActions={quickActions.quickActions} disabled={selectedAccount?.archived} className="reader-toolbar-action" onRun={(quickAction) => void runQuickAction(quickAction, [selected])} />
             </div>
             <div className="reader-toolbar-secondary">
@@ -1153,7 +1187,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
         </> : <div className="empty-state grow">{threadLoading ? <><LoaderCircle className="spin" size={34} /><h3>Opening conversation</h3><p>Loading the selected thread from local storage.</p></> : accounts.some((item) => item.status === 'syncing') ? <><LoaderCircle className="spin" size={34} /><h3>Downloading your mailbox</h3><p>Conversations appear here as soon as they are available.</p></> : <><Inbox size={34} /><h3>Select a conversation</h3><p>Choose a conversation to read it here.</p></>}</div>}
       </section>
 
-      {pending.length > 0 && <div className="undo-toast"><span>{pending.length > 1 ? `${pending.length} mail changes queued` : 'Mail change queued'}</span><button onClick={() => void undo()}><Undo2 size={15} /> Undo</button><button onClick={() => setPending([])}>Dismiss</button></div>}
+      {pending.length > 0 && <div className="undo-toast"><span>{pendingOperationsMessage(pending)}</span><button onClick={() => void undo()}><Undo2 size={15} /> Undo</button><button onClick={() => setPending([])}>Dismiss</button></div>}
       {pendingSend && <div className="undo-toast send-undo-toast"><span>Message will send shortly</span><button onClick={() => void undoSend()}><Undo2 size={15} /> Undo Send</button><button onClick={() => setPendingSend(undefined)}>Dismiss</button></div>}
       {aiSearchOpen && aiStatus && <MailAiSearchDialog status={aiStatus} onRun={(query) => { setSearch(query); setSearchFiltersOpen(false) }} onClose={() => setAiSearchOpen(false)} />}
       {compose && <MailComposeModal accounts={sendableAccounts} draft={compose.draft} replyTo={compose.reply} replyAll={compose.replyAll} forward={compose.forward} initialTo={compose.initialTo} initialBody={compose.initialBody} onClose={() => { setCompose(undefined); if (folder === 'drafts' || folder === 'scheduled') void loadDrafts() }} onSent={(result) => { if (result.status === 'send-pending') setPendingSend(result); void loadPage(); void loadDrafts() }} onToast={onToast} />}

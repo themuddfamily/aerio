@@ -9,7 +9,8 @@ export const MAX_QUICK_ACTION_TARGETS = 1000
 export const QUICK_ACTION_STEP_LABELS: Record<MailActionKind, string> = {
   read: 'Mark as read', unread: 'Mark as unread', star: 'Add star', unstar: 'Remove star',
   important: 'Mark important', unimportant: 'Mark not important', label: 'Apply label', unlabel: 'Remove label',
-  move: 'Move to folder or label', archive: 'Archive', unarchive: 'Move to Inbox', trash: 'Move to Trash', untrash: 'Restore from Trash'
+  move: 'Move to folder or label', archive: 'Archive', unarchive: 'Move to Inbox', trash: 'Move to Trash', untrash: 'Restore from Trash',
+  pin: 'Pin to top', unpin: 'Unpin'
 }
 
 const STEP_KINDS = Object.keys(QUICK_ACTION_STEP_LABELS) as MailActionKind[]

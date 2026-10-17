@@ -26,6 +26,9 @@ when nothing is checked. It can be started from:
   so local state changes immediately and offline runs are sent after
   reconnecting. Queue execution is ordered by `created_at` and then insertion
   order, so steps reach the provider in the order shown.
+- **Local pin steps.** **Pin to top** and **Unpin** steps change Aerio's local
+  pin state at once and are never queued for the provider; see
+  [Pinned mail conversations](mail-pinning.md).
 - **Undo.** The Undo toast reverts every queued step, newest first, so each
   step's snapshot restores onto the state it captured.
 - **Account scope.** Steps without a destination work on any account. Label,

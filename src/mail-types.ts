@@ -1,6 +1,6 @@
 export type MailAccountStatus = 'connecting' | 'syncing' | 'ready' | 'paused' | 'needs-auth' | 'archived' | 'error'
 export type MailSyncPhase = 'idle' | 'inventory' | 'downloading' | 'catch-up' | 'incremental' | 'paused' | 'complete' | 'error'
-export type MailActionKind = 'archive' | 'unarchive' | 'read' | 'unread' | 'star' | 'unstar' | 'important' | 'unimportant' | 'trash' | 'untrash' | 'label' | 'unlabel' | 'move'
+export type MailActionKind = 'archive' | 'unarchive' | 'read' | 'unread' | 'star' | 'unstar' | 'important' | 'unimportant' | 'trash' | 'untrash' | 'label' | 'unlabel' | 'move' | 'pin' | 'unpin'
 export type MailProviderId = 'gmail' | 'microsoft' | 'icloud' | 'yahoo' | 'fastmail' | 'imap' | 'proton-bridge' | 'local'
 
 export interface ImapAccountInput {
@@ -101,6 +101,9 @@ export interface MailThreadSummary {
   messageCount: number
   labelIds: string[]
   snoozedUntil?: string
+  /** Local-only pin (never synced to the provider); pinned conversations list first. */
+  pinned?: boolean
+  pinnedAt?: string
 }
 
 /**

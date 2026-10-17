@@ -46,6 +46,7 @@ import { createReceiptService } from './mail/receipts'
 import { AttachmentContentIndexer } from './mail/attachment-text-indexer'
 import { AttachmentExtractRunner } from './mail/attachment-extract-runner'
 import { supportedSendOptions } from '../src/lib/mail-send-options'
+import { isLocalOnlyMailAction } from '../src/lib/mail-pins'
 import type { MailMergeJobInput } from '../src/mail-merge-types'
 import { clampMailMergeLimits, MAIL_MERGE_MAX_RECIPIENTS, normalizeMergeRecipients } from '../src/lib/mail-merge'
 import { MailMergeNotSubmittedError, MailMergeRunner } from './mail/mail-merge-runner'
@@ -767,7 +768,8 @@ async function runOperations() {
     const kind = String(row.kind) as MailActionKind
     const threadIds = JSON.parse(String(row.thread_ids_json)) as string[]
     const labelId = row.label_id ? String(row.label_id) : undefined
-    if (database.getAccount(accountId)?.provider === 'local') {
+    // Local Folders and local-only actions (pins) never reach a provider.
+    if (database.getAccount(accountId)?.provider === 'local' || isLocalOnlyMailAction(kind)) {
       database.updateOperation(id, 'succeeded')
       emit({ type: 'operation', payload: { id, accountId, kind, status: 'succeeded' } })
       continue

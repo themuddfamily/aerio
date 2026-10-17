@@ -831,4 +831,45 @@ describe('ConnectedMailView', () => {
     await waitFor(() => expect(api.mail.quickActions.save).toHaveBeenCalledWith({ name: 'Project done', accountId: 'account', steps: [{ action: 'label', labelId: 'project' }, { action: 'read' }], shortcut: 2, showInToolbar: true }))
     expect(await within(dialog).findByText('Apply label: Project → Mark as read')).toBeInTheDocument()
   })
+
+  it('pins and unpins from the context menu, bulk toolbar, reader, and palette, under a Pinned heading with undo', async () => {
+    const user = userEvent.setup()
+    pageResult = { items: [summary({ pinned: true, pinnedAt: '2026-08-09T00:00:00Z' }), summary({ id: 'thread-2', subject: 'Second conversation', participants: ['Grace'], lastDate: '2026-08-07T10:00:00Z', unread: false, starred: false, labelIds: ['INBOX'], messageCount: 1 })], total: 2 }
+    api.mail.mail.action.mockImplementation(async (input: any) => ({ id: `operation-${input.action}`, accountId: input.accountId, kind: input.action, status: input.action === 'pin' || input.action === 'unpin' ? 'succeeded' : 'queued', createdAt: '', updatedAt: '', undoUntil: new Date(Date.now() + 60_000).toISOString() }))
+    const onToast = vi.fn()
+    const view = (request = { id: 0, action: 'pin' as 'pin' | 'unpin' }) => <ContextMenuProvider><ConnectedMailView onToast={onToast} pinRequest={request} /></ContextMenuProvider>
+    const { rerender } = render(view({ id: 3, action: 'pin' }))
+    await screen.findByText('Launch & plans')
+    // A request issued before mounting is not replayed.
+    expect(api.mail.mail.action).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'pin' }))
+    const headings = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent?.trim())
+    expect(headings.slice(0, 2)).toEqual(['Pinned', formatMailDateHeading('2026-08-07T10:00:00Z')])
+    const first = document.querySelector('.message-row')!
+    expect(first).toHaveClass('pinned')
+
+    fireEvent.contextMenu(first)
+    await user.click(await screen.findByRole('menuitemcheckbox', { name: 'Unpin conversation' }))
+    expect(api.mail.mail.action).toHaveBeenCalledWith({ accountId: 'account', threadIds: ['thread-1'], action: 'unpin' })
+    // Pins succeed immediately; the success event must not withdraw the undo offer.
+    act(() => emitMail?.({ type: 'operation', payload: { id: 'operation-unpin', accountId: 'account', kind: 'unpin', status: 'succeeded' } }))
+    expect(screen.getByText('Unpinned')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(api.mail.mail.undo).toHaveBeenCalledWith('operation-unpin')
+
+    fireEvent.contextMenu(screen.getByText('Second conversation').closest('.message-row')!)
+    await user.click(await screen.findByRole('menuitemcheckbox', { name: 'Pin to top' }))
+    expect(api.mail.mail.action).toHaveBeenCalledWith({ accountId: 'account', threadIds: ['thread-2'], action: 'pin' })
+    expect(await screen.findByText('Pinned to the top of the list')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Select visible conversations' }))
+    await user.click(within(document.querySelector('.bulk-mail-toolbar')!).getByRole('button', { name: 'Pin' }))
+    expect(api.mail.mail.action).toHaveBeenCalledWith({ accountId: 'account', threadIds: ['thread-1', 'thread-2'], action: 'pin' })
+    await waitFor(() => expect(document.querySelector('.bulk-mail-toolbar')).toBeNull())
+
+    await user.click(await screen.findByTitle('Unpin conversation'))
+    expect(api.mail.mail.action).toHaveBeenLastCalledWith({ accountId: 'account', threadIds: ['thread-1'], action: 'unpin' })
+    api.mail.mail.action.mockClear()
+    rerender(view({ id: 4, action: 'pin' }))
+    await waitFor(() => expect(api.mail.mail.action).toHaveBeenCalledWith({ accountId: 'account', threadIds: ['thread-1'], action: 'pin' }))
+  })
 })

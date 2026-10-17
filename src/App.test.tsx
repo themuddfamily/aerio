@@ -15,7 +15,7 @@ vi.mock('./components/SettingsModal', () => ({ default: (props: any) => <div rol
   finally { props.onLocalDataRestoreEnd?.() }
 }}>Restore fixture</button><button onClick={props.onClose}>Close settings</button></div> }))
 vi.mock('./components/ProfileModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Profile mock"><span>{props.profile.displayName}</span><button onClick={() => props.onSave({ displayName: 'Saved Person', email: 'saved@example.test' })}>Save profile</button><button onClick={props.onClose}>Close profile</button></div> }))
-vi.mock('./views/ConnectedMailView', () => ({ default: (props: any) => <section aria-label="Mail mock"><span>Compose {props.composeRequest.id}:{props.composeRequest.initialTo ?? ''}</span><span>Quick {props.quickActionRequest?.id}:{props.quickActionRequest?.quickActionId}</span><button onClick={() => props.onToast('Mail says hello')}>Mail toast</button></section> }))
+vi.mock('./views/ConnectedMailView', () => ({ default: (props: any) => <section aria-label="Mail mock"><span>Compose {props.composeRequest.id}:{props.composeRequest.initialTo ?? ''}</span><span>Quick {props.quickActionRequest?.id}:{props.quickActionRequest?.quickActionId}</span><span>Pin {props.pinRequest?.id}:{props.pinRequest?.action}</span><button onClick={() => props.onToast('Mail says hello')}>Mail toast</button></section> }))
 vi.mock('./views/CalendarView', () => ({ default: (props: any) => <section aria-label="Calendar mock"><span>Calendar query:{props.query}</span><span>{props.sourceMessage}</span><span>Writable:{[...props.writableCalendarIds].join(',')}</span><button onClick={() => void props.onSync()}>Sync calendar</button><button onClick={() => void props.onEnableEditing()}>Enable editing</button><button onClick={() => void props.onSaveProviderEvent(providerEvent, false)}>Create provider event</button><button onClick={() => void props.onSaveProviderEvent(providerEvent, true)}>Update provider event</button><button onClick={() => void props.onDeleteProviderEvent(providerEvent)}>Delete provider event</button></section> }))
 vi.mock('./views/ContactsView', () => ({ default: (props: any) => <section aria-label="Contacts mock"><span>Contacts query:{props.query}</span><button onClick={() => props.onCompose('ada@example.test')}>Email Ada</button><button onClick={() => void props.onSync()}>Sync contacts</button><button onClick={() => void props.onEnableEditing()}>Enable contact editing</button><button onClick={() => void props.onSaveProviderContact(props.providerAccounts[0].id, productivity.contacts[0], false)}>Create provider contact</button><button onClick={() => void props.onSaveProviderContact(props.providerAccounts[0].id, productivity.contacts[0], true)}>Update provider contact</button><button onClick={() => void props.onDeleteProviderContact(productivity.contacts[0].id)}>Delete provider contact</button></section> }))
 vi.mock('./views/TasksView', () => ({ default: (props: any) => <section aria-label="Tasks mock"><button onClick={() => props.onChange({ ...props.state, tasks: [...props.state.tasks, { id: 'task-2', listId: 'inbox', title: 'Added task', priority: 'normal', completed: false, subtasks: [] }] })}>Change tasks</button><button onClick={() => props.onToast('Task toast')}>Task toast</button></section> }))
@@ -270,6 +270,23 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'Calendar' }))
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
     expect(screen.queryByRole('button', { name: /Run quick action/ })).not.toBeInTheDocument()
+  })
+
+  it('offers Pin and Unpin for the mail selection in the command palette', async () => {
+    const user = userEvent.setup()
+    renderApp(); await screen.findByRole('region', { name: 'Mail mock' })
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    await user.type(screen.getByPlaceholderText('Search Aerio…'), 'unpin')
+    await user.click(await screen.findByRole('button', { name: /Unpin selected conversations/ }))
+    expect(screen.getByRole('region', { name: 'Mail mock' })).toHaveTextContent('Pin 1:unpin')
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    await user.type(screen.getByPlaceholderText('Search Aerio…'), 'pin selected')
+    await user.click(await screen.findByRole('button', { name: /Pin selected conversations to the top/ }))
+    expect(screen.getByRole('region', { name: 'Mail mock' })).toHaveTextContent('Pin 2:pin')
+
+    await user.click(screen.getByRole('button', { name: 'Calendar' }))
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('button', { name: /selected conversations/ })).not.toBeInTheDocument()
   })
 
   it('synchronizes supported providers, exposes provider status, and writes calendar events', async () => {
