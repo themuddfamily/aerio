@@ -16,6 +16,7 @@ import type {
 } from '../../src/cloud-attachment-types'
 import { isCompleteMailAddress } from '../../src/lib/mail-address'
 import { cloudProviderName, shareScopeLabel } from '../../src/lib/cloud-attachments'
+import type { LinkedCloudStorageService } from './cloud-linked-storage'
 
 // Cloud attachments upload a file with the mail account's own OAuth grant and
 // insert a sharing link instead of the file. Tokens never leave the main
@@ -54,19 +55,23 @@ export class CloudPermissionError extends Error {
   }
 }
 
-class UploadSessionExpiredError extends Error {
+export class UploadSessionExpiredError extends Error {
   constructor() {
     super('The interrupted upload session has expired. Start the upload again.')
     this.name = 'UploadSessionExpiredError'
   }
 }
 
-interface StoredUpload extends CloudPendingUpload {
+export interface StoredUpload extends CloudPendingUpload {
   sessionUrl: string
   modifiedAt: number
+  /** Connected storage accounts: bytes the provider has acknowledged so far. */
+  confirmedBytes?: number
+  /** Connected storage accounts: where the finished file is written. */
+  remotePath?: string
 }
 
-interface StoredLink extends CloudSharedLink {
+export interface StoredLink extends CloudSharedLink {
   permissionIds: string[]
 }
 
@@ -115,6 +120,20 @@ export class CloudAttachmentStateStore {
     this.save()
   }
   links() { return this.state.links }
+  /** Drops interrupted uploads and link records that match, for example when a storage account is disconnected. */
+  removeWhere(upload: (value: StoredUpload) => boolean, link: (value: StoredLink) => boolean) {
+    const uploads = Object.fromEntries(Object.entries(this.state.uploads).filter(([, value]) => !upload(value)))
+    const links = this.state.links.filter((value) => !link(value))
+    if (Object.keys(uploads).length === Object.keys(this.state.uploads).length && links.length === this.state.links.length) return
+    this.state = { uploads, links }
+    this.save()
+  }
+  removeLink(url: string) {
+    const links = this.state.links.filter((value) => value.url !== url)
+    if (links.length === this.state.links.length) return
+    this.state.links = links
+    this.save()
+  }
   addLink(value: StoredLink) {
     this.state.links = [...this.state.links.filter((item) => item.url !== value.url), value].slice(-MAX_TRACKED_LINKS)
     this.save()
@@ -131,6 +150,8 @@ export interface CloudAttachmentDependencies {
   /** Only files the user picked in a dialog (or staged by Aerio) may be uploaded. */
   isApprovedPath(path: string): boolean
   state: CloudAttachmentStateStore
+  /** Connected Dropbox, ownCloud and Nextcloud accounts, usable from any mail account. */
+  linked?: LinkedCloudStorageService
   fetch?: typeof fetch
   now?(): number
   chunkBytes?: number
@@ -165,7 +186,7 @@ export function validateShareOptions(provider: CloudStorageProvider, value: Clou
   return { audience: 'recipients', role: value.role, recipients }
 }
 
-async function readChunk(path: string, start: number, end: number) {
+export async function readChunk(path: string, start: number, end: number) {
   const handle = await open(path, 'r')
   try {
     const buffer = Buffer.alloc(end - start)
@@ -181,7 +202,7 @@ async function readChunk(path: string, start: number, end: number) {
   }
 }
 
-async function errorFrom(response: Response, fallback: string) {
+export async function errorFrom(response: Response, fallback: string) {
   const body = await response.json().catch(() => undefined) as { error?: { message?: string; code?: string | number; errors?: Array<{ reason?: string }>; status?: string } } | undefined
   const code = body?.error?.errors?.[0]?.reason ?? (typeof body?.error?.code === 'string' ? body.error.code : body?.error?.status)
   return new CloudProviderError(body?.error?.message || `${fallback} (${response.status})`, response.status, code)
@@ -192,7 +213,7 @@ function isScopeError(error: unknown) {
   return /insufficient|scope|ACCESS_TOKEN_SCOPE/i.test(`${error.code ?? ''} ${error.message}`)
 }
 
-function isAbort(error: unknown, signal?: AbortSignal) {
+export function isAbort(error: unknown, signal?: AbortSignal) {
   return Boolean(signal?.aborted) || (error instanceof Error && error.name === 'AbortError')
 }
 
@@ -233,7 +254,7 @@ export class CloudAttachmentService {
     const provider = cloudProviderFor(account.provider)
     const base = { accountId, mailProvider: account.provider, attachmentLimitBytes: attachmentLimitFor(account.provider) }
     if (!provider || (account.provider !== 'gmail' && account.provider !== 'microsoft')) {
-      return { ...base, supported: false, connected: false, audiences: [], message: 'Cloud links are available for Gmail (Google Drive) and Microsoft (OneDrive) accounts. Attach the file normally from this account.' }
+      return { ...base, supported: false, connected: false, audiences: [], message: 'This account has no storage of its own. Connect a Dropbox, ownCloud or Nextcloud account to share links from it, or attach the file normally.' }
     }
     const connected = this.connected(accountId, account.provider)
     return {
@@ -504,9 +525,14 @@ export class CloudAttachmentService {
     return controller
   }
 
-  async upload(uploadId: string, accountId: string, path: string, shareInput: CloudShareOptions, progress?: (value: CloudUploadProgress) => void): Promise<CloudUploadResult> {
+  async upload(uploadId: string, accountId: string, path: string, shareInput: CloudShareOptions, progress?: (value: CloudUploadProgress) => void, storageAccountId?: string): Promise<CloudUploadResult> {
     if (typeof uploadId !== 'string' || !/^[\w-]{8,64}$/.test(uploadId)) throw new Error('Invalid upload id')
     if (typeof path !== 'string' || !this.dependencies.isApprovedPath(path)) throw new Error('Choose the file to share again')
+    if (storageAccountId !== undefined && storageAccountId !== null) {
+      if (!this.dependencies.linked || typeof storageAccountId !== 'string') throw new Error('Choose a connected storage account')
+      await this.resolve(accountId)
+      return this.dependencies.linked.upload(uploadId, accountId, path, shareInput, storageAccountId, progress)
+    }
     const controller = this.begin(uploadId)
     try {
       const { provider } = await this.storageAccount(accountId)
@@ -531,6 +557,7 @@ export class CloudAttachmentService {
   }
 
   async cancel(uploadId: string) {
+    if (this.dependencies.linked?.isActive(uploadId) || this.dependencies.state.upload(uploadId)?.storageAccountId) return this.dependencies.linked?.cancel(uploadId)
     const controller = this.active.get(uploadId)
     if (controller) controller.abort()
     else await this.discard(uploadId)
@@ -538,13 +565,15 @@ export class CloudAttachmentService {
 
   async pending(accountId: string): Promise<CloudPendingUpload[]> {
     return this.dependencies.state.uploads()
-      .filter((item) => item.accountId === accountId && !this.active.has(item.uploadId))
-      .map(({ sessionUrl: _sessionUrl, modifiedAt: _modifiedAt, ...visible }) => visible)
+      .filter((item) => item.accountId === accountId && !this.active.has(item.uploadId) && !this.dependencies.linked?.isActive(item.uploadId))
+      // Session capabilities and any link password stay in the main process.
+      .map(({ sessionUrl: _sessionUrl, modifiedAt: _modifiedAt, confirmedBytes: _confirmed, remotePath: _remote, share: { password: _password, ...share }, ...visible }) => ({ ...visible, share }))
   }
 
   async discard(uploadId: string) {
     const record = this.dependencies.state.upload(uploadId)
     if (!record) return
+    if (record.storageAccountId) return this.dependencies.linked?.discard(uploadId) ?? this.dependencies.state.removeUpload(uploadId)
     this.active.get(uploadId)?.abort()
     await this.cancelSession(record)
     this.dependencies.state.removeUpload(uploadId)
@@ -554,6 +583,10 @@ export class CloudAttachmentService {
   async resume(uploadId: string, progress?: (value: CloudUploadProgress) => void): Promise<CloudUploadResult> {
     const record = this.dependencies.state.upload(uploadId)
     if (!record) throw new Error('This upload is no longer available. Start it again.')
+    if (record.storageAccountId) {
+      if (!this.dependencies.linked) throw new Error('This upload is no longer available. Start it again.')
+      return this.dependencies.linked.resume(uploadId, progress)
+    }
     const clear = async (message: string) => {
       await this.cancelSession(record)
       this.dependencies.state.removeUpload(uploadId)
@@ -583,7 +616,7 @@ export class CloudAttachmentService {
     const links = this.dependencies.state.links().filter((link) => link.accountId === accountId && wanted.has(link.url))
     const issues: CloudLinkIssue[] = []
     for (const link of links) {
-      const issue = await this.check(link).catch(() => undefined)
+      const issue = await (link.storageAccountId ? this.dependencies.linked?.check(link) : this.check(link))?.catch(() => undefined)
       if (issue) issues.push(issue)
     }
     return issues
@@ -633,7 +666,7 @@ export function registerCloudAttachments(ipc: Pick<IpcMain, 'handle'>, service: 
   }
   ipc.handle('mail:cloud:status', (_event, accountId: string) => service().status(accountId))
   ipc.handle('mail:cloud:connect', (_event, accountId: string) => service().connect(accountId))
-  ipc.handle('mail:cloud:upload', (event, uploadId: string, accountId: string, path: string, share: CloudShareOptions) => service().upload(uploadId, accountId, path, share, progress(event)))
+  ipc.handle('mail:cloud:upload', (event, uploadId: string, accountId: string, path: string, share: CloudShareOptions, storageAccountId?: string) => service().upload(uploadId, accountId, path, share, progress(event), storageAccountId))
   ipc.handle('mail:cloud:cancel', (_event, uploadId: string) => service().cancel(uploadId))
   ipc.handle('mail:cloud:pending', (_event, accountId: string) => service().pending(accountId))
   ipc.handle('mail:cloud:resume', (event, uploadId: string) => service().resume(uploadId, progress(event)))

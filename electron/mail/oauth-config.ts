@@ -6,6 +6,8 @@ export interface DesktopOAuthConfig {
 export interface BuiltInOAuthClients {
   googleConfig?: DesktopOAuthConfig
   microsoftClientId?: string
+  /** Dropbox apps that use PKCE are public clients; the app key is not a secret. */
+  dropboxAppKey?: string
 }
 
 // Google desktop application IDs are public identifiers embedded in native clients.
@@ -18,6 +20,7 @@ interface OAuthEnvironment {
   googleClientId?: string
   googleClientSecret?: string
   microsoftClientId?: string
+  dropboxAppKey?: string
 }
 
 function parseGoogleDesktopValues(clientIdValue: unknown, clientSecretValue: unknown): DesktopOAuthConfig {
@@ -37,6 +40,12 @@ export function parseMicrosoftClientId(value: unknown): string {
   return clientId
 }
 
+export function parseDropboxAppKey(value: unknown): string {
+  const appKey = String(value ?? '').trim()
+  if (!/^[a-z0-9]{8,32}$/i.test(appKey)) throw new Error('The Dropbox app key should be the 8–32 letters and digits shown in the Dropbox App Console')
+  return appKey
+}
+
 export function parseOAuthEnvironment(environment: OAuthEnvironment): BuiltInOAuthClients {
   const googleClientId = environment.googleClientId?.trim()
   const googleClientSecret = environment.googleClientSecret?.trim()
@@ -49,6 +58,9 @@ export function parseOAuthEnvironment(environment: OAuthEnvironment): BuiltInOAu
       : undefined,
     microsoftClientId: environment.microsoftClientId?.trim()
       ? parseMicrosoftClientId(environment.microsoftClientId)
+      : undefined,
+    dropboxAppKey: environment.dropboxAppKey?.trim()
+      ? parseDropboxAppKey(environment.dropboxAppKey)
       : undefined
   }
 }

@@ -252,7 +252,9 @@ const api: AerioDesktopApi = {
     cloudAttachments: {
       status: (accountId) => ipcRenderer.invoke('mail:cloud:status', accountId),
       connect: (accountId) => ipcRenderer.invoke('mail:cloud:connect', accountId),
-      upload: (uploadId, accountId, path, share) => ipcRenderer.invoke('mail:cloud:upload', uploadId, accountId, path, share),
+      upload: (uploadId, accountId, path, share, storageAccountId) => storageAccountId
+        ? ipcRenderer.invoke('mail:cloud:upload', uploadId, accountId, path, share, storageAccountId)
+        : ipcRenderer.invoke('mail:cloud:upload', uploadId, accountId, path, share),
       cancel: (uploadId) => ipcRenderer.invoke('mail:cloud:cancel', uploadId),
       pending: (accountId) => ipcRenderer.invoke('mail:cloud:pending', accountId),
       resume: (uploadId) => ipcRenderer.invoke('mail:cloud:resume', uploadId),
@@ -262,6 +264,16 @@ const api: AerioDesktopApi = {
         const listener = (_event: Electron.IpcRendererEvent, value: import('../src/cloud-attachment-types').CloudUploadProgress) => callback(value)
         ipcRenderer.on('mail:cloud:progress', listener)
         return () => ipcRenderer.removeListener('mail:cloud:progress', listener)
+      },
+      storage: {
+        snapshot: () => ipcRenderer.invoke('mail:cloud:storage:snapshot'),
+        configureDropbox: (appKey) => ipcRenderer.invoke('mail:cloud:storage:configure-dropbox', appKey),
+        connectDropbox: () => ipcRenderer.invoke('mail:cloud:storage:connect-dropbox'),
+        connectServer: (input) => ipcRenderer.invoke('mail:cloud:storage:connect-server', input),
+        refresh: (storageAccountId) => ipcRenderer.invoke('mail:cloud:storage:refresh', storageAccountId),
+        disconnect: (storageAccountId) => ipcRenderer.invoke('mail:cloud:storage:disconnect', storageAccountId),
+        links: (storageAccountId) => ipcRenderer.invoke('mail:cloud:storage:links', storageAccountId),
+        revoke: (url) => ipcRenderer.invoke('mail:cloud:storage:revoke', url)
       }
     },
     credentials: {

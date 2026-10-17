@@ -3,8 +3,18 @@ import {
   DEFAULT_GOOGLE_CLIENT_ID,
   DEFAULT_MICROSOFT_CLIENT_ID,
   parseDesktopOAuthConfig,
+  parseDropboxAppKey,
   parseOAuthEnvironment
 } from './oauth-config'
+
+describe('Dropbox app key', () => {
+  it('reads an optional app key from the build environment and validates it', () => {
+    expect(parseOAuthEnvironment({ dropboxAppKey: ' abcd1234efgh ' }).dropboxAppKey).toBe('abcd1234efgh')
+    expect(parseOAuthEnvironment({}).dropboxAppKey).toBeUndefined()
+    expect(() => parseOAuthEnvironment({ dropboxAppKey: 'not a key!' })).toThrow(/Dropbox app key/)
+    expect(parseDropboxAppKey('Ab12Cd34')).toBe('Ab12Cd34')
+  })
+})
 
 describe('parseDesktopOAuthConfig', () => {
   it('accepts Google Desktop app credentials', () => {
