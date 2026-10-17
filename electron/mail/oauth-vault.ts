@@ -45,6 +45,15 @@ const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'M
 // Permissions added after the first release. A legacy grant without a stored
 // scope list must never ask for these during a silent refresh.
 const MICROSOFT_INTERACTIVE_ONLY_SCOPES = new Set(['Tasks.ReadWrite', 'MailboxSettings.ReadWrite'])
+// Opt-in permissions (cloud attachments) are requested only when the user asks
+// for them, and requested again on later reconnects so a reconnect never drops them.
+const OPTIONAL_GOOGLE_SCOPES = ['https://www.googleapis.com/auth/drive.file']
+const OPTIONAL_MICROSOFT_SCOPES = ['Files.ReadWrite']
+
+export interface OAuthAuthorizeOptions {
+  /** Opt-in scopes added to this grant on top of the mail scopes. */
+  additionalScopes?: string[]
+}
 
 export class OAuthVault {
   private data: StoredOAuthData = { googleTokens: {}, googleCalendarWrite: {}, microsoftTokens: {}, imapAccounts: {} }
@@ -116,7 +125,13 @@ export class OAuthVault {
     return new OAuth2Client(config.clientId, config.clientSecret, redirectUri)
   }
 
-  async authorize(expected?: { accountId: string; email: string }) {
+  /** Scopes for an interactive grant: the base set, opt-ins already granted to this account, and new opt-ins. */
+  private interactiveScopes(base: string[], optional: string[], provider: 'gmail' | 'microsoft', accountId: string | undefined, additional: string[] = []) {
+    const granted = new Set(accountId ? this.grantedScopes(accountId, provider) ?? [] : [])
+    return Array.from(new Set([...base, ...optional.filter((scope) => granted.has(scope)), ...additional]))
+  }
+
+  async authorize(expected?: { accountId: string; email: string }, options: OAuthAuthorizeOptions = {}) {
     const oauth = this.oauth()
     const { codeVerifier, codeChallenge } = await oauth.generateCodeVerifierAsync()
     const state = randomBytes(32).toString('base64url')
@@ -176,7 +191,8 @@ export class OAuthVault {
     const authUrl = oauth.generateAuthUrl({
       access_type: 'offline',
       prompt: 'consent',
-      scope: SCOPES,
+      scope: this.interactiveScopes(SCOPES, OPTIONAL_GOOGLE_SCOPES, 'gmail', expected?.accountId, options.additionalScopes),
+      ...(options.additionalScopes?.length ? { include_granted_scopes: true } : {}),
       state,
       code_challenge: codeChallenge,
       code_challenge_method: CodeChallengeMethod.S256,
@@ -287,7 +303,7 @@ export class OAuthVault {
     return this.builtIn.microsoftClientId ?? this.data.microsoftConfig?.clientId
   }
 
-  async authorizeMicrosoft(expected?: { accountId: string; email: string }) {
+  async authorizeMicrosoft(expected?: { accountId: string; email: string }, options: OAuthAuthorizeOptions = {}) {
     const clientId = this.microsoftClientId()
     if (!clientId) throw new Error('Configure the Microsoft Entra application client ID first')
     const verifier = randomBytes(64).toString('base64url')
@@ -326,7 +342,7 @@ export class OAuthVault {
         resolve({ redirectUri: `http://localhost:${address.port}`, code, close: () => { clearTimeout(timeout); server.close() } })
       })
     })
-    const scopes = MICROSOFT_SCOPES
+    const scopes = this.interactiveScopes(MICROSOFT_SCOPES, OPTIONAL_MICROSOFT_SCOPES, 'microsoft', expected?.accountId, options.additionalScopes)
     const authorization = new URL('https://login.microsoftonline.com/common/oauth2/v2.0/authorize')
     authorization.search = new URLSearchParams({ client_id: clientId, response_type: 'code', redirect_uri: callback.redirectUri, response_mode: 'query', scope: scopes.join(' '), state, code_challenge: challenge, code_challenge_method: 'S256', prompt: 'select_account' }).toString()
     await shell.openExternal(authorization.toString())

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, safeStorage, shell, Tray } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
@@ -73,6 +73,8 @@ import { MailTemplateStore, parseMailTemplateBackup, type MailTemplateBackup } f
 import { registerMailTemplates } from './mail/template-tools'
 import { registerMailIdentities, validateDraftSender } from './mail/identity-ipc'
 import { AutomaticRepliesService, registerAutomaticReplies } from './mail/automatic-replies'
+import { CloudAttachmentService, CloudAttachmentStateStore, registerCloudAttachments } from './mail/cloud-attachments'
+import { assertSecureCredentialStorage } from './mail/secure-storage'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import { InterchangeStore } from './productivity/interchange-store'
@@ -1376,6 +1378,24 @@ function registerIpc() {
     grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider)
   })
   registerAutomaticReplies(ipcMain, () => automaticReplies)
+  const cloudAttachments = new CloudAttachmentService({
+    account: async (accountId) => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId),
+    googleToken: (accountId) => requireVault().accessToken(accountId),
+    microsoftToken: (accountId) => requireVault().microsoftAccessToken(accountId),
+    grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider),
+    authorize: async (account, scopes) => {
+      const expected = { accountId: account.id, email: account.email }
+      if (account.provider === 'gmail') await requireVault().authorize(expected, { additionalScopes: scopes })
+      else await requireVault().authorizeMicrosoft(expected, { additionalScopes: scopes })
+    },
+    isApprovedPath: (path) => approvedAttachmentPaths.has(path),
+    // Upload session URLs are short-lived capabilities; keep them encrypted at rest.
+    state: new CloudAttachmentStateStore(join(app.getPath('userData'), 'cloud-uploads.dat'), {
+      encode: (value) => { assertSecureCredentialStorage(safeStorage); return safeStorage.encryptString(value).toString('base64') },
+      decode: (value) => { assertSecureCredentialStorage(safeStorage); return safeStorage.decryptString(Buffer.from(value, 'base64')) }
+    })
+  })
+  registerCloudAttachments(ipcMain, () => cloudAttachments)
   ipcMain.handle('preferences:load', () => loadPreferences())
   ipcMain.handle('preferences:save', (_event, preferences: AppPreferences) => savePreferences(preferences))
   ipcMain.handle('app-lock:status', () => appLockStatus())

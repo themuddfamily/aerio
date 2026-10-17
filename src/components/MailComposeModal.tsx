@@ -1,4 +1,4 @@
-import { CalendarClock, Copy, Paperclip, Save, Send, Sparkles, Trash2, X } from 'lucide-react'
+import { CalendarClock, Cloud, Copy, Paperclip, Save, Send, Sparkles, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MailAccountSummary, MailDraftInput, MailDraftRecord, MailThreadDetail, MailRecipientSuggestion, MailSendOptions } from '../mail-types'
 import { formatFileSize } from '../lib/domain'
@@ -15,6 +15,7 @@ import { describeExpansion, expandRecipientLists, recipientListLabel, recipientL
 import { useRecipientLists } from './use-recipient-lists'
 import { MailAiComposeAssist } from './MailAiComposeAssist'
 import { aiFeatureAvailable, useAiAssistantStatus } from '../lib/use-ai-assistant'
+import { cloudAttachmentsAvailable, confirmCloudLinks, MailCloudAttachments } from './MailCloudAttachments'
 
 interface MailComposeModalProps {
   accounts: MailAccountSummary[]
@@ -125,6 +126,7 @@ ${signature}` : ''}${forwardedText}`
   const listSuggestions = recipientField ? suggestRecipientLists(fieldValue(recipientField).split(/[;,]/).at(-1) ?? '', recipientLists) : []
   const ai = useAiAssistantStatus()
   const [aiOpen, setAiOpen] = useState(false)
+  const [cloudOpen, setCloudOpen] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
   const editorHtmlRef = useRef(initialHtml)
   const firstRender = useRef(true)
@@ -377,6 +379,7 @@ ${signature}` : ''}${forwardedText}`
       onToast('Choose a reply deadline in the future')
       return
     }
+    if (!(await confirmCloudLinks(accountId, editorRef.current))) return
     setStatus('sending')
     try {
       const result = deliveryAt
@@ -463,9 +466,11 @@ ${signature}` : ''}${forwardedText}`
             { label: 'Copy filename', icon: Copy, action: () => copyText(file.name) },
             { label: 'Remove attachment', icon: Trash2, separatorBefore: true, danger: true, action: () => setAttachments((items) => items.filter((_, itemIndex) => index !== itemIndex)) }
           ], file.name)}><Paperclip size={14} /><strong>{file.name}</strong>{file.size > 0 && <small>{formatFileSize(file.size)}</small>}<button aria-label={`Remove ${file.name}`} onClick={() => setAttachments((items) => items.filter((_, itemIndex) => index !== itemIndex))}><X size={13} /></button></span>)}</div>}
+          <MailCloudAttachments open={cloudOpen} accountId={accountId} provider={currentAccount?.provider} attachments={attachments} recipients={[...input.to, ...input.cc, ...input.bcc]} editorRef={editorRef} onOpenChange={setCloudOpen} onEditorChange={updateEditor} onRemoveAttachment={(path) => setAttachments((items) => items.filter((item) => item.path !== path))} onToast={onToast} />
         </div>
         <footer className="compose-footer">
           <button className="icon-button" title="Attach files" onClick={() => void chooseAttachments()}><Paperclip size={18} /></button>
+          {cloudAttachmentsAvailable(currentAccount?.provider) && <button className={`icon-button ${cloudOpen ? 'active' : ''}`} title="Share a file as a cloud link" aria-pressed={cloudOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setCloudOpen((value) => !value)}><Cloud size={18} /></button>}
           <button className="button ghost small" disabled={status === 'saving' || status === 'sending'} onClick={() => void saveNow(input, true)}><Save size={15} /> Save draft</button>
           {conflict && <button className="button ghost small" disabled={status === 'saving' || status === 'sending'} onClick={() => void saveAsCopy()}><Copy size={15} /> Save as copy</button>}
           <button className="button ghost small danger-subtle" disabled={status === 'sending'} onClick={() => void discard()}><Trash2 size={15} /> Discard</button>

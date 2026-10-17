@@ -150,6 +150,21 @@ const api: AerioDesktopApi = {
       update: (accountId, settings) => ipcRenderer.invoke('mail:automatic-replies:update', accountId, settings),
       disable: (accountId) => ipcRenderer.invoke('mail:automatic-replies:disable', accountId)
     },
+    cloudAttachments: {
+      status: (accountId) => ipcRenderer.invoke('mail:cloud:status', accountId),
+      connect: (accountId) => ipcRenderer.invoke('mail:cloud:connect', accountId),
+      upload: (uploadId, accountId, path, share) => ipcRenderer.invoke('mail:cloud:upload', uploadId, accountId, path, share),
+      cancel: (uploadId) => ipcRenderer.invoke('mail:cloud:cancel', uploadId),
+      pending: (accountId) => ipcRenderer.invoke('mail:cloud:pending', accountId),
+      resume: (uploadId) => ipcRenderer.invoke('mail:cloud:resume', uploadId),
+      discard: (uploadId) => ipcRenderer.invoke('mail:cloud:discard', uploadId),
+      verify: (accountId, urls) => ipcRenderer.invoke('mail:cloud:verify', accountId, urls),
+      onProgress: (callback) => {
+        const listener = (_event: Electron.IpcRendererEvent, value: import('../src/cloud-attachment-types').CloudUploadProgress) => callback(value)
+        ipcRenderer.on('mail:cloud:progress', listener)
+        return () => ipcRenderer.removeListener('mail:cloud:progress', listener)
+      }
+    },
     credentials: {
       status: () => ipcRenderer.invoke('gmail:credentials:status'),
       import: () => ipcRenderer.invoke('gmail:credentials:import'),

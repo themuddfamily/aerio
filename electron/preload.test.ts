@@ -259,6 +259,31 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:disable', 'account-1')
   })
 
+  it('exposes cloud attachments with exact IPC channels and a removable progress listener', async () => {
+    const cloud = api().mail.cloudAttachments
+    const share = { audience: 'anyone', role: 'view' }
+    const calls: Array<[string, unknown[], () => Promise<unknown>]> = [
+      ['mail:cloud:status', ['account-1'], () => cloud.status('account-1')],
+      ['mail:cloud:connect', ['account-1'], () => cloud.connect('account-1')],
+      ['mail:cloud:upload', ['upload-1', 'account-1', 'C:\\file.pdf', share], () => cloud.upload('upload-1', 'account-1', 'C:\\file.pdf', share)],
+      ['mail:cloud:cancel', ['upload-1'], () => cloud.cancel('upload-1')],
+      ['mail:cloud:pending', ['account-1'], () => cloud.pending('account-1')],
+      ['mail:cloud:resume', ['upload-1'], () => cloud.resume('upload-1')],
+      ['mail:cloud:discard', ['upload-1'], () => cloud.discard('upload-1')],
+      ['mail:cloud:verify', ['account-1', ['https://x.test']], () => cloud.verify('account-1', ['https://x.test'])]
+    ]
+    for (const [channel, args, call] of calls) {
+      await call()
+      expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel, ...args)
+    }
+    const progress = vi.fn()
+    const stop = cloud.onProgress(progress)
+    mocks.listeners.get('mail:cloud:progress')?.[0]({}, { uploadId: 'upload-1', sentBytes: 1 })
+    expect(progress).toHaveBeenCalledWith({ uploadId: 'upload-1', sentBytes: 1 })
+    stop()
+    expect(mocks.ipcRenderer.removeListener).toHaveBeenCalledWith('mail:cloud:progress', expect.any(Function))
+  })
+
   it('reports initial and changing network connectivity', async () => {
     window.dispatchEvent(new Event('offline'))
     window.dispatchEvent(new Event('online'))

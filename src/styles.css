@@ -4494,6 +4494,25 @@ kbd {
 .csv-mapping-row > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .csv-mapping-row > small { color: var(--muted); }
 
+/* Cloud attachments (E20) */
+.compose-rich-body a[data-aerio-cloud-link] { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); text-decoration: none; font-weight: 600; }
+.cloud-attach-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 16px 8px; padding: 8px 12px; border: 1px solid color-mix(in srgb, #d79a36 45%, var(--line)); border-radius: 8px; background: color-mix(in srgb, #d79a36 10%, var(--surface)); font-size: 12px; }
+.cloud-attach-notice .text-button, .cloud-attach-pending .text-button { display: inline-flex; align-items: center; gap: 4px; }
+.cloud-attach-panel { display: grid; gap: 8px; margin: 0 16px 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 13px; }
+.cloud-attach-panel header { display: flex; justify-content: space-between; align-items: center; }
+.cloud-attach-panel header strong { display: inline-flex; gap: 6px; align-items: center; }
+.cloud-attach-panel p { margin: 0; }
+.cloud-attach-panel .muted { color: var(--muted); font-size: 12px; }
+.cloud-attach-consent { display: grid; gap: 6px; justify-items: start; }
+.cloud-attach-pending { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.cloud-attach-pending li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cloud-attach-file, .cloud-attach-actions, .cloud-attach-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cloud-attach-scope { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.cloud-attach-scope legend { padding: 0 4px; color: var(--muted); font-size: 12px; }
+.cloud-attach-scope label { display: inline-flex; align-items: center; gap: 5px; }
+.cloud-attach-summary { color: var(--muted); }
+.cloud-attach-progress progress { flex: 1; min-width: 120px; }
+.cloud-attach-error { color: var(--danger); }
 /* Recurrence and time zones (E24) */
 .recurrence-field { display: flex; flex-direction: column; gap: 8px; }
 .recurrence-custom { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
