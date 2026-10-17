@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Bell, DatabaseBackup, Download, LockKeyhole, Monitor, Palette, RefreshCw, Stethoscope, Upload } from 'lucide-react'
+import { Bell, DatabaseBackup, Download, LockKeyhole, MailCheck, Monitor, Palette, RefreshCw, Stethoscope, Upload } from 'lucide-react'
 import type { AppLockStatus, AppPreferences, AppUpdateStatus, DensityPreference, ModuleId, ThemePreference } from '../types'
-import type { MailDiagnosticHealth } from '../mail-types'
+import type { MailDiagnosticHealth, MailReadReceiptPolicy } from '../mail-types'
+import { normalizeReadReceiptPolicy } from '../lib/mail-send-options'
 import type { LocalModuleSnapshot } from '../productivity-types'
 import Modal from './Modal'
+
+const readReceiptChoices: [MailReadReceiptPolicy, string][] = [['never', 'Never send'], ['ask', 'Ask me'], ['always', 'Always send']]
 
 interface SettingsModalProps {
   preferences: AppPreferences
@@ -53,6 +56,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
     return () => { active = false; unsubscribe() }
   }, [])
 
+  const readReceiptPolicy = normalizeReadReceiptPolicy(preferences.settings.readReceiptPolicy)
   const setSettings = (updates: Partial<AppPreferences['settings']>) => {
     onChange({ ...preferences, settings: { ...preferences.settings, ...updates } })
   }
@@ -302,6 +306,21 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
               <span><strong>Desktop notifications</strong><small>Use native desktop notifications for new mail, including while Aerio is open.</small></span>
               <input type="checkbox" checked={preferences.settings.notifications} onChange={(event) => setSettings({ notifications: event.target.checked })} />
             </label>
+          </div>
+        </section>
+        <section className="settings-section">
+          <div className="settings-icon"><MailCheck size={18} /></div>
+          <div className="settings-content">
+            <h3>Read receipts</h3>
+            <p>Choose what happens when a sender asks to know that you opened their message.</p>
+            <div className="segmented wide" role="group" aria-label="Read receipt requests">
+              {readReceiptChoices.map(([policy, label]) => (
+                <button key={policy} className={readReceiptPolicy === policy ? 'active' : ''} aria-pressed={readReceiptPolicy === policy} onClick={() => setSettings({ readReceiptPolicy: policy })}>{label}</button>
+              ))}
+            </div>
+            <small>{readReceiptPolicy === 'always'
+              ? 'Receipts are sent when you open a message, except for junk, automated mail, or receipts addressed somewhere other than the sender — those still ask first.'
+              : readReceiptPolicy === 'never' ? 'Requests are ignored and no receipt is ever sent.' : 'Aerio asks each time and sends nothing unless you choose Send receipt.'}</small>
           </div>
         </section>
       </div>

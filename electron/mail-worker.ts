@@ -1,6 +1,6 @@
 import { parentPort } from 'node:worker_threads'
 import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statfsSync, writeFileSync } from 'node:fs'
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statfsSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { join, sep } from 'node:path'
 import PostalMime, { type Address, type Attachment as ParsedAttachment } from 'postal-mime'
@@ -33,6 +33,8 @@ import { buildNewMailNotification } from './mail/new-mail'
 import { parseMessageSource } from './mail/message-source'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createMime, createMimeBuffer } from './mail/mime-builder'
+import { createReceiptService } from './mail/receipts'
+import { supportedSendOptions } from '../src/lib/mail-send-options'
 import {
   BACKGROUND_MAIL_POLL_INTERVAL_MS,
   clampMailPollingInterval,
@@ -757,8 +759,36 @@ function draftInputFromRow(row: Record<string, string | number | bigint | null>)
     subject: String(row.subject),
     text: String(row.body_text),
     html: row.body_html ? String(row.body_html) : undefined,
-    attachmentPaths: JSON.parse(String(row.attachment_paths_json))
+    attachmentPaths: JSON.parse(String(row.attachment_paths_json)),
+    ...(row.send_options_json ? { sendOptions: JSON.parse(String(row.send_options_json)) } : {})
   }
+}
+
+function readRawPrefix(path: string, maxBytes: number) {
+  const descriptor = openSync(path, 'r')
+  try {
+    const buffer = Buffer.alloc(maxBytes)
+    return buffer.subarray(0, readSync(descriptor, buffer, 0, maxBytes, 0))
+  } finally {
+    closeSync(descriptor)
+  }
+}
+
+let receipts: ReturnType<typeof createReceiptService> | undefined
+function receiptService() {
+  if (!database) throw new Error('Database is not initialized')
+  receipts ??= createReceiptService({
+    database,
+    readRaw: readRawPrefix,
+    online: () => online,
+    async sendRaw(account, raw, recipients) {
+      if (account.archived) throw new Error('Connect this account before sending read receipts')
+      if (account.provider === 'gmail') await clientFor(account.id).sendMessage(raw.toString('base64url'))
+      else if (account.provider === 'microsoft') await microsoftClientFor(account.id).send(raw)
+      else await (await imapClientFor(account.id)).send(raw, recipients)
+    }
+  })
+  return receipts
 }
 
 async function assertRemoteDraftUnchanged(accountId: string, provider: MailAccountSummary['provider'], remoteId?: string, expectedRevision?: string) {
@@ -800,7 +830,7 @@ async function saveDraft(input: MailDraftInput) {
       remoteRevision = remote.message?.id
     } else if (provider === 'microsoft') {
       if (row?.gmail_draft_id) await assertRemoteDraftUnchanged(input.accountId, provider, String(row.gmail_draft_id), row.remote_revision ? String(row.remote_revision) : undefined)
-      const remote = await microsoftClientFor(input.accountId).saveDraft(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined)
+      const remote = await microsoftClientFor(input.accountId).saveDraft(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined, input.sendOptions)
       remoteId = remote.id
       remoteRevision = remote.revision
     } else {
@@ -827,16 +857,18 @@ async function deliverDraft(input: MailDraftInput) {
     const provider = database.getAccount(input.accountId)?.provider ?? 'gmail'
     const account = database.getAccount(input.accountId)
     const from = account ? `${account.displayName} <${account.email}>` : undefined
+    // The stored draft keeps the user's choice; only what the provider can honor is sent.
+    input = { ...input, sendOptions: supportedSendOptions(input.sendOptions, provider) }
     if (row?.gmail_draft_id) await assertRemoteDraftUnchanged(input.accountId, provider, String(row.gmail_draft_id), row.remote_revision ? String(row.remote_revision) : undefined)
     if (provider === 'gmail') {
       const raw = createMime({ ...input, id: result.id }, from)
       if (row?.gmail_draft_id) await clientFor(input.accountId).sendDraft(String(row.gmail_draft_id), raw)
       else await clientFor(input.accountId).sendMessage(raw, input.threadId)
     } else if (provider === 'microsoft') {
-      await microsoftClientFor(input.accountId).send(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined)
+      await microsoftClientFor(input.accountId).send(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined, input.sendOptions)
     } else {
       const client = await imapClientFor(input.accountId)
-      await client.send(createMimeBuffer({ ...input, id: result.id }, from, true), [...input.to, ...input.cc, ...input.bcc])
+      await client.send(createMimeBuffer({ ...input, id: result.id }, from, true), [...input.to, ...input.cc, ...input.bcc], input.sendOptions)
       if (row?.gmail_draft_id) await client.deleteDraft(String(row.gmail_draft_id))
     }
     result = { ...result, status: 'sent', updatedAt: new Date().toISOString() }
@@ -1051,6 +1083,12 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     if (!paused.has(accountId)) void syncAccount(accountId)
     emit({ type: 'mail-changed', payload: { accountId } })
     return
+  }
+  if (command.type === 'receipts:inspect') {
+    return receiptService().inspect(command.payload.accountId, command.payload.messageId, command.payload.policy)
+  }
+  if (command.type === 'receipts:respond') {
+    return receiptService().respond(command.payload.accountId, command.payload.messageId, command.payload.decision, command.payload.policy)
   }
   if (command.type === 'mail:source') {
     const rawPath = database.getMessageRaw(command.payload.accountId, command.payload.messageId)

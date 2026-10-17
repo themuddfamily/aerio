@@ -151,6 +151,10 @@ const api: AerioDesktopApi = {
       delete: (id) => ipcRenderer.invoke('mail:rules:delete', id),
       run: (id) => ipcRenderer.invoke('mail:rules:run', id)
     },
+    receipts: {
+      inspect: (accountId, messageId) => ipcRenderer.invoke('mail:receipts:inspect', accountId, messageId),
+      respond: (accountId, messageId, decision) => ipcRenderer.invoke('mail:receipts:respond', accountId, messageId, decision)
+    },
     sync: {
       start: (accountId) => ipcRenderer.invoke('mail:sync:start', accountId),
       pause: (accountId) => ipcRenderer.invoke('mail:sync:pause', accountId),

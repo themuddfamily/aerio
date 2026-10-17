@@ -1,9 +1,24 @@
 import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import sanitizeHtml from 'sanitize-html'
-import type { MailDraftInput } from '../../src/mail-types'
+import type { MailDraftInput, MailSendOptions } from '../../src/mail-types'
+import { normalizeSendOptions } from '../../src/lib/mail-send-options'
 
 const encodeHeader = (value: string) => value.replaceAll(/[\r\n]+/g, ' ').trim()
+
+// Importance uses both the RFC 2156 header and the widely read X-Priority.
+// Receipt headers are requests addressed back to the sender, never promises.
+export function sendOptionHeaders(value: MailSendOptions | undefined, from?: string) {
+  const options = normalizeSendOptions(value)
+  if (!options) return []
+  const headers: string[] = []
+  if (options.importance === 'high') headers.push('Importance: High', 'X-Priority: 1 (Highest)')
+  if (options.importance === 'low') headers.push('Importance: Low', 'X-Priority: 5 (Lowest)')
+  if (from && options.requestReadReceipt) headers.push(`Disposition-Notification-To: ${encodeHeader(from)}`)
+  if (from && options.requestDeliveryReceipt) headers.push(`Return-Receipt-To: ${encodeHeader(from)}`)
+  return headers
+}
+
 const attachmentName = (path: string) => basename(path).replace(/^\d+(?:-[a-f0-9]{10})?-/, '')
 
 export function createMimeBuffer(input: MailDraftInput, from?: string, omitBcc = false) {
@@ -17,6 +32,7 @@ export function createMimeBuffer(input: MailDraftInput, from?: string, omitBcc =
     ...(input.cc.length ? [`Cc: ${input.cc.map(encodeHeader).join(', ')}`] : []),
     ...(!omitBcc && input.bcc.length ? [`Bcc: ${input.bcc.map(encodeHeader).join(', ')}`] : []),
     `Subject: ${encodeHeader(input.subject)}`,
+    ...sendOptionHeaders(input.sendOptions, from),
     'MIME-Version: 1.0',
     ...(input.inReplyTo ? [`In-Reply-To: ${encodeHeader(input.inReplyTo)}`] : []),
     ...(input.references?.length ? [`References: ${input.references.map(encodeHeader).join(' ')}`] : []),

@@ -24,6 +24,7 @@ import type {
   MailRuleRunResult,
   MailSnooze,
   MailMessageSource,
+  MailReceiptInfo,
   MailThreadDetail,
   ImapAccountInput,
   ImapServerSettings,
@@ -40,6 +41,7 @@ import type {
   SyncProgress
 } from '../src/mail-types'
 import { OAuthVault } from './mail/oauth-vault'
+import { normalizeReadReceiptPolicy, normalizeSendOptions } from '../src/lib/mail-send-options'
 import { DEFAULT_GOOGLE_CLIENT_ID, DEFAULT_MICROSOFT_CLIENT_ID, parseOAuthEnvironment } from './mail/oauth-config'
 import { ImapSmtpClient } from './mail/imap-client'
 import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
@@ -141,6 +143,7 @@ function preferencesFromUnknown(value: unknown): AppPreferences | undefined {
       launchAtLogin: typeof candidate.launchAtLogin === 'boolean' ? candidate.launchAtLogin : defaultSettings.launchAtLogin,
       notifications: candidate.notifications,
       startModule: candidate.startModule as ModuleId,
+      readReceiptPolicy: normalizeReadReceiptPolicy(candidate.readReceiptPolicy),
       ...(profile && !isUntouchedSampleProfile ? { profile: {
         displayName: profile.displayName,
         ...(typeof profile.email === 'string' ? { email: profile.email } : {}),
@@ -219,6 +222,7 @@ function validateDraft(input: MailDraftInput, forSend = false) {
   if (typeof input.subject !== 'string' || input.subject.length > 998) throw new Error('The subject is too long')
   if (typeof input.text !== 'string' || (input.html !== undefined && typeof input.html !== 'string') || input.text.length > 20_000_000 || (input.html?.length ?? 0) > 20_000_000) throw new Error('The message body is too large')
   if (input.attachmentPaths.length > 50) throw new Error('A message cannot contain more than 50 attachments')
+  input.sendOptions = normalizeSendOptions(input.sendOptions)
   if (input.attachmentPaths.some((path) => typeof path !== 'string' || !approvedAttachmentPaths.has(path))) {
     throw new Error('A draft referenced a file that was not selected through Aerio')
   }
@@ -1586,6 +1590,15 @@ function registerIpc() {
   })
   ipcMain.handle('mail:message:source', (_event, accountId: string, messageId: string) =>
     requireMailWorker().request<MailMessageSource>({ type: 'mail:source', payload: { accountId, messageId } }))
+  // The receipt policy is read here, never trusted from the renderer.
+  ipcMain.handle('mail:receipts:inspect', (_event, accountId: string, messageId: string) => {
+    if (typeof accountId !== 'string' || !accountId || accountId.length > 200 || typeof messageId !== 'string' || !messageId || messageId.length > 500) throw new Error('Choose a valid message')
+    return requireMailWorker().request<MailReceiptInfo>({ type: 'receipts:inspect', payload: { accountId, messageId, policy: normalizeReadReceiptPolicy(loadPreferences().settings.readReceiptPolicy) } })
+  })
+  ipcMain.handle('mail:receipts:respond', (_event, accountId: string, messageId: string, decision: 'send' | 'decline') => {
+    if (typeof accountId !== 'string' || !accountId || accountId.length > 200 || typeof messageId !== 'string' || !messageId || messageId.length > 500 || (decision !== 'send' && decision !== 'decline')) throw new Error('Choose a valid read receipt response')
+    return requireMailWorker().request<MailReceiptInfo>({ type: 'receipts:respond', payload: { accountId, messageId, decision, policy: normalizeReadReceiptPolicy(loadPreferences().settings.readReceiptPolicy) } })
+  })
   ipcMain.handle('mail:actions:apply', (_event, input: ApplyMailActionInput) =>
     requireMailWorker().request<PendingOperation>({ type: 'mail:action', payload: input }))
   ipcMain.handle('mail:actions:undo', (_event, operationId: string) =>

@@ -951,4 +951,30 @@ describe('MailDatabase', () => {
     expect(database.diagnosticHealth()).toMatchObject({ integrity: 'ok', integrityMessage: 'ok', missingRawFiles: 0, orphanedMessages: 0, orphanedAttachments: 0 })
     database.close()
   })
+
+  it('keeps importance and receipt requests with drafts across saves and reopen', () => {
+    const { database, path, directory } = setup()
+    const input = { accountId: 'account-1', to: ['reader@example.com'], cc: [], bcc: [], subject: 'Draft', text: 'Body', attachmentPaths: [] }
+    const created = database.saveDraft({ ...input, sendOptions: { importance: 'high', requestReadReceipt: true, requestDeliveryReceipt: false } })
+    expect(database.getDraftRecord(created.id)?.sendOptions).toEqual({ importance: 'high', requestReadReceipt: true })
+    database.saveDraft({ ...input, id: created.id, sendOptions: { importance: 'normal', bogus: true } as never })
+    expect(database.getDraftRecord(created.id)?.sendOptions).toBeUndefined()
+    database.saveDraft({ ...input, id: created.id, sendOptions: { importance: 'low' } })
+    database.close()
+    const reopened = new MailDatabase(path, join(directory, 'mail'))
+    expect(reopened.listDrafts()[0].sendOptions).toEqual({ importance: 'low' })
+    reopened.close()
+  })
+
+  it('records one read-receipt answer per message and correlates receipts to sent mail', () => {
+    const { database } = setup()
+    database.upsertMessage(message({ id: 'sent-1', threadId: 'thread-1', labelIds: ['SENT'], subject: 'Quarterly plan', messageIdHeader: '<Plan-1@aerio.local>' }))
+    expect(database.messageByHeaderId('account-1', 'plan-1@aerio.local')).toMatchObject({ id: 'sent-1', subject: 'Quarterly plan' })
+    expect(database.messageByHeaderId('account-1', '<missing@aerio.local>')).toBeUndefined()
+    expect(database.receiptMessageContext('account-1', 'sent-1')).toMatchObject({ subject: 'Quarterly plan', labelIds: ['SENT'], rawPath: 'message-1.eml' })
+    expect(database.getReceiptResponse('account-1', 'message-1')).toBeUndefined()
+    database.recordReceiptResponse('account-1', 'message-1', { notifyTo: 'ada@example.com', status: 'failed', automatic: true, error: 'offline' })
+    expect(database.recordReceiptResponse('account-1', 'message-1', { notifyTo: 'ada@example.com', status: 'sent', automatic: false })).toMatchObject({ status: 'sent', automatic: false, error: undefined })
+    database.close()
+  })
 })

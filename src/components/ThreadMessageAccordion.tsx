@@ -2,6 +2,7 @@ import { ChevronDown, MoreVertical, Reply, TriangleAlert } from 'lucide-react'
 import type { CSSProperties, MouseEvent, ReactNode } from 'react'
 import type { MailMessageDetail } from '../mail-types'
 import { formatMailArrival, formatMailArrivalTooltip } from '../lib/mail-date'
+import MailReceiptNotice from './MailReceiptNotice'
 import MessageHtml from './MessageHtml'
 import SenderAvatar from './SenderAvatar'
 
@@ -62,6 +63,7 @@ export default function ThreadMessageAccordion({
             <TriangleAlert size={15} aria-hidden="true" />
             <p><button type="button" onClick={onLoadRemoteImages}>Load remote images</button><span>. To preserve your privacy, external images have been blocked.</span></p>
           </div>}
+          {expanded && <MailReceiptNotice accountId={message.accountId} messageId={message.id} />}
           {message.sanitizedHtml && message.local?.format !== 'plain'
             ? <MessageHtml className="message-body mail-html" html={message.sanitizedHtml} />
             : <div className="message-body mail-text">{message.text}</div>}
