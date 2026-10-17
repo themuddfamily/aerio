@@ -25,21 +25,6 @@ export interface SlotSuggestion {
 
 export const DEFAULT_WORKING_HOURS = (timeZone: string): WorkingHours => ({ days: [1, 2, 3, 4, 5], start: '09:00', end: '17:00', timeZone })
 
-export function systemTimeZone() {
-  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { return 'UTC' }
-}
-
-const FALLBACK_ZONES = [
-  'UTC', 'America/Los_Angeles', 'America/Denver', 'America/Chicago', 'America/New_York', 'America/Sao_Paulo',
-  'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Helsinki', 'Africa/Johannesburg', 'Asia/Dubai',
-  'Asia/Kolkata', 'Asia/Singapore', 'Asia/Shanghai', 'Asia/Tokyo', 'Australia/Sydney', 'Pacific/Auckland'
-]
-
-export function selectableTimeZones(): string[] {
-  const supported = (Intl as unknown as { supportedValuesOf?(key: string): string[] }).supportedValuesOf
-  try { return supported ? supported('timeZone') : FALLBACK_ZONES } catch { return FALLBACK_ZONES }
-}
-
 /** Splits the editor's attendee text ("a@x.com, Name <b@y.com>; c@z.com"). */
 export function parseAttendeeText(text: string) {
   return text.split(/[,;\n]/).map((value) => value.trim()).filter(Boolean)
@@ -165,30 +150,24 @@ export function formatZoneDay(ms: number, timeZone: string) {
   return new Intl.DateTimeFormat('en-GB', { timeZone, weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(ms))
 }
 
-/** Short zone label such as "GMT+2" for headers. */
-export function zoneLabel(ms: number, timeZone: string) {
-  try {
-    return new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'short' }).formatToParts(new Date(ms)).find((part) => part.type === 'timeZoneName')?.value ?? timeZone
-  } catch {
-    return timeZone
-  }
+const pad2 = (value: number) => value.toString().padStart(2, '0')
+
+/** Converts an editor `datetime-local` value, read as wall time in `timeZone`, to UTC ms. */
+export function wallInputToMs(value: string, timeZone: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value)
+  if (!match) return Number.NaN
+  return wallTimeToUtc({ year: Number(match[1]), month: Number(match[2]), day: Number(match[3]), hour: Number(match[4]), minute: Number(match[5]), second: 0 }, timeZone)
 }
 
-/** Converts an editor `datetime-local` value (system local time) to UTC ms. */
-export const localInputMs = (value: string) => {
-  const parsed = new Date(value).getTime()
-  return Number.isFinite(parsed) ? parsed : NaN
-}
-
-/** Formats UTC ms back into a `datetime-local` value in system local time. */
-export function msToLocalInput(ms: number) {
-  const date = new Date(ms)
-  const pad = (value: number) => value.toString().padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+/** Formats UTC ms as a `datetime-local` value in `timeZone`. */
+export function msToWallInput(ms: number, timeZone: string) {
+  const wall = wallTimeInZone(ms, timeZone)
+  return `${wall.year}-${pad2(wall.month)}-${pad2(wall.day)}T${pad2(wall.hour)}:${pad2(wall.minute)}`
 }
 
 const WORKING_HOURS_KEY = 'aerio:scheduling-working-hours:v1'
-const SECONDARY_ZONE_KEY = 'aerio:scheduling-secondary-zone:v1'
+// Shared with the Calendar week/day views so both show the same second zone.
+const SECONDARY_ZONE_KEY = 'aerio.calendar.secondaryTimeZone'
 
 function validWorkingHours(value: unknown): value is WorkingHours {
   if (!value || typeof value !== 'object') return false

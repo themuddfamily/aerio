@@ -4494,6 +4494,46 @@ kbd {
 .csv-mapping-row > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .csv-mapping-row > small { color: var(--muted); }
 
+/* Cloud attachments (E20) */
+.compose-rich-body a[data-aerio-cloud-link] { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); text-decoration: none; font-weight: 600; }
+.cloud-attach-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 16px 8px; padding: 8px 12px; border: 1px solid color-mix(in srgb, #d79a36 45%, var(--line)); border-radius: 8px; background: color-mix(in srgb, #d79a36 10%, var(--surface)); font-size: 12px; }
+.cloud-attach-notice .text-button, .cloud-attach-pending .text-button { display: inline-flex; align-items: center; gap: 4px; }
+.cloud-attach-panel { display: grid; gap: 8px; margin: 0 16px 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 13px; }
+.cloud-attach-panel header { display: flex; justify-content: space-between; align-items: center; }
+.cloud-attach-panel header strong { display: inline-flex; gap: 6px; align-items: center; }
+.cloud-attach-panel p { margin: 0; }
+.cloud-attach-panel .muted { color: var(--muted); font-size: 12px; }
+.cloud-attach-consent { display: grid; gap: 6px; justify-items: start; }
+.cloud-attach-pending { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.cloud-attach-pending li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cloud-attach-file, .cloud-attach-actions, .cloud-attach-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cloud-attach-scope { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.cloud-attach-scope legend { padding: 0 4px; color: var(--muted); font-size: 12px; }
+.cloud-attach-scope label { display: inline-flex; align-items: center; gap: 5px; }
+.cloud-attach-summary { color: var(--muted); }
+.cloud-attach-progress progress { flex: 1; min-width: 120px; }
+.cloud-attach-error { color: var(--danger); }
+/* Recurrence and time zones (E24) */
+.recurrence-field { display: flex; flex-direction: column; gap: 8px; }
+.recurrence-custom { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.recurrence-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.recurrence-weekdays { display: flex; flex-wrap: wrap; gap: 6px; }
+.recurrence-weekdays button { min-width: 32px; height: 28px; border: 1px solid var(--line); border-radius: 8px; color: var(--text-soft); background: var(--surface); font-size: 10px; }
+.recurrence-weekdays button.active { color: white; border-color: var(--accent); background: var(--accent); }
+.recurrence-summary, .recurrence-note { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.recurrence-scope { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.recurrence-scope p { margin: 0; color: var(--text-soft); font-size: 11px; }
+.recurrence-scope-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.event-all-day { align-self: end; min-height: 34px; }
+.calendar-zone-group { display: flex; flex-direction: column; gap: 6px; }
+.calendar-zone-group select { width: 100%; }
+.calendar-event .repeat-icon { margin-right: 3px; vertical-align: -1px; color: var(--muted); }
+.time-zone-labels { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 2px; padding-right: 9px; color: var(--muted); font-size: 8px; }
+.time-row > time .secondary-time { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; opacity: 0.8; }
+.all-day-row { min-height: 0; }
+.all-day-row .time-slot { padding-block: 2px; }
+.time-event.all-day-event { min-height: 0; }
+
 /* Rich composition: fonts, colors, tables, inline images (E03) */
 .compose-formatting { flex-wrap: wrap; }
 .compose-format-select { max-width: 104px; height: 27px; margin-right: 2px; padding: 0 6px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--surface); font-size: 10.5px; }
@@ -4545,3 +4585,26 @@ kbd {
 .scheduling-hours-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
 .scheduling-proposed { font-size: 13px; color: var(--text-soft); }
 .scheduling-hours .checkbox-row { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; }
+/* Rich contacts and distribution lists */
+.contact-field-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0; }
+.contact-field-list legend { margin-bottom: 6px; color: var(--muted); font-size: 10px; font-weight: 600; }
+.contact-field-list > .button { align-self: flex-start; }
+.contact-field-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto auto; align-items: center; gap: 6px; }
+.contact-field-row input, .contact-field-row select {
+  min-height: 32px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 8px; outline: 0;
+  color: var(--text); background: var(--surface-2); font-size: 11px;
+}
+.contact-field-row .icon-button { width: 28px; height: 28px; }
+.contact-photo-picker { display: flex; align-items: center; gap: 10px; }
+.contact-photo-picker label.button { cursor: pointer; }
+.contact-photo-picker label.button.disabled { opacity: .5; pointer-events: none; }
+img.avatar.contact-photo { object-fit: cover; }
+.list-member-picker { display: flex; flex-direction: column; gap: 4px; max-height: 220px; padding: 6px 10px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }
+.list-member-picker small { color: var(--muted); }
+.inline-search input { flex: 1; min-width: 0; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 11px; }
+.panel-heading-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.list-preview { margin: 0 18px 8px; }
+.contact-row.external-member { cursor: default; opacity: .85; }
+.sidebar-label:has(.icon-button) { display: flex; align-items: center; }
+.sidebar-label .icon-button { width: 22px; height: 22px; margin-left: auto; }
+.recipient-list-suggestion .avatar { font-variant-numeric: tabular-nums; }

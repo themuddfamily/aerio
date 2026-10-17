@@ -4,7 +4,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AvailabilityRequest, AvailabilityResult } from '../scheduling-types'
-import { msToLocalInput } from '../lib/scheduling'
+import { msToWallInput } from '../lib/scheduling'
 import SchedulingAssistant, { SchedulingAssistantButton } from './SchedulingAssistant'
 
 const at = (iso: string) => Date.parse(iso)
@@ -26,8 +26,8 @@ const api = {
 const props = () => ({
   calendarId: 'g:cal',
   organizerEmail: 'me@company.com',
-  start: msToLocalInput(at('2026-10-20T09:00:00Z')),
-  end: msToLocalInput(at('2026-10-20T10:00:00Z')),
+  start: msToWallInput(at('2026-10-20T09:00:00Z'), 'UTC'),
+  end: msToWallInput(at('2026-10-20T10:00:00Z'), 'UTC'),
   attendees: 'ann@company.com, partner@other.org',
   api,
   timeZone: 'UTC',
@@ -76,8 +76,8 @@ describe('SchedulingAssistant', () => {
     await user.click(suggestion)
     await user.click(screen.getByRole('button', { name: /Use this time/ }))
     expect(input.onApply).toHaveBeenCalledWith({
-      start: msToLocalInput(at('2026-10-20T11:00:00Z')),
-      end: msToLocalInput(at('2026-10-20T12:00:00Z')),
+      start: msToWallInput(at('2026-10-20T11:00:00Z'), 'UTC'),
+      end: msToWallInput(at('2026-10-20T12:00:00Z'), 'UTC'),
       attendees: ['ann@company.com', 'partner@other.org']
     })
   })
@@ -128,7 +128,18 @@ describe('SchedulingAssistant', () => {
     await screen.findByTestId('availability-me@company.com')
     await user.selectOptions(screen.getByLabelText('Second time zone'), 'Asia/Tokyo')
     expect(screen.getAllByText('09:00').length).toBeGreaterThan(1)
-    expect(storage.get('aerio:scheduling-secondary-zone:v1')).toBe('Asia/Tokyo')
+    expect(storage.get('aerio.calendar.secondaryTimeZone')).toBe('Asia/Tokyo')
+  })
+
+  it('reads and writes the editor fields in the event time zone', async () => {
+    const user = userEvent.setup()
+    const input = { ...props(), inputTimeZone: 'America/New_York', start: '2026-10-20T05:00', end: '2026-10-20T06:00' }
+    render(<SchedulingAssistant {...input} />)
+    // 05:00 New York is 09:00 UTC, shown in the UTC display zone.
+    expect(await screen.findByText(/Proposed: Tue 20 Oct, 09:00–10:00/)).toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: /Tue 20 Oct, 11:00–12:00/ }))
+    await user.click(screen.getByRole('button', { name: /Use this time/ }))
+    expect(input.onApply).toHaveBeenCalledWith(expect.objectContaining({ start: '2026-10-20T07:00', end: '2026-10-20T08:00' }))
   })
 
   it('opens from the editor button', async () => {

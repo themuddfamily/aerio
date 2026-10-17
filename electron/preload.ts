@@ -71,11 +71,15 @@ const api: AerioDesktopApi = {
     snapshot: () => ipcRenderer.invoke('productivity:snapshot'),
     sync: (accountId) => ipcRenderer.invoke('productivity:sync', accountId),
     createEvent: (event) => ipcRenderer.invoke('productivity:event-create', event),
-    updateEvent: (event) => ipcRenderer.invoke('productivity:event-update', event),
-    deleteEvent: (eventId) => ipcRenderer.invoke('productivity:event-delete', eventId),
+    updateEvent: (event, scope) => scope ? ipcRenderer.invoke('productivity:event-update', event, scope) : ipcRenderer.invoke('productivity:event-update', event),
+    deleteEvent: (eventId, scope) => scope ? ipcRenderer.invoke('productivity:event-delete', eventId, scope) : ipcRenderer.invoke('productivity:event-delete', eventId),
     createContact: (accountId, contact) => ipcRenderer.invoke('productivity:contact-create', accountId, contact),
     updateContact: (contact) => ipcRenderer.invoke('productivity:contact-update', contact),
     deleteContact: (contactId) => ipcRenderer.invoke('productivity:contact-delete', contactId),
+    createContactGroup: (accountId, name) => ipcRenderer.invoke('productivity:contact-group-create', accountId, name),
+    renameContactGroup: (groupId, name) => ipcRenderer.invoke('productivity:contact-group-rename', groupId, name),
+    deleteContactGroup: (groupId) => ipcRenderer.invoke('productivity:contact-group-delete', groupId),
+    updateContactGroupMembers: (groupId, add, remove) => ipcRenderer.invoke('productivity:contact-group-members', groupId, add, remove),
     chooseNoteAttachments: () => ipcRenderer.invoke('productivity:note-attachments-choose'),
     openNoteAttachment: (path) => ipcRenderer.invoke('productivity:note-attachment-open', path),
     localSnapshot: () => ipcRenderer.invoke('productivity:local-snapshot'),
@@ -146,6 +150,21 @@ const api: AerioDesktopApi = {
       get: (accountId) => ipcRenderer.invoke('mail:automatic-replies:get', accountId),
       update: (accountId, settings) => ipcRenderer.invoke('mail:automatic-replies:update', accountId, settings),
       disable: (accountId) => ipcRenderer.invoke('mail:automatic-replies:disable', accountId)
+    },
+    cloudAttachments: {
+      status: (accountId) => ipcRenderer.invoke('mail:cloud:status', accountId),
+      connect: (accountId) => ipcRenderer.invoke('mail:cloud:connect', accountId),
+      upload: (uploadId, accountId, path, share) => ipcRenderer.invoke('mail:cloud:upload', uploadId, accountId, path, share),
+      cancel: (uploadId) => ipcRenderer.invoke('mail:cloud:cancel', uploadId),
+      pending: (accountId) => ipcRenderer.invoke('mail:cloud:pending', accountId),
+      resume: (uploadId) => ipcRenderer.invoke('mail:cloud:resume', uploadId),
+      discard: (uploadId) => ipcRenderer.invoke('mail:cloud:discard', uploadId),
+      verify: (accountId, urls) => ipcRenderer.invoke('mail:cloud:verify', accountId, urls),
+      onProgress: (callback) => {
+        const listener = (_event: Electron.IpcRendererEvent, value: import('../src/cloud-attachment-types').CloudUploadProgress) => callback(value)
+        ipcRenderer.on('mail:cloud:progress', listener)
+        return () => ipcRenderer.removeListener('mail:cloud:progress', listener)
+      }
     },
     credentials: {
       status: () => ipcRenderer.invoke('gmail:credentials:status'),

@@ -101,3 +101,49 @@ export function wallTimeToUtc(wall: WallTime, timeZone: string) {
   }
   return wallTimeMs(wallTimeInZone(second, timeZone)) === guess ? second : Math.max(first, second)
 }
+
+// The zone this computer is in, falling back to UTC when the runtime cannot report one.
+export function localTimeZone() {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    return isIanaTimeZone(zone) ? zone : 'UTC'
+  } catch {
+    return 'UTC'
+  }
+}
+
+// Windows zone name for an IANA zone (first CLDR match), used when writing to Microsoft Graph.
+export function windowsTimeZoneName(timeZone: string | undefined): string | undefined {
+  if (!timeZone) return undefined
+  if (timeZone === 'UTC' || timeZone === 'Etc/UTC') return 'UTC'
+  return Object.entries(WINDOWS_ZONES).find(([, iana]) => iana === timeZone)?.[0]
+}
+
+const FALLBACK_ZONES = [
+  'UTC', 'America/Los_Angeles', 'America/Denver', 'America/Chicago', 'America/New_York', 'America/Sao_Paulo',
+  'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Moscow', 'Africa/Johannesburg', 'Asia/Dubai',
+  'Asia/Kolkata', 'Asia/Shanghai', 'Asia/Tokyo', 'Australia/Sydney', 'Pacific/Auckland'
+]
+
+// IANA zones offered by pickers: the runtime's full list when available, always including `extra` zones.
+export function timeZoneOptions(...extra: (string | undefined)[]) {
+  let zones: string[]
+  try {
+    const supported = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf?.('timeZone')
+    zones = supported?.length ? [...supported] : [...FALLBACK_ZONES]
+  } catch {
+    zones = [...FALLBACK_ZONES]
+  }
+  if (!zones.includes('UTC')) zones.unshift('UTC')
+  for (const zone of extra) if (zone && isIanaTimeZone(zone) && !zones.includes(zone)) zones.push(zone)
+  return zones
+}
+
+// Short offset label such as "GMT-4" or "GMT+5:30" for a zone at an instant.
+export function timeZoneOffsetLabel(utcMs: number, timeZone: string) {
+  const minutes = timeZoneOffsetMinutes(utcMs, timeZone)
+  if (!minutes) return 'GMT'
+  const hours = Math.floor(Math.abs(minutes) / 60)
+  const rest = Math.abs(minutes) % 60
+  return `GMT${minutes < 0 ? '-' : '+'}${hours}${rest ? `:${String(rest).padStart(2, '0')}` : ''}`
+}

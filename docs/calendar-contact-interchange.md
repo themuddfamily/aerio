@@ -15,7 +15,7 @@ The parsers live in `src/lib` and have no dependencies:
 - `ics.ts` reads `DTSTART`/`DTEND`/`DURATION`, `VALUE=DATE`, `TZID`, UTC and floating times, `RRULE`, `EXDATE`, `RECURRENCE-ID`, `VALARM` triggers, and attendees. It skips `STATUS:CANCELLED` events.
 - `time-zones.ts` resolves TZIDs in this order: IANA names, then Windows names (CLDR subset), then vendor-prefixed names such as `/mozilla.org/.../Europe/Paris`. It converts wall-clock times with the Intl time-zone database. A wall time that falls in a DST gap moves forward. An ambiguous time resolves to its first occurrence.
 - If a TZID is unknown to Intl, its `VTIMEZONE` STANDARD/DAYLIGHT rules are evaluated instead (yearly `BYMONTH`/`BYDAY` rules, `RDATE`, `UNTIL`). If neither source can resolve it, the time is treated as local and a warning is shown.
-- `vcard.ts` reads `FN`, `N`, multiple typed `EMAIL`/`TEL`/`ADR`/`URL` values (`TYPE`, `PREF`, and 3.0 `pref`), `ORG`, `TITLE`, `NOTE`, `NICKNAME`, `BDAY`, `CATEGORIES`, and `UID`. Embedded photos are ignored.
+- `vcard.ts` reads `FN`, `N`, multiple typed `EMAIL`/`TEL`/`ADR`/`URL` values (`TYPE`, `PREF`, and 3.0 `pref`), `ORG`, `TITLE`, `NOTE`, `NICKNAME`, `BDAY`, `CATEGORIES` (every value), `PHOTO` (embedded images within the photo bound; see [rich-contacts.md](rich-contacts.md)), and `UID`. Linked photos are ignored.
 - `contact-csv.ts` is an RFC 4180 parser. It handles the BOM, quoted delimiters, embedded newlines, and comma/semicolon/tab detection. It also suggests column mappings, maps rows to contacts (splitting Google's ` ::: ` multi-value cells), and exports CSV with formula-prefix protection.
 
 ### Resource limits
@@ -83,4 +83,4 @@ These have not been verified against live services:
 - real feeds from Google, Outlook, or iCloud
 - the conversion of imported events and contacts by Google and Microsoft provider APIs
 
-Recurring events still display only their first occurrence in Aerio's views; recurrence expansion is outside this feature.
+Since E24, the views expand imported recurring events: they show every occurrence, apply `EXDATE`s, and replace overridden occurrences, while rules Aerio cannot evaluate are kept unchanged. See [calendar recurrence and time zones](calendar-recurrence-time-zones.md).

@@ -1,9 +1,10 @@
 import { DatabaseSync } from 'node:sqlite'
 import type {
   ProductivityModule, ProductivityProvider, ProductivitySnapshot, ProviderProductivityData,
-  SyncedCalendar, SyncedCalendarEvent, SyncedContact
+  SyncedCalendar, SyncedCalendarEvent, SyncedContact, SyncedContactGroup
 } from '../../src/productivity-types'
 import type { LocalModuleSnapshot } from '../../src/productivity-types'
+import type { ContactList } from '../../src/types'
 
 interface PayloadRow { payload_json: string }
 interface SyncRow { account_id: string; module: ProductivityModule; phase: 'idle' | 'syncing' | 'ready' | 'error'; last_synced_at: string | null; error: string | null }
@@ -65,6 +66,19 @@ export class ProductivityStore {
         payload_json TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS local_contact_lists (
+        id TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS productivity_contact_groups (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_productivity_contact_groups_account ON productivity_contact_groups(account_id);
     `)
   }
 
@@ -83,7 +97,7 @@ export class ProductivityStore {
   removeAccount(accountId: string) {
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      for (const table of ['productivity_calendars', 'productivity_events', 'productivity_contacts', 'productivity_sync_state', 'productivity_sync_checkpoints']) {
+      for (const table of ['productivity_calendars', 'productivity_events', 'productivity_contacts', 'productivity_contact_groups', 'productivity_sync_state', 'productivity_sync_checkpoints']) {
         this.db.prepare(`DELETE FROM ${table} WHERE account_id=?`).run(accountId)
       }
       this.db.exec('COMMIT')
@@ -107,6 +121,7 @@ export class ProductivityStore {
       for (const calendar of data.calendars) insertCalendar.run(calendar.id, accountId, provider, JSON.stringify(calendar), timestamp)
       for (const event of data.events) insertEvent.run(event.id, accountId, provider, JSON.stringify(event), timestamp)
       for (const contact of data.contacts) insertContact.run(contact.id, accountId, provider, JSON.stringify(contact), timestamp)
+      this.replaceContactGroups(accountId, provider, data.contactGroups ?? [], timestamp)
       const insertCheckpoint = this.db.prepare('INSERT INTO productivity_sync_checkpoints(account_id,checkpoint_key,checkpoint_value,updated_at) VALUES(?,?,?,?)')
       for (const [key, value] of Object.entries(checkpoints)) insertCheckpoint.run(accountId, key, value, timestamp)
       for (const module of ['calendar', 'contacts'] satisfies ProductivityModule[]) this.setState(accountId, module, 'ready', undefined, timestamp)
@@ -139,13 +154,39 @@ export class ProductivityStore {
     this.db.prepare('DELETE FROM productivity_contacts WHERE id=?').run(contactId)
   }
 
+  upsertContactGroup(group: SyncedContactGroup) {
+    this.db.prepare(`
+      INSERT INTO productivity_contact_groups(id,account_id,provider,payload_json,updated_at) VALUES(?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id,provider=excluded.provider,payload_json=excluded.payload_json,updated_at=excluded.updated_at
+    `).run(group.id, group.accountId, group.provider, JSON.stringify(group), new Date().toISOString())
+  }
+
+  deleteContactGroup(groupId: string) {
+    this.db.prepare('DELETE FROM productivity_contact_groups WHERE id=?').run(groupId)
+  }
+
+  private replaceContactGroups(accountId: string, provider: ProductivityProvider, groups: SyncedContactGroup[], timestamp: string) {
+    this.db.prepare('DELETE FROM productivity_contact_groups WHERE account_id=?').run(accountId)
+    const insert = this.db.prepare('INSERT INTO productivity_contact_groups(id,account_id,provider,payload_json,updated_at) VALUES(?,?,?,?,?)')
+    for (const group of groups) insert.run(group.id, accountId, provider, JSON.stringify(group), timestamp)
+  }
+
+  private contactGroups(accountId?: string) {
+    const rows = (accountId
+      ? this.db.prepare('SELECT payload_json FROM productivity_contact_groups WHERE account_id=? ORDER BY id').all(accountId)
+      : this.db.prepare('SELECT payload_json FROM productivity_contact_groups ORDER BY id').all()) as unknown as PayloadRow[]
+    return rows.map((row) => JSON.parse(row.payload_json) as SyncedContactGroup)
+  }
+
   accountData(accountId: string): ProviderProductivityData {
     const read = <T>(table: string) => (this.db.prepare(`SELECT payload_json FROM ${table} WHERE account_id=? ORDER BY updated_at DESC`).all(accountId) as unknown as PayloadRow[])
       .map((row) => JSON.parse(row.payload_json) as T)
+    const contactGroups = this.contactGroups(accountId)
     return {
       calendars: read<SyncedCalendar>('productivity_calendars'),
       events: read<SyncedCalendarEvent>('productivity_events'),
-      contacts: read<SyncedContact>('productivity_contacts')
+      contacts: read<SyncedContact>('productivity_contacts'),
+      ...(contactGroups.length ? { contactGroups } : {})
     }
   }
 
@@ -165,10 +206,12 @@ export class ProductivityStore {
         lastSyncedAt: row.last_synced_at ?? undefined,
         error: row.error ?? undefined
       }))
+    const contactGroups = this.contactGroups()
     return {
       calendars: read<SyncedCalendar>('productivity_calendars'),
       events: read<SyncedCalendarEvent>('productivity_events'),
       contacts: read<SyncedContact>('productivity_contacts'),
+      ...(contactGroups.length ? { contactGroups } : {}),
       sync
     }
   }
@@ -176,11 +219,14 @@ export class ProductivityStore {
   localSnapshot(): LocalModuleSnapshot {
     const rows = this.db.prepare('SELECT module,payload_json FROM local_module_state').all() as unknown as { module: 'tasks' | 'notes'; payload_json: string }[]
     const values = new Map(rows.map((row) => [row.module, JSON.parse(row.payload_json) as unknown[]]))
+    const contactLists = (this.db.prepare('SELECT payload_json FROM local_contact_lists ORDER BY id').all() as unknown as PayloadRow[])
+      .map((row) => JSON.parse(row.payload_json) as ContactList)
     return {
       tasks: (values.get('tasks') ?? []) as LocalModuleSnapshot['tasks'],
       notes: (values.get('notes') ?? []) as LocalModuleSnapshot['notes'],
       contacts: (this.db.prepare('SELECT payload_json FROM local_contacts ORDER BY updated_at DESC').all() as unknown as PayloadRow[])
-        .map((row) => JSON.parse(row.payload_json)) as NonNullable<LocalModuleSnapshot['contacts']>
+        .map((row) => JSON.parse(row.payload_json)) as NonNullable<LocalModuleSnapshot['contacts']>,
+      ...(contactLists.length ? { contactLists } : {})
     }
   }
 
@@ -197,6 +243,12 @@ export class ProductivityStore {
       this.db.prepare('DELETE FROM local_contacts').run()
       const saveContact = this.db.prepare('INSERT INTO local_contacts(id,payload_json,updated_at) VALUES(?,?,?)')
       for (const contact of snapshot.contacts ?? []) saveContact.run(contact.id, JSON.stringify(contact), timestamp)
+      // Snapshots and backups from before distribution lists leave saved lists untouched.
+      if (snapshot.contactLists) {
+        this.db.prepare('DELETE FROM local_contact_lists').run()
+        const saveList = this.db.prepare('INSERT INTO local_contact_lists(id,payload_json,updated_at) VALUES(?,?,?)')
+        for (const list of snapshot.contactLists) saveList.run(list.id, JSON.stringify(list), timestamp)
+      }
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')

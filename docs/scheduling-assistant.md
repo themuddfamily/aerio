@@ -38,7 +38,7 @@ Optional attendees never block a slot; each suggestion says how many optional at
 
 ## Time zones
 
-The timeline and suggestions use the computer's time zone, the same one the event editor uses, and the header shows its abbreviation. **Second time zone** adds a row of times (and a line on each suggestion) for any IANA zone; the choice is remembered on the device. Day boundaries and working-hour checks use `src/lib/time-zones.ts`, so daylight-saving days have 23 or 25 hours.
+The timeline and suggestions use the computer's time zone and the header shows its offset. The editor's start and end are read and written in the event's own time zone (the editor's **Time zone** field), so a proposal picked in local time lands at the same instant in the event's zone. **Second time zone** adds a row of times (and a line on each suggestion) for any IANA zone; it shares the saved setting with the Calendar week and day views. Day boundaries and working-hour checks use `src/lib/time-zones.ts`, so daylight-saving days have 23 or 25 hours. The assistant is hidden for all-day events.
 
 ## Permissions
 

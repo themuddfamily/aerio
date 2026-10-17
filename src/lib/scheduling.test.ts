@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AttendeeAvailability } from '../scheduling-types'
 import {
-  DEFAULT_WORKING_HOURS, addZonedDays, formatZoneTime, parseAttendeeText, startOfZonedDay, statusDuring, suggestSlots, withinWorkingHours
+  DEFAULT_WORKING_HOURS, addZonedDays, formatZoneTime, msToWallInput, parseAttendeeText, wallInputToMs, startOfZonedDay, statusDuring, suggestSlots, withinWorkingHours
 } from './scheduling'
 
 const at = (iso: string) => Date.parse(iso)
@@ -11,6 +11,12 @@ const known = (email: string, busy: AttendeeAvailability['busy'] = [], workingHo
 describe('scheduling helpers', () => {
   it('parses attendee text with commas, semicolons, and display names', () => {
     expect(parseAttendeeText('a@x.com, Bo <b@y.com>;\n c@z.com,,')).toEqual(['a@x.com', 'Bo <b@y.com>', 'c@z.com'])
+  })
+
+  it('reads and writes editor wall times in the event time zone', () => {
+    expect(new Date(wallInputToMs('2026-10-20T09:00', 'America/New_York')).toISOString()).toBe('2026-10-20T13:00:00.000Z')
+    expect(msToWallInput(at('2026-10-20T13:00:00Z'), 'Asia/Tokyo')).toBe('2026-10-20T22:00')
+    expect(wallInputToMs('2026-10-20', 'UTC')).toBeNaN()
   })
 
   it('finds zoned day starts across daylight-saving changes', () => {

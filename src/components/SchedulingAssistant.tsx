@@ -3,10 +3,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Modal from './Modal'
 import type { AttendeeAvailability, AvailabilityRequest, AvailabilityResult, WorkingHours } from '../scheduling-types'
 import {
-  addZonedDays, attendeeAddress, formatZoneDay, formatZoneTime, loadSecondaryZone, loadWorkingHours, localInputMs, msToLocalInput,
-  parseAttendeeText, saveSecondaryZone, saveWorkingHours, selectableTimeZones, startOfZonedDay, statusDuring, suggestSlots,
-  systemTimeZone, withinWorkingHours, zoneLabel, type CellStatus, type Participant, type ParticipantRole
+  addZonedDays, attendeeAddress, formatZoneDay, formatZoneTime, loadSecondaryZone, loadWorkingHours, msToWallInput,
+  parseAttendeeText, saveSecondaryZone, saveWorkingHours, startOfZonedDay, statusDuring, suggestSlots, wallInputToMs,
+  withinWorkingHours, type CellStatus, type Participant, type ParticipantRole
 } from '../lib/scheduling'
+import { localTimeZone, timeZoneOffsetLabel as zoneLabel, timeZoneOptions } from '../lib/time-zones'
 
 export interface SchedulingAssistantApi {
   availability?(request: AvailabilityRequest): Promise<AvailabilityResult>
@@ -23,12 +24,14 @@ interface SchedulingAssistantProps {
   calendarId: string
   /** Email of the organizer's account; shown as the first row when it is a real address. */
   organizerEmail?: string
-  /** Editor values: `datetime-local` strings in system local time and the attendee text. */
+  /** Editor values: `datetime-local` strings in `inputTimeZone` and the attendee text. */
   start: string
   end: string
   attendees: string
+  /** Zone of the editor's start/end fields (the event's time zone); defaults to the display zone. */
+  inputTimeZone?: string
   api?: SchedulingAssistantApi
-  /** Display zone; defaults to the system zone the event editor uses. */
+  /** Display zone; defaults to the computer's zone. */
   timeZone?: string
   now?: () => number
   onApply(selection: SchedulingSelection): void
@@ -55,13 +58,16 @@ const defaultApi = (): SchedulingAssistantApi => {
 const isEmail = (value: string) => /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(attendeeAddress(value))
 
 export default function SchedulingAssistant({
-  calendarId, organizerEmail, start, end, attendees, api: providedApi, timeZone: providedZone, now = Date.now, onApply, onClose
+  calendarId, organizerEmail, start, end, attendees, inputTimeZone, api: providedApi, timeZone: providedZone, now = Date.now, onApply, onClose
 }: SchedulingAssistantProps) {
   const api = useMemo(() => providedApi ?? defaultApi(), [providedApi])
-  const timeZone = providedZone ?? systemTimeZone()
+  const timeZone = providedZone ?? localTimeZone()
+  const editorZone = inputTimeZone ?? timeZone
   const organizer = organizerEmail && isEmail(organizerEmail) ? attendeeAddress(organizerEmail) : undefined
-  const initialStart = Number.isFinite(localInputMs(start)) ? localInputMs(start) : now()
-  const initialEnd = Number.isFinite(localInputMs(end)) && localInputMs(end) > initialStart ? localInputMs(end) : initialStart + 3_600_000
+  const parsedStart = wallInputToMs(start, editorZone)
+  const parsedEnd = wallInputToMs(end, editorZone)
+  const initialStart = Number.isFinite(parsedStart) ? parsedStart : now()
+  const initialEnd = Number.isFinite(parsedEnd) && parsedEnd > initialStart ? parsedEnd : initialStart + 3_600_000
   const [participants, setParticipants] = useState<Participant[]>(() => parseAttendeeText(attendees)
     .filter((value) => attendeeAddress(value) !== organizer)
     .map((email) => ({ email, role: 'required' as const })))
@@ -183,7 +189,7 @@ export default function SchedulingAssistant({
           </select></label>
           <label className="field-label inline">Second time zone<select value={secondaryZone} onChange={(event) => { setSecondaryZone(event.target.value); saveSecondaryZone(event.target.value) }}>
             <option value="">None</option>
-            {selectableTimeZones().filter((zone) => zone !== timeZone).map((zone) => <option key={zone} value={zone}>{zone}</option>)}
+            {timeZoneOptions(secondaryZone || undefined).filter((zone) => zone !== timeZone).map((zone) => <option key={zone} value={zone}>{zone}</option>)}
           </select></label>
           <span className="spacer" />
           <button className="button ghost small" disabled={loading} onClick={() => void load()}><RefreshCw size={14} className={loading ? 'spin' : undefined} /> {loading ? 'Checking…' : 'Refresh'}</button>
@@ -289,8 +295,8 @@ export default function SchedulingAssistant({
           <span className="spacer" />
           <button className="button ghost" onClick={onClose}>Cancel</button>
           <button className="button primary" onClick={() => onApply({
-            start: msToLocalInput(proposed.start),
-            end: msToLocalInput(proposed.end),
+            start: msToWallInput(proposed.start, editorZone),
+            end: msToWallInput(proposed.end, editorZone),
             attendees: participants.map((item) => item.email)
           })}><CalendarClock size={16} /> Use this time</button>
         </footer>

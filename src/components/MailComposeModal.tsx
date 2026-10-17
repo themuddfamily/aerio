@@ -1,4 +1,4 @@
-import { CalendarClock, Copy, Paperclip, Save, Send, Sparkles, Trash2, X } from 'lucide-react'
+import { CalendarClock, Cloud, Copy, Paperclip, Save, Send, Sparkles, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MailAccountSummary, MailDraftInput, MailDraftRecord, MailThreadDetail, MailRecipientSuggestion, MailSendOptions } from '../mail-types'
 import { formatFileSize } from '../lib/domain'
@@ -11,8 +11,11 @@ import { defaultIdentityId, identityLabel, LEGACY_SIGNATURE_ID, replaceSignature
 import MailSendOptionsControl from './MailSendOptionsControl'
 import MailFormattingToolbar, { useRichEditorInput } from './MailFormattingToolbar'
 import { ReplyWatchControl, armReplyWatch, replyWatchDeadline, type ReplyWatchSetting } from './MailReplyWatches'
+import { describeExpansion, expandRecipientLists, recipientListLabel, recipientListPreview, suggestRecipientLists, type RecipientList } from '../lib/distribution-lists'
+import { useRecipientLists } from './use-recipient-lists'
 import { MailAiComposeAssist } from './MailAiComposeAssist'
 import { aiFeatureAvailable, useAiAssistantStatus } from '../lib/use-ai-assistant'
+import { cloudAttachmentsAvailable, confirmCloudLinks, MailCloudAttachments } from './MailCloudAttachments'
 
 interface MailComposeModalProps {
   accounts: MailAccountSummary[]
@@ -109,8 +112,21 @@ ${signature}` : ''}${forwardedText}`
   const [conflict, setConflict] = useState(false)
   const [recipientField, setRecipientField] = useState<'to' | 'cc' | 'bcc'>()
   const [recipientSuggestions, setRecipientSuggestions] = useState<MailRecipientSuggestion[]>([])
+  // Distribution lists typed or picked in To/Cc/Bcc expand to their member addresses.
+  const recipientLists = useRecipientLists()
+  const fieldValue = (field: 'to' | 'cc' | 'bcc') => field === 'to' ? to : field === 'cc' ? cc : bcc
+  const expandLists = (field: 'to' | 'cc' | 'bcc', pick?: RecipientList, suffix = '') => {
+    const expansion = expandRecipientLists(fieldValue(field), recipientLists, pick)
+    if (!expansion.expanded.length) return false
+    ;(field === 'to' ? setTo : field === 'cc' ? setCc : setBcc)(expansion.value)
+    setRecipientSuggestions([])
+    onToast(`${describeExpansion(expansion)}${suffix}`)
+    return true
+  }
+  const listSuggestions = recipientField ? suggestRecipientLists(fieldValue(recipientField).split(/[;,]/).at(-1) ?? '', recipientLists) : []
   const ai = useAiAssistantStatus()
   const [aiOpen, setAiOpen] = useState(false)
+  const [cloudOpen, setCloudOpen] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
   const editorHtmlRef = useRef(initialHtml)
   const firstRender = useRef(true)
@@ -340,6 +356,7 @@ ${signature}` : ''}${forwardedText}`
   }
 
   const send = async () => {
+    if ((['to', 'cc', 'bcc'] as const).filter((field) => expandLists(field, undefined, '. Review the recipients, then send again.')).length) return
     const recipients = [...input.to, ...input.cc, ...input.bcc]
     if (!recipients.length) {
       onToast('Add at least one recipient')
@@ -362,6 +379,7 @@ ${signature}` : ''}${forwardedText}`
       onToast('Choose a reply deadline in the future')
       return
     }
+    if (!(await confirmCloudLinks(accountId, editorRef.current))) return
     setStatus('sending')
     try {
       const result = deliveryAt
@@ -410,11 +428,11 @@ ${signature}` : ''}${forwardedText}`
             fromTouched.current = true
             applyIdentity(option.accountId, option.id)
           }}>{senderOptions.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></div>
-          <div className="compose-row"><label>To</label><input autoFocus value={to} onFocus={() => setRecipientField('to')} onChange={(event) => setTo(event.target.value)} placeholder="name@example.com" /></div>
-          <div className="compose-row"><label>Cc</label><input value={cc} onFocus={() => setRecipientField('cc')} onChange={(event) => setCc(event.target.value)} /><button className="text-button" onClick={() => setBccVisible((value) => !value)}>Bcc</button><button className="text-button" onClick={() => setReplyToVisible((value) => !value)}>Reply-To</button></div>
-          {bccVisible && <div className="compose-row"><label>Bcc</label><input value={bcc} onFocus={() => setRecipientField('bcc')} onChange={(event) => setBcc(event.target.value)} /></div>}
+          <div className="compose-row"><label>To</label><input autoFocus value={to} onFocus={() => setRecipientField('to')} onBlur={() => expandLists('to')} onChange={(event) => setTo(event.target.value)} placeholder="name@example.com" /></div>
+          <div className="compose-row"><label>Cc</label><input value={cc} onFocus={() => setRecipientField('cc')} onBlur={() => expandLists('cc')} onChange={(event) => setCc(event.target.value)} /><button className="text-button" onClick={() => setBccVisible((value) => !value)}>Bcc</button><button className="text-button" onClick={() => setReplyToVisible((value) => !value)}>Reply-To</button></div>
+          {bccVisible && <div className="compose-row"><label>Bcc</label><input value={bcc} onFocus={() => setRecipientField('bcc')} onBlur={() => expandLists('bcc')} onChange={(event) => setBcc(event.target.value)} /></div>}
           {(replyToVisible || replyToField) && <div className="compose-row"><label>Reply-To</label><input value={replyToField} onFocus={() => setRecipientField(undefined)} onChange={(event) => setReplyToField(event.target.value)} placeholder="replies@example.com" /></div>}
-          {recipientField && recipientSuggestions.length > 0 && <div className="recipient-suggestions">{recipientSuggestions.map((suggestion) => <button key={`${suggestion.accountId}:${suggestion.email}`} onMouseDown={(event) => event.preventDefault()} onClick={() => chooseRecipient(suggestion)}><span className="avatar">{(suggestion.name || suggestion.email).slice(0, 2).toUpperCase()}</span><span><strong>{suggestion.name || suggestion.email}</strong><small>{suggestion.email}</small></span></button>)}</div>}
+          {recipientField && (recipientSuggestions.length > 0 || listSuggestions.length > 0) && <div className="recipient-suggestions">{listSuggestions.map((list) => <button key={list.id} className="recipient-list-suggestion" title={list.members.map((member) => member.email).join(', ')} onMouseDown={(event) => event.preventDefault()} onClick={() => expandLists(recipientField, list)}><span className="avatar">{list.members.length}</span><span><strong>{list.name} · {recipientListLabel(list)}</strong><small>{recipientListPreview(list)}</small></span></button>)}{recipientSuggestions.map((suggestion) => <button key={`${suggestion.accountId}:${suggestion.email}`} onMouseDown={(event) => event.preventDefault()} onClick={() => chooseRecipient(suggestion)}><span className="avatar">{(suggestion.name || suggestion.email).slice(0, 2).toUpperCase()}</span><span><strong>{suggestion.name || suggestion.email}</strong><small>{suggestion.email}</small></span></button>)}</div>}
           <div className="compose-row"><label>Subject</label><input value={subject} onFocus={() => setRecipientField(undefined)} onChange={(event) => setSubject(event.target.value)} /></div>
           <MailFormattingToolbar editorRef={editorRef} onEditorChange={updateEditor} onToast={onToast}>
             {(signatures.length > 0 || Boolean(currentAccount?.signature.trim())) && <select className="compose-signature-select" aria-label="Signature" value={signatureChoice} onChange={(event) => {
@@ -448,9 +466,11 @@ ${signature}` : ''}${forwardedText}`
             { label: 'Copy filename', icon: Copy, action: () => copyText(file.name) },
             { label: 'Remove attachment', icon: Trash2, separatorBefore: true, danger: true, action: () => setAttachments((items) => items.filter((_, itemIndex) => index !== itemIndex)) }
           ], file.name)}><Paperclip size={14} /><strong>{file.name}</strong>{file.size > 0 && <small>{formatFileSize(file.size)}</small>}<button aria-label={`Remove ${file.name}`} onClick={() => setAttachments((items) => items.filter((_, itemIndex) => index !== itemIndex))}><X size={13} /></button></span>)}</div>}
+          <MailCloudAttachments open={cloudOpen} accountId={accountId} provider={currentAccount?.provider} attachments={attachments} recipients={[...input.to, ...input.cc, ...input.bcc]} editorRef={editorRef} onOpenChange={setCloudOpen} onEditorChange={updateEditor} onRemoveAttachment={(path) => setAttachments((items) => items.filter((item) => item.path !== path))} onToast={onToast} />
         </div>
         <footer className="compose-footer">
           <button className="icon-button" title="Attach files" onClick={() => void chooseAttachments()}><Paperclip size={18} /></button>
+          {cloudAttachmentsAvailable(currentAccount?.provider) && <button className={`icon-button ${cloudOpen ? 'active' : ''}`} title="Share a file as a cloud link" aria-pressed={cloudOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setCloudOpen((value) => !value)}><Cloud size={18} /></button>}
           <button className="button ghost small" disabled={status === 'saving' || status === 'sending'} onClick={() => void saveNow(input, true)}><Save size={15} /> Save draft</button>
           {conflict && <button className="button ghost small" disabled={status === 'saving' || status === 'sending'} onClick={() => void saveAsCopy()}><Copy size={15} /> Save as copy</button>}
           <button className="button ghost small danger-subtle" disabled={status === 'sending'} onClick={() => void discard()}><Trash2 size={15} /> Discard</button>
