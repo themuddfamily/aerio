@@ -4503,3 +4503,45 @@ kbd {
 .compose-rich-body img { max-width: 100%; height: auto; }
 .compose-rich-body table { border-collapse: collapse; }
 .compose-rich-body td, .compose-rich-body th { min-width: 2em; vertical-align: top; }
+
+/* Scheduling assistant */
+.scheduling-open { justify-self: start; }
+.scheduling-assistant { display: grid; gap: 10px; min-width: 0; }
+.scheduling-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.scheduling-day { min-width: 120px; text-align: center; }
+.scheduling-assistant .field-label.inline { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; }
+.scheduling-assistant .field-label.grow { flex: 1; min-width: 200px; }
+.scheduling-notice { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line); font-size: 13px; }
+.scheduling-notice > svg { flex: none; margin-top: 2px; color: var(--danger); }
+.scheduling-notice p { margin: 0; flex: 1; }
+.scheduling-timeline-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; max-height: 340px; }
+.scheduling-timeline { border-collapse: collapse; font-size: 11px; }
+.scheduling-timeline th, .scheduling-timeline td { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.scheduling-person { position: sticky; left: 0; z-index: 1; min-width: 220px; max-width: 260px; padding: 4px 8px; background: var(--surface); text-align: left; font-weight: 500; }
+.scheduling-person select { margin-left: 6px; font-size: 11px; padding: 1px 4px; }
+.scheduling-name { display: inline-block; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.scheduling-unknown-reason { display: block; color: var(--muted); font-weight: 400; }
+.scheduling-hour { min-width: 26px; padding: 3px 2px; color: var(--muted); font-weight: 500; text-align: left; white-space: nowrap; }
+.scheduling-secondary .scheduling-hour { color: var(--text-soft); font-style: italic; }
+.scheduling-cell { display: table-cell; width: 26px; height: 30px; cursor: pointer; background: var(--surface); }
+.scheduling-legend .scheduling-cell { display: inline-block; width: 14px; height: 12px; margin-right: 5px; vertical-align: middle; border: 1px solid var(--line-strong); }
+.scheduling-cell.outside-hours { background: var(--surface-3); }
+.scheduling-cell.status-busy { background: #4a67c9; }
+.scheduling-cell.status-tentative { background: repeating-linear-gradient(90deg, #8ea2e6 0 4px, var(--surface) 4px 7px); }
+.scheduling-cell.status-oof { background: #8a4fb4; }
+.scheduling-cell.status-workingElsewhere { background: repeating-linear-gradient(0deg, #9ccbb5 0 3px, var(--surface) 3px 6px); }
+/* Unknown is hatched so it can never be mistaken for free time. */
+.scheduling-cell.status-unknown { background: repeating-linear-gradient(45deg, var(--line-strong) 0 3px, var(--surface-2) 3px 7px); }
+.scheduling-cell.proposed { box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
+.scheduling-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 12px; }
+.scheduling-add { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.scheduling-suggestions h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-size: 13px; }
+.scheduling-suggestion-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.scheduling-suggestion { display: grid; gap: 2px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); text-align: left; cursor: pointer; }
+.scheduling-suggestion small { color: var(--muted); }
+.scheduling-suggestion:hover, .scheduling-suggestion.active { border-color: var(--accent); background: var(--accent-soft); }
+.scheduling-caveat { margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+.scheduling-hours summary { cursor: pointer; font-size: 13px; }
+.scheduling-hours-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.scheduling-proposed { font-size: 13px; color: var(--text-soft); }
+.scheduling-hours .checkbox-row { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; }

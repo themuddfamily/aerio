@@ -29,6 +29,7 @@ Remaining release work and optional future features are tracked in [ROADMAP.md](
 - Dedicated message windows for provider mail; double-click a conversation to open or focus its window
 - Read-only local archive or complete local deletion when disconnecting an account
 - Google and Microsoft Calendar synchronization with event creation, editing, deletion, recurrence, and configurable reminders
+- Scheduling assistant with provider free/busy (Google `freeBusy`, Microsoft Graph `getSchedule`), unknown-availability hatching, working hours, a second time zone, and suggested slots ([docs](docs/scheduling-assistant.md))
 - Writable Google and Microsoft provider Contacts plus editable local Contacts, with portable backup and restore for local Contacts, Tasks, Notes, and managed note attachments
 - Google Tasks and Microsoft To Do lists/tasks with durable offline changes, conflict review, undo, native/local recurrence mapping, and separate connected-task backup/restore; see [provider task integration](docs/task-provider-integration.md)
 - Optional local passphrase privacy lock at launch, when Aerio is sent to the tray, or on demand
@@ -52,7 +53,7 @@ Official builds use Aerio's built-in registration: choose Gmail and select **Con
 4. Put its `client_id` and `client_secret` into `.env.local` as `MAIN_VITE_GOOGLE_CLIENT_ID` and `MAIN_VITE_GOOGLE_CLIENT_SECRET`, then rebuild Aerio. Both values must belong to the same registration.
 5. Choose Gmail and select **Connect Gmail**. Your normal browser completes Google sign-in and returns to Aerio through a temporary `127.0.0.1` callback.
 
-Aerio requests Gmail modify access, Gmail basic-settings access (for automatic replies), read-only Calendar-list access, Google Calendar event read/write access, Contacts read/write access, and Tasks read/write access. It does not request permission to create or share calendars or permanently delete Gmail messages. Existing accounts connected by an older Aerio build can use **Enable editing** in Calendar/Contacts, **Connect Google Tasks** in Tasks, or **Account settings → Reconnect** to approve added scopes.
+Aerio requests Gmail modify access, Gmail basic-settings access (for automatic replies), read-only Calendar-list access, Google Calendar event read/write access, Calendar free/busy access (for the scheduling assistant), Contacts read/write access, and Tasks read/write access. It does not request permission to create or share calendars or permanently delete Gmail messages. Existing accounts connected by an older Aerio build can use **Enable editing** in Calendar/Contacts, **Connect Google Tasks** in Tasks, or **Account settings → Reconnect** to approve added scopes.
 
 The first download is quota-bound. A mailbox with 100,000 messages can take roughly seven hours or more, depending on message size, retries, and Google’s per-user quota. Progress is persistent; quitting, losing connectivity, or pausing does not discard completed work.
 

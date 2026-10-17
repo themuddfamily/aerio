@@ -12,6 +12,7 @@ import type { AppState, CalendarEvent } from '../types'
 import Modal from '../components/Modal'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { preserveEventInterchangeFields } from '../lib/interchange-plan'
+import { SchedulingAssistantButton } from '../components/SchedulingAssistant'
 
 type CalendarMode = 'month' | 'week' | 'day' | 'agenda'
 
@@ -346,6 +347,8 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
         <label className="field-label">Reminder<select value={reminderMinutes} disabled={readOnly} onChange={(e) => setReminderMinutes(Number(e.target.value))}><option value={0}>At event time</option><option value={5}>5 minutes before</option><option value={10}>10 minutes before</option><option value={15}>15 minutes before</option><option value={30}>30 minutes before</option><option value={60}>1 hour before</option><option value={1440}>1 day before</option></select></label>
         <label className="field-label"><MapPin size={14} /> Location<input value={location} disabled={readOnly} onChange={(e) => setLocation(e.target.value)} placeholder="Add a place or video link" /></label>
         <label className="field-label"><Users size={14} /> Attendees<input value={attendees} disabled={readOnly} onChange={(e) => setAttendees(e.target.value)} placeholder="Separate email addresses with commas" /></label>
+        {!readOnly && <SchedulingAssistantButton calendarId={calendarId} organizerEmail={state.accounts.find((account) => account.id === calendarId)?.email} start={start} end={end} attendees={attendees}
+          onApply={(selection) => { setStart(selection.start); setEnd(selection.end); setAttendees(selection.attendees.join(', ')) }} />}
         <label className="field-label">Notes<textarea value={description} disabled={readOnly} onChange={(e) => setDescription(e.target.value)} /></label>
         <footer className="modal-footer">
           {onDelete && <button className="button danger-subtle" disabled={Boolean(busy)} onClick={() => { setBusy('delete'); void Promise.resolve(onDelete()).finally(() => setBusy(undefined)) }}>{busy === 'delete' ? 'Deleting…' : 'Delete'}</button>}

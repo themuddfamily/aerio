@@ -38,6 +38,9 @@ const SCOPES = [
   'https://www.googleapis.com/auth/gmail.settings.basic',
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
   'https://www.googleapis.com/auth/calendar.events',
+  // Free/busy lookup for the scheduling assistant (freeBusy.query does not accept
+  // calendar.events). Older grants are asked to reconnect from the assistant.
+  'https://www.googleapis.com/auth/calendar.freebusy',
   'https://www.googleapis.com/auth/contacts',
   'https://www.googleapis.com/auth/tasks'
 ]

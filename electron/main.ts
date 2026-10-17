@@ -73,6 +73,7 @@ import { MailTemplateStore, parseMailTemplateBackup, type MailTemplateBackup } f
 import { registerMailTemplates } from './mail/template-tools'
 import { registerMailIdentities, validateDraftSender } from './mail/identity-ipc'
 import { AutomaticRepliesService, registerAutomaticReplies } from './mail/automatic-replies'
+import { AvailabilityService, registerAvailability } from './productivity/availability'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import { InterchangeStore } from './productivity/interchange-store'
@@ -1275,6 +1276,14 @@ function registerIpc() {
     grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider)
   })
   registerAutomaticReplies(ipcMain, () => automaticReplies)
+  const availability = new AvailabilityService({
+    calendars: () => requireProductivityStore().snapshot().calendars,
+    accountEmail: async (accountId) => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId)?.email,
+    googleToken: (accountId) => requireVault().accessToken(accountId),
+    microsoftToken: (accountId) => requireVault().microsoftAccessToken(accountId),
+    grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider)
+  })
+  registerAvailability(ipcMain, () => availability)
   ipcMain.handle('preferences:load', () => loadPreferences())
   ipcMain.handle('preferences:save', (_event, preferences: AppPreferences) => savePreferences(preferences))
   ipcMain.handle('app-lock:status', () => appLockStatus())

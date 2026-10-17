@@ -81,7 +81,8 @@ const api: AerioDesktopApi = {
     localSnapshot: () => ipcRenderer.invoke('productivity:local-snapshot'),
     saveLocal: (snapshot) => ipcRenderer.invoke('productivity:local-save', snapshot),
     exportLocalData: () => ipcRenderer.invoke('productivity:local-export'),
-    importLocalData: () => ipcRenderer.invoke('productivity:local-import')
+    importLocalData: () => ipcRenderer.invoke('productivity:local-import'),
+    availability: (request) => ipcRenderer.invoke('productivity:availability', request)
   },
   interchange: {
     snapshot: () => ipcRenderer.invoke('interchange:snapshot'),

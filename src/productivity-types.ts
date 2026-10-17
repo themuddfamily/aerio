@@ -88,4 +88,6 @@ export interface ProductivityDesktopApi {
   saveLocal(snapshot: LocalModuleSnapshot): Promise<void>
   exportLocalData(): Promise<LocalDataBackupResult>
   importLocalData(): Promise<LocalModuleSnapshot | undefined>
+  /** Free/busy lookup for the scheduling assistant, answered by the calendar's provider. */
+  availability?(request: import('./scheduling-types').AvailabilityRequest): Promise<import('./scheduling-types').AvailabilityResult>
 }
