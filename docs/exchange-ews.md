@@ -108,6 +108,7 @@ Delegation and public folders (E40), directory lookup (E41), and Exchange Notes 
 | `electron/exchange/autodiscover.ts` | POX Autodiscover with injectable HTTP/DNS for tests |
 | `electron/exchange/ews-mail.ts`, `ews-items.ts` | Mail sync/actions/drafts/folders; CalendarItem/Contact mapping and update builders |
 | `electron/exchange/exchange-productivity.ts`, `exchange-store.ts`, `exchange-ipc.ts` | Calendar/Contacts service, its SQLite store, and IPC (`exchange:*`, exposed as `window.aerio.exchange`) |
+| `electron/exchange/ews-directory.ts` | Directory helpers (E41): `ResolveNames`, `ExpandDL`, `GetRoomLists`/`GetRooms`, and `FindPeople` on the directory, used by the [organization directory](organization-directory.md) |
 | `electron/exchange/ews-fixture-server.ts` | In-process EWS + Autodiscover responder used by the tests |
 
 A new operation such as `ResolveNames` should be a thin helper over `call()`, returning parsed values and `EwsError`s instead of throwing for item-level failures.

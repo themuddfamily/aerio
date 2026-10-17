@@ -101,6 +101,9 @@ import { ExchangeStore } from './exchange/exchange-store'
 import { ExchangeProductivityService } from './exchange/exchange-productivity'
 import { registerExchangeAccounts } from './exchange/exchange-ipc'
 import { ewsClientFor } from './exchange/exchange-config'
+import { DirectoryStore } from './directory/directory-store'
+import { DirectoryService } from './directory/directory-service'
+import { registerDirectory } from './directory/directory-ipc'
 import { carryPendingConferences } from './productivity/online-meetings'
 import { validEventConference } from '../src/lib/online-meetings'
 import { registerMailImport } from './mail/mail-import-ipc'
@@ -199,6 +202,10 @@ let davIpc: ReturnType<typeof registerDavAccounts> | null = null
 let exchangeStore: ExchangeStore | null = null
 let exchangeService: ExchangeProductivityService | null = null
 let exchangeIpc: ReturnType<typeof registerExchangeAccounts> | null = null
+// Organization directory and offline address book (E41); directory.sqlite is a rebuildable cache.
+let directoryStore: DirectoryStore | null = null
+let directoryService: DirectoryService | null = null
+let directoryIpc: ReturnType<typeof registerDirectory> | null = null
 let taskService: TaskService | null = null
 let taskPolling: NodeJS.Timeout | undefined
 let taskExtras: ReturnType<typeof registerTaskExtras> | null = null
@@ -2048,6 +2055,7 @@ function registerIpc() {
     await requireMailWorker().request({ type: 'accounts:disconnect', payload: { accountId, mode } })
     requireProductivityStore().removeAccount(accountId)
     if (exchangeService?.hasAccount(accountId)) { exchangeService.removeAccount(accountId); exchangeIpc?.broadcast() }
+    directoryService?.removeAccount(accountId)
     if (mode === 'delete') invitationStore?.removeAccount(accountId)
     accountProviders.delete(accountId)
     if (mode === 'delete') await taskService?.removeAccount(accountId)
@@ -2438,6 +2446,25 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     broadcast: (snapshot) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('exchange:changed', snapshot)),
     productivityChanged: broadcastProductivity
   })
+  directoryStore = new DirectoryStore(join(app.getPath('userData'), 'directory.sqlite'))
+  const directory = new DirectoryService({
+    store: directoryStore,
+    accounts: async () => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).filter((account) => !account.archived),
+    googleToken: (accountId) => requireVault().accessToken(accountId),
+    microsoftToken: (accountId) => requireVault().microsoftAccessToken(accountId),
+    grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider),
+    ewsClient: (accountId) => ewsClientFor(requireVault().exchangeCredential(accountId)),
+    authorize: async (account, scopes) => {
+      const expected = { accountId: account.id, email: account.email }
+      if (account.provider === 'gmail') await requireVault().authorize(expected, { additionalScopes: scopes })
+      else await requireVault().authorizeMicrosoft(expected, { additionalScopes: scopes })
+    },
+    online: () => taskNetworkOnline && net.isOnline(),
+    changed: (snapshot) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('directory:changed', snapshot)),
+    diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
+  })
+  directoryService = directory
+  directoryIpc = registerDirectory({ ipcMain, service: () => directory, locked: () => appLockStatus().locked })
   registerRemoteImageProtocol()
   readyToOpenWindows = true
   createWindow()
@@ -2478,6 +2505,9 @@ app.on('before-quit', () => {
   exchangeIpc?.dispose()
   exchangeStore?.close()
   exchangeStore = null
+  directoryIpc?.dispose()
+  directoryStore?.close()
+  directoryStore = null
   interchangeStore?.close()
   interchangeStore = null
   invitationStore?.close()

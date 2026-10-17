@@ -5046,3 +5046,28 @@ button.mail-folder-twisty:hover { background: var(--surface-hover); color: var(-
 .exchange-credentials { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
 .exchange-credentials.attention { border-color: var(--danger); background: var(--danger-soft); }
 .exchange-credentials p { margin: 0 0 6px; font-size: 10.5px; }
+
+/* Organization directory and offline address book (E41) */
+.recipient-suggestions-label { grid-column: 1 / -1; margin: 4px 7px 0; color: var(--muted); font-size: 9px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.recipient-suggestions > .directory-suggestion { min-width: 0; display: flex; align-items: center; gap: 4px; border-radius: 8px; }
+.recipient-suggestions > .directory-suggestion:hover { background: var(--surface-hover); }
+.directory-suggestion > button:first-child { min-width: 0; flex: 1; display: flex; align-items: center; gap: 8px; padding: 5px 7px; background: transparent; text-align: left; }
+.directory-suggestion > button:first-child > span:last-child { min-width: 0; display: flex; flex-direction: column; }
+.directory-suggestion .directory-expand { flex: none; padding: 2px 6px; font-size: 9.5px; white-space: nowrap; }
+.directory-kind { display: inline-grid; place-items: center; color: var(--accent-text); background: var(--accent-soft); }
+.directory-kind.kind-group { color: var(--success); }
+.directory-kind.kind-room, .directory-kind.kind-equipment { color: var(--text-soft); background: var(--surface-3); }
+.directory-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; }
+.directory-accounts { display: grid; gap: 8px; margin: 0; padding: 10px 14px 14px; border-top: 1px solid var(--line); list-style: none; }
+.directory-account { display: grid; gap: 3px; font-size: 11px; }
+.directory-account small { color: var(--muted); }
+.directory-account.unsupported { opacity: 0.8; }
+.directory-account p { margin: 2px 0; font-size: 10.5px; }
+.directory-account-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; }
+.directory-freshness { overflow-wrap: anywhere; }
+.directory-warning { color: var(--danger); }
+.directory-members { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.directory-members small { color: var(--muted); }
+.directory-resource-picker { display: grid; gap: 6px; }
+.directory-resource-results { display: flex; flex-wrap: wrap; gap: 6px; }
+.directory-resource-results small { color: var(--muted); }

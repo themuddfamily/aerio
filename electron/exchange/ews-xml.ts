@@ -115,7 +115,9 @@ export function responseMessages(body: XmlElement, operation: string): EwsRespon
   const response = m(body, `${operation}Response`)
   if (!response) throw new EwsSoapFault(`The server did not return a ${operation} response`)
   const container = m(response, 'ResponseMessages')
-  return (container?.children ?? []).map((element) => {
+  // A few operations (GetRoomLists, GetRooms, FindPeople) answer with a single unwrapped response.
+  const elements = container ? container.children : response.attributes.ResponseClass ? [response] : []
+  return elements.map((element) => {
     const responseClass = (element.attributes.ResponseClass ?? 'Error') as EwsResponseMessage['responseClass']
     const backOff = element.children.find((child) => child.name === 'MessageXml')?.children.find((child) => child.attributes.Name === 'BackOffMilliseconds')
     return {

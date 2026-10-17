@@ -120,6 +120,27 @@ Use account aliases starting with `exchange-2016-`, `exchange-2019-`, or `exchan
 
 No Exchange results have been recorded yet.
 
+## Organization directory coverage
+
+The read-only organization directory and offline address book ([organization-directory.md](organization-directory.md)) need a work or school tenant, a Google Workspace domain, or an Exchange Server organization with at least 1,000 directory entries (so listings span pages), two people with the same display name, a mail-enabled group, and a room list with two rooms.
+
+| ID | Scenario | Pass criteria |
+| --- | --- | --- |
+| `DIR-01` | Consent and denied consent | **Allow directory access** adds `User.ReadBasic.All`/`People.Read` (Microsoft 365) or `directory.readonly` (Workspace) without disturbing mail. On a tenant that blocks user consent, Aerio shows the administrator-consent explanation and keeps personal contacts and recent recipients working. A consumer Gmail account reports that it has no directory. |
+| `DIR-02` | Lookup and disambiguation | In the composer, typing a partial name lists directory people, groups, and rooms after the cached suggestions and personal contacts, marked read-only with type icons. The two people with the same name show title, department, and address. The group inserts its address, and **Expand members** inserts its members (Exchange; Microsoft 365 with GroupMember.Read.All). |
+| `DIR-03` | Offline address book | **Refresh now** lists every page into the cache, and Contacts › Directory shows the entry count and age. With the network disconnected, lookups answer from the cache and say so. Interrupting a refresh (disconnect mid-listing) keeps the previous cache and shows the failure and last success. |
+| `DIR-04` | Rooms in scheduling | The scheduling assistant finds a room by a word in its name and adds it as a resource whose free/busy is then looked up. |
+
+Use account aliases starting with `directory-m365-`, `directory-workspace-`, or `directory-exchange-`. These rows are Beta and are not checked by `verify:live-evidence`.
+
+| Directory | DIR-01 | DIR-02 | DIR-03 | DIR-04 |
+| --- | --- | --- | --- | --- |
+| directory-m365 | Beta | Beta | Beta | Beta |
+| directory-workspace | Beta | Beta | Beta | N/A: the Workspace directory API has no rooms |
+| directory-exchange | N/A: no consent step | Beta | Beta | Beta |
+
+No organization directory results have been recorded yet.
+
 ## Execution log
 
 Copy this row for every run. A failure remains a release blocker until its linked issue is fixed and the scenario is rerun.

@@ -182,6 +182,19 @@ const api: AerioDesktopApi = {
       return () => ipcRenderer.removeListener('exchange:changed', listener)
     }
   },
+  // Organization directory and offline address book (E41): read-only lookups; nothing edits the directory.
+  directory: {
+    snapshot: () => ipcRenderer.invoke('directory:snapshot'),
+    search: (request) => ipcRenderer.invoke('directory:search', request),
+    expandGroup: (accountId, groupEmail) => ipcRenderer.invoke('directory:expand-group', accountId, groupEmail),
+    refresh: (accountId) => ipcRenderer.invoke('directory:refresh', accountId),
+    grantAccess: (accountId, level) => level ? ipcRenderer.invoke('directory:grant', accountId, level) : ipcRenderer.invoke('directory:grant', accountId),
+    onChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, snapshot: import('../src/directory-types').DirectorySnapshot) => callback(snapshot)
+      ipcRenderer.on('directory:changed', listener)
+      return () => ipcRenderer.removeListener('directory:changed', listener)
+    }
+  },
   // Matrix chat: display snapshots and commands only; tokens and keys never cross this bridge.
   chat: {
     snapshot: () => ipcRenderer.invoke('chat:snapshot'),

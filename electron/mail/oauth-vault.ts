@@ -54,8 +54,10 @@ const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'M
 const MICROSOFT_INTERACTIVE_ONLY_SCOPES = new Set(['Tasks.ReadWrite', 'MailboxSettings.ReadWrite'])
 // Opt-in permissions (cloud attachments) are requested only when the user asks
 // for them, and requested again on later reconnects so a reconnect never drops them.
-const OPTIONAL_GOOGLE_SCOPES = ['https://www.googleapis.com/auth/drive.file']
-const OPTIONAL_MICROSOFT_SCOPES = ['Files.ReadWrite']
+// The organization directory (E41) adds directory.readonly, or User.ReadBasic.All/People.Read and
+// optionally Place.Read.All/GroupMember.Read.All, the same way.
+const OPTIONAL_GOOGLE_SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/directory.readonly']
+const OPTIONAL_MICROSOFT_SCOPES = ['Files.ReadWrite', 'User.ReadBasic.All', 'People.Read', 'Place.Read.All', 'GroupMember.Read.All']
 
 export interface OAuthAuthorizeOptions {
   /** Opt-in scopes added to this grant on top of the mail scopes. */

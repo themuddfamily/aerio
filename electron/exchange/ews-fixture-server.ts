@@ -44,6 +44,23 @@ export interface FixtureItem {
   props: Map<string, string>
 }
 
+/** A global address list entry (E41 directory tests). */
+export interface FixtureDirectoryEntry {
+  name: string
+  email: string
+  /** Mailbox (default), PublicDL, ... */
+  mailboxType?: string
+  /** FindPeople PersonaType; derived from mailboxType when omitted. */
+  personaType?: string
+  title?: string
+  department?: string
+  company?: string
+  office?: string
+  phone?: string
+  /** Distribution group members (addresses of other entries). */
+  members?: string[]
+}
+
 export interface AutodiscoverAnswer {
   status?: number
   location?: string
@@ -111,6 +128,12 @@ export class EwsFixtureServer {
   failures = new Map<string, string[]>()
   sessionsExpired = false
   deletedOccurrences: { masterId: string; instanceIndex: number }[] = []
+  /** Global address list for ResolveNames, ExpandDL, and FindPeople. */
+  directory: FixtureDirectoryEntry[] = []
+  /** Room lists by address: GetRoomLists/GetRooms. */
+  roomLists = new Map<string, { name: string; rooms: string[] }>()
+  /** Like servers that search the directory only with a query string. */
+  findPeopleNeedsQuery = false
   private readonly authenticated = new WeakSet<Socket>()
   private readonly challenges = new WeakMap<Socket, Buffer>()
   private counter = 0
@@ -325,7 +348,8 @@ export class EwsFixtureServer {
       SyncFolderItems: (element) => this.syncItems(element), GetItem: (element) => this.getItem(element), UpdateItem: (element) => this.updateItem(element),
       MoveItem: (element) => this.moveOrCopy(element, 'MoveItem'), CopyItem: (element) => this.moveOrCopy(element, 'CopyItem'), DeleteItem: (element) => this.deleteItem(element),
       CreateItem: (element) => this.createItem(element), CreateFolder: (element) => this.createFolder(element), UpdateFolder: (element) => this.updateFolder(element),
-      MoveFolder: (element) => this.moveFolder(element), DeleteFolder: (element) => this.deleteFolder(element)
+      MoveFolder: (element) => this.moveFolder(element), DeleteFolder: (element) => this.deleteFolder(element),
+      ...directoryHandlers(this)
     }
     const handler = handlers[operation]
     if (!handler) {
@@ -622,6 +646,66 @@ export class EwsFixtureServer {
       const item = this.addItem(target.id, spec.name === 'Contact' ? 'contact' : 'calendar', props)
       return ok('CreateItem', `<m:Items><t:${spec.name}><t:ItemId Id="${item.id}" ChangeKey="${item.changeKey}"/></t:${spec.name}></m:Items>`)
     }))
+  }
+}
+
+// --- Directory (E41) ----------------------------------------------------------------------------
+
+const directoryMailbox = (entry: FixtureDirectoryEntry, tag = 'Mailbox') =>
+  `<t:${tag}><t:Name>${escapeXml(entry.name)}</t:Name><t:EmailAddress>${escapeXml(entry.email)}</t:EmailAddress><t:RoutingType>SMTP</t:RoutingType><t:MailboxType>${entry.mailboxType ?? 'Mailbox'}</t:MailboxType></t:${tag}>`
+
+const directoryContact = (entry: FixtureDirectoryEntry) => `<t:Contact><t:DisplayName>${escapeXml(entry.name)}</t:DisplayName>` +
+  `${entry.company ? `<t:CompanyName>${escapeXml(entry.company)}</t:CompanyName>` : ''}` +
+  `${entry.phone ? `<t:PhoneNumbers><t:Entry Key="BusinessPhone">${escapeXml(entry.phone)}</t:Entry></t:PhoneNumbers>` : ''}` +
+  `${entry.title ? `<t:JobTitle>${escapeXml(entry.title)}</t:JobTitle>` : ''}${entry.department ? `<t:Department>${escapeXml(entry.department)}</t:Department>` : ''}` +
+  `${entry.office ? `<t:OfficeLocation>${escapeXml(entry.office)}</t:OfficeLocation>` : ''}<t:ContactSource>ActiveDirectory</t:ContactSource></t:Contact>`
+
+/** ResolveNames-style ambiguous name resolution: any word of the name or the address starts with the entry. */
+const resolves = (entry: FixtureDirectoryEntry, term: string) => {
+  const lower = term.toLowerCase()
+  return entry.email.toLowerCase().startsWith(lower) || entry.name.toLowerCase().startsWith(lower) || entry.name.toLowerCase().split(/\s+/).some((word) => word.startsWith(lower))
+}
+
+function directoryHandlers(server: EwsFixtureServer): Record<string, (element: XmlElement) => string> {
+  const find = (email: string) => server.directory.find((entry) => entry.email.toLowerCase() === email.toLowerCase())
+  return {
+    ResolveNames: (element) => {
+      const term = text(child(element, 'UnresolvedEntry')).trim()
+      const found = server.directory.filter((entry) => resolves(entry, term)).slice(0, 100)
+      if (!found.length) return reply('ResolveNames', [fail('ResolveNames', 'ErrorNameResolutionNoResults', 'No results were found.')])
+      const full = element.attributes.ReturnFullContactData === 'true'
+      const set = `<m:ResolutionSet TotalItemsInView="${found.length}" IncludesLastItemInRange="true">${found.map((entry) => `<t:Resolution>${directoryMailbox(entry)}${full ? directoryContact(entry) : ''}</t:Resolution>`).join('')}</m:ResolutionSet>`
+      if (found.length === 1) return reply('ResolveNames', [ok('ResolveNames', set)])
+      return reply('ResolveNames', [`<m:ResolveNamesResponseMessage ResponseClass="Warning"><m:MessageText>Multiple results were found.</m:MessageText><m:ResponseCode>ErrorNameResolutionMultipleResults</m:ResponseCode><m:DescriptiveLinkKey>0</m:DescriptiveLinkKey>${set}</m:ResolveNamesResponseMessage>`])
+    },
+    ExpandDL: (element) => {
+      const email = text(child(child(element, 'Mailbox'), 'EmailAddress')).trim()
+      const group = find(email)
+      if (!group?.members) return reply('ExpandDL', [fail('ExpandDL', 'ErrorNameResolutionNoResults', 'No results were found.')])
+      const members = group.members.map(find).filter((entry): entry is FixtureDirectoryEntry => Boolean(entry))
+      return reply('ExpandDL', [ok('ExpandDL', `<m:DLExpansion TotalItemsInView="${members.length}" IncludesLastItemInRange="true">${members.map((entry) => directoryMailbox(entry)).join('')}</m:DLExpansion>`)])
+    },
+    GetRoomLists: () => `<m:GetRoomListsResponse ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:RoomLists>${[...server.roomLists].map(([email, list]) => directoryMailbox({ name: list.name, email, mailboxType: 'PublicDL' }, 'Address')).join('')}</m:RoomLists></m:GetRoomListsResponse>`,
+    GetRooms: (element) => {
+      const email = text(child(child(element, 'RoomList'), 'EmailAddress')).trim().toLowerCase()
+      const list = [...server.roomLists].find(([address]) => address.toLowerCase() === email)?.[1]
+      if (!list) return `<m:GetRoomsResponse ResponseClass="Error"><m:MessageText>No results were found.</m:MessageText><m:ResponseCode>ErrorNameResolutionNoResults</m:ResponseCode><m:DescriptiveLinkKey>0</m:DescriptiveLinkKey></m:GetRoomsResponse>`
+      const rooms = list.rooms.map(find).filter((entry): entry is FixtureDirectoryEntry => Boolean(entry))
+      return `<m:GetRoomsResponse ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Rooms>${rooms.map((room) => `<t:Room>${directoryMailbox(room, 'Id')}</t:Room>`).join('')}</m:Rooms></m:GetRoomsResponse>`
+    },
+    FindPeople: (element) => {
+      const query = text(child(element, 'QueryString')).trim()
+      if (!query && server.findPeopleNeedsQuery) return `<m:FindPeopleResponse ResponseClass="Error"><m:MessageText>A query string is required to search the directory.</m:MessageText><m:ResponseCode>ErrorInvalidArgument</m:ResponseCode><m:DescriptiveLinkKey>0</m:DescriptiveLinkKey></m:FindPeopleResponse>`
+      const view = child(element, 'IndexedPageItemView')
+      const offset = Number(view?.attributes.Offset ?? 0)
+      const max = Number(view?.attributes.MaxEntriesReturned ?? 100)
+      const all = server.directory.filter((entry) => !query || resolves(entry, query))
+      const page = all.slice(offset, offset + max)
+      const persona = (entry: FixtureDirectoryEntry, index: number) => `<t:Persona><t:PersonaId Id="PERSONA${offset + index}"/><t:PersonaType>${entry.personaType ?? (entry.mailboxType === 'PublicDL' ? 'DistributionList' : 'Person')}</t:PersonaType>` +
+        `<t:DisplayName>${escapeXml(entry.name)}</t:DisplayName>${directoryMailbox(entry, 'EmailAddress')}${entry.title ? `<t:Title>${escapeXml(entry.title)}</t:Title>` : ''}` +
+        `${entry.department ? `<t:Department>${escapeXml(entry.department)}</t:Department>` : ''}${entry.company ? `<t:CompanyName>${escapeXml(entry.company)}</t:CompanyName>` : ''}</t:Persona>`
+      return `<m:FindPeopleResponse ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:People>${page.map(persona).join('')}</m:People><m:TotalNumberOfPeopleInView>${all.length}</m:TotalNumberOfPeopleInView><m:FirstMatchingRowIndex>0</m:FirstMatchingRowIndex><m:FirstLoadedRowIndex>${offset}</m:FirstLoadedRowIndex></m:FindPeopleResponse>`
+    }
   }
 }
 
