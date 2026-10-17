@@ -347,6 +347,25 @@ describe('preload bridge', () => {
     expect(Object.keys(smime)).toHaveLength(calls.length)
   })
 
+  it('exposes folder favorites and appearance with exact IPC channels', async () => {
+    const preferences = api().mail.folderPreferences!
+    const order = [{ accountId: 'account-1', labelId: 'folder:Projects' }]
+    const appearance = { accountId: 'account-1', labelId: 'folder:Projects', icon: 'star' as const, hidden: true }
+    await preferences.get()
+    await preferences.addFavorite('account-1', 'folder:Projects')
+    await preferences.removeFavorite('account-1', 'folder:Projects')
+    await preferences.reorderFavorites(order)
+    await preferences.setFavoriteAlias('account-1', 'folder:Projects', 'Clients')
+    await preferences.setAppearance(appearance)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:folder-preferences:get')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:folder-preferences:add-favorite', 'account-1', 'folder:Projects')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:folder-preferences:remove-favorite', 'account-1', 'folder:Projects')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:folder-preferences:reorder', order)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:folder-preferences:set-alias', 'account-1', 'folder:Projects', 'Clients')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:folder-preferences:set-appearance', appearance)
+    expect(Object.keys(preferences)).toHaveLength(6)
+  })
+
   it('exposes provider automatic replies with exact IPC channels', async () => {
     const replies = api().mail.automaticReplies
     const settings = { enabled: true, subject: 'Away', internalMessage: 'Back Monday', externalMessage: '', externalAudience: 'all' }

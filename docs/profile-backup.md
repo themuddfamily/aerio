@@ -11,7 +11,7 @@ The layout is an allowlist. Only these profile entries are copied:
 | Entry | Contents |
 | --- | --- |
 | `aerio-state.sqlite` | Application preferences (the app-lock verifier is removed) |
-| `aerio.sqlite` | Mail accounts (metadata only), folders/labels, cached messages, the search index, drafts, outgoing/scheduled sends, queued mail changes, the folder-change journal, snoozes, rules, Quick Actions, saved searches, read-receipt history, reply watches, conversation pins |
+| `aerio.sqlite` | Mail accounts (metadata only), folders/labels, cached messages, the search index, drafts, outgoing/scheduled sends, queued mail changes, the folder-change journal, snoozes, rules, Quick Actions, saved searches, read-receipt history, reply watches, conversation pins, favorite folders and local folder appearance |
 | `message-local.sqlite` | Per-message categories, display preferences, and links to notes/tasks |
 | `mail-templates.sqlite` | QuickText snippets and templates |
 | `productivity.sqlite` | Local Tasks, Notes, and Contacts, local calendars and internet-calendar subscriptions, plus the provider calendar/contact cache |

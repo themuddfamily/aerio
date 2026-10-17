@@ -1,4 +1,4 @@
-import { CheckCircle2, Copy, FileWarning, Folder, FolderInput, FolderOpen, HardDrive, Import, Pause, Play, Square, Trash2, Upload, X } from 'lucide-react'
+import { CheckCircle2, Copy, Eye, EyeOff, FileWarning, Folder, FolderInput, FolderOpen, HardDrive, Import, Pause, Play, Square, Trash2, Upload, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Modal from './Modal'
 import type {
@@ -13,6 +13,12 @@ import type {
 } from '../mail-types'
 import { isLocalFoldersAccount } from '../lib/local-folders'
 import { mailFolderTree } from '../lib/mail-folders'
+import { folderKey, sidebarFolderRows } from '../lib/mail-folder-preferences'
+import type { MailFolderAppearance } from '../mail-folder-preference-types'
+import { FolderGlyph } from './MailSidebarFolders'
+
+const NO_APPEARANCE = new Map<string, MailFolderAppearance>()
+const NO_COLLAPSED = new Set<string>()
 import { formatFileSize } from '../lib/domain'
 
 const statusText: Record<MailImportJob['status'], string> = {
@@ -341,20 +347,27 @@ interface SidebarProps {
   onContextMenu(event: React.MouseEvent, label: MailLabel): void
   onManage(): void
   onImport(): void
+  /** Local icon, name color, and visibility (E35); defaults to the plain folder look. */
+  appearance?: Map<string, MailFolderAppearance>
+  showHidden?: boolean
+  onToggleHidden?(): void
 }
 
 /** The Local Folders folder tree in the mail sidebar, nested like the source mailboxes. */
-export function LocalFoldersSidebar({ account, labels, selectedAccountId, selectedLabelId, onOpen, onContextMenu, onManage, onImport }: SidebarProps) {
-  const rows = mailFolderTree(account.id, labels)
+export function LocalFoldersSidebar({ account, labels, selectedAccountId, selectedLabelId, onOpen, onContextMenu, onManage, onImport, appearance = NO_APPEARANCE, showHidden = false, onToggleHidden }: SidebarProps) {
+  const rows = sidebarFolderRows(account.id, labels, { appearance, showHidden, collapsed: NO_COLLAPSED })
+  const hiddenCount = labels.filter((label) => label.accountId === account.id && appearance.get(folderKey(account.id, label.id))?.hidden).length
   return <div className="sidebar-group local-folders-sidebar">
     <span className="sidebar-label">Local Folders</span>
-    {rows.map(({ label, depth, leafName }) => {
+    {hiddenCount > 0 && onToggleHidden && <button className="sidebar-item mail-folder-hidden-toggle" aria-pressed={showHidden} onClick={onToggleHidden}>{showHidden ? <EyeOff size={14} /> : <Eye size={14} />}<span>{showHidden ? 'Hide hidden folders' : `Show hidden folders (${hiddenCount.toLocaleString()})`}</span></button>}
+    {rows.map(({ label, depth, leafName, hidden }) => {
       const selected = selectedAccountId === account.id && selectedLabelId === label.id
-      return <button key={label.id} className={`sidebar-item ${selected ? 'active' : ''}`} aria-pressed={selected} style={{ paddingInlineStart: 10 + depth * 14 }} title={label.name} onClick={() => onOpen(label)} onContextMenu={(event) => onContextMenu(event, label)}>
-        {selected ? <FolderOpen size={15} /> : <Folder size={15} />}<span>{leafName}</span>
+      const look = appearance.get(folderKey(account.id, label.id))
+      return <button key={label.id} className={`sidebar-item ${selected ? 'active' : ''} ${hidden ? 'is-hidden' : ''}`} aria-pressed={selected} style={{ paddingInlineStart: 10 + depth * 14 }} title={label.name} onClick={() => onOpen(label)} onContextMenu={(event) => onContextMenu(event, label)}>
+        {look?.icon ? <FolderGlyph icon={look.icon} /> : selected ? <FolderOpen size={15} /> : <Folder size={15} />}<span style={look?.color ? { color: look.color } : undefined}>{leafName}</span>
       </button>
     })}
-    {!rows.length && <button className="sidebar-item" onClick={onManage}><Folder size={15} /><span>Create a folder</span></button>}
+    {!rows.length && !hiddenCount && <button className="sidebar-item" onClick={onManage}><Folder size={15} /><span>Create a folder</span></button>}
     <button className="sidebar-item" onClick={onImport}><Import size={15} /><span>Import mail…</span></button>
   </div>
 }

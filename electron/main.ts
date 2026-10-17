@@ -58,6 +58,7 @@ import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
 import { MailWorkerClient } from './mail/worker-client'
 import { validateCreateFolder, validateDeleteFolder, validateFolderReference, validateUpdateFolder } from './mail/folder-validation'
 import { registerMailRuleHandlers } from './mail/server-rule-ipc'
+import { registerMailFolderPreferenceHandlers } from './mail/folder-preference-ipc'
 import { normalizeAttachmentQuery } from './mail/attachment-index'
 import { normalizeContactHistoryQuery } from './mail/contact-history'
 import { registerContactMerge } from './productivity/contact-merge-ipc'
@@ -2053,6 +2054,7 @@ function registerIpc() {
     requireMailWorker().request<MailFolderMutationResult>({ type: 'folders:delete', payload: validateDeleteFolder(input) }))
   ipcMain.handle('mail:folders:delete-preview', (_event, accountId: string, labelId: string) =>
     requireMailWorker().request<MailFolderDeletePreview>({ type: 'folders:delete-preview', payload: validateFolderReference(accountId, labelId) }))
+  registerMailFolderPreferenceHandlers(ipcMain, (command) => requireMailWorker().request(command))
   ipcMain.handle('mail:rules:list', (_event, accountIds?: string[]) =>
     requireMailWorker().request<MailRule[]>({ type: 'rules:list', payload: { accountIds } }))
   registerMailRuleHandlers(ipcMain, {

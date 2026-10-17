@@ -2,6 +2,8 @@
 
 Open **Folders & labels** from the Mail sidebar footer, or right-click a sidebar label and choose **Manage folders and labels…**. Folders and labels can be created, renamed, nested, and deleted, and Gmail labels can also be recolored. Every change is made on the provider first; Aerio then re-reads the provider's folder list. Folder changes are never applied optimistically or queued offline, because messages can't be filed into a folder until the provider has assigned it an id. When the app is offline, it refuses the change and nothing is altered.
 
+The **Color** column below is the provider's own folder color. Favorites, display aliases, local icons and name colors for non-Gmail folders, and hiding folders from the sidebar are Aerio-only display preferences that never change the provider folder; see [favorite folders and local folder appearance](favorite-folders.md). The star button next to each folder in **Folders & labels** adds it to or removes it from Favorites without contacting the provider.
+
 | Provider | API | Nesting | Color | When a folder is deleted |
 | --- | --- | --- | --- | --- |
 | Gmail | `users.labels` create/patch/delete | By name (`Parent/Child`); renaming a parent also renames its children | Fixed Gmail palette only | The label is removed; its messages stay in All Mail |
@@ -26,6 +28,7 @@ On IMAP, a folder's id is its path, so a rename or move changes the ids of the f
 - the `label_id` and undo snapshots of queued and running operations
 - rule actions
 - per-folder UIDVALIDITY checkpoints
+- favorites and local folder appearance ([details](favorite-folders.md#renamed-moved-and-deleted-folders))
 
 Undoing an operation that was queued before the rename therefore restores the new ids, not stale ones. Messages in a renamed IMAP folder are re-indexed by the sync that follows, and their local ids follow the new path. If the renamed or deleted folder was open in the sidebar, it stays selected under its new id, or the selection is cleared if it was deleted.
 

@@ -105,4 +105,13 @@ describe('MailFolderManagerModal', () => {
     fireEvent.click(screen.getByRole('button', { name: /Save/ }))
     await waitFor(() => expect(api.update).toHaveBeenCalledWith({ accountId: 'g', labelId: 'L1', color: '#4a86e8' }))
   })
+  it('adds and removes Favorites from the manager without calling the provider', () => {
+    const onToggleFavorite = vi.fn()
+    render(<MailFolderManagerModal accounts={[account()]} labels={imapLabels} onChanged={vi.fn()} onToast={vi.fn()} onClose={vi.fn()} isFavorite={(_accountId, labelId) => labelId === 'folder:Work'} onToggleFavorite={onToggleFavorite} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Work from Favorites' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add Acme to Favorites' }))
+    expect(onToggleFavorite.mock.calls.map(([label]) => label.id)).toEqual(['folder:Work', 'folder:Work/Acme'])
+    expect(api.update).not.toHaveBeenCalled()
+    expect(api.delete).not.toHaveBeenCalled()
+  })
 })

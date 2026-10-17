@@ -1,4 +1,4 @@
-import { Folder, FolderPlus, Lock, Pencil, Save, Tag, Trash2 } from 'lucide-react'
+import { Folder, FolderPlus, Lock, Pencil, Save, Star, StarOff, Tag, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { MailAccountSummary, MailFolderDeletePreview, MailFolderMutationResult, MailLabel } from '../mail-types'
 import {
@@ -20,6 +20,9 @@ interface MailFolderManagerModalProps {
   onChanged(accountId: string, result: MailFolderMutationResult): void
   onToast(message: string): void
   onClose(): void
+  /** Favorites are display-only (E35); when provided, each folder gets an Add/Remove from Favorites toggle. */
+  isFavorite?(accountId: string, labelId: string): boolean
+  onToggleFavorite?(label: MailLabel): void
 }
 
 interface FolderEditor {
@@ -39,7 +42,7 @@ interface FolderDeletion {
 const NOT_EMPTY = /contains ([\d,]+) messages? on the server/
 const plural = (count: number, word: string) => `${count.toLocaleString()} ${word}${count === 1 ? '' : 's'}`
 
-export default function MailFolderManagerModal({ accounts, labels, initialAccountId, onChanged, onToast, onClose }: MailFolderManagerModalProps) {
+export default function MailFolderManagerModal({ accounts, labels, initialAccountId, onChanged, onToast, onClose, isFavorite, onToggleFavorite }: MailFolderManagerModalProps) {
   const writable = accounts.filter((account) => !account.archived)
   const [accountId, setAccountId] = useState(() => writable.find((account) => account.id === initialAccountId)?.id ?? writable[0]?.id ?? '')
   const [current, setCurrent] = useState(labels)
@@ -144,6 +147,9 @@ export default function MailFolderManagerModal({ accounts, labels, initialAccoun
           return <article key={label.id} style={{ marginInlineStart: depth * 18 }}>
             {noun === 'label' ? <Tag size={15} style={{ color: label.color }} /> : <Folder size={15} />}
             <span className="rule-copy"><strong>{leafName}</strong>{system && <small>System {noun}</small>}</span>
+            {isFavorite && onToggleFavorite && (isFavorite(label.accountId, label.id)
+              ? <button className="icon-button" title="Remove from Favorites" aria-label={`Remove ${leafName} from Favorites`} onClick={() => onToggleFavorite(label)}><StarOff size={15} /></button>
+              : <button className="icon-button" title="Add to Favorites" aria-label={`Add ${leafName} to Favorites`} onClick={() => onToggleFavorite(label)}><Star size={15} /></button>)}
             {system ? <Lock size={14} aria-label="Managed by the provider" /> : <>
               {capabilities.canRename && <button className="icon-button" title={`Edit ${leafName}`} aria-label={`Edit ${leafName}`} disabled={busy} onClick={() => setEditor({ labelId: label.id, name: leafName, parentId: label.parentId ?? '', color: label.color })}><Pencil size={15} /></button>}
               {capabilities.canDelete && <button className="icon-button danger" title={`Delete ${leafName}`} aria-label={`Delete ${leafName}`} disabled={busy} onClick={() => void beginDelete(label)}><Trash2 size={15} /></button>}
