@@ -1,19 +1,22 @@
 import { CalendarDays, CheckCircle2, Keyboard, Mail, NotebookPen, Search, ShieldCheck, Sparkles } from 'lucide-react'
 import Modal from './Modal'
+import { KEYMAP_COMMANDS } from '../lib/keymap'
+import { useKeymap } from '../lib/use-keymap'
 
 interface AppInfoModalProps {
   kind: 'help' | 'whats-new'
   onClose(): void
 }
 
-const shortcuts = [
-  ['Ctrl K', 'Search the current module or run a command'],
-  ['Ctrl N', 'Compose a new message'],
-  ['Ctrl 1–5', 'Open Mail, Calendar, Contacts, Tasks, or Notes'],
-  ['Esc', 'Close the active panel or dialog']
-]
+// The help list shows the current global bindings from the keymap registry; Esc is fixed.
+const helpCommands = KEYMAP_COMMANDS.filter((command) => command.context === 'global')
 
 export default function AppInfoModal({ kind, onClose }: AppInfoModalProps) {
+  const { label } = useKeymap()
+  const shortcuts = [
+    ...helpCommands.flatMap((command) => { const keys = label(command.id); return keys ? [[keys, command.label]] : [] }),
+    ['Esc', 'Close the active panel or dialog']
+  ]
   if (kind === 'whats-new') {
     return (
       <Modal title="What’s new in Aerio" subtitle="The latest Windows preview" onClose={onClose}>
@@ -35,8 +38,9 @@ export default function AppInfoModal({ kind, onClose }: AppInfoModalProps) {
       <div className="app-info-content">
         <div className="app-info-hero"><Keyboard size={24} /><div><strong>Move quickly without losing focus</strong><p>Search, navigation, and composition are available from the keyboard.</p></div></div>
         <dl className="shortcut-list">
-          {shortcuts.map(([keys, description]) => <div key={keys}><dt><kbd>{keys}</kbd></dt><dd>{description}</dd></div>)}
+          {shortcuts.map(([keys, description]) => <div key={`${keys}-${description}`}><dt><kbd>{keys}</kbd></dt><dd>{description}</dd></div>)}
         </dl>
+        <small className="app-info-note">Change these and the Mail, editor, and Quick Action shortcuts in Settings → Keyboard shortcuts.</small>
         <ul className="app-info-list compact">
           <li><ShieldCheck size={18} /><span><strong>Your local work is stored on this PC</strong><small>Use Settings to export a backup of Tasks, Notes, and local Contacts.</small></span></li>
           <li><NotebookPen size={18} /><span><strong>Mail is provider-backed; Tasks and Notes are local</strong><small>Calendar and Contacts show their latest synchronization time in their module.</small></span></li>

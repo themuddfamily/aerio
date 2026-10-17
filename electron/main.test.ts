@@ -497,6 +497,17 @@ describe.sequential('Electron main process', () => {
     expect(mocks.worker.request).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'drafts:save', payload: expect.objectContaining({ sendOptions: { importance: 'high' } }) }))
   })
 
+  it('persists validated keyboard shortcut overrides and migrates stored ones', async () => {
+    const settings = { theme: 'dark', density: 'compact', closeToTray: false, notifications: true, startModule: 'mail' }
+    invoke('preferences:save', { schemaVersion: 1, settings: { ...settings, keyboardShortcuts: { version: 1, bindings: {
+      'mail.archive': ['ctrl+e', 'Ctrl+E'], 'mail.trash': [], 'app.palette': ['Mod+J'], 'mail.reply': ['Mod+R'], 'unknown.command': ['Ctrl+P'], 'mail.forward': ['Hyper+F']
+    } } } })
+    expect(await invoke('preferences:load')).toMatchObject({ settings: { keyboardShortcuts: { version: 1, bindings: { 'mail.archive': ['Ctrl+E'], 'mail.trash': [], 'app.commandPalette': ['Mod+J'] } } } })
+    expect((await invoke('preferences:load')).settings.keyboardShortcuts.bindings).not.toHaveProperty('mail.reply')
+    invoke('preferences:save', { schemaVersion: 1, settings: { ...settings, keyboardShortcuts: 'Ctrl+K' } })
+    expect((await invoke('preferences:load')).settings).not.toHaveProperty('keyboardShortcuts')
+  })
+
   it('accepts unfinished recipients while saving but requires complete recipients when sending', async () => {
     const draft = { id: 'draft', accountId: 'a1b2', to: ['unfinished'], cc: [], bcc: [], subject: 'Hello', text: 'Body', attachmentPaths: [] }
     await expect(invoke('mail:drafts:save', draft)).resolves.toMatchObject({ command: 'drafts:save' })

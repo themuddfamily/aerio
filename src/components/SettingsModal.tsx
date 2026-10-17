@@ -10,6 +10,7 @@ import OpenPgpKeyManager from './OpenPgpKeyManager'
 import SmimeCertificateManager from './SmimeCertificateManager'
 import ProfileBackupSection from './ProfileBackupSection'
 import DavAccountsSection from './DavAccountsSection'
+import KeyboardShortcutsSection from './KeyboardShortcutsSection'
 
 const readReceiptChoices: [MailReadReceiptPolicy, string][] = [['never', 'Never send'], ['ask', 'Ask me'], ['always', 'Always send']]
 
@@ -266,6 +267,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
             </div>
           </div>
         </section>
+        <KeyboardShortcutsSection overrides={preferences.settings.keyboardShortcuts} onChange={(keyboardShortcuts) => setSettings({ keyboardShortcuts })} />
         <section className="settings-section">
           <div className="settings-icon"><Stethoscope size={18} /></div>
           <div className="settings-content">

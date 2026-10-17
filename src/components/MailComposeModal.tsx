@@ -14,6 +14,7 @@ import MailComposeSmimeControl from './MailComposeSmimeControl'
 import type { MailOpenPgpOptions } from '../openpgp-types'
 import type { MailSmimeOptions } from '../smime-types'
 import MailFormattingToolbar, { useRichEditorInput } from './MailFormattingToolbar'
+import { useKeymapKeyDown } from '../lib/use-keymap'
 import { ReplyWatchControl, armReplyWatch, replyWatchDeadline, type ReplyWatchSetting } from './MailReplyWatches'
 import { describeExpansion, expandRecipientLists, recipientListLabel, recipientListPreview, suggestRecipientLists, type RecipientList } from '../lib/distribution-lists'
 import { useRecipientLists } from './use-recipient-lists'
@@ -439,6 +440,11 @@ ${signature}` : ''}${forwardedText}`
       : status === 'sending' ? 'Sending…'
         : status === 'closing' ? 'Saving before closing…'
           : status === 'failed' ? saveError ?? 'Draft not saved — retry available' : 'Real mail'
+  // Editor shortcuts from the keymap registry; scoped to the composer so they also work when it is popped out.
+  const composeKeyDown = useKeymapKeyDown('compose', {
+    'compose.send': () => { if (status !== 'sending' && status !== 'closing') void send() },
+    'compose.saveDraft': () => { if (status !== 'saving' && status !== 'sending') void saveNow(input, true) }
+  })
   const composeTitle = draft ? 'Edit draft' : forward ? 'Forward' : replyTo ? replyAll ? 'Reply all' : 'Reply' : 'New message'
 
   return (
@@ -451,7 +457,7 @@ ${signature}` : ''}${forwardedText}`
       popoutSize={{ width: 800, height: 820 }}
       onClose={() => void closeComposer()}
     >
-        <div className="compose">
+        <div className="compose" onKeyDown={composeKeyDown}>
           <div className="compose-row"><label>From</label><select value={identityId} disabled={senderOptions.length < 2} onChange={(event) => {
             const option = senderOptions.find((item) => item.id === event.target.value)
             if (!option) return
@@ -498,7 +504,7 @@ ${signature}` : ''}${forwardedText}`
           ], file.name)}><Paperclip size={14} /><strong>{file.name}</strong>{file.size > 0 && <small>{formatFileSize(file.size)}</small>}<button aria-label={`Remove ${file.name}`} onClick={() => setAttachments((items) => items.filter((_, itemIndex) => index !== itemIndex))}><X size={13} /></button></span>)}</div>}
           <MailCloudAttachments open={cloudOpen} accountId={accountId} provider={currentAccount?.provider} attachments={attachments} recipients={[...input.to, ...input.cc, ...input.bcc]} editorRef={editorRef} onOpenChange={setCloudOpen} onEditorChange={updateEditor} onRemoveAttachment={(path) => setAttachments((items) => items.filter((item) => item.path !== path))} onToast={onToast} />
         </div>
-        <footer className="compose-footer">
+        <footer className="compose-footer" onKeyDown={composeKeyDown}>
           <button className="icon-button" title="Attach files" onClick={() => void chooseAttachments()}><Paperclip size={18} /></button>
           {cloudAttachmentsAvailable(currentAccount?.provider) && <button className={`icon-button ${cloudOpen ? 'active' : ''}`} title="Share a file as a cloud link" aria-pressed={cloudOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setCloudOpen((value) => !value)}><Cloud size={18} /></button>}
           <button className="button ghost small" disabled={status === 'saving' || status === 'sending'} onClick={() => void saveNow(input, true)}><Save size={15} /> Save draft</button>

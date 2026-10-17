@@ -51,6 +51,7 @@ import type {
 import type { CreateMailFolderInput, DeleteMailFolderInput, MailFolderDeletePreview, MailFolderMutationResult, UpdateMailFolderInput } from '../src/mail-types'
 import { OAuthVault } from './mail/oauth-vault'
 import { normalizeReadReceiptPolicy, normalizeSendOptions } from '../src/lib/mail-send-options'
+import { normalizeKeymapOverrides } from '../src/lib/keymap'
 import { DEFAULT_GOOGLE_CLIENT_ID, DEFAULT_MICROSOFT_CLIENT_ID, parseOAuthEnvironment } from './mail/oauth-config'
 import { ImapSmtpClient } from './mail/imap-client'
 import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
@@ -201,6 +202,7 @@ function preferencesFromUnknown(value: unknown): AppPreferences | undefined {
   const profile = candidate.profile
   if (profile !== undefined && (!profile || typeof profile !== 'object' || typeof profile.displayName !== 'string')) return
   const isUntouchedSampleProfile = profile?.displayName === 'Alex Avery' && profile.email === 'alex@aerio.app' && !profile.avatarDataUrl
+  const keyboardShortcuts = normalizeKeymapOverrides(candidate.keyboardShortcuts)
   return {
     schemaVersion: 1,
     settings: {
@@ -216,7 +218,8 @@ function preferencesFromUnknown(value: unknown): AppPreferences | undefined {
         displayName: profile.displayName,
         ...(typeof profile.email === 'string' ? { email: profile.email } : {}),
         ...(typeof profile.avatarDataUrl === 'string' ? { avatarDataUrl: profile.avatarDataUrl } : {})
-      } } : {})
+      } } : {}),
+      ...(keyboardShortcuts ? { keyboardShortcuts } : {})
     }
   }
 }

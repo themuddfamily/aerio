@@ -14,9 +14,11 @@ when nothing is checked. It can be started from:
   **Show on the message and selection toolbars**;
 - the conversation context menu (`Quick action: <name>`). Right-clicking a
   checked conversation runs it on the whole selection;
-- an optional keyboard shortcut, Ctrl+Shift+1 to Ctrl+Shift+9 (Cmd+Shift on
-  macOS). Shortcuts are ignored while focus is in a text field, list box,
-  or dialog, and each slot can belong to only one Quick Action;
+- an optional shortcut slot, 1 to 9, by default Ctrl+Shift+1 to Ctrl+Shift+9
+  (Cmd+Shift on macOS). Each slot's key can be changed or cleared in
+  Settings › Keyboard shortcuts ([keyboard shortcuts](keyboard-shortcuts.md)).
+  Shortcuts are ignored while focus is in a text field, list box, or dialog,
+  and each slot can belong to only one Quick Action;
 - the command palette (Ctrl+K) while Mail is open (`Run quick action: <name>`).
 
 ## Behaviour

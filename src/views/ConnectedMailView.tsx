@@ -24,7 +24,9 @@ import { Bookmark, Sparkles, Zap } from 'lucide-react'
 import MailAiSearchDialog from '../components/MailAiSearchDialog'
 import { aiFeatureAvailable, useAiAssistantStatus } from '../lib/use-ai-assistant'
 import { MailQuickActionButtons, MailQuickActionsModal, useMailQuickActions } from '../components/MailQuickActions'
-import { quickActionShortcutLabel, quickActionShortcutSlot, quickActionTargets, summarizeQuickActionRun } from '../lib/mail-quick-actions'
+import { quickActionTargets, summarizeQuickActionRun } from '../lib/mail-quick-actions'
+import { quickActionCommandId } from '../lib/keymap'
+import { useKeymap, useKeymapCommands } from '../lib/use-keymap'
 import type { MailQuickAction, MailSavedSearch, MailSavedSearchInput } from '../mail-types'
 import MailSnoozeModal from '../components/MailSnoozeModal'
 import { MailReplyWatchesModal } from '../components/MailReplyWatches'
@@ -578,20 +580,29 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quickActionRequest.id])
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const slot = quickActionShortcutSlot(event)
-      if (!slot || event.defaultPrevented) return
-      const target = event.target instanceof HTMLElement ? event.target : undefined
-      if (target?.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return
-      const quickAction = quickActions.quickActions.find((item) => item.shortcut === slot)
-      if (!quickAction) return
-      event.preventDefault()
-      void runQuickAction(quickAction)
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  })
+  // Mail shortcuts (src/lib/keymap.ts) act on the checked conversations, or the open one; they never fire in text fields or dialogs.
+  const { label: keyLabel } = useKeymap()
+  const shortcutAction = (action: MailActionKind | ((item: MailThreadSummary) => MailActionKind)) => () => {
+    const items = checkedItems.length ? checkedItems : selected ? [selected] : []
+    if (!items.length) return
+    const kind = typeof action === 'function' ? action(items[0]) : action
+    if (checkedItems.length) void applyBulkAction(kind)
+    else void applyAction(kind, items[0].accountId, [items[0].id])
+  }
+  useKeymapCommands('mail', {
+    'mail.reply': () => { if (selected && !selected.draft) void composeFromSummary(selected) },
+    'mail.replyAll': () => { if (selected && !selected.draft) void composeFromSummary(selected, false, true) },
+    'mail.forward': () => { if (selected) void composeFromSummary(selected, true) },
+    'mail.markRead': shortcutAction('read'),
+    'mail.markUnread': shortcutAction('unread'),
+    'mail.toggleStar': shortcutAction((item) => item.starred ? 'unstar' : 'star'),
+    'mail.archive': shortcutAction('archive'),
+    'mail.trash': shortcutAction('trash'),
+    'mail.openWindow': () => { if (selected) openMessageWindow(selected) },
+    'mail.refresh': () => refreshMail(),
+    ...Object.fromEntries(quickActions.quickActions.flatMap((quickAction) => quickAction.shortcut
+      ? [[quickActionCommandId(quickAction.shortcut), () => void runQuickAction(quickAction)]] : []))
+  }, { blockInTextEntry: true, ignoreDialogs: true })
 
   // Pin state is local-only, so archived (read-only) accounts can still be pinned.
   const togglePin = async (items: MailThreadSummary[], action = pinActionFor(items)) => {
@@ -825,22 +836,22 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     const inSpam = item.labelIds.includes('SPAM')
     return [
       { label: 'Open conversation', icon: MailOpen, action: () => openSummary(item) },
-      { label: 'Open in new window', icon: ExternalLink, action: () => openMessageWindow(item) },
-      { label: 'Reply', icon: Reply, separatorBefore: true, disabled: readOnly || item.draft, action: () => composeFromSummary(item) },
-      { label: 'Reply all', icon: ReplyAll, disabled: readOnly || item.draft, action: () => composeFromSummary(item, false, true) },
-      { label: 'Forward', icon: Forward, disabled: readOnly, action: () => composeFromSummary(item, true) },
-      { label: item.unread ? 'Mark as read' : 'Mark as unread', icon: item.unread ? MailOpen : Mail, separatorBefore: true, disabled: readOnly, action: () => applyAction(item.unread ? 'read' : 'unread', item.accountId, [item.id]) },
-      { label: item.starred ? 'Remove star' : 'Add star', icon: Star, checked: item.starred, disabled: readOnly, action: () => applyAction(item.starred ? 'unstar' : 'star', item.accountId, [item.id]) },
+      { label: 'Open in new window', icon: ExternalLink, shortcut: keyLabel('mail.openWindow'), action: () => openMessageWindow(item) },
+      { label: 'Reply', icon: Reply, shortcut: keyLabel('mail.reply'), separatorBefore: true, disabled: readOnly || item.draft, action: () => composeFromSummary(item) },
+      { label: 'Reply all', icon: ReplyAll, shortcut: keyLabel('mail.replyAll'), disabled: readOnly || item.draft, action: () => composeFromSummary(item, false, true) },
+      { label: 'Forward', icon: Forward, shortcut: keyLabel('mail.forward'), disabled: readOnly, action: () => composeFromSummary(item, true) },
+      { label: item.unread ? 'Mark as read' : 'Mark as unread', icon: item.unread ? MailOpen : Mail, shortcut: keyLabel(item.unread ? 'mail.markRead' : 'mail.markUnread'), separatorBefore: true, disabled: readOnly, action: () => applyAction(item.unread ? 'read' : 'unread', item.accountId, [item.id]) },
+      { label: item.starred ? 'Remove star' : 'Add star', icon: Star, shortcut: keyLabel('mail.toggleStar'), checked: item.starred, disabled: readOnly, action: () => applyAction(item.starred ? 'unstar' : 'star', item.accountId, [item.id]) },
       { label: item.pinned ? 'Unpin conversation' : 'Pin to top', icon: item.pinned ? PinOff : Pin, checked: Boolean(item.pinned), action: () => togglePin(checkedKeys.has(`${item.accountId}:${item.id}`) ? checkedItems : [item], item.pinned ? 'unpin' : 'pin') },
       { label: item.important ? 'Mark as not important' : 'Mark as important', icon: Tag, checked: item.important, disabled: readOnly, action: () => applyAction(item.important ? 'unimportant' : 'important', item.accountId, [item.id]) },
-      ...(!item.trashed ? [{ label: inInbox ? 'Archive' : 'Move to inbox', icon: inInbox ? Archive : Inbox, separatorBefore: true, disabled: readOnly, action: () => applyAction(inInbox ? 'archive' : inSpam ? 'move' : 'unarchive', item.accountId, [item.id], true, inSpam ? 'INBOX' : undefined) }] satisfies ContextMenuItem[] : []),
+      ...(!item.trashed ? [{ label: inInbox ? 'Archive' : 'Move to inbox', icon: inInbox ? Archive : Inbox, shortcut: inInbox ? keyLabel('mail.archive') : undefined, separatorBefore: true, disabled: readOnly, action: () => applyAction(inInbox ? 'archive' : inSpam ? 'move' : 'unarchive', item.accountId, [item.id], true, inSpam ? 'INBOX' : undefined) }] satisfies ContextMenuItem[] : []),
       { label: 'Move to…', icon: FolderInput, disabled: readOnly, action: () => { setCheckedKeys(new Set([`${item.accountId}:${item.id}`])); setOrganizeMode('move') } },
       { label: 'Manage labels…', icon: Tags, disabled: readOnly || accounts.find((account) => account.id === item.accountId)?.provider !== 'gmail', action: () => { setCheckedKeys(new Set([`${item.accountId}:${item.id}`])); setOrganizeMode('label') } },
       { label: item.snoozedUntil ? 'Return to Inbox now' : 'Snooze…', icon: Clock3, disabled: readOnly, action: () => item.snoozedUntil ? unsnooze(item) : setSnoozeItems([item]) },
-      { label: item.trashed ? 'Restore from Trash' : 'Move to Trash', icon: Trash2, danger: !item.trashed, disabled: readOnly, action: () => applyAction(item.trashed ? 'untrash' : 'trash', item.accountId, [item.id]) },
+      { label: item.trashed ? 'Restore from Trash' : 'Move to Trash', icon: Trash2, shortcut: item.trashed ? undefined : keyLabel('mail.trash'), danger: !item.trashed, disabled: readOnly, action: () => applyAction(item.trashed ? 'untrash' : 'trash', item.accountId, [item.id]) },
       ...quickActions.quickActions.map((quickAction, index): ContextMenuItem => ({
         label: `Quick action: ${quickAction.name}`, icon: Zap, separatorBefore: index === 0, disabled: readOnly,
-        shortcut: quickAction.shortcut ? quickActionShortcutLabel(quickAction.shortcut) : undefined,
+        shortcut: quickAction.shortcut ? keyLabel(quickActionCommandId(quickAction.shortcut)) : undefined,
         action: () => runQuickAction(quickAction, checkedKeys.has(`${item.accountId}:${item.id}`) ? checkedItems : [item])
       })),
       { label: 'Copy subject', icon: Copy, separatorBefore: true, action: () => copyText(item.subject) },
@@ -874,8 +885,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     }
     showContextMenu(event, [
       { label: 'Open in new window', icon: ExternalLink, action: () => openMessageWindow(selected, message.id) },
-      { label: 'Reply all', icon: ReplyAll, disabled: readOnly, action: () => setCompose({ reply: thread, replyAll: true }) },
-      { label: 'Forward', icon: Forward, disabled: readOnly, action: () => setCompose({ reply: thread, forward: true }) },
+      { label: 'Reply all', icon: ReplyAll, shortcut: keyLabel('mail.replyAll'), disabled: readOnly, action: () => setCompose({ reply: thread, replyAll: true }) },
+      { label: 'Forward', icon: Forward, shortcut: keyLabel('mail.forward'), disabled: readOnly, action: () => setCompose({ reply: thread, forward: true }) },
       { label: selected.important ? 'Mark as not important' : 'Mark as important', icon: Tag, checked: selected.important, separatorBefore: true, disabled: readOnly, action: () => applyAction(selected.important ? 'unimportant' : 'important', selected.accountId, [selected.id]) },
       { label: 'Move to…', icon: FolderInput, disabled: readOnly, action: () => selectForOrganizing('move') },
       { label: 'Manage tags / labels…', icon: Tags, disabled: !canManageLabels, action: () => selectForOrganizing('label') },

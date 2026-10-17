@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MailAccountSummary, MailDraftRecord, MailPage, MailQuickAction, MailQuickActionRunResult, MailSavedSearch, MailThreadDetail, SyncProgress } from '../mail-types'
 import { ContextMenuProvider } from '../components/ContextMenu'
 import ConnectedMailView from './ConnectedMailView'
+import { KeymapProvider } from '../lib/use-keymap'
 import { formatMailDateHeading } from '../lib/mail-date'
 
 vi.mock('../components/MailComposeModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Compose mock"><span>{props.draft ? `Editing ${props.draft.subject}` : props.replyAll ? 'Reply all' : props.forward ? 'Forward' : props.reply ? 'Reply' : `New ${props.initialTo ?? ''}`}</span><button onClick={() => props.onSent({ id: 'send-1', status: 'send-pending', updatedAt: new Date().toISOString(), undoUntil: new Date(Date.now() + 60_000).toISOString() })}>Queue send</button><button onClick={props.onClose}>Close compose</button></div> }))
@@ -235,6 +236,44 @@ describe('ConnectedMailView', () => {
 
     fireEvent.click(second)
     await waitFor(() => expect(api.mail.mail.thread).toHaveBeenCalledWith('account', 'thread-2'))
+  })
+
+  it('runs remappable mail shortcuts on the open or checked conversations, never while typing or in dialogs', async () => {
+    const onToast = vi.fn()
+    render(<KeymapProvider platform="windows" overrides={{ version: 1, bindings: { 'mail.archive': ['E'], 'mail.reply': [] } }}><ContextMenuProvider><ConnectedMailView onToast={onToast} /></ContextMenuProvider></KeymapProvider>)
+    await screen.findByText('Launch & plans')
+    const first = document.querySelector('.message-row') as HTMLElement
+    fireEvent.click(first)
+    await waitFor(() => expect(first).toHaveAttribute('aria-current', 'true'))
+    const actions = (action: string) => api.mail.mail.action.mock.calls.filter(([input]: any[]) => input.action === action)
+    fireEvent.keyDown(first, { key: 'Delete', code: 'Delete' })
+    await waitFor(() => expect(actions('trash')).toEqual([[{ accountId: 'account', threadIds: ['thread-1'], action: 'trash', labelId: undefined }]]))
+    // Plain and modified Mail shortcuts are ignored in the search field.
+    const search = screen.getByLabelText('Search mail')
+    fireEvent.keyDown(search, { key: 'Delete', code: 'Delete' })
+    fireEvent.keyDown(search, { key: 'u', code: 'KeyU', ctrlKey: true })
+    fireEvent.keyDown(search, { key: 'e', code: 'KeyE' })
+    expect(actions('trash')).toHaveLength(1)
+    expect(actions('unread')).toHaveLength(0)
+    fireEvent.keyDown(document.body, { key: 'u', code: 'KeyU', ctrlKey: true })
+    await waitFor(() => expect(actions('unread')).toHaveLength(1))
+    // A remapped plain key acts on the checked conversations instead of the open one.
+    fireEvent.click(screen.getByText('Second conversation').closest('.message-row')!, { ctrlKey: true })
+    fireEvent.keyDown(document.body, { key: 'e', code: 'KeyE' })
+    await waitFor(() => expect(actions('archive')).toEqual([[{ accountId: 'account', threadIds: ['thread-2'], action: 'archive' }]]))
+    fireEvent.keyDown(document.body, { key: 'e', code: 'KeyE', ctrlKey: true, shiftKey: true })
+    fireEvent.keyDown(document.body, { key: 'r', code: 'KeyR', ctrlKey: true })
+    expect(screen.queryByRole('dialog', { name: 'Compose mock' })).not.toBeInTheDocument()
+    fireEvent.keyDown(document.body, { key: 'R', code: 'KeyR', ctrlKey: true, shiftKey: true })
+    const compose = await screen.findByRole('dialog', { name: 'Compose mock' })
+    expect(compose).toHaveTextContent('Reply all')
+    fireEvent.keyDown(compose, { key: 'Delete', code: 'Delete' })
+    expect(actions('trash')).toHaveLength(1)
+    expect(actions('archive')).toHaveLength(1)
+    fireEvent.contextMenu(first)
+    expect(await screen.findByRole('menuitem', { name: 'Archive' })).toHaveAttribute('aria-keyshortcuts', 'E')
+    expect(screen.getByRole('menuitem', { name: 'Reply' })).not.toHaveAttribute('aria-keyshortcuts')
+    expect(screen.getByRole('menuitem', { name: 'Reply all' })).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+R')
   })
 
   it('performs bulk actions, move/label organization, snooze, and undo', async () => {

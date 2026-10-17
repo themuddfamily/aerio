@@ -193,6 +193,8 @@ export interface Settings {
   startModule: ModuleId
   readReceiptPolicy?: import('./mail-types').MailReadReceiptPolicy
   profile?: UserProfile
+  /** User changes to keyboard shortcuts; absent commands use the platform defaults (docs/keyboard-shortcuts.md). */
+  keyboardShortcuts?: import('./lib/keymap').KeymapOverrides
 }
 
 export interface AppPreferences {

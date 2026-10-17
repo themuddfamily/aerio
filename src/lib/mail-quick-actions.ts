@@ -30,16 +30,7 @@ export function quickActionDestinations(action: MailActionKind, account: Pick<Ma
   return [system('INBOX', 'Inbox'), ...own.filter((label) => label.type === 'user'), system('SPAM', 'Spam'), system('TRASH', 'Trash')]
 }
 
-/** Keyboard label for a shortcut slot. */
-export const quickActionShortcutLabel = (slot: number, mac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)) =>
-  `${mac ? 'Cmd' : 'Ctrl'}+Shift+${slot}`
-
-/** Returns the shortcut slot (1-9) for a Ctrl/Cmd+Shift+digit key event, using the physical key so Shift does not change it. */
-export function quickActionShortcutSlot(event: Pick<KeyboardEvent, 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey' | 'code'>) {
-  if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey) return undefined
-  const match = /^(?:Digit|Numpad)([1-9])$/.exec(event.code)
-  return match ? Number(match[1]) : undefined
-}
+// Shortcut slots 1-9 map to the remappable keymap commands quickActionCommandId(slot) in ./keymap.
 
 export function describeQuickActionStep(step: MailQuickActionStep, labels: MailLabel[] = [], accountId?: string) {
   const base = QUICK_ACTION_STEP_LABELS[step.action]
