@@ -32,7 +32,7 @@ export interface AvailabilityDependencies {
   googleToken(accountId: string): Promise<string>
   microsoftToken(accountId: string): Promise<string>
   /** Undefined means the grant predates scope tracking; the provider response decides. */
-  grantedScopes(accountId: string, provider: ProductivityProvider): string[] | undefined
+  grantedScopes(accountId: string, provider: Exclude<ProductivityProvider, 'dav'>): string[] | undefined
   now?: () => number
 }
 
@@ -276,7 +276,16 @@ export class AvailabilityService {
         message: 'Free/busy lookup needs a Google or Microsoft calendar. Local and subscribed calendars can’t check other people’s availability.'
       }
     }
-    const { accountId, provider } = calendar
+    // CalDAV free/busy (RFC 6638 scheduling) is not implemented.
+    if (calendar.provider === 'dav') {
+      return {
+        ...base,
+        attendees: [...addresses.map((email) => unknownAttendee(email, 'unsupported')), ...invalid],
+        message: 'Free/busy lookup needs a Google or Microsoft calendar. CalDAV calendars can’t check other people’s availability yet.'
+      }
+    }
+    const accountId = calendar.accountId
+    const provider = calendar.provider
     const scopes = availabilityScopeStatus(provider, this.dependencies.grantedScopes(accountId, provider))
     const withAccount = { ...base, accountId, provider }
     if (!scopes.granted) {

@@ -80,6 +80,10 @@ import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import { InterchangeStore } from './productivity/interchange-store'
 import { registerCalendarContactInterchange } from './productivity/interchange-ipc'
+import { DavStore } from './productivity/dav-store'
+import { DavCredentialVault } from './productivity/dav-credentials'
+import { DavService } from './productivity/dav-service'
+import { registerDavAccounts } from './productivity/dav-ipc'
 import { registerMailImport } from './mail/mail-import-ipc'
 import { validContactInterchangeFields, validContactLists, validEventInterchangeFields } from '../src/lib/interchange-validation'
 import { contactEditConflict } from '../src/lib/contact-fields'
@@ -140,6 +144,9 @@ let updates: UpdateManager | null = null
 let productivityStore: ProductivityStore | null = null
 let interchangeStore: InterchangeStore | null = null
 let interchangeService: ReturnType<typeof registerCalendarContactInterchange> | null = null
+let davStore: DavStore | null = null
+let davService: DavService | null = null
+let davIpc: ReturnType<typeof registerDavAccounts> | null = null
 let taskService: TaskService | null = null
 let taskPolling: NodeJS.Timeout | undefined
 let taskNetworkOnline = true
@@ -461,7 +468,22 @@ function materializeLocalDataBackup(backup: LocalDataBackup): { snapshot: LocalM
   }
 }
 
+function requireDavService() {
+  if (!davService) throw new Error('Calendar and contacts accounts are not ready')
+  return davService
+}
+
+function broadcastProductivity() {
+  if (!productivityStore) return
+  const snapshot = productivityStore.snapshot()
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { snapshot })
+}
+
 async function syncProductivity(accountId: string): Promise<ProductivitySnapshot> {
+  if (davService?.hasAccount(accountId)) {
+    try { await davService.sync(accountId) } finally { davIpc?.broadcast() }
+    return requireProductivityStore().snapshot()
+  }
   const provider = accountProviders.get(accountId)
   if (provider !== 'gmail' && provider !== 'microsoft') throw new Error('This mail connection does not provide Calendar or Contacts APIs')
   const store = requireProductivityStore()
@@ -566,6 +588,12 @@ async function createProductivityEvent(input: CalendarEvent) {
   const store = requireProductivityStore()
   const calendar = store.snapshot().calendars.find((item) => item.id === input.calendarId)
   if (!calendar) throw new Error('That calendar is no longer available')
+  if (calendar.provider === 'dav') {
+    if (!calendar.canWrite) throw new Error('This calendar is read-only')
+    await requireDavService().createEvent(calendar, input)
+    davIpc?.broadcast()
+    return store.snapshot()
+  }
   if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
   const saved = await writableCalendarConnector(calendar).createEvent(calendar, input)
   store.upsertEvent(saved)
@@ -611,6 +639,11 @@ async function updateProductivityEvent(input: CalendarEvent, scope?: RecurrenceE
   if (!calendar) throw new Error('That calendar is no longer available')
   if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
   if (current.provider !== calendar.provider || current.accountId !== calendar.accountId) throw new Error('The event’s calendar connection changed; synchronize before editing')
+  if (calendar.provider === 'dav') {
+    await requireDavService().updateEvent(current, input)
+    davIpc?.broadcast()
+    return store.snapshot()
+  }
   const saved = await writableCalendarConnector(calendar).updateEvent(calendar, current, input)
   store.upsertEvent(saved)
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-updated', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
@@ -630,6 +663,11 @@ async function deleteProductivityEvent(eventId: string, scope?: RecurrenceEditSc
   if (!calendar) throw new Error('That calendar is no longer available')
   if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
   if (current.provider !== calendar.provider || current.accountId !== calendar.accountId) throw new Error('The event’s calendar connection changed; synchronize before deleting')
+  if (calendar.provider === 'dav') {
+    await requireDavService().deleteEvent(current)
+    davIpc?.broadcast()
+    return store.snapshot()
+  }
   await writableCalendarConnector(calendar).deleteEvent(calendar, current)
   store.deleteEvent(current.id)
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-deleted', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
@@ -706,6 +744,11 @@ async function updateProductivityContactGroupMembers(groupId: string, addIds: st
 }
 
 async function createProductivityContact(accountId: string, input: Contact) {
+  if (davService?.hasAccount(accountId)) {
+    const contact = await davService.createContact(accountId, input)
+    davIpc?.broadcast()
+    return { contact, snapshot: requireProductivityStore().snapshot() }
+  }
   const provider = accountProviders.get(accountId)
   if (provider !== 'gmail' && provider !== 'microsoft') throw new Error('Choose a connected Google or Microsoft account')
   const store = requireProductivityStore()
@@ -719,6 +762,12 @@ async function updateProductivityContact(input: Contact) {
   const store = requireProductivityStore()
   const current = store.snapshot().contacts.find((contact) => contact.id === input.id)
   if (!current) throw new Error('That contact is no longer available')
+  if (current.provider === 'dav') {
+    if (current.readOnly) throw new Error('This address book is read-only')
+    const contact = await requireDavService().updateContact(current, input)
+    davIpc?.broadcast()
+    return { contact, snapshot: store.snapshot() }
+  }
   if (current.readOnly) throw new Error('Reconnect this account once to enable Contacts editing')
   const conflict = contactEditConflict(current, input as Contact & { revision?: unknown })
   if (conflict) throw new Error(conflict)
@@ -732,6 +781,12 @@ async function deleteProductivityContact(contactId: string) {
   const store = requireProductivityStore()
   const current = store.snapshot().contacts.find((contact) => contact.id === contactId)
   if (!current) throw new Error('That contact is no longer available')
+  if (current.provider === 'dav') {
+    if (current.readOnly) throw new Error('This address book is read-only')
+    await requireDavService().deleteContact(current)
+    davIpc?.broadcast()
+    return store.snapshot()
+  }
   if (current.readOnly) throw new Error('Reconnect this account once to enable Contacts editing')
   await writableContactsConnector(current.accountId, current.provider).deleteContact(current)
   store.deleteContact(current.id)
@@ -1960,6 +2015,7 @@ function registerIpc() {
     if (typeof online !== 'boolean') throw new Error('Invalid network state')
     taskNetworkOnline = online
     if (online) void taskService?.flush().catch(() => {})
+    if (online) void davIpc?.flushNow()
     return requireMailWorker().request({ type: 'network', payload: { online } })
   })
   ipcMain.handle('mail:attachments:list', (_event, query: unknown) =>
@@ -2035,6 +2091,15 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     },
     diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
   })
+  davStore = new DavStore(join(app.getPath('userData'), 'dav.sqlite'))
+  davService = new DavService({
+    store: davStore,
+    productivity: requireProductivityStore,
+    credentials: new DavCredentialVault(join(app.getPath('userData'), 'dav-credentials.dat'), safeStorage),
+    online: () => taskNetworkOnline && net.isOnline(),
+    diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
+  })
+  davIpc = registerDavAccounts({ service: requireDavService, productivityChanged: broadcastProductivity })
   registerRemoteImageProtocol()
   readyToOpenWindows = true
   createWindow()
@@ -2066,6 +2131,9 @@ app.on('before-quit', () => {
   void taskService?.close().catch(() => {})
   updates?.stop()
   interchangeService?.dispose()
+  davIpc?.dispose()
+  davStore?.close()
+  davStore = null
   interchangeStore?.close()
   interchangeStore = null
   productivityStore?.close()

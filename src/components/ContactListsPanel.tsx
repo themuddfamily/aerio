@@ -147,7 +147,7 @@ export async function deleteRecipientList(actions: ContactListActions, contacts:
 export function ContactListEditor({ list, contacts, providerAccounts, canCreateGroups, onClose, onSave, onToast }: {
   list?: RecipientList
   contacts: Contact[]
-  providerAccounts: { id: string; email: string; provider: 'gmail' | 'microsoft' }[]
+  providerAccounts: { id: string; email: string; provider: 'gmail' | 'microsoft' | 'dav' }[]
   canCreateGroups: boolean
   onClose(): void
   onSave(target: ListTarget, name: string, memberIds: Set<string>, extraAddresses: string[]): Promise<void>
@@ -172,7 +172,7 @@ export function ContactListEditor({ list, contacts, providerAccounts, canCreateG
         <label className="field-label">Save to
           <select value={targetKey} disabled={Boolean(list)} onChange={(event) => { setTargetKey(event.target.value); setMemberIds(new Set()) }}>
             <option value="list">Local list on this PC</option>
-            {providerAccounts.map((account) => account.provider === 'gmail'
+            {providerAccounts.filter((account) => account.provider !== 'dav').map((account) => account.provider === 'gmail'
               ? canCreateGroups && <option key={account.id} value={`group:${account.id}`}>{account.email} · Google contact group</option>
               : <option key={account.id} value={`category:${account.id}`}>{account.email} · Outlook category</option>)}
           </select>

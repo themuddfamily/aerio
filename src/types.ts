@@ -14,7 +14,7 @@ export interface Account {
   email: string
   initials: string
   color: string
-  provider: 'gmail' | 'microsoft' | 'outlook' | 'imap' | 'local'
+  provider: 'gmail' | 'microsoft' | 'outlook' | 'imap' | 'local' | 'dav'
 }
 
 export interface Attachment {
@@ -218,4 +218,5 @@ export interface AerioDesktopApi {
   ai: import('./ai-assistant-types').AiAssistantApi
   openPgp?: import('./openpgp-types').OpenPgpApi
   interchange: import('./interchange-types').InterchangeDesktopApi
+  dav: import('./dav-types').DavDesktopApi
 }

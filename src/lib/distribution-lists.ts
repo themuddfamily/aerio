@@ -16,7 +16,7 @@ export interface RecipientList {
   id: string
   name: string
   kind: RecipientListKind
-  source: 'local' | 'gmail' | 'microsoft'
+  source: 'local' | 'gmail' | 'microsoft' | 'dav'
   accountId?: string
   // Membership cannot be changed (provider editing not enabled, or a protected group).
   readOnly: boolean
