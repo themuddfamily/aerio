@@ -2881,6 +2881,29 @@ kbd {
 .rules-empty { min-height: 240px; display: grid; place-content: center; justify-items: center; gap: 7px; margin: 0; color: var(--muted); text-align: center; }
 .rules-empty strong { color: var(--text); font-size: 12px; }
 
+.mail-attachments-modal { width: min(1000px, 96vw); height: min(780px, calc(100vh - 100px)); }
+.mail-attachment-filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
+.mail-attachment-filters > label { display: flex; flex-direction: column; gap: 5px; min-width: 0; color: var(--muted); font-size: 9.5px; font-weight: 650; }
+.mail-attachment-filters input, .mail-attachment-filters select { width: 100%; height: 32px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; color: var(--text); background: var(--surface-2); font-size: 11px; }
+.mail-attachment-filters input:focus, .mail-attachment-filters select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.mail-attachment-filters > .mail-attachment-search { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-2); }
+.mail-attachment-filters > .mail-attachment-search input { border: 0; padding: 0; background: transparent; box-shadow: none; }
+.mail-attachment-toggles { grid-column: 1 / -1; display: flex; align-items: center; gap: 16px; color: var(--muted); font-size: 10.5px; }
+.mail-attachment-toggles label { display: inline-flex; align-items: center; gap: 6px; }
+.mail-attachment-toggles input { width: auto; height: auto; }
+.mail-attachment-list { flex: 1; min-height: 240px; display: grid; align-content: start; gap: 6px; padding: 14px 20px; overflow-y: auto; }
+.mail-attachment-list > article { display: flex; align-items: center; gap: 10px; min-height: 58px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.mail-attachment-list > article.unavailable { opacity: .68; }
+.mail-attachment-list > article.unavailable .file-icon { color: var(--muted); background: var(--surface-3, var(--line)); }
+.mail-attachment-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.mail-attachment-copy strong, .mail-attachment-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-attachment-copy strong { font-size: 11px; }
+.mail-attachment-copy small { color: var(--muted); font-size: 9px; }
+.mail-attachment-copy small .account-dot { display: inline-block; margin-right: 5px; vertical-align: 1px; }
+.mail-attachment-list time { flex: 0 0 auto; color: var(--muted); font-size: 9.5px; }
+.mail-attachment-more { display: flex; justify-content: center; padding: 6px 0 2px; }
+@media (max-width: 720px) { .mail-attachment-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
 .rule-toggle { position: relative; width: 31px; height: 18px; flex: 0 0 auto; }
 .rule-toggle input { position: absolute; opacity: 0; }
 .rule-toggle span { position: absolute; inset: 0; border-radius: 12px; background: var(--line-strong); transition: background .15s; }

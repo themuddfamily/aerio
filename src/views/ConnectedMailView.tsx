@@ -7,6 +7,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import MailComposeModal from '../components/MailComposeModal'
 import MailAccountSetupModal from '../components/MailAccountSetupModal'
 import MailAccountSettingsModal from '../components/MailAccountSettingsModal'
+import MailAttachmentsModal from '../components/MailAttachmentsModal'
 import MailOrganizeModal from '../components/MailOrganizeModal'
 import MailMessageSourceModal from '../components/MailMessageSourceModal'
 import MailRulesModal from '../components/MailRulesModal'
@@ -103,6 +104,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [organizeMode, setOrganizeMode] = useState<'move' | 'label'>()
   const [snoozeItems, setSnoozeItems] = useState<MailThreadSummary[]>()
   const [rulesOpen, setRulesOpen] = useState(false)
+  const [attachmentsOpen, setAttachmentsOpen] = useState(false)
   const [sourceViewer, setSourceViewer] = useState<{ mode: 'headers' | 'source'; subject: string; content: string }>()
   const [remoteImages, setRemoteImages] = useState(false)
   const [accountSetup, setAccountSetup] = useState(false)
@@ -855,6 +857,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
             { label: 'Check account for mail', icon: RefreshCw, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => startSync(label.accountId) }
           ], label.name)}><Tag size={15} /><span>{label.name}</span></button> })}</div>}
         <div className="mail-sidebar-footer">
+          <button onClick={() => setAttachmentsOpen(true)}><Paperclip size={14} /> All attachments</button>
           <button onClick={() => setRulesOpen(true)}><Filter size={14} /> Mail rules</button>
           <button onClick={() => void showStorage()}><Download size={14} /> Offline storage</button>
           {accounts.filter((account) => !account.archived).map((account) => <button key={account.id} title={`Settings for ${account.email}`} onClick={() => setSettingsAccount(account)} onContextMenu={(event) => showAccountMenu(event, account)}><Settings2 size={14} /> {account.email.split('@')[0]}</button>)}
@@ -1003,6 +1006,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       {settingsAccount && <MailAccountSettingsModal account={settingsAccount} onSaved={(updated) => { setAccounts((items) => items.map((item) => item.id === updated.id ? updated : item)); setSettingsAccount(updated) }} onClose={() => setSettingsAccount(undefined)} onToast={onToast} />}
       {organizeMode && <MailOrganizeModal mode={organizeMode} items={checkedItems} accounts={accounts} labels={labels} onApply={applyOrganizeRequests} onClose={() => setOrganizeMode(undefined)} />}
       {snoozeItems && <MailSnoozeModal count={snoozeItems.length} onApply={(until) => applySnooze(snoozeItems, until)} onClose={() => setSnoozeItems(undefined)} />}
+      {attachmentsOpen && <MailAttachmentsModal accounts={accounts} onToast={onToast} onClose={() => setAttachmentsOpen(false)} />}
       {rulesOpen && <MailRulesModal accounts={accounts} labels={labels} onToast={onToast} onClose={() => setRulesOpen(false)} />}
       {sourceViewer && <MailMessageSourceModal {...sourceViewer} onClose={() => setSourceViewer(undefined)} />}
       {messageTools.dialog}

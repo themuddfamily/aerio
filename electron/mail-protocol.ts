@@ -14,6 +14,8 @@ import type {
   MailWorkerEvent,
   ImapAccountInput,
   MailPage,
+  MailAttachmentPage,
+  MailAttachmentQuery,
   MailFolderUnreadCounts,
   MailAccountUnreadCounts,
   MailAccountSettingsInput,
@@ -64,6 +66,7 @@ export type MailWorkerCommand =
   | { type: 'sync:progress' }
   | { type: 'storage:stats' }
   | { type: 'diagnostics:health' }
+  | { type: 'attachments:list'; payload: MailAttachmentQuery }
   | { type: 'attachment:extract'; payload: { accountId: string; messageId: string; attachmentId: string; targetPath: string } }
   | { type: 'network'; payload: { online: boolean } }
   | { type: 'polling'; payload: { intervalMs: number; immediate?: boolean } }
@@ -83,6 +86,7 @@ export type MailWorkerResult =
   | MailThreadDetail
   | MailMessageSource
   | MailPage
+  | MailAttachmentPage
   | MailFolderUnreadCounts
   | MailAccountUnreadCounts
   | PendingOperation

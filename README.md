@@ -13,6 +13,7 @@ Remaining release work and optional future features are tracked in [ROADMAP.md](
 - Raw RFC 2822 messages, MIME bodies, and attachments stored locally
 - Resumable sync checkpoints, Gmail History, Microsoft delta links, IMAP folder reconciliation, 15-second active/one-minute background polling, and manual pause/resume
 - SQLite-backed folder views, infinite scrolling, and full-text offline search
+- An all-attachments workspace that filters attachments across accounts by name, sender, recipient, date, file type, and size, with open, save, and jump-to-message actions ([attachments workspace](docs/attachments-workspace.md))
 - Single and multi-select Archive, read/unread, star, importance, move, label, and Trash actions
 - Optimistic local changes with exact-state Undo, retry/backoff, and a durable provider operation queue
 - Editable provider drafts with idle autosave, rich-text composition, recipient suggestions, signatures, forwarding attachments, scheduled delivery, ten-second Undo Send, SMTP delivery, and an offline Outbox

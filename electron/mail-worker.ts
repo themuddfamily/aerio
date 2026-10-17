@@ -905,7 +905,7 @@ async function processQueuedDrafts() {
 async function extractAttachment(accountId: string, messageId: string, attachmentIdValue: string, targetPath: string) {
   if (!database) throw new Error('Database is not initialized')
   const rawPath = database.getMessageRaw(accountId, messageId)
-  if (!rawPath) throw new Error('The original message is not available offline')
+  if (!rawPath || !database.rawExists(rawPath)) throw new Error('The original message is not available offline')
   const parsed = await PostalMime.parse(readFileSync(rawPath))
   const attachment = parsed.attachments.find((item, index) => attachmentId(item, index) === attachmentIdValue)
   if (!attachment) throw new Error('Attachment not found')
@@ -1168,6 +1168,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     return
   }
   if (command.type === 'diagnostics:health') return database.diagnosticHealth()
+  if (command.type === 'attachments:list') return database.listAttachments(command.payload)
   if (command.type === 'attachment:extract') {
     await extractAttachment(command.payload.accountId, command.payload.messageId, command.payload.attachmentId, command.payload.targetPath)
     return

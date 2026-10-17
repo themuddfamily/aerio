@@ -160,6 +160,7 @@ describe('preload bridge', () => {
     await mail.sync.resume('account-1')
     await mail.sync.rebuild('account-1')
     await mail.sync.progress()
+    await mail.attachments.list({ fileTypes: ['pdf'] })
     await mail.attachments.open('account-1', 'message-1', 'attachment-1', 'file.txt')
     await mail.attachments.save('account-1', 'message-1', 'attachment-1', 'file.txt')
     await mail.storage()
@@ -173,6 +174,7 @@ describe('preload bridge', () => {
       'mail:drafts:schedule', 'mail:rules:run', 'mail:sync:rebuild', 'mail:attachment:save', 'mail:diagnostics:export'
     ]) expect(channels).toContain(expected)
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:snooze', 'account-1', ['thread-1'], '2026-08-09T10:00:00Z')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:attachments:list', { fileTypes: ['pdf'] })
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:attachment:open', 'account-1', 'message-1', 'attachment-1', 'file.txt')
   })
 

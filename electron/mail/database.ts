@@ -5,6 +5,7 @@ import type {
   ApplyMailActionInput,
   MailAccountSummary,
   MailAttachment,
+  MailAttachmentPage,
   MailDraftInput,
   MailDraftRecord,
   MailDraftResult,
@@ -26,6 +27,7 @@ import type {
   PendingOperation,
   SyncProgress
 } from '../../src/mail-types'
+import { listAttachmentPage } from './attachment-index'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -1333,6 +1335,10 @@ export class MailDatabase {
 
   getAttachment(accountId: string, messageId: string, attachmentId: string) {
     return this.stmt('SELECT * FROM gmail_attachments WHERE account_id=? AND message_id=? AND id=?').get(accountId, messageId, attachmentId) as DatabaseRow | undefined
+  }
+
+  listAttachments(query: unknown): MailAttachmentPage {
+    return listAttachmentPage(this.db, query, (path) => this.rawExists(path))
   }
 
   storageStats(freeBytes: number): MailStorageStats {
