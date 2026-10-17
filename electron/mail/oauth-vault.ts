@@ -31,12 +31,18 @@ interface MicrosoftTokenSet {
 
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
+  // Automatic replies (users.settings.vacation). Existing grants keep working
+  // without it; the automatic-replies screen detects its absence and offers a reconnect.
+  'https://www.googleapis.com/auth/gmail.settings.basic',
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/contacts',
   'https://www.googleapis.com/auth/tasks'
 ]
-const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.ReadWrite', 'Contacts.ReadWrite', 'Tasks.ReadWrite']
+const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'MailboxSettings.ReadWrite', 'Calendars.ReadWrite', 'Contacts.ReadWrite', 'Tasks.ReadWrite']
+// Permissions added after the first release. A legacy grant without a stored
+// scope list must never ask for these during a silent refresh.
+const MICROSOFT_INTERACTIVE_ONLY_SCOPES = new Set(['Tasks.ReadWrite', 'MailboxSettings.ReadWrite'])
 
 export class OAuthVault {
   private data: StoredOAuthData = { googleTokens: {}, googleCalendarWrite: {}, microsoftTokens: {}, imapAccounts: {} }
@@ -359,9 +365,9 @@ export class OAuthVault {
     if (!clientId || !current) throw new Error('This Microsoft account needs to be connected again')
     const response = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      // Refresh renews the granted permissions; added Tasks consent belongs in
-      // an interactive reconnect, not a legacy mailbox's token refresh.
-      body: new URLSearchParams({ client_id: clientId, grant_type: 'refresh_token', refresh_token: current.refreshToken, scope: current.scope ?? MICROSOFT_SCOPES.filter((scope) => scope !== 'Tasks.ReadWrite').join(' ') })
+      // Refresh renews the granted permissions; added Tasks or mailbox-settings
+      // consent belongs in an interactive reconnect, not a legacy mailbox's token refresh.
+      body: new URLSearchParams({ client_id: clientId, grant_type: 'refresh_token', refresh_token: current.refreshToken, scope: current.scope ?? MICROSOFT_SCOPES.filter((scope) => !MICROSOFT_INTERACTIVE_ONLY_SCOPES.has(scope)).join(' ') })
     })
     const token = await response.json() as { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string; error_description?: string }
     if (!response.ok || !token.access_token) throw new Error(token.error_description ?? 'Microsoft token refresh failed')
@@ -395,6 +401,24 @@ export class OAuthVault {
       credentials = this.data.microsoftTokens[accountId]
     }
     return new Set((credentials?.scope ?? '').split(/\s+/).filter(Boolean)).has('Contacts.ReadWrite')
+  }
+
+  /**
+   * Scopes the provider reported for this account's grant, or undefined when
+   * the stored grant predates scope tracking and access must be probed instead.
+   * Microsoft Graph scopes are returned without their resource prefix.
+   */
+  grantedScopes(accountId: string, provider: 'gmail' | 'microsoft'): string[] | undefined {
+    const stored = () => provider === 'gmail' ? this.data.googleTokens[accountId] : this.data.microsoftTokens[accountId]
+    let credentials = stored()
+    if (!credentials) {
+      this.load()
+      credentials = stored()
+    }
+    const scope = credentials?.scope ?? undefined
+    if (!scope?.trim()) return undefined
+    const values = scope.split(/\s+/).filter(Boolean)
+    return provider === 'microsoft' ? values.map((value) => value.replace(/^https:\/\/graph\.microsoft\.com\//i, '')) : values
   }
 
   storeImap(accountId: string, input: ImapAccountInput) {

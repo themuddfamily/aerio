@@ -2,12 +2,14 @@ import { createHash } from 'node:crypto'
 import { ImapFlow, type ListResponse } from 'imapflow'
 import nodemailer from 'nodemailer'
 import PostalMime from 'postal-mime'
-import type { ImapAccountInput, MailActionKind } from '../../src/mail-types'
+import type { ImapAccountInput, MailActionKind, MailSendOptions } from '../../src/mail-types'
+import { FolderConflictError, FolderNotEmptyError } from './folder-errors'
 
 export interface ImapFolder {
   path: string
   name: string
   specialUse?: string
+  delimiter?: string
 }
 
 export interface ImapMessageRef {
@@ -85,11 +87,76 @@ export class ImapSmtpClient {
     }
   }
 
-  async listFolders(client: ImapFlow) {
+  async listFolders(client: ImapFlow): Promise<ImapFolder[]> {
     const folders = await client.list({ statusQuery: { messages: true, uidNext: true, uidValidity: true, highestModseq: true } })
     return folders
       .filter((folder) => !folder.flags.has('\\Noselect'))
-      .map((folder) => ({ path: folder.path, name: folder.name, specialUse: folder.specialUse }))
+      .map((folder) => ({ path: folder.path, name: folder.name, specialUse: folder.specialUse, delimiter: folder.delimiter || undefined }))
+  }
+
+  private async folderDelimiter(client: ImapFlow, path?: string) {
+    const folders = await client.list()
+    const match = folders.find((folder) => folder.path === path) ?? folders.find((folder) => folder.path.toUpperCase() === 'INBOX') ?? folders[0]
+    return { folders, delimiter: match?.delimiter || undefined }
+  }
+
+  async createFolder(parentPath: string | undefined, name: string) {
+    return this.withConnection(async (client) => {
+      const { folders, delimiter } = await this.folderDelimiter(client, parentPath)
+      if (parentPath && !folders.some((folder) => folder.path === parentPath)) throw new FolderConflictError('The parent folder no longer exists on the mail server')
+      if (parentPath && !delimiter) throw new Error('This mail server does not support nested folders')
+      if (delimiter && name.includes(delimiter)) throw new Error(`The name cannot contain the folder separator “${delimiter}”`)
+      // An array lets ImapFlow add the server's personal namespace prefix
+      // (for example "INBOX.") to new top-level folders.
+      const result = await client.mailboxCreate(parentPath ? `${parentPath}${delimiter}${name}` : [name])
+      if (!result?.created && !result?.path) throw new Error('The mail server could not create the folder')
+      if (result.created === false) throw new FolderConflictError('A folder with that name already exists on the mail server')
+      return { path: result.path, delimiter }
+    })
+  }
+
+  async renameFolder(path: string, newParentPath: string | undefined, newName: string) {
+    return this.withConnection(async (client) => {
+      const { folders, delimiter } = await this.folderDelimiter(client, path)
+      if (!folders.some((folder) => folder.path === path)) throw new FolderConflictError('The folder was renamed or removed on the mail server')
+      if (newParentPath && !folders.some((folder) => folder.path === newParentPath)) throw new FolderConflictError('The destination parent folder no longer exists on the mail server')
+      if (newParentPath && !delimiter) throw new Error('This mail server does not support nested folders')
+      if (delimiter && newName.includes(delimiter)) throw new Error(`The name cannot contain the folder separator “${delimiter}”`)
+      const target = newParentPath ? `${newParentPath}${delimiter}${newName}` : newName
+      if (target === path) return { path, delimiter }
+      if (folders.some((folder) => folder.path.toLowerCase() === target.toLowerCase())) throw new FolderConflictError('A folder with that name already exists on the mail server')
+      // As with create, an array target lets ImapFlow keep the namespace prefix.
+      const result = await client.mailboxRename(path, newParentPath ? target : [newName])
+      return { path: result?.newPath ?? target, delimiter }
+    })
+  }
+
+  // Deleting an IMAP mailbox expunges its messages on most servers, so
+  // non-empty folders are first emptied into Trash and verified empty.
+  async deleteFolder(path: string, allowNonEmpty: boolean) {
+    return this.withConnection(async (client) => {
+      const { folders, delimiter } = await this.folderDelimiter(client, path)
+      const folder = folders.find((item) => item.path === path)
+      if (!folder) throw new FolderConflictError('The folder was renamed or removed on the mail server')
+      if (delimiter && folders.some((item) => item.path.startsWith(`${path}${delimiter}`))) throw new Error('Delete or move this folder’s subfolders first')
+      const status = await client.status(path, { messages: true })
+      const count = status.messages ?? 0
+      let movedTo: string | undefined
+      if (count > 0) {
+        if (!allowNonEmpty) throw new FolderNotEmptyError(count)
+        movedTo = this.folderFor(normalizeImapFolders(folders), '\\Trash')
+        if (!movedTo || movedTo === path) throw new Error('The mail server does not expose a Trash folder. Move the messages out of this folder before deleting it.')
+        const lock = await client.getMailboxLock(path)
+        try {
+          const moved = await client.messageMove('1:*', movedTo)
+          if (!moved) throw new Error('The mail server could not move the messages to Trash')
+        } finally { lock.release() }
+        const remaining = (await client.status(path, { messages: true })).messages ?? 0
+        if (remaining > 0) throw new Error(`${remaining} message${remaining === 1 ? '' : 's'} could not be moved to Trash, so the folder was kept`)
+      }
+      await client.mailboxDelete(path)
+      return { moved: count, movedTo }
+    })
   }
 
   async inventoryFolder(client: ImapFlow, folder: ImapFolder) {
@@ -208,7 +275,7 @@ export class ImapSmtpClient {
   }
 
   /** `envelopeFrom` lets an alias identity use its own SMTP sender; the server decides whether it is allowed. */
-  async send(raw: Buffer, recipients: string[], envelopeFrom = this.config.email) {
+  async send(raw: Buffer, recipients: string[], options?: MailSendOptions, envelopeFrom = this.config.email) {
     const transport = nodemailer.createTransport({
       host: this.config.smtpHost,
       port: this.config.smtpPort,
@@ -218,14 +285,27 @@ export class ImapSmtpClient {
       tls: { rejectUnauthorized: !this.config.allowInvalidCertificates },
       connectionTimeout: 30_000
     })
-    await transport.sendMail({ envelope: { from: envelopeFrom, to: recipients }, raw })
+    // Nodemailer only adds DSN parameters when the SMTP server advertises DSN.
+    const dsn = options?.requestDeliveryReceipt ? { return: 'headers' as const, notify: ['success', 'failure', 'delay'] as ('success' | 'failure' | 'delay')[], recipient: envelopeFrom } : undefined
+    await transport.sendMail({ envelope: { from: envelopeFrom, to: recipients }, raw, ...(dsn ? { dsn } : {}) })
   }
 }
 
 export function labelsForImapFolders(accountId: string, folders: ImapFolder[]) {
-  return folders.map((folder) => ({ accountId, id: `folder:${folder.path}`, name: folder.path, type: folder.specialUse || folder.path.toUpperCase() === 'INBOX' ? 'system' as const : 'user' as const }))
+  const paths = new Set(folders.map((folder) => folder.path))
+  return folders.map((folder) => {
+    const split = folder.delimiter ? folder.path.lastIndexOf(folder.delimiter) : -1
+    const parent = split > 0 ? folder.path.slice(0, split) : undefined
+    return {
+      accountId,
+      id: `folder:${folder.path}`,
+      name: folder.path,
+      type: folder.specialUse || folder.path.toUpperCase() === 'INBOX' ? 'system' as const : 'user' as const,
+      ...(parent && paths.has(parent) ? { parentId: `folder:${parent}` } : {})
+    }
+  })
 }
 
 export function normalizeImapFolders(folders: ListResponse[]) {
-  return folders.map((folder) => ({ path: folder.path, name: folder.name, specialUse: folder.specialUse }))
+  return folders.map((folder) => ({ path: folder.path, name: folder.name, specialUse: folder.specialUse, delimiter: folder.delimiter || undefined }))
 }

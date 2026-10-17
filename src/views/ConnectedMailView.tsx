@@ -1,5 +1,5 @@
 import {
-  Archive, AtSign, CalendarClock, CheckSquare, ChevronDown, ChevronRight, Clock3, Copy, Download, Edit3, ExternalLink, FileText, Filter, FolderInput, Forward, Inbox, LoaderCircle, Mail, MailOpen,
+  Archive, AtSign, CalendarClock, CheckSquare, ChevronDown, ChevronRight, Clock3, Copy, Download, Edit3, ExternalLink, Eye, FileText, Filter, FolderInput, Forward, Inbox, LoaderCircle, Mail, MailOpen,
   MoreVertical, Paperclip, Pause, Play, Plus, RefreshCw, Reply, ReplyAll, Search, Send, Settings2,
   Star, Tag, Tags, Trash2, Undo2, UserPlus, WifiOff, X
 } from 'lucide-react'
@@ -7,16 +7,21 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import MailComposeModal from '../components/MailComposeModal'
 import MailAccountSetupModal from '../components/MailAccountSetupModal'
 import MailAccountSettingsModal from '../components/MailAccountSettingsModal'
+import MailAttachmentsModal from '../components/MailAttachmentsModal'
 import MailOrganizeModal from '../components/MailOrganizeModal'
 import MailMessageSourceModal from '../components/MailMessageSourceModal'
 import MailRulesModal from '../components/MailRulesModal'
+import MailFolderManagerModal from '../components/MailFolderManagerModal'
 import MailSearchFiltersPanel from '../components/MailSearchFiltersPanel'
 import { MailSavedSearchList, MailSaveSearchModal, savedSearchFromView, useMailSavedSearches, type MailSearchView } from '../components/MailSavedSearches'
 import { savedSearchMatchesView } from '../lib/mail-saved-search'
 import { mailSearchQueryError } from '../lib/mail-search-query'
-import { Bookmark } from 'lucide-react'
-import type { MailSavedSearch, MailSavedSearchInput } from '../mail-types'
+import { Bookmark, Zap } from 'lucide-react'
+import { MailQuickActionButtons, MailQuickActionsModal, useMailQuickActions } from '../components/MailQuickActions'
+import { quickActionShortcutLabel, quickActionShortcutSlot, quickActionTargets, summarizeQuickActionRun } from '../lib/mail-quick-actions'
+import type { MailQuickAction, MailSavedSearch, MailSavedSearchInput } from '../mail-types'
 import MailSnoozeModal from '../components/MailSnoozeModal'
+import { MailReplyWatchesModal } from '../components/MailReplyWatches'
 import SenderAvatar from '../components/SenderAvatar'
 import ThreadListPreview from '../components/ThreadListPreview'
 import ThreadMessageAccordion from '../components/ThreadMessageAccordion'
@@ -53,6 +58,7 @@ interface ConnectedMailViewProps {
   onToast(message: string): void
   composeRequest?: { id: number; initialTo?: string }
   searchRequest?: { id: number; query: string }
+  quickActionRequest?: { id: number; quickActionId: string }
 }
 
 const emptyPage: MailPage = { items: [], total: 0 }
@@ -73,7 +79,7 @@ function shortDate(date: string) {
     : new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(value)
 }
 
-export default function ConnectedMailView({ onToast, composeRequest = { id: 0 }, searchRequest = { id: 0, query: '' } }: ConnectedMailViewProps) {
+export default function ConnectedMailView({ onToast, composeRequest = { id: 0 }, searchRequest = { id: 0, query: '' }, quickActionRequest = { id: 0, quickActionId: '' } }: ConnectedMailViewProps) {
   const { showContextMenu } = useContextMenu()
   const mailPanes = useResizableMailPanes()
   const [accounts, setAccounts] = useState<MailAccountSummary[]>([])
@@ -90,6 +96,10 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [searchFiltersOpen, setSearchFiltersOpen] = useState(false)
   const savedSearches = useMailSavedSearches(onToast)
   const [savingSearch, setSavingSearch] = useState<MailSavedSearchInput>()
+  const quickActions = useMailQuickActions(onToast)
+  const [quickActionsOpen, setQuickActionsOpen] = useState(false)
+  // Requests that existed before this view mounted were meant for an earlier instance.
+  const handledQuickActionRequest = useRef(quickActionRequest.id)
   const [selectedKey, setSelectedKey] = useState('')
   const [thread, setThread] = useState<MailThreadDetail>()
   const [expandedMessageId, setExpandedMessageId] = useState<string>()
@@ -110,6 +120,9 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [organizeMode, setOrganizeMode] = useState<'move' | 'label'>()
   const [snoozeItems, setSnoozeItems] = useState<MailThreadSummary[]>()
   const [rulesOpen, setRulesOpen] = useState(false)
+  const [replyWatchesOpen, setReplyWatchesOpen] = useState(false)
+  const [foldersOpen, setFoldersOpen] = useState<string | true>()
+  const [attachmentsOpen, setAttachmentsOpen] = useState(false)
   const [sourceViewer, setSourceViewer] = useState<{ mode: 'headers' | 'source'; subject: string; content: string }>()
   const [remoteImages, setRemoteImages] = useState(false)
   const [accountSetup, setAccountSetup] = useState(false)
@@ -395,7 +408,9 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const undo = async () => {
     if (!pending.length) return
     try {
-      const restored = await Promise.all(pending.map((operation) => window.aerio.mail.mail.undo(operation.id)))
+      // Undo newest first so each operation's snapshot restores onto the state it captured (multi-step quick actions).
+      const restored: boolean[] = []
+      for (const operation of [...pending].reverse()) restored.push(await window.aerio.mail.mail.undo(operation.id))
       if (restored.some(Boolean)) {
         onToast('Change undone')
         setPending([])
@@ -487,6 +502,48 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       onToast(error instanceof Error ? error.message : 'The bulk change could not be queued')
     }
   }
+
+  // Quick actions run on the checked conversations, or the open conversation when nothing is checked.
+  const runQuickAction = async (quickAction: MailQuickAction, items = checkedItems.length ? checkedItems : selected ? [selected] : []) => {
+    if (!items.length) {
+      onToast(`Select a conversation to run “${quickAction.name}”`)
+      return
+    }
+    try {
+      const result = await window.aerio.mail.quickActions.run(quickAction.id, quickActionTargets(items))
+      if (result.operations.length) setPending(result.operations)
+      if (items === checkedItems) setCheckedKeys(new Set())
+      await loadPage()
+      onToast(summarizeQuickActionRun(quickAction, result, accounts))
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'The quick action could not be run')
+    }
+  }
+
+  useEffect(() => {
+    if (!quickActionRequest.id || handledQuickActionRequest.current === quickActionRequest.id) return
+    handledQuickActionRequest.current = quickActionRequest.id
+    const quickAction = quickActions.quickActions.find((item) => item.id === quickActionRequest.quickActionId)
+    if (quickAction) void runQuickAction(quickAction)
+    else onToast('That quick action no longer exists')
+    // Only a new palette request triggers a run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickActionRequest.id])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const slot = quickActionShortcutSlot(event)
+      if (!slot || event.defaultPrevented) return
+      const target = event.target instanceof HTMLElement ? event.target : undefined
+      if (target?.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return
+      const quickAction = quickActions.quickActions.find((item) => item.shortcut === slot)
+      if (!quickAction) return
+      event.preventDefault()
+      void runQuickAction(quickAction)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  })
 
   const applyBulkAction = async (action: MailActionKind) => {
     const groups = new Map<string, string[]>()
@@ -707,6 +764,11 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       { label: 'Manage labels…', icon: Tags, disabled: readOnly || accounts.find((account) => account.id === item.accountId)?.provider !== 'gmail', action: () => { setCheckedKeys(new Set([`${item.accountId}:${item.id}`])); setOrganizeMode('label') } },
       { label: item.snoozedUntil ? 'Return to Inbox now' : 'Snooze…', icon: Clock3, disabled: readOnly, action: () => item.snoozedUntil ? unsnooze(item) : setSnoozeItems([item]) },
       { label: item.trashed ? 'Restore from Trash' : 'Move to Trash', icon: Trash2, danger: !item.trashed, disabled: readOnly, action: () => applyAction(item.trashed ? 'untrash' : 'trash', item.accountId, [item.id]) },
+      ...quickActions.quickActions.map((quickAction, index): ContextMenuItem => ({
+        label: `Quick action: ${quickAction.name}`, icon: Zap, separatorBefore: index === 0, disabled: readOnly,
+        shortcut: quickAction.shortcut ? quickActionShortcutLabel(quickAction.shortcut) : undefined,
+        action: () => runQuickAction(quickAction, checkedKeys.has(`${item.accountId}:${item.id}`) ? checkedItems : [item])
+      })),
       { label: 'Copy subject', icon: Copy, separatorBefore: true, action: () => copyText(item.subject) },
       { label: 'Copy participants', icon: AtSign, action: () => copyText(item.participants.join(', ')) }
     ]
@@ -881,11 +943,16 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           {visibleLabels.length > 0 && <div className="sidebar-group"><span className="sidebar-label">Labels</span>{visibleLabels.map((label) => { const selected = labelId === label.id && accountId === label.accountId; return <button className={`sidebar-item ${selected ? 'active' : ''}`} aria-pressed={selected} key={`${label.accountId}:${label.id}`} onClick={() => toggleLabel(label)} onContextMenu={(event) => showContextMenu(event, [
             { label: selected ? `Clear ${label.name} filter` : `Open ${label.name}`, icon: Tag, action: () => toggleLabel(label) },
             { label: 'New message', icon: Plus, separatorBefore: true, disabled: !accounts.some((account) => account.id === label.accountId && !account.archived), action: () => setCompose({}) },
-            { label: 'Check account for mail', icon: RefreshCw, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => startSync(label.accountId) }
+            { label: 'Check account for mail', icon: RefreshCw, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => startSync(label.accountId) },
+            { label: 'Manage folders and labels…', icon: FolderInput, separatorBefore: true, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => setFoldersOpen(label.accountId) }
           ], label.name)}><Tag size={15} /><span>{label.name}</span></button> })}</div>}
         <MailSavedSearchList searches={savedSearches.searches} view={searchView} onOpen={openSavedSearch} onEdit={setSavingSearch} onReplace={(item) => void replaceSavedSearch(item)} onDelete={(item) => { if (window.confirm(`Delete the saved search “${item.name}”? Mail is not affected.`)) void savedSearches.remove(item) }} />
         <div className="mail-sidebar-footer">
+          <button onClick={() => setAttachmentsOpen(true)}><Paperclip size={14} /> All attachments</button>
           <button onClick={() => setRulesOpen(true)}><Filter size={14} /> Mail rules</button>
+          <button onClick={() => setReplyWatchesOpen(true)}><Eye size={14} /> Reply watches</button>
+          <button disabled={!accounts.some((account) => !account.archived)} onClick={() => setFoldersOpen(accountId === 'all' ? true : accountId)}><FolderInput size={14} /> Folders &amp; labels</button>
+          <button onClick={() => setQuickActionsOpen(true)}><Zap size={14} /> Quick actions</button>
           <button onClick={() => void showStorage()}><Download size={14} /> Offline storage</button>
           {accounts.filter((account) => !account.archived).map((account) => <button key={account.id} title={`Settings for ${account.email}`} onClick={() => setSettingsAccount(account)} onContextMenu={(event) => showAccountMenu(event, account)}><Settings2 size={14} /> {account.email.split('@')[0]}</button>)}
         </div>
@@ -919,6 +986,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           <button className="button ghost small" onClick={() => folder === 'snoozed' ? void unsnoozeMany(checkedItems) : setSnoozeItems(checkedItems)}>{folder === 'snoozed' ? <Inbox size={15} /> : <Clock3 size={15} />} {folder === 'snoozed' ? 'Return now' : 'Snooze'}</button>
           <button className="button ghost small" onClick={() => setOrganizeMode('move')}><FolderInput size={15} /> Move</button>
           <button className="button ghost small" onClick={() => setOrganizeMode('label')}><Tags size={15} /> Labels</button>
+          <MailQuickActionButtons quickActions={quickActions.quickActions} className="button ghost small" onRun={(quickAction) => void runQuickAction(quickAction, checkedItems)} />
           <span className="spacer" />
           <button className="button danger-subtle small" onClick={() => void applyBulkAction('trash')}><Trash2 size={15} /> Trash</button>
         </div>}
@@ -1004,6 +1072,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
               <button className="reader-toolbar-action" disabled={selectedAccount?.archived} title={selected.trashed ? 'Restore from Trash' : 'Move to Trash'} onClick={() => void applyAction(selected.trashed ? 'untrash' : 'trash')}>{selected.trashed ? <Undo2 size={17} /> : <Trash2 size={17} />}<span>{selected.trashed ? 'Restore' : 'Trash'}</span></button>
               <span className="toolbar-divider" />
               <button className={`reader-toolbar-action ${selected.starred ? 'active' : ''}`} disabled={selectedAccount?.archived} title={selected.starred ? 'Unstar' : 'Star'} onClick={() => void applyAction(selected.starred ? 'unstar' : 'star')}><Star size={17} fill={selected.starred ? 'currentColor' : 'none'} /><span>{selected.starred ? 'Unstar' : 'Star'}</span></button>
+              <MailQuickActionButtons quickActions={quickActions.quickActions} disabled={selectedAccount?.archived} className="reader-toolbar-action" onRun={(quickAction) => void runQuickAction(quickAction, [selected])} />
             </div>
             <div className="reader-toolbar-secondary">
               <button className="icon-button" aria-label="More message actions" title="More" onClick={showReaderMoreMenu}><MoreVertical size={18} /></button>
@@ -1036,7 +1105,18 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       {organizeMode && <MailOrganizeModal mode={organizeMode} items={checkedItems} accounts={accounts} labels={labels} onApply={applyOrganizeRequests} onClose={() => setOrganizeMode(undefined)} />}
       {snoozeItems && <MailSnoozeModal count={snoozeItems.length} onApply={(until) => applySnooze(snoozeItems, until)} onClose={() => setSnoozeItems(undefined)} />}
       {savingSearch && <MailSaveSearchModal accounts={accounts} labels={labels} initial={savingSearch} onClose={() => setSavingSearch(undefined)} onSave={async (input) => { const saved = await savedSearches.save(input); openSavedSearch(saved); onToast(`Saved “${saved.name}”`) }} />}
+      {replyWatchesOpen && <MailReplyWatchesModal accounts={accounts} onToast={onToast} onClose={() => setReplyWatchesOpen(false)} />}
+      {attachmentsOpen && <MailAttachmentsModal accounts={accounts} onToast={onToast} onClose={() => setAttachmentsOpen(false)} />}
+      {quickActionsOpen && <MailQuickActionsModal accounts={accounts} labels={labels} quickActions={quickActions.quickActions} onSave={async (input) => { const saved = await quickActions.save(input); onToast(`Saved “${saved.name}”`) }} onDelete={quickActions.remove} onClose={() => setQuickActionsOpen(false)} />}
       {rulesOpen && <MailRulesModal accounts={accounts} labels={labels} onToast={onToast} onClose={() => setRulesOpen(false)} />}
+      {foldersOpen && <MailFolderManagerModal accounts={accounts} labels={labels} initialAccountId={foldersOpen === true ? undefined : foldersOpen} onToast={onToast} onClose={() => setFoldersOpen(undefined)} onChanged={(changedAccount, result) => {
+        setLabels((items) => [...items.filter((label) => label.accountId !== changedAccount), ...result.labels])
+        // Keep the open folder selected across path-based renames; leave it when deleted.
+        if (accountId === changedAccount && labelId) {
+          if (result.deletedId === labelId) setLabelId(undefined)
+          else if (result.renamed[labelId]) setLabelId(result.renamed[labelId])
+        }
+      }} />}
       {sourceViewer && <MailMessageSourceModal {...sourceViewer} onClose={() => setSourceViewer(undefined)} />}
       {messageTools.dialog}
     </div>

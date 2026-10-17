@@ -24,13 +24,19 @@ import type {
   MailRuleRunResult,
   MailSavedSearch,
   MailSavedSearchInput,
+  MailQuickAction,
+  MailQuickActionRunResult,
   MailSnooze,
+  MailReplyWatch,
+  MailReplyWatchInput,
   MailMessageSource,
+  MailReceiptInfo,
   MailThreadDetail,
   ImapAccountInput,
   ImapServerSettings,
   ImapServerSettingsUpdate,
   MailPage,
+  MailAttachmentPage,
   MailFolderUnreadCounts,
   MailAccountUnreadCounts,
   MailAccountSettingsInput,
@@ -41,11 +47,15 @@ import type {
   PendingOperation,
   SyncProgress
 } from '../src/mail-types'
+import type { CreateMailFolderInput, DeleteMailFolderInput, MailFolderDeletePreview, MailFolderMutationResult, UpdateMailFolderInput } from '../src/mail-types'
 import { OAuthVault } from './mail/oauth-vault'
+import { normalizeReadReceiptPolicy, normalizeSendOptions } from '../src/lib/mail-send-options'
 import { DEFAULT_GOOGLE_CLIENT_ID, DEFAULT_MICROSOFT_CLIENT_ID, parseOAuthEnvironment } from './mail/oauth-config'
 import { ImapSmtpClient } from './mail/imap-client'
 import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
 import { MailWorkerClient } from './mail/worker-client'
+import { validateCreateFolder, validateDeleteFolder, validateFolderReference, validateUpdateFolder } from './mail/folder-validation'
+import { normalizeAttachmentQuery } from './mail/attachment-index'
 import { DiagnosticLogger, type DiagnosticRecord } from './diagnostics'
 import { UpdateManager } from './update-manager'
 import { ProductivityStore } from './productivity/store'
@@ -60,12 +70,17 @@ import { registerMessageTools } from './mail/message-tools'
 import { MailTemplateStore, parseMailTemplateBackup, type MailTemplateBackup } from './mail/template-store'
 import { registerMailTemplates } from './mail/template-tools'
 import { registerMailIdentities, validateDraftSender } from './mail/identity-ipc'
+import { AutomaticRepliesService, registerAutomaticReplies } from './mail/automatic-replies'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
+import { InterchangeStore } from './productivity/interchange-store'
+import { registerCalendarContactInterchange } from './productivity/interchange-ipc'
+import { validContactInterchangeFields } from '../src/lib/interchange-validation'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
 import { senderDomainFromEmail } from '../src/lib/sender-avatar'
 import { isCompleteMailAddress } from '../src/lib/mail-address'
 import { validateMailSavedSearch } from '../src/lib/mail-saved-search'
+import { validateMailQuickAction, validateMailQuickActionTargets } from '../src/lib/mail-quick-actions'
 import { mailPollingIntervalForWindow } from './mail/polling-policy'
 import { faviconDomainCandidates } from './mail/favicon-domains'
 import { fetchRemoteImage } from './mail/remote-image-fetch'
@@ -108,6 +123,8 @@ let lastBoundsWrite: NodeJS.Timeout | undefined
 let diagnostics: DiagnosticLogger | null = null
 let updates: UpdateManager | null = null
 let productivityStore: ProductivityStore | null = null
+let interchangeStore: InterchangeStore | null = null
+let interchangeService: ReturnType<typeof registerCalendarContactInterchange> | null = null
 let taskService: TaskService | null = null
 let taskPolling: NodeJS.Timeout | undefined
 let taskNetworkOnline = true
@@ -149,6 +166,7 @@ function preferencesFromUnknown(value: unknown): AppPreferences | undefined {
       launchAtLogin: typeof candidate.launchAtLogin === 'boolean' ? candidate.launchAtLogin : defaultSettings.launchAtLogin,
       notifications: candidate.notifications,
       startModule: candidate.startModule as ModuleId,
+      readReceiptPolicy: normalizeReadReceiptPolicy(candidate.readReceiptPolicy),
       ...(profile && !isUntouchedSampleProfile ? { profile: {
         displayName: profile.displayName,
         ...(typeof profile.email === 'string' ? { email: profile.email } : {}),
@@ -228,6 +246,7 @@ function validateDraft(input: MailDraftInput, forSend = false) {
   if (typeof input.text !== 'string' || (input.html !== undefined && typeof input.html !== 'string') || input.text.length > 20_000_000 || (input.html?.length ?? 0) > 20_000_000) throw new Error('The message body is too large')
   if (input.attachmentPaths.length > 50) throw new Error('A message cannot contain more than 50 attachments')
   validateDraftSender(input, forSend)
+  input.sendOptions = normalizeSendOptions(input.sendOptions)
   if (input.attachmentPaths.some((path) => typeof path !== 'string' || !approvedAttachmentPaths.has(path))) {
     throw new Error('A draft referenced a file that was not selected through Aerio')
   }
@@ -331,7 +350,8 @@ function validLocalModules(value: unknown): value is LocalModuleSnapshot {
         text(attachment.path, 32_767, true) && (attachment.mime === undefined || text(attachment.mime, 300)))))) &&
     (input.contacts ?? []).every((contact) => contact && text(contact.id, 300, true) && text(contact.name, 10_000, true) && text(contact.email, 10_000) &&
       text(contact.group, 300, true) && text(contact.color, 100, true) && typeof contact.favorite === 'boolean' && contact.source === 'local' &&
-      [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || text(field, 1_000_000)))
+      [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || text(field, 1_000_000)) &&
+      validContactInterchangeFields(contact))
 }
 
 interface ArchivedNoteAttachment {
@@ -498,7 +518,8 @@ function validContact(value: unknown): value is Contact {
   const validText = (input: unknown, max: number, required = false) => typeof input === 'string' && input.length <= max && (!required || Boolean(input.trim()))
   return validText(contact.id, 500, true) && validText(contact.name, 10_000, true) && validText(contact.email, 10_000) &&
     validText(contact.group, 300, true) && validText(contact.color, 100, true) && typeof contact.favorite === 'boolean' &&
-    [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || validText(field, 100_000))
+    [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || validText(field, 100_000)) &&
+    validContactInterchangeFields(contact)
 }
 
 function googleCalendarConnector(accountId: string) {
@@ -646,6 +667,23 @@ function showNewMailNotification(payload: Extract<import('../src/mail-types').Ma
   notification.show()
 }
 
+function showReplyWatchNotification(payload: Extract<import('../src/mail-types').MailWorkerEvent, { type: 'reply-watch' }>['payload']) {
+  if (hideTestWindows || !Notification.isSupported() || !loadPreferences().settings.notifications) return
+  const { watch, reason } = payload
+  const subject = watch.subject || '(No subject)'
+  const notification = new Notification({
+    title: reason === 'replied' ? `Reply from ${watch.replyFrom || 'a recipient'}` : 'No reply yet',
+    body: reason === 'replied' ? subject : `${subject} — the reply deadline has passed`,
+    icon: iconPath()
+  })
+  notification.on('click', () => {
+    openMainWindow()
+    const threadId = watch.replyThreadId ?? watch.threadId
+    if (threadId && !appLockStatus().locked) createMessageWindow({ source: 'connected', accountId: watch.accountId, threadId, title: subject })
+  })
+  notification.show()
+}
+
 function updateMailPolling(immediate = false) {
   if (!mailWorker || !mainWindow) return
   const intervalMs = mailPollingIntervalForWindow({
@@ -673,6 +711,7 @@ async function initializeMail() {
         details: event.payload as unknown as Record<string, unknown>
       })
       if (event.type === 'new-mail') showNewMailNotification(event.payload)
+      if (event.type === 'reply-watch') showReplyWatchNotification(event.payload)
       mainWindow?.webContents.send('mail:event', event)
       for (const window of messageWindows.values()) if (!window.isDestroyed()) window.webContents.send('mail:event', event)
     }
@@ -1245,6 +1284,13 @@ function registerIpc() {
   registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
   } })
+  const automaticReplies = new AutomaticRepliesService({
+    account: async (accountId) => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId),
+    googleToken: (accountId) => requireVault().accessToken(accountId),
+    microsoftToken: (accountId) => requireVault().microsoftAccessToken(accountId),
+    grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider)
+  })
+  registerAutomaticReplies(ipcMain, () => automaticReplies)
   ipcMain.handle('preferences:load', () => loadPreferences())
   ipcMain.handle('preferences:save', (_event, preferences: AppPreferences) => savePreferences(preferences))
   ipcMain.handle('app-lock:status', () => appLockStatus())
@@ -1607,6 +1653,15 @@ function registerIpc() {
   })
   ipcMain.handle('mail:message:source', (_event, accountId: string, messageId: string) =>
     requireMailWorker().request<MailMessageSource>({ type: 'mail:source', payload: { accountId, messageId } }))
+  // The receipt policy is read here, never trusted from the renderer.
+  ipcMain.handle('mail:receipts:inspect', (_event, accountId: string, messageId: string) => {
+    if (typeof accountId !== 'string' || !accountId || accountId.length > 200 || typeof messageId !== 'string' || !messageId || messageId.length > 500) throw new Error('Choose a valid message')
+    return requireMailWorker().request<MailReceiptInfo>({ type: 'receipts:inspect', payload: { accountId, messageId, policy: normalizeReadReceiptPolicy(loadPreferences().settings.readReceiptPolicy) } })
+  })
+  ipcMain.handle('mail:receipts:respond', (_event, accountId: string, messageId: string, decision: 'send' | 'decline') => {
+    if (typeof accountId !== 'string' || !accountId || accountId.length > 200 || typeof messageId !== 'string' || !messageId || messageId.length > 500 || (decision !== 'send' && decision !== 'decline')) throw new Error('Choose a valid read receipt response')
+    return requireMailWorker().request<MailReceiptInfo>({ type: 'receipts:respond', payload: { accountId, messageId, decision, policy: normalizeReadReceiptPolicy(loadPreferences().settings.readReceiptPolicy) } })
+  })
   ipcMain.handle('mail:actions:apply', (_event, input: ApplyMailActionInput) =>
     requireMailWorker().request<PendingOperation>({ type: 'mail:action', payload: input }))
   ipcMain.handle('mail:actions:undo', (_event, operationId: string) =>
@@ -1618,6 +1673,21 @@ function registerIpc() {
   ipcMain.handle('mail:unsnooze', (_event, accountId: string, threadIds: string[]) => {
     if (typeof accountId !== 'string' || !accountId || !Array.isArray(threadIds) || !threadIds.length || threadIds.some((id) => typeof id !== 'string' || !id)) throw new Error('Choose valid conversations to restore')
     return requireMailWorker().request<boolean>({ type: 'mail:unsnooze', payload: { accountId, threadIds } })
+  })
+  ipcMain.handle('mail:reply-watches:list', (_event, accountIds?: string[]) =>
+    requireMailWorker().request<MailReplyWatch[]>({ type: 'reply-watches:list', payload: { accountIds: Array.isArray(accountIds) ? accountIds.filter((id) => typeof id === 'string').slice(0, 100) : undefined } }))
+  ipcMain.handle('mail:reply-watches:create', (_event, input: MailReplyWatchInput) => {
+    const valid = (value: unknown) => typeof value === 'string' && value.length > 0 && value.length <= 500
+    if (!input || !valid(input.accountId) || (valid(input.draftId) === valid(input.messageId))) throw new Error('Choose a sent or outgoing message to watch')
+    return requireMailWorker().request<MailReplyWatch>({ type: 'reply-watches:create', payload: {
+      accountId: input.accountId,
+      ...(input.draftId ? { draftId: input.draftId } : { messageId: input.messageId }),
+      deadlineAt: input.deadlineAt ? validateFutureDate(input.deadlineAt, 'Reply deadline') : undefined
+    } })
+  })
+  ipcMain.handle('mail:reply-watches:cancel', (_event, id: string) => {
+    if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid reply watch')
+    return requireMailWorker().request<boolean>({ type: 'reply-watches:cancel', payload: { id } })
   })
   ipcMain.handle('mail:drafts:save', (_event, input: MailDraftInput) =>
     requireMailWorker().request({ type: 'drafts:save', payload: validateDraft(input) }))
@@ -1650,6 +1720,14 @@ function registerIpc() {
     for (const file of files) approvedAttachmentPaths.add(file.path)
     return files
   })
+  ipcMain.handle('mail:folders:create', (_event, input: CreateMailFolderInput) =>
+    requireMailWorker().request<MailFolderMutationResult>({ type: 'folders:create', payload: validateCreateFolder(input) }))
+  ipcMain.handle('mail:folders:update', (_event, input: UpdateMailFolderInput) =>
+    requireMailWorker().request<MailFolderMutationResult>({ type: 'folders:update', payload: validateUpdateFolder(input) }))
+  ipcMain.handle('mail:folders:delete', (_event, input: DeleteMailFolderInput) =>
+    requireMailWorker().request<MailFolderMutationResult>({ type: 'folders:delete', payload: validateDeleteFolder(input) }))
+  ipcMain.handle('mail:folders:delete-preview', (_event, accountId: string, labelId: string) =>
+    requireMailWorker().request<MailFolderDeletePreview>({ type: 'folders:delete-preview', payload: validateFolderReference(accountId, labelId) }))
   ipcMain.handle('mail:rules:list', (_event, accountIds?: string[]) =>
     requireMailWorker().request<MailRule[]>({ type: 'rules:list', payload: { accountIds } }))
   ipcMain.handle('mail:rules:save', (_event, input: MailRuleInput) =>
@@ -1670,6 +1748,18 @@ function registerIpc() {
     if (typeof id !== 'string' || !id || id.length > 500) throw new Error('Invalid saved search id')
     return requireMailWorker().request({ type: 'saved-searches:delete', payload: { id } })
   })
+  const quickActionId = (id: unknown) => {
+    if (typeof id !== 'string' || !id || id.length > 500) throw new Error('Invalid quick action id')
+    return id
+  }
+  ipcMain.handle('mail:quick-actions:list', () =>
+    requireMailWorker().request<MailQuickAction[]>({ type: 'quick-actions:list' }))
+  ipcMain.handle('mail:quick-actions:save', (_event, input: unknown) =>
+    requireMailWorker().request<MailQuickAction>({ type: 'quick-actions:save', payload: validateMailQuickAction(input) }))
+  ipcMain.handle('mail:quick-actions:delete', (_event, id: unknown) =>
+    requireMailWorker().request({ type: 'quick-actions:delete', payload: { id: quickActionId(id) } }))
+  ipcMain.handle('mail:quick-actions:run', (_event, id: unknown, targets: unknown) =>
+    requireMailWorker().request<MailQuickActionRunResult>({ type: 'quick-actions:run', payload: { id: quickActionId(id), targets: validateMailQuickActionTargets(targets) } }))
   ipcMain.handle('mail:sync:start', (_event, accountId?: string) =>
     requireMailWorker().request({ type: 'sync:start', payload: { accountId } }))
   ipcMain.handle('mail:sync:pause', (_event, accountId: string) =>
@@ -1707,6 +1797,8 @@ function registerIpc() {
     if (online) void taskService?.flush().catch(() => {})
     return requireMailWorker().request({ type: 'network', payload: { online } })
   })
+  ipcMain.handle('mail:attachments:list', (_event, query: unknown) =>
+    requireMailWorker().request<MailAttachmentPage>({ type: 'attachments:list', payload: normalizeAttachmentQuery(query) }))
   ipcMain.handle('mail:attachment:open', async (_event, accountId: string, messageId: string, attachmentId: string, filename: string) => {
     const directory = join(tmpdir(), 'aerio-attachments')
     mkdirSync(directory, { recursive: true })
@@ -1736,6 +1828,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   await initializePreferencesDatabase()
   await initializeMail()
   productivityStore = new ProductivityStore(join(app.getPath('userData'), 'productivity.sqlite'))
+  interchangeStore = new InterchangeStore(join(app.getPath('userData'), 'productivity.sqlite'))
   taskService = new TaskService(new TaskStore(join(app.getPath('userData'), 'provider-tasks.sqlite')), {
     accounts: () => requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' }),
     access: (id, provider) => provider === 'gmail'
@@ -1750,6 +1843,14 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   taskPolling = setInterval(() => { void taskService?.poll().catch(() => {}) }, 60_000)
   taskPolling.unref()
   registerIpc()
+  interchangeService = registerCalendarContactInterchange({
+    productivity: requireProductivityStore,
+    interchange: () => {
+      if (!interchangeStore) throw new Error('Calendar import and subscription storage is not ready')
+      return interchangeStore
+    },
+    diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
+  })
   registerRemoteImageProtocol()
   readyToOpenWindows = true
   createWindow()
@@ -1779,6 +1880,9 @@ app.on('before-quit', () => {
   if (taskPolling) clearInterval(taskPolling)
   void taskService?.close().catch(() => {})
   updates?.stop()
+  interchangeService?.dispose()
+  interchangeStore?.close()
+  interchangeStore = null
   productivityStore?.close()
   messageLocalStore?.close()
   mailTemplateStore?.close()

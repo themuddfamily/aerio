@@ -185,4 +185,33 @@ describe('Microsoft Graph mail client', () => {
       { accountId: 'account', id: 'folder:project', name: 'Project', type: 'user' }
     ])
   })
+
+  it('sets Graph importance and receipt properties on saved drafts', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'draft-1', changeKey: 'before' }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'draft-1', changeKey: 'after' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new MicrosoftGraphClient(async () => 'token')
+    await expect(client.saveDraft(Buffer.from('Subject: hi\r\n\r\nBody'), undefined, { importance: 'high', requestReadReceipt: true, requestDeliveryReceipt: true }))
+      .resolves.toEqual({ id: 'draft-1', revision: 'after' })
+    expect(fetchMock.mock.calls[1][0]).toContain('/me/messages/draft-1')
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'PATCH', body: JSON.stringify({ importance: 'high', isReadReceiptRequested: true, isDeliveryReceiptRequested: true }) })
+  })
+
+  it('stages a draft to send with receipt properties and keeps plain sends on sendMail', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'staged', changeKey: 'one' }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'staged', changeKey: 'two' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 202 }))
+      .mockResolvedValueOnce(new Response(null, { status: 202 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new MicrosoftGraphClient(async () => 'token')
+    await client.send(Buffer.from('Subject: hi\r\n\r\nBody'), undefined, { importance: 'low' })
+    expect(fetchMock.mock.calls.map((call) => [call[1].method, String(call[0]).replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/, '')])).toEqual([
+      ['POST', '/me/messages'], ['PATCH', '/me/messages/staged'], ['POST', '/me/messages/staged/send']
+    ])
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ importance: 'low', isReadReceiptRequested: false, isDeliveryReceiptRequested: false })
+    await client.send(Buffer.from('Subject: plain\r\n\r\nBody'), undefined, { importance: 'normal' })
+    expect(String(fetchMock.mock.calls[3][0])).toContain('/me/sendMail')
+  })
 })

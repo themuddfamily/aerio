@@ -10,12 +10,21 @@ import type {
   MailRuleRunResult,
   MailSavedSearch,
   MailSavedSearchInput,
+  MailQuickAction,
+  MailQuickActionInput,
+  MailQuickActionRunResult,
+  MailQuickActionTarget,
   MailSnooze,
+  MailReplyWatch,
+  MailReplyWatchInput,
   MailMessageSource,
+  MailReadReceiptPolicy,
   MailThreadDetail,
   MailWorkerEvent,
   ImapAccountInput,
   MailPage,
+  MailAttachmentPage,
+  MailAttachmentQuery,
   MailFolderUnreadCounts,
   MailAccountUnreadCounts,
   MailAccountSettingsInput,
@@ -42,6 +51,8 @@ export type MailWorkerCommand =
   | { type: 'mail:account-unread-counts' }
   | { type: 'mail:thread'; payload: { accountId: string; threadId: string; allowRemoteImages?: boolean } }
   | { type: 'mail:source'; payload: { accountId: string; messageId: string } }
+  | { type: 'receipts:inspect'; payload: { accountId: string; messageId: string; policy: MailReadReceiptPolicy } }
+  | { type: 'receipts:respond'; payload: { accountId: string; messageId: string; decision: 'send' | 'decline'; policy: MailReadReceiptPolicy } }
   | { type: 'mail:copy'; payload: { accountId: string; threadId: string; messageId: string; destination: string } }
   | { type: 'mail:export'; payload: { accountId: string; messageId: string; targetPath: string } }
   | { type: 'mail:action'; payload: ApplyMailActionInput }
@@ -52,10 +63,17 @@ export type MailWorkerCommand =
   | { type: 'drafts:send'; payload: MailDraftInput }
   | { type: 'drafts:schedule'; payload: { input: MailDraftInput; deliveryAt: string } }
   | { type: 'drafts:cancel-send'; payload: { id: string } }
+  | { type: 'reply-watches:list'; payload: { accountIds?: string[] } }
+  | { type: 'reply-watches:create'; payload: MailReplyWatchInput }
+  | { type: 'reply-watches:cancel'; payload: { id: string } }
   | { type: 'drafts:list'; payload: { accountIds?: string[] } }
   | { type: 'drafts:get'; payload: { id: string } }
   | { type: 'drafts:delete'; payload: { id: string } }
   | { type: 'drafts:stage-message-attachments'; payload: { draftId: string; accountId: string; messageId: string } }
+  | { type: 'folders:create'; payload: import('../src/mail-types').CreateMailFolderInput }
+  | { type: 'folders:update'; payload: import('../src/mail-types').UpdateMailFolderInput }
+  | { type: 'folders:delete'; payload: import('../src/mail-types').DeleteMailFolderInput }
+  | { type: 'folders:delete-preview'; payload: { accountId: string; labelId: string } }
   | { type: 'rules:list'; payload: { accountIds?: string[] } }
   | { type: 'rules:save'; payload: MailRuleInput }
   | { type: 'rules:delete'; payload: { id: string } }
@@ -70,6 +88,10 @@ export type MailWorkerCommand =
   | { type: 'saved-searches:list' }
   | { type: 'saved-searches:save'; payload: MailSavedSearchInput }
   | { type: 'saved-searches:delete'; payload: { id: string } }
+  | { type: 'quick-actions:list' }
+  | { type: 'quick-actions:save'; payload: MailQuickActionInput }
+  | { type: 'quick-actions:delete'; payload: { id: string } }
+  | { type: 'quick-actions:run'; payload: { id: string; targets: MailQuickActionTarget[] } }
   | { type: 'sync:start'; payload: { accountId?: string } }
   | { type: 'sync:pause'; payload: { accountId: string } }
   | { type: 'sync:resume'; payload: { accountId: string } }
@@ -77,6 +99,7 @@ export type MailWorkerCommand =
   | { type: 'sync:progress' }
   | { type: 'storage:stats' }
   | { type: 'diagnostics:health' }
+  | { type: 'attachments:list'; payload: MailAttachmentQuery }
   | { type: 'attachment:extract'; payload: { accountId: string; messageId: string; attachmentId: string; targetPath: string } }
   | { type: 'network'; payload: { online: boolean } }
   | { type: 'polling'; payload: { intervalMs: number; immediate?: boolean } }
@@ -97,11 +120,17 @@ export type MailWorkerResult =
   | MailSenderIdentity[]
   | MailSignature
   | MailSignature[]
+  | MailQuickAction
+  | MailQuickAction[]
+  | MailQuickActionRunResult
   | MailSnooze[]
+  | MailReplyWatch
+  | MailReplyWatch[]
   | MailRecipientSuggestion[]
   | MailThreadDetail
   | MailMessageSource
   | MailPage
+  | MailAttachmentPage
   | MailFolderUnreadCounts
   | MailAccountUnreadCounts
   | PendingOperation
@@ -112,6 +141,9 @@ export type MailWorkerResult =
   | MailDraftRecord
   | MailDraftRecord[]
   | MailDraftAttachmentFile[]
+  | import('../src/mail-types').MailReceiptInfo
+  | import('../src/mail-types').MailFolderMutationResult
+  | import('../src/mail-types').MailFolderDeletePreview
 
 export interface WorkerRequest {
   kind: 'request'

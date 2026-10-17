@@ -1,4 +1,4 @@
-import { CalendarPlus, CheckSquare, ChevronsDownUp, ChevronsUpDown, Copy, Download, FileText, Filter, Info, Languages, MailX, NotebookPen, Printer, Tags, Type } from 'lucide-react'
+import { CalendarPlus, CheckSquare, ChevronsDownUp, ChevronsUpDown, Copy, Download, Eye, FileText, Filter, Info, Languages, MailX, NotebookPen, Printer, Tags, Type } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import type { ContextMenuItem } from './ContextMenu'
 import type { MailAccountSummary, MailLabel, MailMessageDetail, MailMessageRef, MailMessageLocalData } from '../mail-types'
@@ -7,8 +7,9 @@ import type { SyncedCalendar } from '../productivity-types'
 import MailRulesModal from './MailRulesModal'
 import MailUnsubscribeDialog from './MailUnsubscribeDialog'
 import Modal from './Modal'
+import { MailReplyWatchesModal, canWatchMessage } from './MailReplyWatches'
 
-type Tool = 'categories' | 'copy' | 'meeting' | 'task' | 'rule' | 'note' | 'translate' | 'format' | 'properties' | 'unsubscribe'
+type Tool = 'categories' | 'copy' | 'meeting' | 'task' | 'rule' | 'note' | 'translate' | 'format' | 'properties' | 'unsubscribe' | 'watch'
 export const messageRef = (message: MailMessageDetail): MailMessageRef => ({ accountId: message.accountId, threadId: message.threadId, messageId: message.id })
 const localTime = (date: Date) => new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
 const defaultLocal: MailMessageLocalData = { categories: [], format: 'auto', fontSize: 14, noteIds: [], taskIds: [] }
@@ -38,6 +39,7 @@ export function useMailMessageTools({ accounts, onToast, collapseAll, expandAll,
       { label: 'Create rule from email…', icon: Filter, disabled: readOnly, action: open('rule') },
       { label: 'Add note…', icon: NotebookPen, action: open('note') },
       { label: 'Unsubscribe from list…', icon: MailX, action: open('unsubscribe') },
+      { label: 'Watch for replies…', icon: Eye, disabled: !canWatchMessage(message, accounts), action: open('watch') },
       { label: 'Translate…', icon: Languages, separatorBefore: true, disabled: !message.text.trim(), action: open('translate') },
       { label: 'Message format…', icon: Type, action: open('format') },
       { label: 'Message properties', icon: Info, action: open('properties') }
@@ -117,7 +119,8 @@ function MessageToolDialog({ tool, message, accounts, onToast, onUpdated, onClos
     onUpdated(message, saved)
   }
   const copyTargets = labels.filter((label) => account?.provider === 'gmail' ? label.type === 'user' || label.id === 'INBOX' : label.id.startsWith('folder:') && !/draft|sent|outbox/i.test(label.name))
-  const titles: Record<Tool, string> = { categories: 'Edit categories', copy: 'Copy to folder', meeting: 'Create meeting from email', task: 'Create task from email', rule: 'Create rule from email', note: 'Add note', translate: 'Translate email', format: 'Message format', properties: 'Message properties', unsubscribe: 'Unsubscribe from mailing list' }
+  if (tool === 'watch') return <MailReplyWatchesModal accounts={accounts} message={message} onToast={onToast} onClose={onClose} />
+  const titles: Record<Tool, string> = { categories: 'Edit categories', copy: 'Copy to folder', meeting: 'Create meeting from email', task: 'Create task from email', rule: 'Create rule from email', note: 'Add note', translate: 'Translate email', format: 'Message format', properties: 'Message properties', unsubscribe: 'Unsubscribe from mailing list', watch: 'Watch for replies' }
 
   if (tool === 'rule' && !loading && !error) return <MailRulesModal accounts={accounts} labels={labels} onToast={onToast} onClose={onClose} initialRule={{ accountId: message.accountId, name: `Mail from ${message.fromName || message.fromEmail}`, enabled: true, match: 'all', conditions: [{ field: 'from', operator: 'equals', value: message.fromEmail }], actions: [{ action: 'archive' }] }} />
 

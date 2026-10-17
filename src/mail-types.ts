@@ -111,6 +111,53 @@ export interface MailAttachment {
   contentId?: string
 }
 
+export type MailAttachmentFileType = 'pdf' | 'calendar' | 'spreadsheet' | 'presentation' | 'document' | 'archive' | 'image' | 'audio' | 'video' | 'other'
+
+/** Filters for the cross-account attachments workspace. Dates are inclusive YYYY-MM-DD bounds. */
+export interface MailAttachmentQuery {
+  accountIds?: string[]
+  /** Defaults to true: archived accounts keep their offline attachments. */
+  includeArchivedAccounts?: boolean
+  /** Defaults to false: inline images referenced by Content-ID (logos, signatures) are hidden. */
+  includeInline?: boolean
+  search?: string
+  sender?: string
+  recipient?: string
+  dateFrom?: string
+  dateTo?: string
+  fileTypes?: MailAttachmentFileType[]
+  minSize?: number
+  maxSize?: number
+  cursor?: string
+  pageSize?: number
+}
+
+export interface MailAttachmentListItem {
+  accountId: string
+  threadId: string
+  messageId: string
+  attachmentId: string
+  filename: string
+  mimeType: string
+  size: number
+  fileType: MailAttachmentFileType
+  date: string
+  fromName: string
+  fromEmail: string
+  to: string[]
+  cc: string[]
+  subject: string
+  /** False when the stored original message is missing, so open/save cannot extract it. */
+  available: boolean
+  accountArchived: boolean
+}
+
+export interface MailAttachmentPage {
+  items: MailAttachmentListItem[]
+  nextCursor?: string
+  total: number
+}
+
 export interface MailMessageDetail {
   local?: MailMessageLocalData
   accountId: string
@@ -204,6 +251,63 @@ export interface MessageToolsApi {
   translate(ref: MailMessageRef, input: { endpoint: string; apiKey?: string; target: string; source: string }): Promise<string>
 }
 
+/** Who outside the account's organization (or contacts) receives an automatic reply. */
+export type MailAutomaticReplyAudience = 'none' | 'contacts' | 'all'
+
+export interface MailAutomaticReplySettings {
+  enabled: boolean
+  /** ISO 8601 UTC instants. Omitted when the reply has no scheduled boundary. */
+  startAt?: string
+  endAt?: string
+  /** Gmail only; Microsoft replies have no separate subject. */
+  subject: string
+  /** Plain text. Gmail sends this to everyone it replies to. */
+  internalMessage: string
+  /** Plain text for people outside the organization (Microsoft only). */
+  externalMessage: string
+  externalAudience: MailAutomaticReplyAudience
+}
+
+export interface MailAutomaticReplyCapabilities {
+  subject: boolean
+  separateExternalMessage: boolean
+  audiences: MailAutomaticReplyAudience[]
+  /** Microsoft schedules need both a start and an end; Gmail accepts either boundary alone. */
+  requiresBothDates: boolean
+}
+
+export type MailAutomaticReplyPhase = 'off' | 'active' | 'scheduled' | 'ended'
+
+export interface MailAutomaticRepliesState {
+  accountId: string
+  provider: MailProviderId
+  /** False for accounts whose protocol has no provider-side automatic reply API, such as IMAP. */
+  supported: boolean
+  /** Explains an unsupported account or a missing permission. */
+  message?: string
+  canRead: boolean
+  canWrite: boolean
+  /** True when signing in again would grant the missing provider permission. */
+  needsReconnect: boolean
+  missingScopes: string[]
+  settings?: MailAutomaticReplySettings
+  capabilities?: MailAutomaticReplyCapabilities
+  phase?: MailAutomaticReplyPhase
+  /** Mailbox time zone reported by the provider, when it has one. */
+  serverTimeZone?: string
+  warnings: string[]
+  readAt?: string
+}
+
+export interface MailAutomaticRepliesApi {
+  /** Reads the active configuration from the provider; nothing is cached locally. */
+  get(accountId: string): Promise<MailAutomaticRepliesState>
+  /** Writes the configuration to the provider and returns what the provider reports back. */
+  update(accountId: string, settings: MailAutomaticReplySettings): Promise<MailAutomaticRepliesState>
+  /** Turns replies off on the provider while keeping the saved message text. */
+  disable(accountId: string): Promise<MailAutomaticRepliesState>
+}
+
 export interface MailThreadDetail {
   accountId: string
   id: string
@@ -268,6 +372,60 @@ export interface MailLabel {
   name: string
   type: 'system' | 'user'
   color?: string
+  parentId?: string
+}
+
+export interface MailFolderCapabilities {
+  kind: 'label' | 'folder'
+  canCreate: boolean
+  canRename: boolean
+  canDelete: boolean
+  canNest: boolean
+  canColor: boolean
+  /** True when the provider keeps messages after the folder/label is removed. */
+  deleteKeepsMessages: boolean
+}
+
+export interface CreateMailFolderInput {
+  accountId: string
+  name: string
+  parentId?: string
+  color?: string
+}
+
+export interface UpdateMailFolderInput {
+  accountId: string
+  labelId: string
+  name?: string
+  /** null moves the folder to the top level. */
+  parentId?: string | null
+  color?: string
+}
+
+export interface DeleteMailFolderInput {
+  accountId: string
+  labelId: string
+  /** Required when the folder still contains messages. */
+  confirmNonEmpty?: boolean
+}
+
+export interface MailFolderDeletePreview {
+  labelId: string
+  messages: number
+  threads: number
+  childFolders: number
+  pendingOperations: number
+  deleteKeepsMessages: boolean
+  /** Where messages go when the provider would otherwise remove them. */
+  messagesMoveTo?: string
+}
+
+export interface MailFolderMutationResult {
+  label?: MailLabel
+  labels: MailLabel[]
+  /** Old label id to new label id, for providers whose ids follow the folder path. */
+  renamed: Record<string, string>
+  deletedId?: string
 }
 
 export interface ApplyMailActionInput {
@@ -304,6 +462,47 @@ export interface MailDraftInput {
   /** Sender identity (alias) id; omitted means the account's primary address. */
   fromIdentityId?: string
   replyTo?: string[]
+  sendOptions?: MailSendOptions
+}
+
+export type MailImportance = 'low' | 'normal' | 'high'
+
+// Outgoing importance and receipt requests. Receipts are requests only: the
+// recipient's client or server decides whether one is ever returned.
+export interface MailSendOptions {
+  importance?: MailImportance
+  requestReadReceipt?: boolean
+  requestDeliveryReceipt?: boolean
+}
+
+export type MailReadReceiptPolicy = 'never' | 'ask' | 'always'
+
+export type MailReceiptRequestStatus = 'pending' | 'sent' | 'declined' | 'failed' | 'suppressed'
+
+export interface MailReceiptRequestInfo {
+  notifyTo: string
+  status: MailReceiptRequestStatus
+  policy: MailReadReceiptPolicy
+  automatic?: boolean
+  respondedAt?: string
+  // Why an automatic receipt was held back for the user to decide.
+  reason?: string
+  error?: string
+}
+
+export interface MailReceiptReportInfo {
+  kind: 'read' | 'delivery'
+  reporter?: string
+  originalMessageId?: string
+  originalSubject?: string
+  originalSentAt?: string
+  disposition?: string
+  recipients: { recipient: string; action?: string; status?: string }[]
+}
+
+export interface MailReceiptInfo {
+  request?: MailReceiptRequestInfo
+  report?: MailReceiptReportInfo
 }
 
 export interface MailRecipientSuggestion {
@@ -348,6 +547,34 @@ export interface MailSnooze {
   snoozedUntil: string
 }
 
+export type MailReplyWatchStatus = 'pending' | 'watching' | 'replied' | 'expired' | 'cancelled'
+
+export interface MailReplyWatch {
+  id: string
+  accountId: string
+  draftId?: string
+  messageIdHeader?: string
+  threadId?: string
+  subject: string
+  recipients: string[]
+  deadlineAt?: string
+  status: MailReplyWatchStatus
+  createdAt: string
+  sentAt?: string
+  resolvedAt?: string
+  replyMessageId?: string
+  replyThreadId?: string
+  replyFrom?: string
+}
+
+/** Watches an outgoing draft (activated when delivered) or an already sent message. */
+export interface MailReplyWatchInput {
+  accountId: string
+  draftId?: string
+  messageId?: string
+  deadlineAt?: string
+}
+
 export type MailRuleConditionField = 'from' | 'to' | 'subject' | 'body'
 export type MailRuleConditionOperator = 'contains' | 'equals' | 'starts-with' | 'ends-with'
 
@@ -385,6 +612,49 @@ export interface MailRuleRunResult {
   operations: number
 }
 
+/** One step of a user-defined Quick Action; label, unlabel, and move steps need an account-specific destination. */
+export interface MailQuickActionStep {
+  action: MailActionKind
+  labelId?: string
+}
+
+/** A named, ordered sequence of mail actions. Destinations require the action to be scoped to one account. */
+export interface MailQuickActionInput {
+  id?: string
+  name: string
+  accountId?: string
+  steps: MailQuickActionStep[]
+  /** Keyboard slot 1-9, bound to Ctrl/Cmd+Shift+number. */
+  shortcut?: number
+  showInToolbar: boolean
+}
+
+export interface MailQuickAction extends MailQuickActionInput {
+  id: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface MailQuickActionTarget {
+  accountId: string
+  threadIds: string[]
+}
+
+export interface MailQuickActionRunFailure {
+  accountId: string
+  threadCount: number
+  /** Zero-based step that failed; absent when the whole account group was rejected before any step ran. */
+  step?: number
+  appliedSteps: number
+  error: string
+}
+
+export interface MailQuickActionRunResult {
+  operations: PendingOperation[]
+  updatedThreads: number
+  failures: MailQuickActionRunFailure[]
+}
+
 export interface MailStorageStats {
   totalBytes: number
   freeBytes: number
@@ -415,6 +685,7 @@ export interface MailDiagnosticHealth {
 
 export interface MailDesktopApi {
   messageTools: MessageToolsApi
+  automaticReplies: MailAutomaticRepliesApi
   credentials: {
     status(): Promise<MailCredentialStatus>
     import(): Promise<MailCredentialStatus>
@@ -465,6 +736,7 @@ export interface MailDesktopApi {
     progress(): Promise<SyncProgress[]>
   }
   attachments: {
+    list(query: MailAttachmentQuery): Promise<MailAttachmentPage>
     open(accountId: string, messageId: string, attachmentId: string, filename: string): Promise<{ error?: string }>
     save(accountId: string, messageId: string, attachmentId: string, filename: string): Promise<{ savedPath?: string; error?: string }>
   }
@@ -475,6 +747,12 @@ export interface MailDesktopApi {
   }
   templates: import('./mail-template-types').MailTemplatesApi
   identities: import('./mail-identity-types').MailIdentitiesApi
+  folders: {
+    create(input: CreateMailFolderInput): Promise<MailFolderMutationResult>
+    update(input: UpdateMailFolderInput): Promise<MailFolderMutationResult>
+    delete(input: DeleteMailFolderInput): Promise<MailFolderMutationResult>
+    deletePreview(accountId: string, labelId: string): Promise<MailFolderDeletePreview>
+  }
   rules: {
     list(accountIds?: string[]): Promise<MailRule[]>
     save(input: MailRuleInput): Promise<MailRule>
@@ -485,6 +763,21 @@ export interface MailDesktopApi {
     list(): Promise<MailSavedSearch[]>
     save(input: MailSavedSearchInput): Promise<MailSavedSearch>
     delete(id: string): Promise<void>
+  }
+  receipts?: {
+    inspect(accountId: string, messageId: string): Promise<MailReceiptInfo>
+    respond(accountId: string, messageId: string, decision: 'send' | 'decline'): Promise<MailReceiptInfo>
+  }
+  replyWatches: {
+    list(accountIds?: string[]): Promise<MailReplyWatch[]>
+    create(input: MailReplyWatchInput): Promise<MailReplyWatch>
+    cancel(id: string): Promise<boolean>
+  }
+  quickActions: {
+    list(): Promise<MailQuickAction[]>
+    save(input: MailQuickActionInput): Promise<MailQuickAction>
+    delete(id: string): Promise<void>
+    run(id: string, targets: MailQuickActionTarget[]): Promise<MailQuickActionRunResult>
   }
   onEvent(callback: (event: MailWorkerEvent) => void): () => void
 }
@@ -497,3 +790,4 @@ export type MailWorkerEvent =
   | { type: 'connectivity'; payload: { online: boolean } }
   | { type: 'new-mail'; payload: { accountId: string; count: number; threadId?: string; subject?: string; sender?: string } }
   | { type: 'draft-delivery'; payload: MailDraftResult }
+  | { type: 'reply-watch'; payload: { watch: MailReplyWatch; reason: 'replied' | 'expired' } }

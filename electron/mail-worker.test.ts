@@ -57,6 +57,10 @@ const mocks = vi.hoisted(() => {
   method('getRule', () => undefined)
   method('matchingThreadIdsForRule', () => [])
   method('recordRuleMatch')
+  method('listQuickActions', () => [])
+  method('saveQuickAction', (input: any) => ({ ...input, id: input.id ?? 'quick-1' }))
+  method('deleteQuickAction')
+  method('getQuickAction', () => undefined)
   method('storageStats', (free: number) => ({ totalBytes: 100, freeBytes: free, accounts: [] }))
   method('resetForFullSync')
   method('diagnosticHealth', () => ({ integrity: 'ok' }))
@@ -69,6 +73,8 @@ const mocks = vi.hoisted(() => {
   method('matchingRulesForMessage', () => [])
   method('rawPath', () => 'C:\\content\\raw.eml')
   method('hasMessage', () => false)
+  method('rawExists', () => true)
+  method('listAttachments', () => ({ items: [], total: 0 }))
   method('upsertMessage')
   method('upsertLabels')
   method('replaceLabels')
@@ -102,6 +108,19 @@ const mocks = vi.hoisted(() => {
     delete: vi.fn(), listSignatures: vi.fn(() => []), saveSignature: vi.fn((input: any) => ({ ...input, id: 'signature' })), deleteSignature: vi.fn(),
     replaceProviderIdentities: vi.fn((_account: any, source: string, items: any[]) => items.map((item) => ({ ...item, source }))), markRefreshed: vi.fn(), refreshedAt: vi.fn((): string | undefined => undefined)
   }
+  const watch = { id: 'watch-1', accountId: 'account-1', subject: 'Proposal', recipients: ['ada@example.test'], status: 'pending', createdAt: '2026-08-08T10:00:00Z' }
+  db.replyWatches = {
+    watch,
+    list: vi.fn(() => [watch]),
+    get: vi.fn(() => watch),
+    createForDraft: vi.fn(() => watch),
+    createForMessage: vi.fn(() => ({ ...watch, status: 'watching' })),
+    cancel: vi.fn(() => true),
+    cancelForDraft: vi.fn(() => 1),
+    activateForDraft: vi.fn(),
+    process: vi.fn((): any[] => [])
+  }
+  method('recoverInterruptedFolderOperations', () => [])
 
   const gmail = {
     copyToLabel: vi.fn().mockResolvedValue(undefined),
@@ -320,6 +339,18 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.db.getRule.mockReturnValueOnce({ id: 'rule-1', accountId: 'account-1', actions: [{ action: 'archive' }] })
     mocks.db.matchingThreadIdsForRule.mockReturnValueOnce(['thread-1'])
     await expect(request({ type: 'rules:run', payload: { id: 'rule-1' } })).resolves.toMatchObject({ result: { matched: 1, operations: 1 } })
+    await expect(request({ type: 'quick-actions:list' })).resolves.toMatchObject({ result: [] })
+    await expect(request({ type: 'quick-actions:save', payload: { name: 'Done', steps: [{ action: 'archive' }], showInToolbar: false } })).resolves.toMatchObject({ result: { id: 'quick-1' } })
+    await request({ type: 'quick-actions:delete', payload: { id: 'quick-1' } })
+    expect(mocks.db.deleteQuickAction).toHaveBeenCalledWith('quick-1')
+    await expect(request({ type: 'quick-actions:run', payload: { id: 'missing', targets: [] } })).resolves.toMatchObject({ error: { message: 'Quick action not found' } })
+    mocks.db.getQuickAction.mockReturnValueOnce({ id: 'quick-1', name: 'Done', steps: [{ action: 'read' }, { action: 'archive' }], showInToolbar: false })
+    mocks.posted.length = 0
+    await expect(request({ type: 'quick-actions:run', payload: { id: 'quick-1', targets: [{ accountId: 'account-1', threadIds: ['thread-1'] }] } }))
+      .resolves.toMatchObject({ result: { updatedThreads: 1, failures: [], operations: [mocks.operation, mocks.operation] } })
+    expect(mocks.db.applyLocalAction).toHaveBeenNthCalledWith(mocks.db.applyLocalAction.mock.calls.length - 1, { accountId: 'account-1', threadIds: ['thread-1'], action: 'read', labelId: undefined })
+    expect(mocks.posted.filter((message) => message.kind === 'event' && message.event.type === 'operation')).toHaveLength(2)
+    expect(mocks.posted).toContainEqual(expect.objectContaining({ kind: 'event', event: { type: 'mail-changed', payload: { accountId: 'account-1', threadIds: ['thread-1'] } } }))
 
     mocks.db.listAccounts.mockReturnValueOnce([]).mockReturnValueOnce([])
     await request({ type: 'sync:start', payload: {} })
@@ -336,6 +367,11 @@ describe.sequential('mail worker protocol routing', () => {
 
     mocks.db.getMessageRaw.mockReturnValueOnce(undefined)
     await expect(request({ type: 'attachment:extract', payload: { accountId: 'account-1', messageId: 'missing', attachmentId: 'a', targetPath: 'out' } })).resolves.toMatchObject({ error: { message: 'The original message is not available offline' } })
+    mocks.db.getMessageRaw.mockReturnValueOnce('pruned.eml')
+    mocks.db.rawExists.mockReturnValueOnce(false)
+    await expect(request({ type: 'attachment:extract', payload: { accountId: 'account-1', messageId: 'pruned', attachmentId: 'a', targetPath: 'out' } })).resolves.toMatchObject({ error: { message: 'The original message is not available offline' } })
+    await expect(request({ type: 'attachments:list', payload: { fileTypes: ['pdf'] } })).resolves.toMatchObject({ result: { items: [], total: 0 } })
+    expect(mocks.db.listAttachments).toHaveBeenCalledWith({ fileTypes: ['pdf'] })
     await request({ type: 'network', payload: { online: false } })
     await request({ type: 'network', payload: { online: true } })
     await request({ type: 'polling', payload: { intervalMs: 50, immediate: true } })
@@ -625,7 +661,7 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'microsoft' })
     mocks.db.getDraft.mockReturnValue({ gmail_draft_id: 'existing-remote' })
     await expect(request({ type: 'drafts:save', payload: input })).resolves.toMatchObject({ result: { status: 'synced', remoteDraftId: 'remote-draft' } })
-    expect(mocks.microsoft.saveDraft).toHaveBeenCalledWith(expect.any(Buffer), 'existing-remote')
+    expect(mocks.microsoft.saveDraft).toHaveBeenCalledWith(expect.any(Buffer), 'existing-remote', undefined)
 
     mocks.microsoft.saveDraft.mockRejectedValueOnce(new Error('draft provider failed'))
     await expect(request({ type: 'drafts:save', payload: { ...input, id: 'failed-draft' } })).resolves.toMatchObject({ result: { status: 'failed', error: 'draft provider failed' } })
@@ -636,7 +672,7 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.db.getDraft.mockReturnValue(row)
     queueDeliveries([row])
     await request({ type: 'network', payload: { online: true } })
-    await vi.waitFor(() => expect(mocks.imap.send).toHaveBeenCalledWith(expect.any(Buffer), ['ada@example.test', 'team@example.test']))
+    await vi.waitFor(() => expect(mocks.imap.send).toHaveBeenCalledWith(expect.any(Buffer), ['ada@example.test', 'team@example.test'], undefined))
     expect(mocks.imap.deleteDraft).toHaveBeenCalledWith('imap-remote')
 
     mocks.imap.deleteDraft.mockRejectedValueOnce(new Error('discard provider failed'))
@@ -855,7 +891,7 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.db.getDraft.mockReturnValue({ gmail_draft_id: null })
     queueDeliveries([deliveryRow('microsoft-send', null)])
     await request({ type: 'network', payload: { online: true } })
-    await vi.waitFor(() => expect(mocks.microsoft.send).toHaveBeenCalledWith(expect.any(Buffer), undefined))
+    await vi.waitFor(() => expect(mocks.microsoft.send).toHaveBeenCalledWith(expect.any(Buffer), undefined, undefined))
     mocks.db.getDraft.mockReturnValue({ id: 'discard-ms', account_id: 'account-1', gmail_draft_id: 'remote-ms' })
     await expect(request({ type: 'drafts:delete', payload: { id: 'discard-ms' } })).resolves.toMatchObject({ result: { status: 'discarded' } })
     expect(mocks.microsoft.deleteDraft).toHaveBeenCalledWith('remote-ms')
@@ -1088,7 +1124,7 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'microsoft' })
     mocks.db.getDraft.mockReturnValue({ gmail_draft_id: null })
     await request({ type: 'drafts:save', payload: providerInput })
-    expect(mocks.microsoft.saveDraft).toHaveBeenCalledWith(expect.any(Buffer), undefined)
+    expect(mocks.microsoft.saveDraft).toHaveBeenCalledWith(expect.any(Buffer), undefined, undefined)
 
     const row = (id: string, remoteId: string | null) => ({
       id, account_id: 'account-1', thread_id: 'thread-id', in_reply_to: '<reply@example.test>', references_json: '[]', to_json: '["ada@example.test"]',
@@ -1097,7 +1133,7 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.db.getDraft.mockReturnValue(row('microsoft-remote-send', 'remote-ms'))
     queueDeliveries([row('microsoft-remote-send', 'remote-ms')])
     await request({ type: 'network', payload: { online: true } })
-    await vi.waitFor(() => expect(mocks.microsoft.send).toHaveBeenCalledWith(expect.any(Buffer), 'remote-ms'))
+    await vi.waitFor(() => expect(mocks.microsoft.send).toHaveBeenCalledWith(expect.any(Buffer), 'remote-ms', undefined))
 
     mocks.setCredential({ type: 'imap', config: { email: 'imap@example.test' } })
     mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'imap' })
@@ -1108,7 +1144,7 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.db.getDraft.mockReturnValue(row('imap-no-remote-send', null))
     queueDeliveries([row('imap-no-remote-send', null)])
     await request({ type: 'network', payload: { online: true } })
-    await vi.waitFor(() => expect(mocks.imap.send).toHaveBeenCalledWith(expect.any(Buffer), ['ada@example.test']))
+    await vi.waitFor(() => expect(mocks.imap.send).toHaveBeenCalledWith(expect.any(Buffer), ['ada@example.test'], undefined))
 
     mocks.setCredential({ type: 'oauth', accessToken: 'token' })
     mocks.db.getAccount.mockReturnValue(undefined)
@@ -1178,7 +1214,7 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.imap.send.mockClear()
     queueDeliveries([row('alias-imap')])
     await request({ type: 'network', payload: { online: true } })
-    await vi.waitFor(() => expect(mocks.imap.send).toHaveBeenCalledWith(expect.any(Buffer), ['ada@example.test'], 'alias@example.test'))
+    await vi.waitFor(() => expect(mocks.imap.send).toHaveBeenCalledWith(expect.any(Buffer), ['ada@example.test'], undefined, 'alias@example.test'))
     expect(createMimeBuffer).toHaveBeenCalledWith(expect.objectContaining({ id: 'alias-imap', fromIdentityId: 'alias' }), 'Alias <alias@example.test>', true)
 
     mocks.imap.send.mockRejectedValueOnce(Object.assign(new Error('553 5.7.1 Sender address rejected: not owned by user'), { responseCode: 553 }))
@@ -1200,6 +1236,57 @@ describe.sequential('mail worker protocol routing', () => {
     expect(createMime).toHaveBeenLastCalledWith(expect.objectContaining({ fromIdentityId: 'alias' }), 'Alias <alias@example.test>')
     identities.get.mockImplementation(() => undefined)
     identities.draftSender.mockReturnValue({})
+  })
+
+  it('delivers stored importance and receipt choices only where the provider supports them', async () => {
+    const row = (id: string) => ({
+      id, account_id: 'account-1', thread_id: null, in_reply_to: null, references_json: '[]', to_json: '["ada@example.test"]', cc_json: '[]', bcc_json: '[]',
+      subject: id, body_text: 'Body', body_html: null, attachment_paths_json: '[]', gmail_draft_id: null,
+      send_options_json: '{"importance":"high","requestReadReceipt":true,"requestDeliveryReceipt":true}'
+    })
+    mocks.setCredential({ type: 'imap', config: { email: 'imap@example.test' } })
+    mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'imap' })
+    mocks.db.getDraft.mockReturnValue(row('imap-options'))
+    queueDeliveries([row('imap-options')])
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(mocks.imap.send).toHaveBeenCalledWith(expect.any(Buffer), ['ada@example.test'], { importance: 'high', requestReadReceipt: true, requestDeliveryReceipt: true }))
+
+    mocks.setCredential({ type: 'oauth', accessToken: 'token' })
+    mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'gmail' })
+    mocks.db.getDraft.mockReturnValue(row('gmail-options'))
+    mocks.gmail.sendMessage.mockClear()
+    queueDeliveries([row('gmail-options')])
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(mocks.gmail.sendMessage).toHaveBeenCalled())
+    const { createMime } = await import('./mail/mime-builder')
+    // Gmail cannot request delivery receipts, so that choice is not sent.
+    expect(vi.mocked(createMime).mock.calls.at(-1)?.[0].sendOptions).toEqual({ importance: 'high', requestReadReceipt: true })
+  })
+
+  it('routes reply watches and activates them with the delivered Message-ID and Gmail thread', async () => {
+    const watches = mocks.db.replyWatches
+    const event = { watch: { ...watches.watch, status: 'replied' }, reason: 'replied' }
+    watches.process.mockReturnValueOnce([event])
+    await expect(request({ type: 'reply-watches:list', payload: { accountIds: ['account-1'] } })).resolves.toMatchObject({ result: [watches.watch] })
+    await request({ type: 'reply-watches:create', payload: { accountId: 'account-1', draftId: 'draft-w', deadlineAt: '2026-09-01T00:00:00.000Z' } })
+    expect(watches.createForDraft).toHaveBeenCalledWith('account-1', 'draft-w', '2026-09-01T00:00:00.000Z')
+    // Creating a watch runs an immediate pass so existing replies notify without waiting for the timer.
+    expect(mocks.posted).toContainEqual({ kind: 'event', event: { type: 'reply-watch', payload: event } })
+    await request({ type: 'reply-watches:create', payload: { accountId: 'account-1', messageId: 'sent-1' } })
+    expect(watches.createForMessage).toHaveBeenCalledWith('account-1', 'sent-1', undefined)
+    await expect(request({ type: 'reply-watches:cancel', payload: { id: 'watch-1' } })).resolves.toMatchObject({ result: true })
+    await request({ type: 'drafts:cancel-send', payload: { id: 'draft-w' } })
+    expect(watches.cancelForDraft).toHaveBeenCalledWith('draft-w')
+
+    const row = { id: 'watched-delivery', account_id: 'account-1', thread_id: null, in_reply_to: null, references_json: '[]', to_json: '["ada@example.test"]', cc_json: '[]', bcc_json: '[]', subject: 'Proposal', body_text: 'Body', body_html: null, attachment_paths_json: '[]', gmail_draft_id: null }
+    const mime = await import('./mail/mime-builder')
+    vi.mocked(mime.createMime).mockReturnValueOnce(Buffer.from('Message-ID: <sent-id@aerio.local>\r\nSubject: Proposal\r\n\r\nBody').toString('base64url'))
+    mocks.gmail.sendMessage.mockResolvedValueOnce({ id: 'gmail-sent', threadId: 'gmail-thread' })
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.getDraft.mockReturnValue(undefined)
+    queueDeliveries([row])
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(watches.activateForDraft).toHaveBeenCalledWith('watched-delivery', expect.objectContaining({ messageIdHeader: '<sent-id@aerio.local>', threadId: 'gmail-thread' })))
   })
 
   it('shuts down cleanly', async () => {

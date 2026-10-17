@@ -416,6 +416,22 @@ describe.sequential('Electron main process', () => {
     expect(routed).toEqual(expect.arrayContaining(['mail:list', 'mail:unread-counts', 'mail:account-unread-counts', 'mail:thread', 'mail:action', 'rules:list', 'sync:rebuild', 'storage:stats']))
   })
 
+  it('routes read-receipt requests with the stored policy instead of renderer input', async () => {
+    const settings = { theme: 'dark', density: 'compact', closeToTray: false, notifications: true, startModule: 'mail' }
+    invoke('preferences:save', { schemaVersion: 1, settings: { ...settings, readReceiptPolicy: 'always' } })
+    await invoke('mail:receipts:inspect', 'a1b2', 'message')
+    expect(mocks.worker.request).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'receipts:inspect', payload: { accountId: 'a1b2', messageId: 'message', policy: 'always' } }))
+    invoke('preferences:save', { schemaVersion: 1, settings: { ...settings, readReceiptPolicy: 'sometimes' } })
+    expect(await invoke('preferences:load')).toMatchObject({ settings: { readReceiptPolicy: 'ask' } })
+    await invoke('mail:receipts:respond', 'a1b2', 'message', 'decline')
+    expect(mocks.worker.request).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'receipts:respond', payload: { accountId: 'a1b2', messageId: 'message', decision: 'decline', policy: 'ask' } }))
+    expect(() => invoke('mail:receipts:respond', 'a1b2', 'message', 'always')).toThrow(/valid read receipt/)
+    expect(() => invoke('mail:receipts:inspect', '', 'message')).toThrow(/valid message/)
+    const draft = { accountId: 'a1b2', to: ['reader@example.test'], cc: [], bcc: [], subject: 'Hello', text: 'Body', attachmentPaths: [], sendOptions: { importance: 'high', requestReadReceipt: 'yes' } }
+    await invoke('mail:drafts:save', draft)
+    expect(mocks.worker.request).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'drafts:save', payload: expect.objectContaining({ sendOptions: { importance: 'high' } }) }))
+  })
+
   it('accepts unfinished recipients while saving but requires complete recipients when sending', async () => {
     const draft = { id: 'draft', accountId: 'a1b2', to: ['unfinished'], cc: [], bcc: [], subject: 'Hello', text: 'Body', attachmentPaths: [] }
     await expect(invoke('mail:drafts:save', draft)).resolves.toMatchObject({ command: 'drafts:save' })
@@ -832,6 +848,24 @@ describe.sequential('Electron main process', () => {
     expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'saved-searches:delete', payload: { id: 'search-1' } })
   })
 
+  it('validates and routes quick actions', async () => {
+    await invoke('mail:quick-actions:list')
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'quick-actions:list' })
+    await invoke('mail:quick-actions:save', { name: ' Triage ', accountId: 'a1', steps: [{ action: 'read', labelId: 'ignored' }, { action: 'move', labelId: 'folder:Done' }], shortcut: 2, showInToolbar: true })
+    expect(mocks.worker.request).toHaveBeenCalledWith({
+      type: 'quick-actions:save', payload: { name: 'Triage', accountId: 'a1', steps: [{ action: 'read' }, { action: 'move', labelId: 'folder:Done' }], shortcut: 2, showInToolbar: true }
+    })
+    expect(() => invoke('mail:quick-actions:save', { name: 'Bad', steps: [{ action: 'drop table' }] })).toThrow(/unknown action/)
+    expect(() => invoke('mail:quick-actions:save', { name: 'No account', steps: [{ action: 'label', labelId: 'x' }] })).toThrow(/choose an account/)
+    expect(() => invoke('mail:quick-actions:save', { name: 'Shortcut', steps: [{ action: 'read' }], shortcut: 12 })).toThrow(/shortcut/)
+    await invoke('mail:quick-actions:run', 'quick-1', [{ accountId: 'a1', threadIds: ['t1', 't1', 't2'] }])
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'quick-actions:run', payload: { id: 'quick-1', targets: [{ accountId: 'a1', threadIds: ['t1', 't2'] }] } })
+    expect(() => invoke('mail:quick-actions:run', 'quick-1', [])).toThrow(/at least one/)
+    expect(() => invoke('mail:quick-actions:run', '', [{ accountId: 'a1', threadIds: ['t1'] }])).toThrow(/quick action id/)
+    await invoke('mail:quick-actions:delete', 'quick-1')
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'quick-actions:delete', payload: { id: 'quick-1' } })
+  })
+
   it('creates, updates, and deletes writable Google calendar events', async () => {
     const calendar = { id: 'calendar', accountId: 'abcdef', provider: 'gmail', remoteId: 'remote-calendar', name: 'Work', canWrite: true }
     const input = {
@@ -1145,6 +1179,39 @@ describe.sequential('Electron main process', () => {
     } finally {
       mocks.Notification.isSupported.mockReturnValue(true)
       invoke('preferences:save', previous)
+    }
+  })
+
+  it('validates reply watch requests and notifies replies and expired deadlines while hidden in the tray', async () => {
+    const future = new Date(Date.now() + 60 * 60_000).toISOString()
+    expect(() => invoke('mail:reply-watches:create', { accountId: 'a1b2' })).toThrow(/sent or outgoing message/)
+    expect(() => invoke('mail:reply-watches:create', { accountId: 'a1b2', draftId: 'd', messageId: 'm' })).toThrow(/sent or outgoing message/)
+    expect(() => invoke('mail:reply-watches:create', { accountId: 'a1b2', draftId: 'd', deadlineAt: '2020-01-01T00:00:00Z' })).toThrow(/Reply deadline must be in the future/)
+    expect(() => invoke('mail:reply-watches:cancel', '')).toThrow(/reply watch/)
+    await invoke('mail:reply-watches:create', { accountId: 'a1b2', draftId: 'draft', deadlineAt: future })
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'reply-watches:create', payload: { accountId: 'a1b2', draftId: 'draft', deadlineAt: future } })
+    await invoke('mail:reply-watches:create', { accountId: 'a1b2', messageId: 'sent' })
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'reply-watches:create', payload: { accountId: 'a1b2', messageId: 'sent', deadlineAt: undefined } })
+    await invoke('mail:reply-watches:list', ['a1b2', 7])
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'reply-watches:list', payload: { accountIds: ['a1b2'] } })
+    await invoke('mail:reply-watches:cancel', 'watch')
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'reply-watches:cancel', payload: { id: 'watch' } })
+
+    const main = mocks.windows.filter((window) => window.options.title === 'Aerio').at(-1)
+    const visible = main.visible
+    main.visible = false
+    try {
+      const watch = { id: 'w', accountId: 'a1b2', subject: 'Proposal', recipients: ['ada@example.test'], status: 'replied', createdAt: future, threadId: 'sent-thread', replyThreadId: 'reply-thread', replyFrom: 'Ada <ada@example.test>' }
+      mocks.emitWorker({ type: 'reply-watch', payload: { watch, reason: 'replied' } })
+      const replied = mocks.notifications.at(-1)
+      expect(replied.options).toMatchObject({ title: 'Reply from Ada <ada@example.test>', body: 'Proposal' })
+      expect(replied.show).toHaveBeenCalledOnce()
+      replied.handlers.get('click')()
+      expect(mocks.windows.at(-1).loadFile).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ query: expect.objectContaining({ accountId: 'a1b2', threadId: 'reply-thread' }) }))
+      mocks.emitWorker({ type: 'reply-watch', payload: { watch: { ...watch, status: 'expired', subject: '', replyThreadId: undefined, replyFrom: undefined }, reason: 'expired' } })
+      expect(mocks.notifications.at(-1).options).toMatchObject({ title: 'No reply yet', body: '(No subject) — the reply deadline has passed' })
+    } finally {
+      main.visible = visible
     }
   })
 

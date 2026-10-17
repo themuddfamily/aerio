@@ -2865,6 +2865,51 @@ kbd {
   background: transparent;
 }
 
+.mail-send-options { position: relative; }
+.mail-send-options > summary { list-style: none; cursor: pointer; }
+.mail-send-options > summary::-webkit-details-marker { display: none; }
+.mail-send-options.active > summary { color: var(--accent-text); }
+
+.mail-send-options-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  width: 260px;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 18%);
+  font-size: 12px;
+}
+
+.mail-send-options-panel > label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mail-send-options-panel > label.mail-send-options-check { justify-content: flex-start; }
+.mail-send-options-panel small { color: var(--muted); line-height: 1.5; }
+
+.mail-receipt-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-bottom: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.mail-receipt-notice > svg { flex-shrink: 0; margin-top: 3px; color: var(--muted); }
+.mail-receipt-notice p { margin: 0; }
+.mail-receipt-notice small { color: var(--muted); }
+.mail-receipt-actions { display: inline-flex; gap: 10px; margin-left: 8px; }
+.mail-receipt-actions button { padding: 0; border: 0; background: transparent; color: var(--accent-text); font: inherit; cursor: pointer; }
+.mail-receipt-actions button:hover { text-decoration: underline; }
+
 .undo-toast:not(.send-undo-toast):has(~ .send-undo-toast) { bottom: 78px; }
 
 .snooze-options {
@@ -2920,6 +2965,29 @@ kbd {
 .rule-copy small { color: var(--muted); font-size: 9px; }
 .rules-empty { min-height: 240px; display: grid; place-content: center; justify-items: center; gap: 7px; margin: 0; color: var(--muted); text-align: center; }
 .rules-empty strong { color: var(--text); font-size: 12px; }
+
+.mail-attachments-modal { width: min(1000px, 96vw); height: min(780px, calc(100vh - 100px)); }
+.mail-attachment-filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
+.mail-attachment-filters > label { display: flex; flex-direction: column; gap: 5px; min-width: 0; color: var(--muted); font-size: 9.5px; font-weight: 650; }
+.mail-attachment-filters input, .mail-attachment-filters select { width: 100%; height: 32px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; color: var(--text); background: var(--surface-2); font-size: 11px; }
+.mail-attachment-filters input:focus, .mail-attachment-filters select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.mail-attachment-filters > .mail-attachment-search { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-2); }
+.mail-attachment-filters > .mail-attachment-search input { border: 0; padding: 0; background: transparent; box-shadow: none; }
+.mail-attachment-toggles { grid-column: 1 / -1; display: flex; align-items: center; gap: 16px; color: var(--muted); font-size: 10.5px; }
+.mail-attachment-toggles label { display: inline-flex; align-items: center; gap: 6px; }
+.mail-attachment-toggles input { width: auto; height: auto; }
+.mail-attachment-list { flex: 1; min-height: 240px; display: grid; align-content: start; gap: 6px; padding: 14px 20px; overflow-y: auto; }
+.mail-attachment-list > article { display: flex; align-items: center; gap: 10px; min-height: 58px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.mail-attachment-list > article.unavailable { opacity: .68; }
+.mail-attachment-list > article.unavailable .file-icon { color: var(--muted); background: var(--surface-3, var(--line)); }
+.mail-attachment-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.mail-attachment-copy strong, .mail-attachment-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-attachment-copy strong { font-size: 11px; }
+.mail-attachment-copy small { color: var(--muted); font-size: 9px; }
+.mail-attachment-copy small .account-dot { display: inline-block; margin-right: 5px; vertical-align: 1px; }
+.mail-attachment-list time { flex: 0 0 auto; color: var(--muted); font-size: 9.5px; }
+.mail-attachment-more { display: flex; justify-content: center; padding: 6px 0 2px; }
+@media (max-width: 720px) { .mail-attachment-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .rule-toggle { position: relative; width: 31px; height: 18px; flex: 0 0 auto; }
 .rule-toggle input { position: absolute; opacity: 0; }
@@ -4285,3 +4353,108 @@ kbd {
 .signature-item small { overflow: hidden; color: var(--muted); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
 .signature-editor { display: grid; gap: 8px; }
 .signature-editor-body { min-height: 96px; max-height: 260px; overflow-y: auto; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 8px; outline: 0; color: var(--text); background: var(--surface-2); }
+.reply-watch-control { display: flex; align-items: center; gap: 6px; }
+.reply-watch-control > .icon-button.active { color: var(--accent); background: var(--accent-soft); }
+/* Folder and label management */
+.mail-folder-list > article { min-height: 44px; }
+.mail-folder-delete { display: grid; gap: 12px; padding: 16px 20px; color: var(--text-soft); font-size: 11px; }
+.mail-folder-delete p { margin: 0; line-height: 1.5; }
+.mail-folder-error { color: var(--danger); font-size: 9.5px; }
+.mail-folder-colors { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; border: 0; }
+.mail-folder-colors legend { margin-bottom: 6px; color: var(--muted); font-size: 10px; }
+.mail-folder-colors button { width: 22px; height: 22px; border: 2px solid transparent; border-radius: 50%; }
+.mail-folder-colors button[aria-pressed='true'] { border-color: var(--text); box-shadow: 0 0 0 2px var(--surface) inset; }
+.automatic-replies-form { display: grid; gap: 9px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.automatic-replies-form:disabled { opacity: .62; }
+.automatic-replies-dates { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+.automatic-replies-dates p { grid-column: 1 / -1; display: flex; align-items: center; gap: 5px; }
+.automatic-replies-permission { display: grid; gap: 7px; }
+.automatic-replies-warning { padding: 7px 9px; border-radius: 7px; background: var(--surface-2); }
+/* Calendar and contact interchange */
+.interchange-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 4px 6px;
+}
+
+.interchange-calendar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 6px 4px 9px;
+  border-radius: 8px;
+  font-size: 11px;
+}
+
+.interchange-calendar:hover { background: var(--surface-hover); }
+.interchange-calendar .icon-button { width: 24px; height: 24px; flex: none; }
+.interchange-calendar-text { display: grid; min-width: 0; flex: 1; }
+.interchange-calendar-text strong,
+.interchange-calendar-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.interchange-calendar-text small { color: var(--muted); font-size: 9px; }
+.interchange-calendar.has-error small { color: var(--danger); white-space: normal; }
+
+.interchange-summary {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.interchange-warnings {
+  margin: 0;
+  padding: 8px 10px 8px 26px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.interchange-preview {
+  max-height: 260px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  list-style: none;
+}
+
+.interchange-preview li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.interchange-preview li:last-child { border-bottom: 0; }
+.interchange-preview li.muted { color: var(--muted); }
+.interchange-preview li > span:not([title]) { display: grid; flex: 1; min-width: 0; }
+.interchange-preview small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.interchange-preview em { color: var(--muted); font-size: 11px; font-style: normal; white-space: nowrap; }
+
+.csv-mapping {
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.csv-mapping-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(140px, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.csv-mapping-row:last-child { border-bottom: 0; }
+.csv-mapping-row.heading { position: sticky; top: 0; background: var(--surface); color: var(--muted); font-weight: 650; }
+.csv-mapping-row > span,
+.csv-mapping-row > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.csv-mapping-row > small { color: var(--muted); }

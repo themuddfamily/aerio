@@ -1,6 +1,6 @@
 import { parentPort } from 'node:worker_threads'
 import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statfsSync, writeFileSync } from 'node:fs'
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statfsSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { join, sep } from 'node:path'
 import PostalMime, { type Address, type Attachment as ParsedAttachment } from 'postal-mime'
@@ -28,12 +28,17 @@ import { MailDatabase, type ParsedMailMessage } from './mail/database'
 import { GmailApiError, GmailClient, type GmailRawMessage } from './mail/gmail-client'
 import { ImapSmtpClient, labelsForImapFolders, type ImapFolder } from './mail/imap-client'
 import { MicrosoftGraphClient, MicrosoftGraphError, microsoftLabels, microsoftMessageLabels } from './mail/microsoft-client'
+import { MailFolderManager } from './mail/folder-management'
 import { sanitizeMessageHtmlWithReport } from './mail/message-security'
 import { buildNewMailNotification } from './mail/new-mail'
+import { messageIdFromMime } from './mail/reply-watches'
 import { parseMessageSource } from './mail/message-source'
+import { runMailQuickAction } from './mail/quick-actions'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createMime, createMimeBuffer } from './mail/mime-builder'
 import { describeSenderRejection, parseGmailSendAs, parseMicrosoftProxyAddresses, resolveDraftSender } from './mail/sender-identity'
+import { createReceiptService } from './mail/receipts'
+import { supportedSendOptions } from '../src/lib/mail-send-options'
 import {
   BACKGROUND_MAIL_POLL_INTERVAL_MS,
   clampMailPollingInterval,
@@ -56,6 +61,8 @@ const nextRequestAt = new Map<string, number>()
 const draftQueues = new Map<string, Promise<unknown>>()
 const lastAutomaticSyncAt = new Map<string, number>()
 let pollingIntervalMs = BACKGROUND_MAIL_POLL_INTERVAL_MS
+let lastReplyWatchPassAt = 0
+const REPLY_WATCH_INTERVAL_MS = 15_000
 const UNDO_SEND_DELAY_MS = 10_000
 const DRAFT_CONFLICT_MESSAGE = 'This draft changed after it was opened in another mail client. Your version was not overwritten; save it as a copy to keep both versions.'
 
@@ -119,6 +126,16 @@ function microsoftClientFor(accountId: string) {
     if (credential.type !== 'oauth') throw new Error('The Microsoft account does not have OAuth credentials')
     return credential.accessToken
   })
+}
+
+let folderManagerInstance: MailFolderManager | undefined
+function folderManager() {
+  if (!database) throw new Error('Database is not initialized')
+  if (!folderManagerInstance) {
+    const db = database
+    folderManagerInstance = new MailFolderManager({ database: db, online: () => online, gmail: clientFor, microsoft: microsoftClientFor, imap: imapClientFor })
+  }
+  return folderManagerInstance
 }
 
 function addressList(value?: Address[]) {
@@ -651,12 +668,23 @@ async function processOperations() {
   }
 }
 
+function processReplyWatches(force = false) {
+  if (!database || (!force && Date.now() - lastReplyWatchPassAt < REPLY_WATCH_INTERVAL_MS)) return
+  lastReplyWatchPassAt = Date.now()
+  try {
+    for (const event of database.replyWatches.process()) emit({ type: 'reply-watch', payload: event })
+  } catch {
+    // A failed pass leaves watches active for the next timer tick.
+  }
+}
+
 async function runOperations() {
   if (!database) return
   for (const snooze of database.releaseDueSnoozes()) {
     emit({ type: 'operation', payload: snooze.operation })
     emit({ type: 'mail-changed', payload: { accountId: snooze.accountId, threadIds: [snooze.threadId] } })
   }
+  processReplyWatches()
   if (!online) return
   for (const row of database.dueOperations()) {
     const id = String(row.id)
@@ -759,6 +787,7 @@ function draftInputFromRow(row: Record<string, string | number | bigint | null>)
     text: String(row.body_text),
     html: row.body_html ? String(row.body_html) : undefined,
     attachmentPaths: JSON.parse(String(row.attachment_paths_json)),
+    ...(row.send_options_json ? { sendOptions: JSON.parse(String(row.send_options_json)) } : {}),
     ...database!.identities.draftSender(String(row.id))
   }
 }
@@ -778,6 +807,33 @@ async function refreshIdentities(accountId: string) {
   if (account.provider === 'microsoft') return database!.identities.replaceProviderIdentities(account, 'microsoft', parseMicrosoftProxyAddresses(await microsoftClientFor(accountId).senderAddresses(), account.email))
   database!.identities.markRefreshed(accountId)
   return database!.identities.list([account])
+}
+
+function readRawPrefix(path: string, maxBytes: number) {
+  const descriptor = openSync(path, 'r')
+  try {
+    const buffer = Buffer.alloc(maxBytes)
+    return buffer.subarray(0, readSync(descriptor, buffer, 0, maxBytes, 0))
+  } finally {
+    closeSync(descriptor)
+  }
+}
+
+let receipts: ReturnType<typeof createReceiptService> | undefined
+function receiptService() {
+  if (!database) throw new Error('Database is not initialized')
+  receipts ??= createReceiptService({
+    database,
+    readRaw: readRawPrefix,
+    online: () => online,
+    async sendRaw(account, raw, recipients) {
+      if (account.archived) throw new Error('Connect this account before sending read receipts')
+      if (account.provider === 'gmail') await clientFor(account.id).sendMessage(raw.toString('base64url'))
+      else if (account.provider === 'microsoft') await microsoftClientFor(account.id).send(raw)
+      else await (await imapClientFor(account.id)).send(raw, recipients)
+    }
+  })
+  return receipts
 }
 
 async function assertRemoteDraftUnchanged(accountId: string, provider: MailAccountSummary['provider'], remoteId?: string, expectedRevision?: string) {
@@ -818,7 +874,7 @@ async function saveDraft(input: MailDraftInput) {
       remoteRevision = remote.message?.id
     } else if (provider === 'microsoft') {
       if (row?.gmail_draft_id) await assertRemoteDraftUnchanged(input.accountId, provider, String(row.gmail_draft_id), row.remote_revision ? String(row.remote_revision) : undefined)
-      const remote = await microsoftClientFor(input.accountId).saveDraft(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined)
+      const remote = await microsoftClientFor(input.accountId).saveDraft(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined, input.sendOptions)
       remoteId = remote.id
       remoteRevision = remote.revision
     } else {
@@ -846,22 +902,32 @@ async function deliverDraft(input: MailDraftInput) {
     const row = database.getDraft(result.id)
     sender = senderFor(input, true)
     const from = sender?.from
+    // The stored draft keeps the user's choice; only what the provider can honor is sent.
+    input = { ...input, sendOptions: supportedSendOptions(input.sendOptions, provider) }
     if (row?.gmail_draft_id) await assertRemoteDraftUnchanged(input.accountId, provider, String(row.gmail_draft_id), row.remote_revision ? String(row.remote_revision) : undefined)
+    // Reply watches match on the Message-ID and provider thread of what was actually sent.
+    let sent: { messageIdHeader?: string; threadId?: string }
     if (provider === 'gmail') {
       const raw = createMime({ ...input, id: result.id }, from)
-      if (row?.gmail_draft_id) await clientFor(input.accountId).sendDraft(String(row.gmail_draft_id), raw)
-      else await clientFor(input.accountId).sendMessage(raw, input.threadId)
+      const reference = row?.gmail_draft_id
+        ? await clientFor(input.accountId).sendDraft(String(row.gmail_draft_id), raw)
+        : await clientFor(input.accountId).sendMessage(raw, input.threadId)
+      sent = { messageIdHeader: messageIdFromMime(raw), threadId: reference?.threadId }
     } else if (provider === 'microsoft') {
-      await microsoftClientFor(input.accountId).send(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined)
+      // Exchange assigns its own Message-ID; the watch adopts it from the synced Sent copy.
+      await microsoftClientFor(input.accountId).send(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined, input.sendOptions)
+      sent = { threadId: input.threadId }
     } else {
       const client = await imapClientFor(input.accountId)
       const recipients = [...input.to, ...input.cc, ...input.bcc]
-      const raw = createMimeBuffer({ ...input, id: result.id }, from, true)
+      const mime = createMimeBuffer({ ...input, id: result.id }, from, true)
       // An alias also becomes the SMTP envelope sender; the server decides whether it is allowed.
-      await (sender?.identity ? client.send(raw, recipients, sender.identity.email) : client.send(raw, recipients))
+      await (sender?.identity ? client.send(mime, recipients, input.sendOptions, sender.identity.email) : client.send(mime, recipients, input.sendOptions))
       if (row?.gmail_draft_id) await client.deleteDraft(String(row.gmail_draft_id))
+      sent = { messageIdHeader: messageIdFromMime(mime) }
     }
     result = { ...result, status: 'sent', updatedAt: new Date().toISOString() }
+    database.replyWatches.activateForDraft(result.id, { ...sent, sentAt: result.updatedAt })
     removeDraftFiles(result.id)
   } catch (error) {
     const rejected = sender ? describeSenderRejection(error, provider, sender) : undefined
@@ -901,6 +967,7 @@ async function discardDraft(id: string) {
       else await (await imapClientFor(accountId)).deleteDraft(remoteId)
     }
     database.deleteDraftRecord(id)
+    database.replyWatches.cancelForDraft(id)
     removeDraftFiles(id)
     result = { ...result, status: 'discarded', updatedAt: new Date().toISOString() }
   } catch (error) {
@@ -928,7 +995,7 @@ async function processQueuedDrafts() {
 async function extractAttachment(accountId: string, messageId: string, attachmentIdValue: string, targetPath: string) {
   if (!database) throw new Error('Database is not initialized')
   const rawPath = database.getMessageRaw(accountId, messageId)
-  if (!rawPath) throw new Error('The original message is not available offline')
+  if (!rawPath || !database.rawExists(rawPath)) throw new Error('The original message is not available offline')
   const parsed = await PostalMime.parse(readFileSync(rawPath))
   const attachment = parsed.attachments.find((item, index) => attachmentId(item, index) === attachmentIdValue)
   if (!attachment) throw new Error('Attachment not found')
@@ -997,6 +1064,7 @@ function applyRulesToIncoming(records: ParsedMailMessage[]) {
 
 function emitNewMail(accountId: string, records: ParsedMailMessage[]) {
   const silenced = applyRulesToIncoming(records)
+  if (records.length) processReplyWatches(true)
   if (!database?.getAccount(accountId)?.notifications) return
   const payload = buildNewMailNotification(accountId, records.filter((record) => !silenced.has(record.id)))
   if (payload) emit({ type: 'new-mail', payload })
@@ -1006,6 +1074,9 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'initialize') {
     contentPath = command.payload.contentPath
     database = new MailDatabase(command.payload.databasePath, contentPath)
+    folderManagerInstance = undefined
+    // Re-read provider folders for any folder change cut off by a restart.
+    for (const accountId of database.recoverInterruptedFolderOperations()) void folderManager().refresh(accountId).catch(() => undefined)
     clearInterval(operationTimer)
     clearInterval(pollTimer)
     operationTimer = setInterval(() => void processOperations(), 2_000)
@@ -1075,6 +1146,12 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     emit({ type: 'mail-changed', payload: { accountId } })
     return
   }
+  if (command.type === 'receipts:inspect') {
+    return receiptService().inspect(command.payload.accountId, command.payload.messageId, command.payload.policy)
+  }
+  if (command.type === 'receipts:respond') {
+    return receiptService().respond(command.payload.accountId, command.payload.messageId, command.payload.decision, command.payload.policy)
+  }
   if (command.type === 'mail:source') {
     const rawPath = database.getMessageRaw(command.payload.accountId, command.payload.messageId)
     if (!rawPath) throw new Error('The original message is not available offline')
@@ -1138,14 +1215,40 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     return serializeDraft(id, async () => queueDraftDelivery({ ...command.payload.input, id }, command.payload.deliveryAt, 'scheduled'))
   }
   if (command.type === 'drafts:cancel-send') {
-    return serializeDraft(command.payload.id, async () => database!.cancelDraftDelivery(command.payload.id))
+    return serializeDraft(command.payload.id, async () => {
+      const result = database!.cancelDraftDelivery(command.payload.id)
+      database!.replyWatches.cancelForDraft(command.payload.id)
+      return result
+    })
   }
+  if (command.type === 'reply-watches:list') return database.replyWatches.list(command.payload.accountIds)
+  if (command.type === 'reply-watches:create') {
+    const { accountId, draftId, messageId, deadlineAt } = command.payload
+    const watch = draftId
+      ? await serializeDraft(draftId, async () => database!.replyWatches.createForDraft(accountId, draftId, deadlineAt))
+      : database.replyWatches.createForMessage(accountId, messageId!, deadlineAt)
+    processReplyWatches(true)
+    return database.replyWatches.get(watch.id) ?? watch
+  }
+  if (command.type === 'reply-watches:cancel') return database.replyWatches.cancel(command.payload.id)
   if (command.type === 'drafts:delete') {
     if (!database.getDraft(command.payload.id)) return discardDraft(command.payload.id)
     const queued = database.requestDraftDiscard(command.payload.id)
     return online ? serializeDraft(command.payload.id, () => discardDraft(command.payload.id)) : queued
   }
   if (command.type === 'drafts:stage-message-attachments') return stageMessageAttachments(command.payload.draftId, command.payload.accountId, command.payload.messageId)
+  if (command.type === 'folders:delete-preview') return folderManager().preview(command.payload.accountId, command.payload.labelId)
+  if (command.type === 'folders:create' || command.type === 'folders:update' || command.type === 'folders:delete') {
+    const accountId = command.payload.accountId
+    const result = command.type === 'folders:create' ? await folderManager().create(command.payload)
+      : command.type === 'folders:update' ? await folderManager().update(command.payload)
+        : await folderManager().delete(command.payload)
+    emit({ type: 'mail-changed', payload: { accountId } })
+    // Renamed IMAP folders and deleted folders' messages are re-indexed.
+    const provider = database.getAccount(accountId)?.provider
+    if (provider !== 'gmail' && (command.type === 'folders:delete' || Object.keys(result.renamed).length) && !paused.has(accountId)) void syncAccount(accountId)
+    return result
+  }
   if (command.type === 'rules:list') return database.listRules(command.payload.accountIds)
   if (command.type === 'rules:save') return database.saveRule(command.payload)
   if (command.type === 'rules:delete') return database.deleteRule(command.payload.id)
@@ -1181,6 +1284,17 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'saved-searches:list') return database.listSavedSearches()
   if (command.type === 'saved-searches:save') return database.saveSavedSearch(command.payload)
   if (command.type === 'saved-searches:delete') return database.deleteSavedSearch(command.payload.id)
+  if (command.type === 'quick-actions:list') return database.listQuickActions()
+  if (command.type === 'quick-actions:save') return database.saveQuickAction(command.payload)
+  if (command.type === 'quick-actions:delete') return database.deleteQuickAction(command.payload.id)
+  if (command.type === 'quick-actions:run') {
+    const quickAction = database.getQuickAction(command.payload.id)
+    if (!quickAction) throw new Error('Quick action not found')
+    const { result, changed } = runMailQuickAction(database, quickAction, command.payload.targets)
+    for (const operation of result.operations) emit({ type: 'operation', payload: operation })
+    for (const target of changed) emit({ type: 'mail-changed', payload: target })
+    return result
+  }
   if (command.type === 'sync:start') {
     const accounts = command.payload.accountId
       ? database.listAccounts().filter((item) => item.id === command.payload.accountId)
@@ -1215,6 +1329,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     return
   }
   if (command.type === 'diagnostics:health') return database.diagnosticHealth()
+  if (command.type === 'attachments:list') return database.listAttachments(command.payload)
   if (command.type === 'attachment:extract') {
     await extractAttachment(command.payload.accountId, command.payload.messageId, command.payload.attachmentId, command.payload.targetPath)
     return
@@ -1238,6 +1353,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     clearInterval(pollTimer)
     database.close()
     database = undefined
+    folderManagerInstance = undefined
     return
   }
 }

@@ -13,13 +13,16 @@ Remaining release work and optional future features are tracked in [ROADMAP.md](
 - Raw RFC 2822 messages, MIME bodies, and attachments stored locally
 - Resumable sync checkpoints, Gmail History, Microsoft delta links, IMAP folder reconciliation, 15-second active/one-minute background polling, and manual pause/resume
 - SQLite-backed folder views, infinite scrolling, and full-text offline search
+- An all-attachments workspace that filters attachments across accounts by name, sender, recipient, date, file type, and size, with open, save, and jump-to-message actions ([attachments workspace](docs/attachments-workspace.md))
 - Single and multi-select Archive, read/unread, star, importance, move, label, and Trash actions
 - Optimistic local changes with exact-state Undo, retry/backoff, and a durable provider operation queue
 - Editable provider drafts with idle autosave, rich-text composition, recipient suggestions, signatures, forwarding attachments, scheduled delivery, ten-second Undo Send, SMTP delivery, and an offline Outbox
 - QuickText snippets and whole-message templates (subject, sanitized HTML, and managed attachments) with search, editing, caret-preserving insertion, and backup/restore
 - Sender identities with provider-authorized aliases (Gmail send-as, Microsoft aliases, manual IMAP/shared-mailbox addresses), Reply-To, multiple sanitized HTML signatures, and per-identity defaults for new messages and replies ([details](docs/sender-identities.md))
 - Persistent snooze/remind-later with automatic Inbox restoration, plus account-specific rules for sender, recipient, subject, and body filtering
+- User-defined Quick Actions that run a saved sequence of mail actions from the toolbar, context menu, command palette, or Ctrl+Shift+1–9, with run-time destination checks and step-by-step Undo ([Quick Actions](docs/mail-quick-actions.md))
 - Per-account identity, synchronization, notification, OAuth, IMAP/SMTP, connection-test, and local-rebuild settings
+- Provider-side Gmail and Microsoft automatic replies (out of office) with schedules, audiences, read-back of the server state, and a reconnect path for missing permissions ([automatic replies](docs/automatic-replies.md))
 - Privacy-redacted diagnostics, storage-integrity checks, and native new-mail notifications that open the relevant conversation
 - Sanitized HTML; scripts and unsafe links are removed, remote images are blocked by default, and suspected tracking pixels stay blocked with an explanation even after remote images are permitted ([tracking protection](docs/tracking-protection.md))
 - Dedicated message windows for provider mail; double-click a conversation to open or focus its window
@@ -47,7 +50,7 @@ Official builds use Aerio's built-in registration: choose Gmail and select **Con
 4. Put its `client_id` and `client_secret` into `.env.local` as `MAIN_VITE_GOOGLE_CLIENT_ID` and `MAIN_VITE_GOOGLE_CLIENT_SECRET`, then rebuild Aerio. Both values must belong to the same registration.
 5. Choose Gmail and select **Connect Gmail**. Your normal browser completes Google sign-in and returns to Aerio through a temporary `127.0.0.1` callback.
 
-Aerio requests Gmail modify access, read-only Calendar-list access, Google Calendar event read/write access, Contacts read/write access, and Tasks read/write access. It does not request permission to create or share calendars or permanently delete Gmail messages. Existing accounts connected by an older Aerio build can use **Enable editing** in Calendar/Contacts, **Connect Google Tasks** in Tasks, or **Account settings → Reconnect** to approve added scopes.
+Aerio requests Gmail modify access, Gmail basic-settings access (for automatic replies), read-only Calendar-list access, Google Calendar event read/write access, Contacts read/write access, and Tasks read/write access. It does not request permission to create or share calendars or permanently delete Gmail messages. Existing accounts connected by an older Aerio build can use **Enable editing** in Calendar/Contacts, **Connect Google Tasks** in Tasks, or **Account settings → Reconnect** to approve added scopes.
 
 The first download is quota-bound. A mailbox with 100,000 messages can take roughly seven hours or more, depending on message size, retries, and Google’s per-user quota. Progress is persistent; quitting, losing connectivity, or pausing does not discard completed work.
 
@@ -57,7 +60,7 @@ Official builds use Aerio's built-in public-client registration: choose Microsof
 
 1. Create an app registration in [Microsoft Entra](https://entra.microsoft.com/).
 2. Enable public client flows and add the **Mobile and desktop applications** redirect URI `http://localhost`.
-3. Set `MAIN_VITE_MICROSOFT_CLIENT_ID` to the new Application (client) ID and rebuild, then choose Microsoft and sign in. The browser requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite`, `Contacts.ReadWrite`, and `Tasks.ReadWrite` access. Existing connections can reconnect to grant added permissions; Tasks offers **Connect Microsoft To Do**. Background token refresh renews the existing grant without requesting new Tasks consent.
+3. Set `MAIN_VITE_MICROSOFT_CLIENT_ID` to the new Application (client) ID and rebuild, then choose Microsoft and sign in. The browser requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `MailboxSettings.ReadWrite`, `Calendars.ReadWrite`, `Contacts.ReadWrite`, and `Tasks.ReadWrite` access. Existing connections can reconnect to grant added permissions; Tasks offers **Connect Microsoft To Do**. Background token refresh renews the existing grant without requesting new Tasks or mailbox-settings consent.
 
 Aerio includes its Microsoft public-client application ID by default, because desktop application IDs are public identifiers rather than secrets. `MAIN_VITE_MICROSOFT_CLIENT_ID` can override it for a separate development registration.
 

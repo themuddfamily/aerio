@@ -6,6 +6,7 @@ import type {
   ApplyMailActionInput,
   MailAccountSummary,
   MailAttachment,
+  MailAttachmentPage,
   MailDraftInput,
   MailDraftRecord,
   MailDraftResult,
@@ -14,6 +15,8 @@ import type {
   MailRuleInput,
   MailSavedSearch,
   MailSavedSearchInput,
+  MailQuickAction,
+  MailQuickActionInput,
   MailSnooze,
   MailMessageDetail,
   MailThreadDetail,
@@ -30,6 +33,9 @@ import type {
   SyncProgress
 } from '../../src/mail-types'
 import { compileMailSearchQuery } from '../../src/lib/mail-search-query'
+import { normalizeSendOptions } from '../../src/lib/mail-send-options'
+import { ReplyWatchStore } from './reply-watches'
+import { listAttachmentPage } from './attachment-index'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -71,6 +77,11 @@ const json = <T>(value: string | null | undefined, fallback: T): T => {
     return fallback
   }
 }
+const sendOptionsJson = (value: MailDraftInput['sendOptions']) => {
+  const options = normalizeSendOptions(value)
+  return options ? JSON.stringify(options) : null
+}
+const draftSendOptions = (row: DatabaseRow) => normalizeSendOptions(json<unknown>(row.send_options_json ? String(row.send_options_json) : undefined, undefined))
 const containsPattern = (value: string) => `%${value.trim().replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`
 
 type MailRuleMessage = Pick<ParsedMailMessage, 'accountId' | 'threadId' | 'fromName' | 'fromEmail' | 'to' | 'cc' | 'subject' | 'text'>
@@ -102,6 +113,7 @@ export class MailDatabase {
   private readonly db: DatabaseSync
   readonly identities: MailIdentityStore
   private statements = new Map<string, StatementSync>()
+  readonly replyWatches: ReplyWatchStore
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -113,6 +125,7 @@ export class MailDatabase {
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;')
     this.migrate()
     this.identities = new MailIdentityStore(this.db)
+    this.replyWatches = new ReplyWatchStore(this.db)
   }
 
   close() {
@@ -349,6 +362,17 @@ export class MailDatabase {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS mail_quick_actions (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        account_id TEXT REFERENCES gmail_accounts(id) ON DELETE CASCADE,
+        steps_json TEXT NOT NULL DEFAULT '[]',
+        shortcut INTEGER,
+        show_in_toolbar INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE VIRTUAL TABLE IF NOT EXISTS gmail_fts USING fts5(
         account_id UNINDEXED,
         message_id UNINDEXED,
@@ -389,6 +413,39 @@ export class MailDatabase {
     const draftColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_drafts)').all() as { name: string }[]).map((column) => column.name))
     if (!draftColumns.has('delivery_at')) this.db.exec('ALTER TABLE gmail_drafts ADD COLUMN delivery_at TEXT')
     if (!draftColumns.has('remote_revision')) this.db.exec('ALTER TABLE gmail_drafts ADD COLUMN remote_revision TEXT')
+    if (!draftColumns.has('send_options_json')) this.db.exec('ALTER TABLE gmail_drafts ADD COLUMN send_options_json TEXT')
+    // One row per incoming message that asked for a read receipt and was answered.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS mail_receipt_responses (
+        account_id TEXT NOT NULL REFERENCES gmail_accounts(id) ON DELETE CASCADE,
+        message_id TEXT NOT NULL,
+        notify_to TEXT NOT NULL,
+        original_message_id TEXT,
+        status TEXT NOT NULL,
+        automatic INTEGER NOT NULL DEFAULT 0,
+        error TEXT,
+        responded_at TEXT NOT NULL,
+        PRIMARY KEY (account_id, message_id)
+      );
+    `)
+    const labelColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_labels)').all() as { name: string }[]).map((column) => column.name))
+    if (!labelColumns.has('parent_id')) this.db.exec('ALTER TABLE gmail_labels ADD COLUMN parent_id TEXT')
+    // Journal for provider folder/label changes so an interrupted request can
+    // be reconciled from the provider's folder list after a restart.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS mail_folder_operations (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES gmail_accounts(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        label_id TEXT,
+        input_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS mail_folder_operations_status ON mail_folder_operations(status, account_id);
+    `)
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(4, ?)').run(nowIso())
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(5, ?)').run(nowIso())
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(6, ?)').run(nowIso())
@@ -476,8 +533,8 @@ export class MailDatabase {
   replaceLabels(accountId: string, labels: MailLabel[]) {
     this.transaction(() => {
       this.stmt('DELETE FROM gmail_labels WHERE account_id=?').run(accountId)
-      const insert = this.stmt('INSERT INTO gmail_labels(account_id,id,name,type,color) VALUES(?,?,?,?,?)')
-      for (const label of labels) insert.run(accountId, label.id, label.name, label.type, label.color ?? null)
+      const insert = this.stmt('INSERT INTO gmail_labels(account_id,id,name,type,color,parent_id) VALUES(?,?,?,?,?,?)')
+      for (const label of labels) insert.run(accountId, label.id, label.name, label.type, label.color ?? null, label.parentId ?? null)
     })
   }
 
@@ -490,7 +547,8 @@ export class MailDatabase {
       id: String(row.id),
       name: String(row.name),
       type: String(row.type) as MailLabel['type'],
-      color: row.color ? String(row.color) : undefined
+      color: row.color ? String(row.color) : undefined,
+      ...(row.parent_id ? { parentId: String(row.parent_id) } : {})
     }))
   }
 
@@ -1077,7 +1135,7 @@ export class MailDatabase {
   }
 
   dueOperations(limit = 20) {
-    return this.stmt(`SELECT * FROM gmail_operations WHERE status='queued' AND execute_after<=? ORDER BY created_at LIMIT ?`).all(nowIso(), limit) as DatabaseRow[]
+    return this.stmt(`SELECT * FROM gmail_operations WHERE status='queued' AND execute_after<=? ORDER BY created_at,rowid LIMIT ?`).all(nowIso(), limit) as DatabaseRow[]
   }
 
   updateOperation(id: string, status: PendingOperation['status'], error?: string) {
@@ -1130,16 +1188,17 @@ export class MailDatabase {
     const status = result.status ?? (retainedDelivery ? existingStatus : 'local') ?? 'local'
     const deliveryAt = result.deliveryAt ?? (retainedDelivery && existing?.delivery_at ? String(existing.delivery_at) : undefined)
     this.stmt(`
-      INSERT INTO gmail_drafts(id,account_id,gmail_draft_id,remote_revision,thread_id,in_reply_to,references_json,to_json,cc_json,bcc_json,subject,body_text,body_html,attachment_paths_json,status,delivery_at,error,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO gmail_drafts(id,account_id,gmail_draft_id,remote_revision,thread_id,in_reply_to,references_json,to_json,cc_json,bcc_json,subject,body_text,body_html,attachment_paths_json,status,delivery_at,error,updated_at,send_options_json)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET gmail_draft_id=COALESCE(excluded.gmail_draft_id,gmail_drafts.gmail_draft_id),remote_revision=COALESCE(excluded.remote_revision,gmail_drafts.remote_revision),thread_id=excluded.thread_id,in_reply_to=excluded.in_reply_to,
         references_json=excluded.references_json,to_json=excluded.to_json,cc_json=excluded.cc_json,bcc_json=excluded.bcc_json,
         subject=excluded.subject,body_text=excluded.body_text,body_html=excluded.body_html,attachment_paths_json=excluded.attachment_paths_json,
-        status=excluded.status,delivery_at=excluded.delivery_at,error=excluded.error,updated_at=excluded.updated_at
+        status=excluded.status,delivery_at=excluded.delivery_at,error=excluded.error,updated_at=excluded.updated_at,send_options_json=excluded.send_options_json
     `).run(
       id, input.accountId, result.remoteDraftId ?? null, result.remoteRevision ?? null, input.threadId ?? null, input.inReplyTo ?? null,
       JSON.stringify(input.references ?? []), JSON.stringify(input.to), JSON.stringify(input.cc), JSON.stringify(input.bcc),
-      input.subject, input.text, input.html ?? null, JSON.stringify(input.attachmentPaths), status, deliveryAt ?? null, result.error ?? null, updatedAt
+      input.subject, input.text, input.html ?? null, JSON.stringify(input.attachmentPaths), status, deliveryAt ?? null, result.error ?? null, updatedAt,
+      sendOptionsJson(input.sendOptions)
     )
     this.identities.saveDraftSender(id, input)
     const stored = this.getDraft(id)
@@ -1160,6 +1219,7 @@ export class MailDatabase {
   }
 
   private draftRecord(row: DatabaseRow): MailDraftRecord {
+    const sendOptions = draftSendOptions(row)
     return {
       id: String(row.id),
       accountId: String(row.account_id),
@@ -1176,6 +1236,7 @@ export class MailDatabase {
       html: row.body_html ? String(row.body_html) : undefined,
       attachmentPaths: json<string[]>(String(row.attachment_paths_json), []),
       ...this.identities.draftSender(String(row.id)),
+      ...(sendOptions ? { sendOptions } : {}),
       status: String(row.status) as MailDraftRecord['status'],
       updatedAt: String(row.updated_at),
       deliveryAt: row.delivery_at ? String(row.delivery_at) : undefined,
@@ -1364,6 +1425,45 @@ export class MailDatabase {
     this.stmt('DELETE FROM mail_saved_searches WHERE id=?').run(id)
   }
 
+  private quickActionRecord(row: DatabaseRow): MailQuickAction {
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      ...(row.account_id ? { accountId: String(row.account_id) } : {}),
+      steps: json<MailQuickAction['steps']>(String(row.steps_json), []),
+      ...(row.shortcut ? { shortcut: Number(row.shortcut) } : {}),
+      showInToolbar: Boolean(row.show_in_toolbar),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at)
+    }
+  }
+
+  listQuickActions() {
+    return (this.stmt('SELECT * FROM mail_quick_actions ORDER BY name COLLATE NOCASE,created_at').all() as DatabaseRow[]).map((row) => this.quickActionRecord(row))
+  }
+
+  getQuickAction(id: string) {
+    const row = this.stmt('SELECT * FROM mail_quick_actions WHERE id=?').get(id) as DatabaseRow | undefined
+    return row ? this.quickActionRecord(row) : undefined
+  }
+
+  saveQuickAction(input: MailQuickActionInput): MailQuickAction {
+    if (input.accountId && !this.getAccount(input.accountId)) throw new Error('Account not found')
+    const id = input.id ?? crypto.randomUUID()
+    const clash = input.shortcut ? this.stmt('SELECT name FROM mail_quick_actions WHERE shortcut=? AND id<>?').get(input.shortcut, id) as DatabaseRow | undefined : undefined
+    if (clash) throw new Error(`Shortcut ${input.shortcut} is already used by “${String(clash.name)}”`)
+    const timestamp = nowIso()
+    this.stmt(`INSERT INTO mail_quick_actions(id,name,account_id,steps_json,shortcut,show_in_toolbar,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,account_id=excluded.account_id,steps_json=excluded.steps_json,
+      shortcut=excluded.shortcut,show_in_toolbar=excluded.show_in_toolbar,updated_at=excluded.updated_at`)
+      .run(id, input.name, input.accountId ?? null, JSON.stringify(input.steps), input.shortcut ?? null, input.showInToolbar ? 1 : 0, timestamp, timestamp)
+    return this.getQuickAction(id)!
+  }
+
+  deleteQuickAction(id: string) {
+    this.stmt('DELETE FROM mail_quick_actions WHERE id=?').run(id)
+  }
+
   matchingRulesForMessage(message: MailRuleMessage) {
     return this.listRules([message.accountId]).filter((rule) => rule.enabled && mailRuleMatches(rule, message))
   }
@@ -1391,6 +1491,48 @@ export class MailDatabase {
     this.stmt('UPDATE mail_rules SET match_count=match_count+?,last_matched_at=?,updated_at=? WHERE id=?').run(count, nowIso(), nowIso(), id)
   }
 
+  receiptMessageContext(accountId: string, messageId: string) {
+    const row = this.stmt('SELECT from_email,subject,header_message_id,label_ids_json,raw_path FROM gmail_messages WHERE account_id=? AND id=?').get(accountId, messageId) as DatabaseRow | undefined
+    if (!row) return undefined
+    return {
+      fromEmail: String(row.from_email ?? ''),
+      subject: String(row.subject ?? ''),
+      messageIdHeader: row.header_message_id ? String(row.header_message_id) : undefined,
+      labelIds: json<string[]>(String(row.label_ids_json), []),
+      rawPath: row.raw_path ? String(row.raw_path) : undefined
+    }
+  }
+
+  // Correlates a returned receipt with the locally synced message it reports on.
+  messageByHeaderId(accountId: string, messageIdHeader: string) {
+    const bare = messageIdHeader.trim().replace(/^<|>$/g, '').toLowerCase()
+    if (!bare) return undefined
+    const row = this.stmt(`SELECT id,subject,internal_date FROM gmail_messages WHERE account_id=? AND lower(trim(header_message_id,'<> ')) = ? ORDER BY internal_date LIMIT 1`).get(accountId, bare) as DatabaseRow | undefined
+    return row ? { id: String(row.id), subject: String(row.subject ?? ''), date: String(row.internal_date ?? '') } : undefined
+  }
+
+  getReceiptResponse(accountId: string, messageId: string) {
+    const row = this.stmt('SELECT * FROM mail_receipt_responses WHERE account_id=? AND message_id=?').get(accountId, messageId) as DatabaseRow | undefined
+    if (!row) return undefined
+    return {
+      notifyTo: String(row.notify_to),
+      status: String(row.status) as 'sent' | 'declined' | 'failed',
+      automatic: Number(row.automatic) === 1,
+      error: row.error ? String(row.error) : undefined,
+      respondedAt: String(row.responded_at)
+    }
+  }
+
+  recordReceiptResponse(accountId: string, messageId: string, input: { notifyTo: string; originalMessageId?: string; status: 'sent' | 'declined' | 'failed'; automatic: boolean; error?: string }) {
+    this.stmt(`
+      INSERT INTO mail_receipt_responses(account_id,message_id,notify_to,original_message_id,status,automatic,error,responded_at)
+      VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(account_id,message_id) DO UPDATE SET notify_to=excluded.notify_to,original_message_id=excluded.original_message_id,
+        status=excluded.status,automatic=excluded.automatic,error=excluded.error,responded_at=excluded.responded_at
+    `).run(accountId, messageId, input.notifyTo, input.originalMessageId ?? null, input.status, input.automatic ? 1 : 0, input.error ?? null, nowIso())
+    return this.getReceiptResponse(accountId, messageId)!
+  }
+
   getMessageRaw(accountId: string, messageId: string) {
     const row = this.stmt('SELECT raw_path FROM gmail_messages WHERE account_id=? AND id=?').get(accountId, messageId) as DatabaseRow | undefined
     return row?.raw_path ? String(row.raw_path) : undefined
@@ -1398,6 +1540,10 @@ export class MailDatabase {
 
   getAttachment(accountId: string, messageId: string, attachmentId: string) {
     return this.stmt('SELECT * FROM gmail_attachments WHERE account_id=? AND message_id=? AND id=?').get(accountId, messageId, attachmentId) as DatabaseRow | undefined
+  }
+
+  listAttachments(query: unknown): MailAttachmentPage {
+    return listAttachmentPage(this.db, query, (path) => this.rawExists(path))
   }
 
   storageStats(freeBytes: number): MailStorageStats {
@@ -1453,5 +1599,103 @@ export class MailDatabase {
 
   rawExists(path: string) {
     try { return statSync(path).size > 0 } catch { return false }
+  }
+
+  private messagesInFolder(accountId: string, labelId: string) {
+    const remoteFolderId = labelId.startsWith('folder:') ? labelId.slice(7) : null
+    return this.stmt(`
+      SELECT id,thread_id,label_ids_json,remote_folder_id FROM gmail_messages
+      WHERE account_id=? AND (remote_folder_id=? OR EXISTS(SELECT 1 FROM json_each(label_ids_json) WHERE value=?))
+    `).all(accountId, remoteFolderId, labelId) as DatabaseRow[]
+  }
+
+  // Counts cached messages and queued work that still depend on a folder.
+  folderUsage(accountId: string, labelId: string) {
+    const rows = this.messagesInFolder(accountId, labelId)
+    return { messages: rows.length, threads: new Set(rows.map((row) => String(row.thread_id))).size, pendingOperations: this.pendingOperationsForLabel(accountId, labelId) }
+  }
+
+  pendingOperationsForLabel(accountId: string, labelId: string) {
+    const rows = this.stmt(`SELECT label_id,before_labels_json FROM gmail_operations WHERE account_id=? AND status IN ('queued','running')`).all(accountId) as DatabaseRow[]
+    return rows.filter((row) => row.label_id === labelId
+      || Object.values(json<Record<string, string[]>>(String(row.before_labels_json), {})).some((labels) => labels.includes(labelId))).length
+  }
+
+  // Rewrites cached references after a provider changed folder ids (IMAP ids
+  // follow the mailbox path) so messages, queued operations, undo snapshots
+  // and rules keep pointing at the renamed folder.
+  renameFolderReferences(accountId: string, renamed: Record<string, string>) {
+    const map = new Map(Object.entries(renamed).filter(([from, to]) => from !== to))
+    if (!map.size) return
+    const remote = new Map([...map].filter(([from, to]) => from.startsWith('folder:') && to.startsWith('folder:')).map(([from, to]) => [from.slice(7), to.slice(7)]))
+    const mapLabels = (labels: string[]) => [...new Set(labels.map((label) => map.get(label) ?? label))]
+    this.transaction(() => {
+      const rows = new Map<string, DatabaseRow>()
+      for (const from of map.keys()) for (const row of this.messagesInFolder(accountId, from)) rows.set(String(row.id), row)
+      const threads = new Set<string>()
+      for (const row of rows.values()) {
+        const folder = row.remote_folder_id ? String(row.remote_folder_id) : null
+        this.stmt('UPDATE gmail_messages SET label_ids_json=?,remote_folder_id=? WHERE account_id=? AND id=?')
+          .run(JSON.stringify(mapLabels(json<string[]>(String(row.label_ids_json), []))), folder ? remote.get(folder) ?? folder : null, accountId, String(row.id))
+        threads.add(String(row.thread_id))
+      }
+      for (const [from, to] of remote) this.stmt('UPDATE gmail_sync_items SET remote_folder_id=? WHERE account_id=? AND remote_folder_id=?').run(to, accountId, from)
+      const operations = this.stmt(`SELECT id,label_id,before_labels_json FROM gmail_operations WHERE account_id=? AND status IN ('queued','running')`).all(accountId) as DatabaseRow[]
+      for (const operation of operations) {
+        const snapshot = Object.fromEntries(Object.entries(json<Record<string, string[]>>(String(operation.before_labels_json), {})).map(([id, labels]) => [id, mapLabels(labels)]))
+        const labelId = operation.label_id ? String(operation.label_id) : null
+        this.stmt('UPDATE gmail_operations SET label_id=?,before_labels_json=?,updated_at=? WHERE id=?')
+          .run(labelId ? map.get(labelId) ?? labelId : null, JSON.stringify(snapshot), nowIso(), String(operation.id))
+      }
+      for (const rule of this.stmt('SELECT id,actions_json FROM mail_rules WHERE account_id=?').all(accountId) as DatabaseRow[]) {
+        const actions = json<MailRuleInput['actions']>(String(rule.actions_json), [])
+        if (!actions.some((action) => action.labelId && map.has(action.labelId))) continue
+        this.stmt('UPDATE mail_rules SET actions_json=?,updated_at=? WHERE id=?')
+          .run(JSON.stringify(actions.map((action) => action.labelId && map.has(action.labelId) ? { ...action, labelId: map.get(action.labelId) } : action)), nowIso(), String(rule.id))
+      }
+      for (const threadId of threads) this.rebuildThread(accountId, threadId)
+    })
+  }
+
+  // Gmail keeps messages when a label is deleted; drop only the label.
+  removeLabelReferences(accountId: string, labelId: string) {
+    this.transaction(() => {
+      const threads = new Set<string>()
+      for (const row of this.messagesInFolder(accountId, labelId)) {
+        this.stmt('UPDATE gmail_messages SET label_ids_json=? WHERE account_id=? AND id=?')
+          .run(JSON.stringify(json<string[]>(String(row.label_ids_json), []).filter((label) => label !== labelId)), accountId, String(row.id))
+        threads.add(String(row.thread_id))
+      }
+      for (const threadId of threads) this.rebuildThread(accountId, threadId)
+      this.stmt('DELETE FROM gmail_labels WHERE account_id=? AND id=?').run(accountId, labelId)
+    })
+  }
+
+  beginFolderOperation(accountId: string, kind: 'create' | 'update' | 'delete', labelId: string | undefined, input: unknown) {
+    const id = crypto.randomUUID()
+    const timestamp = nowIso()
+    this.stmt(`INSERT INTO mail_folder_operations(id,account_id,kind,label_id,input_json,status,created_at,updated_at) VALUES(?,?,?,?,?,'running',?,?)`)
+      .run(id, accountId, kind, labelId ?? null, JSON.stringify(input ?? {}), timestamp, timestamp)
+    return id
+  }
+
+  finishFolderOperation(id: string, status: 'succeeded' | 'failed', error?: string) {
+    this.stmt('UPDATE mail_folder_operations SET status=?,error=?,updated_at=? WHERE id=?').run(status, error ?? null, nowIso(), id)
+  }
+
+  listFolderOperations(accountId?: string) {
+    const rows = (accountId
+      ? this.stmt('SELECT * FROM mail_folder_operations WHERE account_id=? ORDER BY created_at').all(accountId)
+      : this.stmt('SELECT * FROM mail_folder_operations ORDER BY created_at').all()) as DatabaseRow[]
+    return rows.map((row) => ({ id: String(row.id), accountId: String(row.account_id), kind: String(row.kind), labelId: row.label_id ? String(row.label_id) : undefined, status: String(row.status), error: row.error ? String(row.error) : undefined }))
+  }
+
+  // Returns accounts whose folder change was cut off mid-request; the caller
+  // re-reads their provider folder list, which is the source of truth.
+  recoverInterruptedFolderOperations() {
+    const rows = this.stmt(`SELECT DISTINCT account_id FROM mail_folder_operations WHERE status='running'`).all() as DatabaseRow[]
+    const timestamp = nowIso()
+    this.stmt(`UPDATE mail_folder_operations SET status='interrupted',error='Aerio closed during the provider request; the folder list was refreshed from the provider',updated_at=? WHERE status='running'`).run(timestamp)
+    return rows.map((row) => String(row.account_id))
   }
 }

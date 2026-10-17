@@ -161,6 +161,14 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:saved-searches:list')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:saved-searches:save', expect.objectContaining({ name: 'Invoices' }))
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:saved-searches:delete', 'search-1')
+    await mail.quickActions.list()
+    await mail.quickActions.save({ name: 'Triage', steps: [{ action: 'read' }], showInToolbar: true })
+    await mail.quickActions.delete('quick-1')
+    await mail.quickActions.run('quick-1', [{ accountId: 'account-1', threadIds: ['thread-1'] }])
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:list')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:save', expect.objectContaining({ name: 'Triage' }))
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:delete', 'quick-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:run', 'quick-1', [{ accountId: 'account-1', threadIds: ['thread-1'] }])
     await mail.templates.list('welcome')
     await mail.templates.save({ kind: 'snippet', name: 'Hi', html: 'Hi' })
     await mail.templates.delete('template-1')
@@ -179,6 +187,7 @@ describe('preload bridge', () => {
     await mail.sync.resume('account-1')
     await mail.sync.rebuild('account-1')
     await mail.sync.progress()
+    await mail.attachments.list({ fileTypes: ['pdf'] })
     await mail.attachments.open('account-1', 'message-1', 'attachment-1', 'file.txt')
     await mail.attachments.save('account-1', 'message-1', 'attachment-1', 'file.txt')
     await mail.storage()
@@ -194,7 +203,19 @@ describe('preload bridge', () => {
       'mail:identities:list', 'mail:identities:save', 'mail:identities:delete', 'mail:identities:refresh', 'mail:signatures:list', 'mail:signatures:save', 'mail:signatures:delete'
     ]) expect(channels).toContain(expected)
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:snooze', 'account-1', ['thread-1'], '2026-08-09T10:00:00Z')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:attachments:list', { fileTypes: ['pdf'] })
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:attachment:open', 'account-1', 'message-1', 'attachment-1', 'file.txt')
+  })
+
+  it('exposes provider automatic replies with exact IPC channels', async () => {
+    const replies = api().mail.automaticReplies
+    const settings = { enabled: true, subject: 'Away', internalMessage: 'Back Monday', externalMessage: '', externalAudience: 'all' }
+    await replies.get('account-1')
+    await replies.update('account-1', settings)
+    await replies.disable('account-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:get', 'account-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:update', 'account-1', settings)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:disable', 'account-1')
   })
 
   it('reports initial and changing network connectivity', async () => {

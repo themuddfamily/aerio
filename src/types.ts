@@ -14,7 +14,7 @@ export interface Account {
   email: string
   initials: string
   color: string
-  provider: 'gmail' | 'microsoft' | 'outlook' | 'imap'
+  provider: 'gmail' | 'microsoft' | 'outlook' | 'imap' | 'local'
 }
 
 export interface Attachment {
@@ -37,6 +37,21 @@ export interface CalendarEvent {
   attendees: string[]
   reminderMinutes: number
   recurrence?: 'none' | 'daily' | 'weekly' | 'monthly'
+  // Interchange fields preserved from ICS imports and written back on export.
+  allDay?: boolean
+  timeZone?: string
+  recurrenceRule?: string
+  recurrenceExceptions?: string[]
+  recurrenceId?: string
+  sourceUid?: string
+}
+
+export interface ContactField {
+  value: string
+  type?: string
+  preferred?: boolean
+  // Structured ADR components: PO box, extended, street, locality, region, postal code, country.
+  parts?: string[]
 }
 
 export interface Contact {
@@ -51,6 +66,15 @@ export interface Contact {
   favorite: boolean
   color: string
   source?: 'local'
+  // Interchange fields preserved from vCard/CSV imports; `email` and `phone` stay the primary values.
+  emails?: ContactField[]
+  phones?: ContactField[]
+  addresses?: ContactField[]
+  urls?: ContactField[]
+  nameParts?: string[]
+  nickname?: string
+  birthday?: string
+  sourceUid?: string
 }
 
 export interface Task {
@@ -85,6 +109,7 @@ export interface Settings {
   launchAtLogin?: boolean
   notifications: boolean
   startModule: ModuleId
+  readReceiptPolicy?: import('./mail-types').MailReadReceiptPolicy
   profile?: UserProfile
 }
 
@@ -159,4 +184,5 @@ export interface AerioDesktopApi {
   onWindowState(callback: (maximized: boolean) => void): () => void
   onComposeCommand(callback: () => void): () => void
   mail: import('./mail-types').MailDesktopApi
+  interchange: import('./interchange-types').InterchangeDesktopApi
 }

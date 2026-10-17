@@ -49,6 +49,47 @@ export interface GmailHistory {
   labelsRemoved?: { message: GmailMessageReference & { labelIds?: string[] }; labelIds?: string[] }[]
 }
 
+export interface GmailLabelColor {
+  backgroundColor: string
+  textColor: string
+}
+
+export interface GmailLabelResource {
+  id: string
+  name: string
+  type?: string
+  messagesTotal?: number
+  threadsTotal?: number
+  color?: GmailLabelColor
+}
+
+// Gmail nests labels by name ("Parent/Child"); derive the parent id from the
+// longest existing label name prefix so the folder tree matches Gmail web.
+export function gmailLabelsWithParents(labels: MailLabel[]): MailLabel[] {
+  const byName = new Map(labels.map((label) => [label.name, label]))
+  return labels.map((label) => {
+    if (label.type !== 'user') return label
+    const parts = label.name.split('/')
+    for (let length = parts.length - 1; length > 0; length -= 1) {
+      const parent = byName.get(parts.slice(0, length).join('/'))
+      if (parent && parent.type === 'user') return { ...label, parentId: parent.id }
+    }
+    return label
+  })
+}
+
+/** Gmail users.settings.vacation resource. Times are epoch milliseconds as strings. */
+export interface GmailVacationSettings {
+  enableAutoReply?: boolean
+  responseSubject?: string
+  responseBodyPlainText?: string
+  responseBodyHtml?: string
+  restrictToContacts?: boolean
+  restrictToDomain?: boolean
+  startTime?: string
+  endTime?: string
+}
+
 interface HistoryResponse {
   history?: GmailHistory[]
   nextPageToken?: string
@@ -97,13 +138,32 @@ export class GmailClient {
 
   async listLabels(): Promise<MailLabel[]> {
     const result = await this.request<{ labels?: { id: string; name: string; type: 'system' | 'user'; color?: { backgroundColor?: string } }[] }>('/labels')
-    return (result.labels ?? []).map((label) => ({
+    return gmailLabelsWithParents((result.labels ?? []).map((label) => ({
       accountId: this.accountId,
       id: label.id,
       name: label.name,
       type: label.type.toLowerCase() as MailLabel['type'],
       color: label.color?.backgroundColor
-    }))
+    })))
+  }
+
+  getLabel(labelId: string) {
+    return this.request<GmailLabelResource>(`/labels/${encodeURIComponent(labelId)}`)
+  }
+
+  createLabel(name: string, color?: GmailLabelColor) {
+    return this.request<GmailLabelResource>('/labels', {
+      method: 'POST',
+      body: JSON.stringify({ name, labelListVisibility: 'labelShow', messageListVisibility: 'show', ...(color ? { color } : {}) })
+    })
+  }
+
+  patchLabel(labelId: string, changes: { name?: string; color?: GmailLabelColor }) {
+    return this.request<GmailLabelResource>(`/labels/${encodeURIComponent(labelId)}`, { method: 'PATCH', body: JSON.stringify(changes) })
+  }
+
+  deleteLabel(labelId: string) {
+    return this.request<void>(`/labels/${encodeURIComponent(labelId)}`, { method: 'DELETE' })
   }
 
   listMessages(pageToken?: string) {
@@ -196,6 +256,16 @@ export class GmailClient {
   /** Send-as aliases; readable with the gmail.modify scope Aerio already holds. */
   listSendAs() {
     return this.request<{ sendAs?: import('./sender-identity').GmailSendAs[] }>('/settings/sendAs')
+  }
+
+  /** Readable with gmail.modify; writing needs the gmail.settings.basic scope. */
+  getVacationSettings() {
+    return this.request<GmailVacationSettings>('/settings/vacation')
+  }
+
+  /** PUT replaces the whole resource, so callers send every field they want kept. */
+  updateVacationSettings(settings: GmailVacationSettings) {
+    return this.request<GmailVacationSettings>('/settings/vacation', { method: 'PUT', body: JSON.stringify(settings) })
   }
 
   sendMessage(raw: string, threadId?: string) {

@@ -1,4 +1,5 @@
-import type { MailLabel, MailActionKind } from '../../src/mail-types'
+import type { MailLabel, MailActionKind, MailSendOptions } from '../../src/mail-types'
+import { normalizeSendOptions } from '../../src/lib/mail-send-options'
 
 interface GraphPage<T> {
   value: T[]
@@ -46,8 +47,22 @@ export function microsoftMessageLabels(folder: GraphFolder, message: GraphMessag
   return [...new Set(labels)]
 }
 
+export interface GraphDateTimeTimeZone {
+  dateTime: string
+  timeZone: string
+}
+
+export interface GraphAutomaticRepliesSetting {
+  status?: 'disabled' | 'alwaysEnabled' | 'scheduled'
+  externalAudience?: 'none' | 'contactsOnly' | 'all'
+  internalReplyMessage?: string
+  externalReplyMessage?: string
+  scheduledStartDateTime?: GraphDateTimeTimeZone
+  scheduledEndDateTime?: GraphDateTimeTimeZone
+}
+
 export class MicrosoftGraphError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly code?: string) {
     super(message)
     this.name = 'MicrosoftGraphError'
   }
@@ -82,8 +97,8 @@ export class MicrosoftGraphClient {
   private async request<T>(path: string, init: RequestInit = {}) {
     const response = await this.response(path, init)
     if (!response.ok) {
-      const value = await response.json().catch(() => ({})) as { error?: { message?: string } }
-      throw new MicrosoftGraphError(value.error?.message ?? `Microsoft Graph request failed (${response.status})`, response.status)
+      const value = await response.json().catch(() => ({})) as { error?: { message?: string; code?: string } }
+      throw new MicrosoftGraphError(value.error?.message ?? `Microsoft Graph request failed (${response.status})`, response.status, value.error?.code)
     }
     if (response.status === 204 || response.status === 202 || response.headers.get('content-length') === '0') return undefined as T
     const text = await response.text()
@@ -168,7 +183,7 @@ export class MicrosoftGraphClient {
     }
   }
 
-  async saveDraft(raw: Buffer, existingId?: string) {
+  async saveDraft(raw: Buffer, existingId?: string, options?: MailSendOptions) {
     if (existingId) await this.request(`/me/messages/${encodeURIComponent(existingId)}`, { method: 'DELETE' }).catch(() => undefined)
     const result = await this.request<{ id?: string; changeKey?: string }>('/me/messages', {
       method: 'POST',
@@ -176,7 +191,20 @@ export class MicrosoftGraphClient {
       body: raw.toString('base64')
     })
     if (!result?.id) throw new Error('Microsoft could not save the draft')
-    return { id: result.id, revision: result.changeKey }
+    const patched = await this.applySendOptions(result.id, options)
+    return { id: result.id, revision: patched?.changeKey ?? result.changeKey }
+  }
+
+  // MIME import does not reliably map receipt headers, so the Graph message
+  // properties are set explicitly whenever the user chose non-default options.
+  async applySendOptions(id: string, value?: MailSendOptions) {
+    const options = normalizeSendOptions(value)
+    if (!options) return undefined
+    return this.request<{ changeKey?: string }>(`/me/messages/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(graphSendOptions(options))
+    })
   }
 
   async draftRevision(id: string) {
@@ -185,9 +213,16 @@ export class MicrosoftGraphClient {
     return result.changeKey
   }
 
-  async send(raw: Buffer, draftId?: string) {
+  async send(raw: Buffer, draftId?: string, options?: MailSendOptions) {
     if (draftId) {
+      await this.applySendOptions(draftId, options)
       await this.request(`/me/messages/${encodeURIComponent(draftId)}/send`, { method: 'POST' })
+      return
+    }
+    if (normalizeSendOptions(options)) {
+      // sendMail with MIME cannot carry Graph properties; stage a draft first.
+      const staged = await this.saveDraft(raw, undefined, options)
+      await this.request(`/me/messages/${encodeURIComponent(staged.id)}/send`, { method: 'POST' })
       return
     }
     await this.request<void>('/me/sendMail', {
@@ -205,8 +240,59 @@ export class MicrosoftGraphClient {
   senderAddresses() {
     return this.request<import('./sender-identity').MicrosoftUserAddresses>('/me?$select=mail,proxyAddresses')
   }
+
+  folder(id: string) {
+    return this.request<GraphFolder & { totalItemCount?: number }>(`/me/mailFolders/${encodeURIComponent(id)}?$select=id,displayName,parentMailFolderId,childFolderCount,totalItemCount`)
+  }
+
+  createFolder(displayName: string, parentId?: string) {
+    const path = parentId ? `/me/mailFolders/${encodeURIComponent(parentId)}/childFolders` : '/me/mailFolders'
+    return this.request<GraphFolder>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ displayName, isHidden: false }) })
+  }
+
+  renameFolder(id: string, displayName: string) {
+    return this.request<GraphFolder>(`/me/mailFolders/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ displayName }) })
+  }
+
+  // Graph moves folders with an action; "msgfolderroot" is the top level.
+  moveFolder(id: string, parentId?: string) {
+    return this.request<GraphFolder>(`/me/mailFolders/${encodeURIComponent(id)}/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destinationId: parentId ?? 'msgfolderroot' }) })
+  }
+
+  deleteFolder(id: string) {
+    return this.request<void>(`/me/mailFolders/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
+
+  /** Needs MailboxSettings.Read or MailboxSettings.ReadWrite. */
+  mailboxAutomaticReplies() {
+    return this.request<{ automaticRepliesSetting?: GraphAutomaticRepliesSetting; timeZone?: string }>('/me/mailboxSettings?$select=automaticRepliesSetting,timeZone')
+  }
+
+  /** Needs MailboxSettings.ReadWrite. */
+  async updateAutomaticReplies(setting: GraphAutomaticRepliesSetting) {
+    await this.request('/me/mailboxSettings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ automaticRepliesSetting: setting })
+    })
+  }
+}
+
+export function graphSendOptions(options: MailSendOptions) {
+  return {
+    importance: options.importance ?? 'normal',
+    isReadReceiptRequested: Boolean(options.requestReadReceipt),
+    isDeliveryReceiptRequested: Boolean(options.requestDeliveryReceipt)
+  }
 }
 
 export function microsoftLabels(accountId: string, folders: GraphFolder[]): MailLabel[] {
-  return folders.map((folder) => ({ accountId, id: `folder:${folder.id}`, name: folder.displayName, type: folder.specialUse ? 'system' : 'user' }))
+  const ids = new Set(folders.map((folder) => folder.id))
+  return folders.map((folder) => ({
+    accountId,
+    id: `folder:${folder.id}`,
+    name: folder.displayName,
+    type: folder.specialUse ? 'system' : 'user',
+    ...(folder.parentMailFolderId && ids.has(folder.parentMailFolderId) ? { parentId: `folder:${folder.parentMailFolderId}` } : {})
+  }))
 }
