@@ -4633,6 +4633,9 @@ kbd {
 .dav-account-heading .settings-actions, .dav-review .settings-actions { margin: 0; }
 .dav-account-list > li > small.diagnostic-error { display: block; color: var(--danger); font-size: 9.5px; }
 .dav-collection-list .toggle-row { margin: 0; }
+.meeting-host-registration { display: grid; gap: 4px; margin-top: 8px; }
+.meeting-host-registration small { color: var(--muted); font-size: 9.5px; overflow-wrap: anywhere; }
+.event-conference-keep { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; font-size: 11px; color: var(--muted); }
 .dav-color { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 50%; vertical-align: middle; }
 .dav-password-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-top: 6px; }
 .dav-review { display: grid; gap: 4px; margin: 8px 0; padding: 9px 10px; border: 1px solid var(--warning, var(--line)); border-radius: 8px; background: var(--surface-2); }

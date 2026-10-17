@@ -1,12 +1,42 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ExternalLink, Undo2, Video, X } from 'lucide-react'
 import type { EventConference } from '../types'
-import { checkJoinLink, conferenceLabel, requestConference, type ConferenceCapability } from '../lib/online-meetings'
+import type { HostedMeetingOptions } from '../meeting-host-types'
+import { checkJoinLink, conferenceLabel, isHostedConferenceProvider, requestConference, type ConferenceCapability } from '../lib/online-meetings'
 
 // Opens a join link through the main window's external-link handler (window.open is denied in-app and passed
 // to the system browser for https). Links outside the meeting-host allowlist ask first.
 export function openJoinLink(url: string) {
   window.open(url, '_blank', 'noopener')
+}
+
+// Zoom and Webex meetings Aerio created (E47) are cancelled when their event is deleted in Aerio, unless this
+// is turned off. The choice is stored with the meeting, so it applies to every way of deleting the event.
+function HostedMeetingDeleteOption({ requestId, label }: { requestId: string; label: string }) {
+  const api = window.aerio?.meetingHosts
+  const [options, setOptions] = useState<HostedMeetingOptions | null>(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    if (!api) return
+    let active = true
+    void api.meetingOptions(requestId).then((next) => { if (active) setOptions(next) }).catch(() => undefined)
+    return () => { active = false }
+  }, [api, requestId])
+  if (!api || !options) return null
+  const change = async (cancelOnDelete: boolean) => {
+    setError('')
+    try { setOptions(await api.setCancelOnDelete(requestId, cancelOnDelete)) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'The choice could not be saved') }
+  }
+  return (
+    <>
+      <label className="event-conference-keep">
+        <input type="checkbox" checked={options.cancelOnDelete} onChange={(event) => void change(event.target.checked)} />
+        Cancel the {label} meeting if this event is deleted
+      </label>
+      {error && <p className="recurrence-note">{error}</p>}
+    </>
+  )
 }
 
 /**
@@ -63,6 +93,7 @@ export function EventConferenceField({ value, original, capabilities, canRemove,
           </p>
         )}
         {value.phone && <p className="recurrence-note">Dial-in {value.phone}{value.pin ? ` · PIN ${value.pin}` : ''}</p>}
+        {isHostedConferenceProvider(value.provider) && value.joinUrl && value.requestId && !disabled && <HostedMeetingDeleteOption requestId={value.requestId} label={conferenceLabel(value)} />}
         {confirmHost && (
           <div className="event-conference-confirm" role="alertdialog" aria-label="Open meeting link">
             <span>This link opens {confirmHost.host}, which is not a known meeting service.</span>

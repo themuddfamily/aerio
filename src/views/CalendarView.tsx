@@ -22,7 +22,8 @@ import { RecurrenceScopeChooser, RepeatField } from './RecurrenceFields'
 import EventAttendeesField, { applyAttendeeSelection, attendeeFieldText, attendeeFieldValues, attendeesFromFields } from './EventAttendeesField'
 import { withAttendees } from '../lib/event-attendees'
 import { EventConferenceField } from '../components/EventConferenceField'
-import { conferenceCapabilities } from '../lib/online-meetings'
+import { conferenceCapabilities, isHostedConferenceProvider } from '../lib/online-meetings'
+import { useMeetingHosts } from '../lib/use-meeting-hosts'
 import type { SyncedCalendar } from '../productivity-types'
 
 // Provider calendar details the event editor needs for online meetings (E25).
@@ -493,6 +494,7 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
   const [reminderMinutes, setReminderMinutes] = useState(event?.reminderMinutes ?? 15)
   const [conference, setConference] = useState(event?.conference)
   const conferenceCalendar = conferenceCalendars?.find((item) => item.id === calendarId)
+  const meetingHosts = useMeetingHosts()
   const [busy, setBusy] = useState<'save' | 'delete'>()
   const [pendingScope, setPendingScope] = useState<'save' | 'delete'>()
   const color = state.accounts.find((account) => account.id === calendarId)?.color ?? '#6659e8'
@@ -576,8 +578,9 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
           <EventConferenceField
             value={conference}
             original={event?.conference}
-            capabilities={conferenceCapabilities(conferenceCalendar)}
-            canRemove={Boolean(conferenceCalendar?.conferences?.canRemove)}
+            capabilities={conferenceCapabilities(conferenceCalendar, meetingHosts)}
+            // Aerio's own Zoom and Webex meetings can always be removed; Teams cannot (see canRemove).
+            canRemove={Boolean(conferenceCalendar?.conferences?.canRemove) || (isHostedConferenceProvider(conference?.provider) && Boolean(conference?.requestId))}
             disabled={readOnly}
             onChange={setConference}
           />

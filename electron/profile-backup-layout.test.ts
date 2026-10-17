@@ -8,6 +8,7 @@ import { MailTemplateStore } from './mail/template-store'
 import { ProductivityStore } from './productivity/store'
 import { DavStore, RESTORED_DAV_MESSAGE, RESTORED_DAV_WRITE_MESSAGE } from './productivity/dav-store'
 import { TaskStore } from './productivity/task-store'
+import { MeetingLinkStore } from './productivity/meeting-link-store'
 import { applyPendingProfileRestore, createProfileBackup, previewProfileBackup, stageProfileRestore } from './profile-backup'
 import { PROFILE_BACKUP_LAYOUT, RESTORED_ACCOUNT_MESSAGE, RESTORED_MERGE_HOLD_MESSAGE, RESTORED_SEND_HOLD_MESSAGE } from './profile-backup-layout'
 
@@ -63,6 +64,11 @@ function makeProfile() {
   writeFileSync(join(profile, 'oauth-vault.dat'), 'encrypted-refresh-token')
   writeFileSync(join(profile, 'openpgp-keyring.dat'), 'wrapped-openpgp-keys')
   writeFileSync(join(profile, 'smime-certificates.dat'), 'wrapped-smime-keys')
+  writeFileSync(join(profile, 'meeting-host-vault.dat'), 'encrypted-zoom-token')
+  const links = new MeetingLinkStore(join(profile, 'productivity.sqlite'))
+  links.begin('0123456789abcdef', 'zoom', { requestId: '0123456789abcdef', title: 'Planning', start: '2026-03-02T14:00:00Z', end: '2026-03-02T15:00:00Z' })
+  links.created('0123456789abcdef', { provider: 'zoom', meetingId: '1', joinUrl: 'https://zoom.us/j/1' }, { requestId: '0123456789abcdef', title: 'Planning', start: '2026-03-02T14:00:00Z', end: '2026-03-02T15:00:00Z' })
+  links.close()
   return profile
 }
 
@@ -76,6 +82,7 @@ describe('full profile layout', () => {
     expect(existsSync(join(path, 'data', 'oauth-vault.dat'))).toBe(false)
     expect(existsSync(join(path, 'data', 'openpgp-keyring.dat'))).toBe(false)
     expect(existsSync(join(path, 'data', 'smime-certificates.dat'))).toBe(false)
+    expect(existsSync(join(path, 'data', 'meeting-host-vault.dat'))).toBe(false)
     const preview = await previewProfileBackup(path, profile, PROFILE_BACKUP_LAYOUT)
     const counts = Object.fromEntries(preview.counts.map((item) => [item.label, item.count]))
     expect(counts).toMatchObject({
@@ -120,6 +127,11 @@ describe('full profile layout', () => {
     expect(readFileSync(join(profile, 'oauth-vault.dat'), 'utf8')).toBe('encrypted-refresh-token')
     expect(readFileSync(join(profile, 'openpgp-keyring.dat'), 'utf8')).toBe('wrapped-openpgp-keys')
     expect(readFileSync(join(profile, 'smime-certificates.dat'), 'utf8')).toBe('wrapped-smime-keys')
+    expect(readFileSync(join(profile, 'meeting-host-vault.dat'), 'utf8')).toBe('encrypted-zoom-token')
+    // Zoom/Webex meeting links travel with the calendar cache, so restored events keep their meetings.
+    const links = new MeetingLinkStore(join(profile, 'productivity.sqlite'))
+    expect(links.get('0123456789abcdef')).toMatchObject({ state: 'created', meeting: { joinUrl: 'https://zoom.us/j/1' } })
+    links.close()
   })
 
   it('holds every unsent recipient of an unfinished mail merge for review after a restore', async () => {

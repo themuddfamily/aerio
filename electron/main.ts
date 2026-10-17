@@ -122,6 +122,8 @@ import { assertSingleProtection, normalizeSmimeOptions } from './mail/smime-draf
 import { initializeChat, type ChatRuntime } from './chat/chat-main'
 import { registerChatIpc } from './chat/chat-ipc'
 import { CHAT_SERVICE_SCHEME } from './chat/service-host'
+import { initializeMeetingHosts, type MeetingHosts } from './productivity/meeting-host-ipc'
+import { parseMeetingHostEnvironment } from './productivity/meeting-host-providers'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -131,6 +133,12 @@ const builtInOAuthClients = parseOAuthEnvironment({
   googleClientSecret: builtInGoogleClientSecret,
   microsoftClientId: import.meta.env.MAIN_VITE_MICROSOFT_CLIENT_ID || DEFAULT_MICROSOFT_CLIENT_ID,
   dropboxAppKey: import.meta.env.MAIN_VITE_DROPBOX_APP_KEY
+})
+const builtInMeetingHostClients = parseMeetingHostEnvironment({
+  zoomClientId: import.meta.env.MAIN_VITE_ZOOM_CLIENT_ID,
+  zoomClientSecret: import.meta.env.MAIN_VITE_ZOOM_CLIENT_SECRET,
+  webexClientId: import.meta.env.MAIN_VITE_WEBEX_CLIENT_ID,
+  webexClientSecret: import.meta.env.MAIN_VITE_WEBEX_CLIENT_SECRET
 })
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -168,6 +176,7 @@ let updates: UpdateManager | null = null
 let productivityStore: ProductivityStore | null = null
 let interchangeStore: InterchangeStore | null = null
 let invitationStore: InvitationStore | null = null
+let meetingHosts: MeetingHosts | null = null
 let interchangeService: ReturnType<typeof registerCalendarContactInterchange> | null = null
 let davStore: DavStore | null = null
 let davService: DavService | null = null
@@ -504,6 +513,11 @@ function materializeLocalDataBackup(backup: LocalDataBackup): { snapshot: LocalM
   }
 }
 
+function requireMeetingHosts() {
+  if (!meetingHosts) throw new Error('Online meeting accounts are not ready')
+  return meetingHosts
+}
+
 function requireDavService() {
   if (!davService) throw new Error('Calendar and contacts accounts are not ready')
   return davService
@@ -540,7 +554,7 @@ async function syncProductivity(accountId: string): Promise<ProductivitySnapshot
   try {
     const previous = store.accountData(accountId)
     const data = await connector.sync(previous, store.checkpoints(accountId))
-    data.events = carryPendingConferences(previous.events, data.events)
+    data.events = requireMeetingHosts().coordinator.decorate(carryPendingConferences(previous.events, data.events))
     store.replaceAccount(accountId, provider, data, data.checkpoints)
     diagnostic({
       level: 'info', component: 'provider', event: 'productivity-sync-complete', accountId,
@@ -633,7 +647,10 @@ async function createProductivityEvent(input: CalendarEvent) {
     return store.snapshot()
   }
   if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
-  const saved = await writableCalendarConnector(calendar).createEvent(calendar, input)
+  // Zoom and Webex meetings are created before the event and written into it (meeting-coordinator.ts).
+  const meetings = requireMeetingHosts().coordinator
+  const prepared = await meetings.prepare(calendar, input)
+  const saved = meetings.finish(prepared, await writableCalendarConnector(calendar).createEvent(calendar, prepared.event))
   store.upsertEvent(saved)
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { snapshot: store.snapshot() })
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-created', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
@@ -685,9 +702,12 @@ async function updateProductivityEvent(input: CalendarEvent, scope?: RecurrenceE
   // A requested meeting is stored with its request id before the write, so a failed or interrupted save is
   // retried under the same id (and the editor reopens with it) instead of requesting a second meeting.
   if (input.conference?.status === 'pending' && input.conference.requestId && !current.conference) store.upsertEvent({ ...current, conference: input.conference })
-  const saved = await writableCalendarConnector(calendar).updateEvent(calendar, current, input)
+  const meetings = requireMeetingHosts().coordinator
+  const prepared = await meetings.prepare(calendar, input, current)
+  const saved = meetings.finish(prepared, await writableCalendarConnector(calendar).updateEvent(calendar, current, prepared.event))
   store.upsertEvent(saved)
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-updated', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
+  try { await meetings.settle(prepared) } catch (error) { broadcastProductivity(); throw error }
   return store.snapshot()
 }
 
@@ -712,6 +732,8 @@ async function deleteProductivityEvent(eventId: string, scope?: RecurrenceEditSc
   await writableCalendarConnector(calendar).deleteEvent(calendar, current)
   store.deleteEvent(current.id)
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-deleted', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
+  // A Zoom or Webex meeting is cancelled unless the user chose to keep it.
+  try { await requireMeetingHosts().coordinator.eventDeleted(current) } catch (error) { broadcastProductivity(); throw error }
   return store.snapshot()
 }
 
@@ -2146,6 +2168,15 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   productivityStore = new ProductivityStore(join(app.getPath('userData'), 'productivity.sqlite'))
   interchangeStore = new InterchangeStore(join(app.getPath('userData'), 'productivity.sqlite'))
   invitationStore = new InvitationStore(join(app.getPath('userData'), 'productivity.sqlite'))
+  meetingHosts = initializeMeetingHosts({
+    userData: app.getPath('userData'),
+    databasePath: join(app.getPath('userData'), 'productivity.sqlite'),
+    storage: safeStorage,
+    builtIn: builtInMeetingHostClients,
+    openExternal: (url) => shell.openExternal(url),
+    isLocked: () => applicationLocked,
+    log: (event, details) => diagnostic({ level: 'info', component: 'provider', event, details })
+  })
   taskService =new TaskService(new TaskStore(join(app.getPath('userData'), 'provider-tasks.sqlite')), {
     accounts: () => requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' }),
     access: (id, provider) => provider === 'gmail'
@@ -2273,6 +2304,8 @@ app.on('before-quit', () => {
   interchangeStore = null
   invitationStore?.close()
   invitationStore = null
+  meetingHosts?.close()
+  meetingHosts = null
   productivityStore?.close()
   messageLocalStore?.close()
   mailTemplateStore?.close()

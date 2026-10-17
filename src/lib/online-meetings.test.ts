@@ -6,7 +6,10 @@ describe('online meeting join links', () => {
     expect(checkJoinLink('https://meet.google.com/abc-defg-hij')).toEqual({ kind: 'trusted', url: 'https://meet.google.com/abc-defg-hij' })
     expect(checkJoinLink('https://teams.microsoft.com/l/meetup-join/19%3a')).toMatchObject({ kind: 'trusted' })
     expect(checkJoinLink('https://teams.live.com/meet/123')).toMatchObject({ kind: 'trusted' })
-    expect(checkJoinLink('https://us02web.zoom.us/j/123')).toEqual({ kind: 'untrusted', url: 'https://us02web.zoom.us/j/123', host: 'us02web.zoom.us' })
+    expect(checkJoinLink('https://us02web.zoom.us/j/123')).toEqual({ kind: 'trusted', url: 'https://us02web.zoom.us/j/123' })
+    expect(checkJoinLink('https://acme.webex.com/acme/j.php?MTID=m1')).toMatchObject({ kind: 'trusted' })
+    expect(checkJoinLink('https://zoom.us.evil.example/j/1')).toMatchObject({ kind: 'untrusted', host: 'zoom.us.evil.example' })
+    expect(checkJoinLink('https://meet.example.org/room')).toEqual({ kind: 'untrusted', url: 'https://meet.example.org/room', host: 'meet.example.org' })
     expect(checkJoinLink('https://meet.google.com.evil.example/x')).toMatchObject({ kind: 'untrusted', host: 'meet.google.com.evil.example' })
     expect(checkJoinLink('http://meet.google.com/abc')).toEqual({ kind: 'invalid' })
     expect(checkJoinLink('https://user:pw@meet.google.com/abc')).toEqual({ kind: 'invalid' })
@@ -61,11 +64,20 @@ describe('conference capability reporting', () => {
     expect(conferenceCapabilities({ provider: 'microsoft', canWrite: true })[0]).toMatchObject({ available: false, reason: expect.stringContaining('Synchronize') })
   })
 
-  it('lists Zoom and Webex behind the connector boundary as unavailable', () => {
+  it('lists Zoom and Webex as unavailable until their accounts are connected', () => {
     const [, zoom, webex] = conferenceCapabilities(google(['hangoutsMeet']))
-    expect(zoom).toMatchObject({ provider: 'zoom', available: false })
+    expect(zoom).toMatchObject({ provider: 'zoom', available: false, reason: 'Connect Zoom in Settings › Online meetings' })
     expect(webex).toMatchObject({ provider: 'webex', available: false })
     expect(conferenceCapabilities({ provider: 'local' })).toEqual([expect.objectContaining({ provider: 'other', available: false })])
+  })
+
+  it('offers connected Zoom and Webex accounts on Google and Microsoft calendars and explains the rest', () => {
+    const host = (provider: 'zoom' | 'webex', extra = {}) => ({ provider, configured: true, connected: true, redirectUri: '', scopes: [], ...extra })
+    const [, zoom, webex] = conferenceCapabilities(microsoft([]), [host('zoom'), host('webex', { needsReconnect: true })])
+    expect(zoom).toEqual({ provider: 'zoom', label: 'Zoom', available: true })
+    expect(webex).toMatchObject({ available: false, reason: 'Webex access was revoked or expired; reconnect Webex in Settings › Online meetings' })
+    expect(conferenceCapabilities(google(['hangoutsMeet']), [host('zoom', { configured: false, connected: false })])[1].reason).toMatch(/no Zoom app registration/)
+    expect(conferenceCapabilities(google(['hangoutsMeet'], false), [host('zoom')])[1]).toMatchObject({ available: false, reason: expect.stringContaining('Reconnect this Google account') })
   })
 })
 

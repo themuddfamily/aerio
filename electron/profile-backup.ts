@@ -29,11 +29,12 @@ export const PROFILE_BACKUP_EXCLUSIONS = [
   'oauth-vault.dat (OAuth access/refresh tokens, IMAP/SMTP passwords, and their secure-storage encryption)',
   'openpgp-keyring.dat (OpenPGP public and passphrase-protected private keys; export keys explicitly to move them)',
   'smime-certificates.dat (S/MIME certificates, trust choices, and passphrase-protected private keys; export a password-protected PKCS#12 to move them)',
+  'meeting-host-vault.dat (Zoom and Webex OAuth tokens and app registrations; reconnect them in Settings › Online meetings)',
   'App-lock passphrase verifier (the current device keeps its own app lock)',
   'Diagnostic logs, window bounds, and update caches',
   'Earlier restore staging and rollback copies'
 ]
-const FORBIDDEN_NAMES = new Set(['oauth-vault.dat', 'openpgp-keyring.dat', 'smime-certificates.dat'])
+const FORBIDDEN_NAMES = new Set(['oauth-vault.dat', 'openpgp-keyring.dat', 'smime-certificates.dat', 'meeting-host-vault.dat'])
 
 export interface ProfileRestoreContext {
   userData: string

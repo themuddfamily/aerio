@@ -274,6 +274,8 @@ export interface AerioDesktopApi {
   smime?: import('./smime-types').SmimeApi
   interchange: import('./interchange-types').InterchangeDesktopApi
   dav: import('./dav-types').DavDesktopApi
+  /** Zoom and Webex meeting-host accounts (E47). */
+  meetingHosts?: import('./meeting-host-types').MeetingHostApi
   contactMerge?: import('./contact-merge-types').ContactMergeDesktopApi
   /** Matrix chat; the Chat module still appears only when its gate passes. */
   chat?: import('./chat-types').ChatDesktopApi

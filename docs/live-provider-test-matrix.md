@@ -13,6 +13,8 @@ Automated unit tests deliberately mock provider responses. This matrix is the re
 | `fastmail` | Fastmail account | App password | Required |
 | `custom-imap` | Dovecot or equivalent disposable server | Password, TLS and STARTTLS variants | Required |
 | `proton-bridge` | Proton Mail Bridge on the test machine | Bridge credentials | Beta |
+| `zoom` | Disposable Zoom user that may schedule meetings, plus a Google or Microsoft calendar account from this table | Zoom user-managed OAuth app (Settings › Online meetings) | Beta |
+| `webex` | Disposable Webex user with a Meetings license, plus a Google or Microsoft calendar account from this table | Webex integration (Settings › Online meetings) | Beta |
 
 Record no secrets in evidence. Use an account alias such as `gmail-a`, the Aerio version and commit, Windows version, start/end times, result, diagnostic export filename, and issue link.
 
@@ -56,6 +58,11 @@ Record no secrets in evidence. Use an account alias such as `gmail-a`, the Aerio
 | `DRAFT-04` | Cross-client draft conflict | Change a Gmail or Microsoft draft in another client, then save the stale Aerio editor; explain the conflict and preserve the stale edit as a separate copy when requested. |
 | `LOCAL-TIME-01` | Scheduled actions and recovery | Scheduled sending, Undo Send, snooze and rules recover across offline use/restart without duplicate sends. Tray mode processes due actions; fully quitting defers due actions until next launch as documented. |
 | `PROD-FAIL-01` | Productivity refresh failure | Revoked scope, 429 and 5xx errors are visible, retry safely, and retain the last successful cached snapshot. |
+| `MEET-01` | Meeting-host connection | Connect Zoom or Webex in Settings › Online meetings. Consent lists the documented scopes, Settings shows the connected account, and a registration missing a scope is refused with the scope named. Disconnect removes the grant (Zoom also revokes it) and leaves existing meetings in place. |
+| `MEET-02` | Hosted meeting lifecycle | On a Google and a Microsoft calendar, add Zoom or Webex to a new event with an attendee. Exactly one meeting appears in the host's web portal with the Aerio reference in its agenda. The join link, meeting number, passcode, and dial-in numbers appear in the event and in the attendee's invitation. Changing the title and time updates the meeting. Remove cancels it. Delete cancels it with *Cancel the meeting* on, and keeps it with the option off. Each change survives a fresh Aerio sync. |
+| `MEET-03` | Duplicate prevention after an uncertain outcome | Drop the connection while a save is creating the meeting (after the request leaves, before the response), save again, and quit and reopen before a third save. The host has exactly one meeting for the event. A save whose calendar write fails reuses the meeting on retry. |
+| `MEET-04` | Revoked meeting-host credential | Remove the Aerio app from the Zoom account or revoke the Webex integration. The next save or delete explains the revoked access and does not change the event. Settings shows Reconnect. Reconnecting restores scheduling, and events that already have meetings keep their links. |
+| `MEET-05` | Host permissions | An account without meeting-host permission or a Meetings license, or an account whose administrator blocks the app, gets a clear refusal. No event or meeting is left behind. |
 
 ## Provider coverage
 
@@ -82,11 +89,20 @@ IMAP/SMTP is a mail protocol and does not imply Calendar or Contacts APIs. These
 
 `LOCAL-TIME-01` is additionally Required for every required mail provider and Beta for Proton Bridge.
 
+## Online meeting coverage
+
+Zoom and Webex meetings are scheduled through the host's own account and written onto a Google or Microsoft calendar event, so run `MEET-02` and `MEET-03` once on each calendar provider. These rows are Beta. They are not part of the public-beta release gate, and `npm run verify:live-evidence` does not check them yet. Record runs in the execution log like any other scenario. No evidence has been recorded.
+
+| Host | MEET-01 | MEET-02 | MEET-03 | MEET-04 | MEET-05 |
+| --- | --- | --- | --- | --- | --- |
+| zoom | Beta | Beta | Beta | Beta | Beta |
+| webex | Beta | Beta | Beta | Beta | Beta |
+
 ## Execution log
 
 Copy this row for every run. A failure remains a release blocker until its linked issue is fixed and the scenario is rerun.
 
-Use aliases starting with `gmail-`, `icloud-`, `yahoo-`, `fastmail-`, `custom-imap-`, or `proton-bridge-`. Microsoft needs separate runs with aliases starting with `microsoft-consumer-` and `microsoft-365-`. Record the package version and exact commit in Commit/version. Evidence for a public release must match that package version. The last recorded result for each account class/scenario determines its status.
+Use aliases starting with `gmail-`, `icloud-`, `yahoo-`, `fastmail-`, `custom-imap-`, `proton-bridge-`, `zoom-`, or `webex-`. For a meeting scenario, name the calendar account in the notes. Microsoft needs separate runs with aliases starting with `microsoft-consumer-` and `microsoft-365-`. Record the package version and exact commit in Commit/version. Evidence for a public release must match that package version. The last recorded result for each account class/scenario determines its status.
 
 `npm run test:live-matrix` checks the checklist structure only. Before publishing, run `npm run verify:live-evidence` to require dated Pass results for all Required scenarios, on both Microsoft account classes. This verifies recorded evidence, not the provider behavior itself; review diagnostics and confirm results apply to the candidate commit.
 
