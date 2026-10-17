@@ -117,7 +117,7 @@ cancelled merges can be removed.
   no per-recipient link to the Sent message.
 - Variables are plain text; there is no conditional content or per-recipient
   attachment.
-- Merge deliveries are never OpenPGP signed or encrypted, so the composer
-  disables **Mail merge** while signing or encryption is on. Distribution-list
+- Merge deliveries are never OpenPGP or S/MIME signed or encrypted, so the
+  composer disables **Mail merge** while signing or encryption is on. Distribution-list
   names typed into To are not expanded into the merge list; choose the members
   under Contacts or paste their addresses.

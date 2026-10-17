@@ -26,6 +26,7 @@ Writable local mail folders (roadmap E18) don't exist yet. When they're added, t
 
 - `oauth-vault.dat`: OAuth access and refresh tokens, IMAP/SMTP passwords, and the secure-storage (DPAPI/Keychain/libsecret) encryption around them. The engine also refuses any file with this name inside a managed folder, and rejects any manifest that lists one.
 - `openpgp-keyring.dat`: OpenPGP public keys and passphrase-protected private keys, wrapped with the same secure storage. It is on the same forbidden list and stays as it is on the device during a restore. Export keys from Settings › OpenPGP keys to move them ([OpenPGP mail](openpgp-mail.md)).
+- `smime-certificates.dat`: S/MIME certificates, trust choices, sender defaults, and passphrase-protected private keys, wrapped with the same secure storage. It is on the forbidden list and stays as it is on the device during a restore. Export a password-protected PKCS#12 from Settings › S/MIME certificates to move your certificate ([S/MIME mail](smime-mail.md)).
 - `dav-credentials.dat`: CalDAV/CardDAV app passwords encrypted with OS secure storage. On restore, DAV accounts ask for the password again, and writes that were still queued are held for review instead of being sent.
 - The app-lock passphrase verifier. Backups delete it under `secure_delete` and `VACUUM`, so the bytes don't survive in free pages. On restore, the current device keeps its own app lock, or keeps having none.
 - Diagnostic logs, window bounds, update caches, `profile-backup.json` (the schedule itself), and earlier restore staging or rollback copies.
