@@ -11,6 +11,8 @@ import type {
   MailLabel,
   MailRule,
   MailRuleInput,
+  MailSavedSearch,
+  MailSavedSearchInput,
   MailSnooze,
   MailMessageDetail,
   MailThreadDetail,
@@ -26,6 +28,7 @@ import type {
   PendingOperation,
   SyncProgress
 } from '../../src/mail-types'
+import { compileMailSearchQuery } from '../../src/lib/mail-search-query'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -330,6 +333,18 @@ export class MailDatabase {
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS mail_rules_account ON mail_rules(account_id, enabled);
+
+      CREATE TABLE IF NOT EXISTS mail_saved_searches (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        query TEXT NOT NULL DEFAULT '',
+        account_id TEXT REFERENCES gmail_accounts(id) ON DELETE CASCADE,
+        folder TEXT NOT NULL DEFAULT 'all',
+        label_id TEXT,
+        filters_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
 
       CREATE VIRTUAL TABLE IF NOT EXISTS gmail_fts USING fts5(
         account_id UNINDEXED,
@@ -890,9 +905,15 @@ export class MailDatabase {
       params.push(filters.important ? 1 : 0)
     }
     let join = ''
-    if (query.search?.trim()) {
+    // The parser re-quotes every user word; compiled MATCH strings are only ever bound as parameters.
+    const search = query.search?.trim() ? compileMailSearchQuery(query.search) : undefined
+    if (search?.include) {
       join = 'JOIN (SELECT DISTINCT account_id,thread_id FROM gmail_fts WHERE gmail_fts MATCH ?) f ON f.account_id=t.account_id AND f.thread_id=t.id'
-      params.unshift(query.search.trim().split(/\s+/).map((term) => `"${term.replaceAll('"', '""')}"*`).join(' AND '))
+      params.unshift(search.include)
+    }
+    if (search?.exclude) {
+      where.push(`(t.account_id||':'||t.id) NOT IN (SELECT account_id||':'||thread_id FROM gmail_fts WHERE gmail_fts MATCH ?)`)
+      params.push(search.exclude)
     }
     if (query.cursor) {
       const cursor = json<{ date: string; id: string; accountId: string }>(Buffer.from(query.cursor, 'base64url').toString('utf8'), { date: '', id: '', accountId: '' })
@@ -1297,6 +1318,45 @@ export class MailDatabase {
 
   deleteRule(id: string) {
     this.stmt('DELETE FROM mail_rules WHERE id=?').run(id)
+  }
+
+  private savedSearchRecord(row: DatabaseRow): MailSavedSearch {
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      query: String(row.query),
+      ...(row.account_id ? { accountId: String(row.account_id) } : {}),
+      folder: String(row.folder) as MailSavedSearch['folder'],
+      ...(row.label_id ? { labelId: String(row.label_id) } : {}),
+      filters: json<MailSavedSearch['filters']>(String(row.filters_json), {}),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at)
+    }
+  }
+
+  listSavedSearches() {
+    return (this.stmt('SELECT * FROM mail_saved_searches ORDER BY name COLLATE NOCASE,created_at').all() as DatabaseRow[]).map((row) => this.savedSearchRecord(row))
+  }
+
+  getSavedSearch(id: string) {
+    const row = this.stmt('SELECT * FROM mail_saved_searches WHERE id=?').get(id) as DatabaseRow | undefined
+    return row ? this.savedSearchRecord(row) : undefined
+  }
+
+  saveSavedSearch(input: MailSavedSearchInput): MailSavedSearch {
+    if (input.accountId && !this.getAccount(input.accountId)) throw new Error('Account not found')
+    compileMailSearchQuery(input.query)
+    const id = input.id ?? crypto.randomUUID()
+    const timestamp = nowIso()
+    this.stmt(`INSERT INTO mail_saved_searches(id,name,query,account_id,folder,label_id,filters_json,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,query=excluded.query,account_id=excluded.account_id,
+      folder=excluded.folder,label_id=excluded.label_id,filters_json=excluded.filters_json,updated_at=excluded.updated_at`)
+      .run(id, input.name, input.query, input.accountId ?? null, input.folder, input.labelId ?? null, JSON.stringify(input.filters ?? {}), timestamp, timestamp)
+    return this.getSavedSearch(id)!
+  }
+
+  deleteSavedSearch(id: string) {
+    this.stmt('DELETE FROM mail_saved_searches WHERE id=?').run(id)
   }
 
   matchingRulesForMessage(message: MailRuleMessage) {

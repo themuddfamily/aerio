@@ -22,6 +22,8 @@ import type {
   MailRule,
   MailRuleInput,
   MailRuleRunResult,
+  MailSavedSearch,
+  MailSavedSearchInput,
   MailSnooze,
   MailMessageSource,
   MailThreadDetail,
@@ -60,6 +62,7 @@ import { MicrosoftProductivityConnector } from './productivity/microsoft-connect
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
 import { senderDomainFromEmail } from '../src/lib/sender-avatar'
 import { isCompleteMailAddress } from '../src/lib/mail-address'
+import { validateMailSavedSearch } from '../src/lib/mail-saved-search'
 import { mailPollingIntervalForWindow } from './mail/polling-policy'
 import { faviconDomainCandidates } from './mail/favicon-domains'
 
@@ -1640,6 +1643,14 @@ function registerIpc() {
   ipcMain.handle('mail:rules:run', (_event, id: string) => {
     if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid rule id')
     return requireMailWorker().request<MailRuleRunResult>({ type: 'rules:run', payload: { id } })
+  })
+  ipcMain.handle('mail:saved-searches:list', () =>
+    requireMailWorker().request<MailSavedSearch[]>({ type: 'saved-searches:list' }))
+  ipcMain.handle('mail:saved-searches:save', (_event, input: MailSavedSearchInput) =>
+    requireMailWorker().request<MailSavedSearch>({ type: 'saved-searches:save', payload: validateMailSavedSearch(input) }))
+  ipcMain.handle('mail:saved-searches:delete', (_event, id: string) => {
+    if (typeof id !== 'string' || !id || id.length > 500) throw new Error('Invalid saved search id')
+    return requireMailWorker().request({ type: 'saved-searches:delete', payload: { id } })
   })
   ipcMain.handle('mail:sync:start', (_event, accountId?: string) =>
     requireMailWorker().request({ type: 'sync:start', payload: { accountId } }))
