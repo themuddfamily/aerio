@@ -1,6 +1,6 @@
 # eM Client feature parity evidence
 
-Reviewed: 2026-10-17. Aerio baseline: version 0.5.0, commit `e7696cc0886f06017a0a33b24f40a45b4f82aa09`. This comparison supports E01-E30 in [ROADMAP.md](../ROADMAP.md).
+Reviewed: 2026-10-17. Aerio baseline: version 0.5.0, commit `e7696cc0886f06017a0a33b24f40a45b4f82aa09`. This comparison supported roadmap tasks E01-E30, which are now complete; the E-numbers below are kept for traceability.
 
 ## Scope and confidence
 
