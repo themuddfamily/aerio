@@ -78,6 +78,18 @@ export function gmailLabelsWithParents(labels: MailLabel[]): MailLabel[] {
   })
 }
 
+/** Gmail users.settings.vacation resource. Times are epoch milliseconds as strings. */
+export interface GmailVacationSettings {
+  enableAutoReply?: boolean
+  responseSubject?: string
+  responseBodyPlainText?: string
+  responseBodyHtml?: string
+  restrictToContacts?: boolean
+  restrictToDomain?: boolean
+  startTime?: string
+  endTime?: string
+}
+
 interface HistoryResponse {
   history?: GmailHistory[]
   nextPageToken?: string
@@ -239,6 +251,16 @@ export class GmailClient {
       method: 'POST',
       body: JSON.stringify(raw ? { id: draftId, message: { raw } } : { id: draftId })
     })
+  }
+
+  /** Readable with gmail.modify; writing needs the gmail.settings.basic scope. */
+  getVacationSettings() {
+    return this.request<GmailVacationSettings>('/settings/vacation')
+  }
+
+  /** PUT replaces the whole resource, so callers send every field they want kept. */
+  updateVacationSettings(settings: GmailVacationSettings) {
+    return this.request<GmailVacationSettings>('/settings/vacation', { method: 'PUT', body: JSON.stringify(settings) })
   }
 
   sendMessage(raw: string, threadId?: string) {

@@ -15,7 +15,7 @@ vi.mock('./components/SettingsModal', () => ({ default: (props: any) => <div rol
   finally { props.onLocalDataRestoreEnd?.() }
 }}>Restore fixture</button><button onClick={props.onClose}>Close settings</button></div> }))
 vi.mock('./components/ProfileModal', () => ({ default: (props: any) => <div role="dialog" aria-label="Profile mock"><span>{props.profile.displayName}</span><button onClick={() => props.onSave({ displayName: 'Saved Person', email: 'saved@example.test' })}>Save profile</button><button onClick={props.onClose}>Close profile</button></div> }))
-vi.mock('./views/ConnectedMailView', () => ({ default: (props: any) => <section aria-label="Mail mock"><span>Compose {props.composeRequest.id}:{props.composeRequest.initialTo ?? ''}</span><button onClick={() => props.onToast('Mail says hello')}>Mail toast</button></section> }))
+vi.mock('./views/ConnectedMailView', () => ({ default: (props: any) => <section aria-label="Mail mock"><span>Compose {props.composeRequest.id}:{props.composeRequest.initialTo ?? ''}</span><span>Quick {props.quickActionRequest?.id}:{props.quickActionRequest?.quickActionId}</span><button onClick={() => props.onToast('Mail says hello')}>Mail toast</button></section> }))
 vi.mock('./views/CalendarView', () => ({ default: (props: any) => <section aria-label="Calendar mock"><span>Calendar query:{props.query}</span><span>{props.sourceMessage}</span><span>Writable:{[...props.writableCalendarIds].join(',')}</span><button onClick={() => void props.onSync()}>Sync calendar</button><button onClick={() => void props.onEnableEditing()}>Enable editing</button><button onClick={() => void props.onSaveProviderEvent(providerEvent, false)}>Create provider event</button><button onClick={() => void props.onSaveProviderEvent(providerEvent, true)}>Update provider event</button><button onClick={() => void props.onDeleteProviderEvent(providerEvent)}>Delete provider event</button></section> }))
 vi.mock('./views/ContactsView', () => ({ default: (props: any) => <section aria-label="Contacts mock"><span>Contacts query:{props.query}</span><button onClick={() => props.onCompose('ada@example.test')}>Email Ada</button><button onClick={() => void props.onSync()}>Sync contacts</button><button onClick={() => void props.onEnableEditing()}>Enable contact editing</button><button onClick={() => void props.onSaveProviderContact(props.providerAccounts[0].id, productivity.contacts[0], false)}>Create provider contact</button><button onClick={() => void props.onSaveProviderContact(props.providerAccounts[0].id, productivity.contacts[0], true)}>Update provider contact</button><button onClick={() => void props.onDeleteProviderContact(productivity.contacts[0].id)}>Delete provider contact</button></section> }))
 vi.mock('./views/TasksView', () => ({ default: (props: any) => <section aria-label="Tasks mock"><button onClick={() => props.onChange({ ...props.state, tasks: [...props.state.tasks, { id: 'task-2', listId: 'inbox', title: 'Added task', priority: 'normal', completed: false, subtasks: [] }] })}>Change tasks</button><button onClick={() => props.onToast('Task toast')}>Task toast</button></section> }))
@@ -56,7 +56,10 @@ const api = {
     onStatus: vi.fn((callback: (status: { enabled: boolean; locked: boolean }) => void) => { appLockListener = callback; return vi.fn() })
   },
   onComposeCommand: vi.fn((callback: () => void) => { composeCommand = callback; return vi.fn() }),
-  mail: { accounts: { list: vi.fn(async () => accountResults), reconnect: vi.fn(async () => gmailAccount) } },
+  mail: {
+    accounts: { list: vi.fn(async () => accountResults), reconnect: vi.fn(async () => gmailAccount) },
+    quickActions: { list: vi.fn(async () => [{ id: 'quick-1', name: 'File receipt', steps: [{ action: 'archive' }], shortcut: 2, showInToolbar: false, createdAt: '', updatedAt: '' }]) }
+  },
   productivity: {
     snapshot: vi.fn(async () => productivity),
     sync: vi.fn(async (_accountId: string) => productivity),
@@ -206,6 +209,20 @@ describe('App', () => {
     expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument()
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument()
+  })
+
+  it('lists saved mail quick actions in the command palette and forwards the chosen one to Mail', async () => {
+    const user = userEvent.setup()
+    renderApp(); await screen.findByRole('region', { name: 'Mail mock' })
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    await user.type(screen.getByPlaceholderText('Search Aerio…'), 'receipt')
+    await user.click(await screen.findByRole('button', { name: /Run quick action: File receipt/ }))
+    expect(screen.getByRole('region', { name: 'Mail mock' })).toHaveTextContent('Quick 1:quick-1')
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Calendar' }))
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('button', { name: /Run quick action/ })).not.toBeInTheDocument()
   })
 
   it('synchronizes supported providers, exposes provider status, and writes calendar events', async () => {

@@ -20,6 +20,7 @@ const api = {
       update: vi.fn(async (input: any) => ({ ...account(), ...input })), verify: vi.fn(async () => undefined), reconnect: vi.fn(async () => undefined),
       imapSettings: vi.fn(async () => server), updateImap: vi.fn(async () => server)
     },
+    automaticReplies: { get: vi.fn(async () => ({ accountId: 'account', provider: 'imap', supported: false, canRead: false, canWrite: false, needsReconnect: false, missingScopes: [], warnings: [], message: 'Not available for this account' })) },
     sync: { rebuild: vi.fn(async () => undefined) }
   }
 }

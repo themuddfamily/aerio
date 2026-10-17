@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { MailDatabase } from './mail/database'
 import { MessageLocalStore } from './mail/message-local-store'
 import { MailTemplateStore } from './mail/template-store'
+import { InterchangeStore } from './productivity/interchange-store'
 import { ProductivityStore } from './productivity/store'
 import { TaskStore } from './productivity/task-store'
 import { countRows, PROFILE_PREVIEW_LABELS, profileTableExists, type ProfileBackupLayout } from './profile-backup'
@@ -67,6 +68,7 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
         { label: PROFILE_PREVIEW_LABELS.heldSends, count: countRows(db, 'gmail_drafts', OUTGOING) },
         { label: 'Queued mail changes', count: countRows(db, 'gmail_operations', `status IN ('queued','running')`) },
         { label: 'Mail rules', count: countRows(db, 'mail_rules') },
+        { label: 'Quick actions', count: countRows(db, 'mail_quick_actions') },
         { label: 'Saved searches', count: countRows(db, 'mail_saved_searches') },
         { label: 'Reply watches', count: countRows(db, 'mail_reply_watches', `status='pending'`) }
       ]
@@ -85,15 +87,18 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
     },
     {
       file: 'productivity.sqlite',
-      label: 'Local Tasks, Notes, Contacts, and calendar cache',
-      prepareRestore: (path) => new ProductivityStore(path).close(),
+      label: 'Local Tasks, Notes, Contacts, local calendars, and calendar cache',
+      prepareRestore: (path) => { new ProductivityStore(path).close(); new InterchangeStore(path).close() },
       summarize: (db) => {
         const module = (name: string) => {
           if (!profileTableExists(db, 'local_module_state')) return 0
           const row = db.prepare('SELECT payload_json FROM local_module_state WHERE module=?').get(name) as { payload_json: string } | undefined
           try { return row ? (JSON.parse(row.payload_json) as unknown[]).length : 0 } catch { return 0 }
         }
-        return [{ label: 'Local tasks', count: module('tasks') }, { label: 'Notes', count: module('notes') }, { label: 'Local contacts', count: countRows(db, 'local_contacts') }]
+        return [
+          { label: 'Local tasks', count: module('tasks') }, { label: 'Notes', count: module('notes') }, { label: 'Local contacts', count: countRows(db, 'local_contacts') },
+          { label: 'Local calendars and subscriptions', count: countRows(db, 'interchange_calendars') }
+        ]
       }
     },
     {

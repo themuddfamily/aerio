@@ -83,6 +83,24 @@ const api: AerioDesktopApi = {
     exportLocalData: () => ipcRenderer.invoke('productivity:local-export'),
     importLocalData: () => ipcRenderer.invoke('productivity:local-import')
   },
+  interchange: {
+    snapshot: () => ipcRenderer.invoke('interchange:snapshot'),
+    onChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, snapshot: import('../src/interchange-types').InterchangeSnapshot) => callback(snapshot)
+      ipcRenderer.on('interchange:changed', listener)
+      return () => ipcRenderer.removeListener('interchange:changed', listener)
+    },
+    chooseCalendarFile: () => ipcRenderer.invoke('interchange:calendar-file-choose'),
+    chooseContactsFile: () => ipcRenderer.invoke('interchange:contacts-file-choose'),
+    exportCalendar: (calendarIds) => ipcRenderer.invoke('interchange:calendar-export', calendarIds),
+    exportContacts: (contactIds, format) => ipcRenderer.invoke('interchange:contacts-export', contactIds, format),
+    saveLocalEvents: (target, events) => ipcRenderer.invoke('interchange:local-events-save', target, events),
+    saveLocalEvent: (event) => ipcRenderer.invoke('interchange:local-event-save', event),
+    deleteLocalEvent: (eventId) => ipcRenderer.invoke('interchange:local-event-delete', eventId),
+    subscribe: (input) => ipcRenderer.invoke('interchange:subscribe', input),
+    refresh: (calendarId) => ipcRenderer.invoke('interchange:refresh', calendarId),
+    removeCalendar: (calendarId) => ipcRenderer.invoke('interchange:calendar-remove', calendarId)
+  },
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     maximize: () => ipcRenderer.invoke('window:maximize'),
@@ -113,6 +131,11 @@ const api: AerioDesktopApi = {
       translate: (ref, input) => ipcRenderer.invoke('mail:message:translate', ref, input),
       unsubscribeInfo: (ref) => ipcRenderer.invoke('mail:message:unsubscribe-info', ref),
       unsubscribe: (ref, request) => ipcRenderer.invoke('mail:message:unsubscribe', ref, request)
+    },
+    automaticReplies: {
+      get: (accountId) => ipcRenderer.invoke('mail:automatic-replies:get', accountId),
+      update: (accountId, settings) => ipcRenderer.invoke('mail:automatic-replies:update', accountId, settings),
+      disable: (accountId) => ipcRenderer.invoke('mail:automatic-replies:disable', accountId)
     },
     credentials: {
       status: () => ipcRenderer.invoke('gmail:credentials:status'),
@@ -190,6 +213,12 @@ const api: AerioDesktopApi = {
       inspect: (accountId, messageId) => ipcRenderer.invoke('mail:receipts:inspect', accountId, messageId),
       respond: (accountId, messageId, decision) => ipcRenderer.invoke('mail:receipts:respond', accountId, messageId, decision)
     },
+    quickActions: {
+      list: () => ipcRenderer.invoke('mail:quick-actions:list'),
+      save: (input) => ipcRenderer.invoke('mail:quick-actions:save', input),
+      delete: (id) => ipcRenderer.invoke('mail:quick-actions:delete', id),
+      run: (id, targets) => ipcRenderer.invoke('mail:quick-actions:run', id, targets)
+    },
     sync: {
       start: (accountId) => ipcRenderer.invoke('mail:sync:start', accountId),
       pause: (accountId) => ipcRenderer.invoke('mail:sync:pause', accountId),
@@ -198,6 +227,7 @@ const api: AerioDesktopApi = {
       progress: () => ipcRenderer.invoke('mail:sync:progress')
     },
     attachments: {
+      list: (query) => ipcRenderer.invoke('mail:attachments:list', query),
       open: (accountId, messageId, attachmentId, filename) => ipcRenderer.invoke('mail:attachment:open', accountId, messageId, attachmentId, filename),
       save: (accountId, messageId, attachmentId, filename) => ipcRenderer.invoke('mail:attachment:save', accountId, messageId, attachmentId, filename)
     },
