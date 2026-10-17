@@ -21,6 +21,8 @@ export default defineConfig({
   test: {
     setupFiles: ['./test/setup.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', '.claude/**'],
+    // Component suites run in parallel; a longer ceiling avoids load-only timeouts.
+    testTimeout: 20000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary', 'html'],

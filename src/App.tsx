@@ -17,11 +17,12 @@ import CalendarInterchangePanel from './components/CalendarInterchangePanel'
 import ContactInterchangePanel from './components/ContactInterchangePanel'
 import type { InterchangeSnapshot } from './interchange-types'
 import type { DavSnapshot } from './dav-types'
-import type { Account, AppLockStatus, AppPreferences, AppState, CalendarEvent, Contact, ModuleId } from './types'
+import type { Account, AppLockStatus, AppPreferences, AppState, CalendarEvent, Contact, ContactList, ModuleId, RecurrenceEditScope } from './types'
 import type { MailAccountSummary, MailQuickAction } from './mail-types'
 import { quickActionShortcutLabel } from './lib/mail-quick-actions'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from './productivity-types'
-import { unreadCount } from './lib/domain'
+import { uid, unreadCount } from './lib/domain'
+import { planLocalRecurrenceDelete, planLocalRecurrenceSave, storedEvent, type LocalRecurrencePlan } from './lib/recurrence-edit'
 import { useContextMenu } from './components/ContextMenu'
 import { useDialogFocus } from './lib/dialog-focus'
 
@@ -215,24 +216,35 @@ export default function App() {
 
   const localCalendarIds = useMemo(() => new Set(interchange.calendars.filter((calendar) => calendar.kind === 'local').map((calendar) => calendar.id)), [interchange.calendars])
 
-  const saveProviderEvent = useCallback(async (event: CalendarEvent, exists: boolean) => {
-    if (localCalendarIds.has(event.calendarId)) {
-      setInterchange(await window.aerio.interchange.saveLocalEvent(event))
-      return
-    }
-    const latest = exists
-      ? await window.aerio.productivity.updateEvent(event)
-      : await window.aerio.productivity.createEvent(event)
-    setProductivity(latest)
-  }, [localCalendarIds])
+  // Applies a series edit plan to local calendars: saves first so a split series never loses events.
+  const applyLocalPlan = useCallback(async (plan: LocalRecurrencePlan) => {
+    let snapshot: InterchangeSnapshot | undefined
+    for (const item of plan.save) snapshot = await window.aerio.interchange.saveLocalEvent(storedEvent(item))
+    for (const id of plan.remove) snapshot = await window.aerio.interchange.deleteLocalEvent(id)
+    if (snapshot) setInterchange(snapshot)
+  }, [])
 
-  const deleteProviderEvent = useCallback(async (event: CalendarEvent) => {
+  const saveProviderEvent = useCallback(async (event: CalendarEvent, exists: boolean, scope?: RecurrenceEditScope) => {
     if (localCalendarIds.has(event.calendarId)) {
-      setInterchange(await window.aerio.interchange.deleteLocalEvent(event.id))
+      if (scope) await applyLocalPlan(planLocalRecurrenceSave(interchange.events, event, event, scope, () => uid('event')))
+      else setInterchange(await window.aerio.interchange.saveLocalEvent(storedEvent(event)))
       return
     }
-    setProductivity(await window.aerio.productivity.deleteEvent(event.id))
-  }, [localCalendarIds])
+    const input = storedEvent(event)
+    const latest = exists
+      ? scope ? await window.aerio.productivity.updateEvent(input, scope) : await window.aerio.productivity.updateEvent(input)
+      : await window.aerio.productivity.createEvent(input)
+    setProductivity(latest)
+  }, [applyLocalPlan, interchange.events, localCalendarIds])
+
+  const deleteProviderEvent = useCallback(async (event: CalendarEvent, scope?: RecurrenceEditScope) => {
+    if (localCalendarIds.has(event.calendarId)) {
+      if (scope) await applyLocalPlan(planLocalRecurrenceDelete(interchange.events, event, scope))
+      else setInterchange(await window.aerio.interchange.deleteLocalEvent(event.id))
+      return
+    }
+    setProductivity(scope ? await window.aerio.productivity.deleteEvent(event.id, scope) : await window.aerio.productivity.deleteEvent(event.id))
+  }, [applyLocalPlan, interchange.events, localCalendarIds])
 
   const enableContactEditing = useCallback(async (accountId?: string) => {
     setProductivitySyncing(true)
@@ -264,6 +276,25 @@ export default function App() {
   const deleteProviderContact = useCallback(async (contactId: string) => {
     setProductivity(await window.aerio.productivity.deleteContact(contactId))
   }, [])
+
+  // Distribution lists: local lists persist with the local modules; Google groups go through IPC.
+  const contactListActions = useMemo(() => {
+    const api = window.aerio.productivity
+    const applying = <T extends unknown[]>(call: ((...args: T) => Promise<ProductivitySnapshot>) | undefined) => call && (async (...args: T) => {
+      const snapshot = await call(...args)
+      setProductivity(snapshot)
+      return snapshot
+    })
+    return {
+      localLists: localModules.contactLists ?? [],
+      groups: productivity.contactGroups ?? [],
+      onLocalListsChange: (contactLists: ContactList[]) => setLocalModules((current) => ({ ...current, contactLists })),
+      createGroup: applying(api.createContactGroup),
+      renameGroup: applying(api.renameContactGroup),
+      deleteGroup: applying(api.deleteContactGroup),
+      updateGroupMembers: applying(api.updateContactGroupMembers)
+    }
+  }, [localModules.contactLists, productivity.contactGroups])
 
   useEffect(() => {
     if (!preferences || !hydrated.current) return
@@ -512,6 +543,7 @@ export default function App() {
               providerAccounts={providerContactAccounts}
               syncing={productivitySyncing}
               sourceMessage={productivityMessage}
+              listActions={contactListActions}
               interchangePanel={window.aerio.interchange && <ContactInterchangePanel
                 api={window.aerio.interchange}
                 contacts={connectedState.contacts}

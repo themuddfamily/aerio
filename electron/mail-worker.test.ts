@@ -71,6 +71,8 @@ const mocks = vi.hoisted(() => {
   method('queuedDrafts', () => [])
   method('getDueDraft')
   method('matchingRulesForMessage', () => [])
+  method('hasLocalRules', () => true)
+  db.ruleLedger = { claim: vi.fn(() => true), processed: vi.fn(() => false) }
   method('rawPath', () => 'C:\\content\\raw.eml')
   method('hasMessage', () => false)
   method('rawExists', () => true)
@@ -167,10 +169,15 @@ const mocks = vi.hoisted(() => {
     sanitize: vi.fn((html: string, remote?: boolean) => `safe:${remote}:${html}`),
     source: vi.fn(() => ({ headers: 'headers', source: 'source' })),
     fs: {
-      copyFileSync: vi.fn(), existsSync: vi.fn(() => false), mkdirSync: vi.fn(), readFileSync: vi.fn(() => Buffer.from('raw')),
+      copyFileSync: vi.fn(), existsSync: vi.fn((_path?: unknown) => false), mkdirSync: vi.fn(), readFileSync: vi.fn(() => Buffer.from('raw')),
       readdirSync: vi.fn((): string[] => []), renameSync: vi.fn(), rmSync: vi.fn(),
       statfsSync: vi.fn(() => ({ bavail: 2n, bsize: 4096n })), writeFileSync: vi.fn()
     },
+    indexer: {
+      schedule: vi.fn(), cancelAccount: vi.fn(), resumeAccount: vi.fn(), stop: vi.fn().mockResolvedValue(undefined),
+      options: undefined as any
+    },
+    extractor: { extract: vi.fn().mockResolvedValue({ status: 'indexed', text: 'x', truncated: false }), close: vi.fn().mockResolvedValue(undefined), options: undefined as any },
     setCredential(value: any) { credential = value; credentialError = undefined },
     setCredentialError(value: string) { credential = undefined; credentialError = value },
     emit(message: any) { messageHandler?.(message) }
@@ -197,7 +204,23 @@ vi.mock('./mail/imap-client', () => ({
 vi.mock('./mail/message-security', () => ({ sanitizeMessageHtmlWithReport: (html: string, remote?: boolean) => ({ html: mocks.sanitize(html, remote), remoteContent: { remoteImages: 1, trackers: [] } }) }))
 vi.mock('./mail/new-mail', () => ({ buildNewMailNotification: mocks.notification }))
 vi.mock('./mail/message-source', () => ({ parseMessageSource: mocks.source }))
+vi.mock('./mail/attachment-text-indexer', () => ({
+  AttachmentContentIndexer: vi.fn(function (options: any) { mocks.indexer.options = options; return mocks.indexer })
+}))
+vi.mock('./mail/attachment-extract-runner', () => ({
+  AttachmentExtractRunner: vi.fn(function (options: any) { mocks.extractor.options = options; return mocks.extractor })
+}))
 vi.mock('./mail/mime-builder', () => ({ createMime: vi.fn(() => 'mime'), createMimeBuffer: vi.fn(() => Buffer.from('mime')) }))
+const localMocks = vi.hoisted(() => {
+  const job = { id: 'job-1', accountId: 'local-folders', status: 'queued' }
+  const service = {
+    start: vi.fn(() => job), list: vi.fn(() => [job]), pause: vi.fn(() => job), resume: vi.fn(() => job), cancel: vi.fn(() => job),
+    dismiss: vi.fn(), items: vi.fn(() => []), resolve: vi.fn(async () => job), pump: vi.fn(async () => undefined), halt: vi.fn()
+  }
+  return { job, service, deps: [] as any[], transfer: vi.fn(async (): Promise<any> => ({ copied: 1, skipped: 0, missing: 0 })) }
+})
+vi.mock('./mail/mail-import', () => ({ MailImportService: vi.fn(function (deps: any) { localMocks.deps.push(deps); return localMocks.service }) }))
+vi.mock('./mail/local-folders', () => ({ transferToLocalFolders: localMocks.transfer }))
 
 import './mail-worker'
 
@@ -418,10 +441,49 @@ describe.sequential('mail worker protocol routing', () => {
     expect(mocks.db.upsertMessage).toHaveBeenCalledWith(expect.objectContaining({ subject: 'Worker message', fromEmail: 'ada@example.test', to: ['Grace <grace@example.test>'] }))
     expect(mocks.db.deleteMessage).toHaveBeenCalledWith('account-1', 'deleted-message')
     expect(mocks.db.recordRuleMatch).toHaveBeenCalledWith('incoming-rule', 1)
+    expect(mocks.db.ruleLedger.claim).toHaveBeenCalledWith('account-1', expect.objectContaining({ id: 'new-message' }), 'incoming')
+    expect(mocks.db.matchingRulesForMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 'new-message' }), 'incoming')
     expect(mocks.notification).toHaveBeenCalled()
     expect(mocks.posted).toContainEqual(expect.objectContaining({ kind: 'event', event: expect.objectContaining({ type: 'sync-progress', payload: expect.objectContaining({ phase: 'complete' }) }) }))
     mocks.db.matchingRulesForMessage.mockReturnValue([])
     mocks.notification.mockReturnValue(undefined)
+  })
+
+  it('runs outgoing rules on new Sent copies and never reprocesses a message the rule ledger already claimed', async () => {
+    mocks.fs.statfsSync.mockReturnValue({ bavail: 2_000_000n, bsize: 4096n })
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.getAccountHistory.mockReturnValue('5')
+    mocks.db.hasMessage.mockReturnValue(false)
+    mocks.db.recordRuleMatch.mockClear()
+    mocks.db.matchingRulesForMessage.mockClear()
+    mocks.db.ruleLedger.claim.mockImplementation(((_accountId: string, message: { id: string }) => message.id !== 'repeat-message') as any)
+    mocks.db.matchingRulesForMessage.mockImplementation(((_message: unknown, trigger: string) => trigger === 'outgoing'
+      ? [{ id: 'outgoing-rule', accountId: 'account-1', enabled: true, name: 'File sent', trigger: 'outgoing', conditions: [], actions: [{ action: 'star' }] }]
+      : []) as any)
+    mocks.gmail.listHistory.mockResolvedValueOnce({
+      historyId: '6',
+      history: [{ id: '6', messagesAdded: [
+        { message: { id: 'sent-message', threadId: 'sent-thread' } },
+        { message: { id: 'repeat-message', threadId: 'repeat-thread' } },
+        { message: { id: 'draft-message', threadId: 'draft-thread' } }
+      ] }]
+    })
+    mocks.gmail.getRawMessage.mockImplementation(async (id: string) => ({
+      id, threadId: id.replace('message', 'thread'), historyId: '6', raw: Buffer.from(`raw:${id}`).toString('base64url'),
+      labelIds: id === 'sent-message' ? ['SENT'] : id === 'draft-message' ? ['DRAFT'] : ['INBOX'], internalDate: '1786183200000'
+    }))
+    mocks.postalParse.mockResolvedValue({ from: { address: 'person@example.test' }, subject: 'Sent', attachments: [] })
+
+    await request({ type: 'sync:start', payload: { accountId: 'account-1' } })
+    await vi.waitFor(() => expect(mocks.db.setAccountHistory).toHaveBeenCalledWith('account-1', '6', true))
+    await vi.waitFor(() => expect(mocks.db.recordRuleMatch).toHaveBeenCalledWith('outgoing-rule', 1))
+    expect(mocks.db.matchingRulesForMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 'sent-message' }), 'outgoing')
+    expect(mocks.db.matchingRulesForMessage).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'sent-message' }), 'incoming')
+    expect(mocks.db.matchingRulesForMessage).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'repeat-message' }), expect.anything())
+    expect(mocks.db.ruleLedger.claim).not.toHaveBeenCalledWith('account-1', expect.objectContaining({ id: 'draft-message' }), expect.anything())
+    mocks.db.ruleLedger.claim.mockImplementation(() => true)
+    mocks.db.matchingRulesForMessage.mockImplementation(() => [])
+    mocks.db.getAccountHistory.mockReturnValue(undefined)
   })
 
   it('runs Microsoft delta synchronization including removed folders and messages', async () => {
@@ -1289,8 +1351,106 @@ describe.sequential('mail worker protocol routing', () => {
     await vi.waitFor(() => expect(watches.activateForDraft).toHaveBeenCalledWith('watched-delivery', expect.objectContaining({ messageIdHeader: '<sent-id@aerio.local>', threadId: 'gmail-thread' })))
   })
 
+  it('routes Local Folders and import commands without any provider calls', async () => {
+    const local = { ...mocks.account, id: 'local-folders', provider: 'local', email: 'Local Folders', syncEnabled: false }
+    let exists = false
+    mocks.db.localMail = {
+      account: vi.fn(() => exists ? local : undefined),
+      ensureAccount: vi.fn(() => { exists = true; return local }),
+      completeDueOperations: vi.fn(() => [{ id: 'local-op', accountId: 'local-folders', kind: 'read' }]),
+      nextQueuedJob: vi.fn(() => undefined)
+    }
+    mocks.posted.length = 0
+    await expect(request({ type: 'local:ensure' })).resolves.toMatchObject({ result: local })
+    expect(mocks.posted.some((message) => message.event?.type === 'accounts-changed')).toBe(true)
+
+    await expect(request({ type: 'import:start', payload: { paths: ['a.mbox'], duplicates: 'review', mboxVariant: 'mboxrd' } })).resolves.toMatchObject({ result: localMocks.job })
+    expect(localMocks.service.start).toHaveBeenCalledWith({ paths: ['a.mbox'], duplicates: 'review', mboxVariant: 'mboxrd' })
+    for (const type of ['import:pause', 'import:resume', 'import:cancel', 'import:dismiss'] as const) await request({ type, payload: { id: 'job-1' } })
+    expect(localMocks.service.pause).toHaveBeenCalledWith('job-1')
+    expect(localMocks.service.dismiss).toHaveBeenCalledWith('job-1')
+    await expect(request({ type: 'import:list' })).resolves.toMatchObject({ result: [localMocks.job] })
+    await request({ type: 'import:items', payload: { jobId: 'job-1' } })
+    await request({ type: 'import:resolve', payload: { jobId: 'job-1', keys: ['0:0'], decision: 'import' } })
+    expect(localMocks.service.resolve).toHaveBeenCalledWith('job-1', ['0:0'], 'import')
+
+    // The worker wires imports to its normal store path, progress events and disk checks.
+    const deps = localMocks.deps.at(-1)
+    deps.emit(localMocks.job)
+    expect(mocks.posted).toContainEqual({ kind: 'event', event: { type: 'import-progress', payload: localMocks.job } })
+    expect(deps.freeBytes()).toBeGreaterThan(0)
+    deps.changed('local-folders', true)
+    expect(mocks.posted).toContainEqual({ kind: 'event', event: { type: 'mail-changed', payload: { accountId: 'local-folders' } } })
+
+    const trashOperation = { id: 'trash-op', accountId: 'account-1', kind: 'trash', status: 'queued' }
+    localMocks.transfer.mockResolvedValueOnce({ copied: 1, skipped: 0, missing: 0, trashOperation })
+    await expect(request({ type: 'local:transfer', payload: { sourceAccountId: 'account-1', threadIds: ['thread-1'], destinationLabelId: 'folder:local-1', mode: 'move' } })).resolves.toMatchObject({ result: { copied: 1 } })
+    expect(mocks.posted).toContainEqual({ kind: 'event', event: { type: 'operation', payload: trashOperation } })
+
+    mocks.db.getAccount.mockReturnValue(local)
+    mocks.gmail.getProfile.mockClear()
+    await expect(request({ type: 'accounts:verify', payload: { accountId: 'local-folders' } })).resolves.toMatchObject({ result: undefined })
+    expect(mocks.gmail.getProfile).not.toHaveBeenCalled()
+    await expect(request({ type: 'sync:rebuild', payload: { accountId: 'local-folders' } })).resolves.toMatchObject({ error: { message: expect.stringMatching(/nothing to download/) } })
+    await expect(request({ type: 'receipts:inspect', payload: { accountId: 'local-folders', messageId: 'm', policy: 'always' } })).resolves.toMatchObject({ result: {} })
+    await expect(request({ type: 'receipts:respond', payload: { accountId: 'local-folders', messageId: 'm', decision: 'send', policy: 'ask' } })).resolves.toMatchObject({ error: { message: expect.stringMatching(/do not send read receipts/) } })
+    await request({ type: 'mail:copy', payload: { accountId: 'local-folders', threadId: 't', messageId: 'm', destination: 'folder:local-2' } })
+    expect(localMocks.transfer).toHaveBeenLastCalledWith(expect.anything(), { sourceAccountId: 'local-folders', threadIds: ['t'], messageIds: ['m'], destinationLabelId: 'folder:local-2', mode: 'copy' })
+    mocks.db.setAccountStatus.mockClear()
+    await request({ type: 'sync:start', payload: { accountId: 'local-folders' } })
+    expect(mocks.db.setAccountStatus).not.toHaveBeenCalled()
+
+    // Queued Local Folders changes complete without a provider request.
+    mocks.db.dueOperations.mockReturnValueOnce([{ id: 'late-local', account_id: 'local-folders', kind: 'star', thread_ids_json: '["t"]', label_id: null }]).mockReturnValue([])
+    mocks.db.updateOperation.mockClear()
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(mocks.db.updateOperation).toHaveBeenCalledWith('late-local', 'succeeded'))
+    expect(mocks.posted).toContainEqual({ kind: 'event', event: { type: 'operation', payload: { id: 'local-op', accountId: 'local-folders', kind: 'read', status: 'succeeded' } } })
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+  })
+
+  it('runs attachment-content indexing in an isolated extractor worker', async () => {
+    // Without the built extractor entry (as under Vitest), indexing stays off.
+    expect(mocks.indexer.options).toBeUndefined()
+    mocks.fs.existsSync.mockImplementation((path: any) => String(path).endsWith('attachment-extract-worker.js'))
+    mocks.db.attachmentText = { kind: 'store' }
+    await request({ type: 'initialize', payload: { databasePath: 'mail.db', contentPath: 'C:\\content' } })
+    expect(String(mocks.extractor.options.workerPath)).toMatch(/attachment-extract-worker\.js$/)
+    expect(mocks.indexer.options.store).toBe(mocks.db.attachmentText)
+    expect(mocks.indexer.schedule).toHaveBeenCalled()
+
+    await mocks.indexer.options.extract({ filename: 'a.txt', mimeType: 'text/plain', content: Buffer.from('a') }, AbortSignal.timeout(1_000))
+    expect(mocks.extractor.extract).toHaveBeenCalledWith(expect.objectContaining({ filename: 'a.txt' }), expect.any(AbortSignal))
+    mocks.db.getMessageRaw.mockReturnValueOnce(undefined)
+    await expect(mocks.indexer.options.readAttachments('account-1', 'gone')).resolves.toBeUndefined()
+    mocks.db.getMessageRaw.mockReturnValueOnce('C:\\content\\raw.eml')
+    mocks.fs.existsSync.mockReturnValueOnce(true)
+    mocks.postalParse.mockResolvedValueOnce({ attachments: [
+      { filename: 'a.txt', mimeType: 'text/plain', content: 'aGVsbG8=', encoding: 'base64' },
+      { filename: 'b.bin', mimeType: 'application/octet-stream', content: new Uint8Array([1, 2]).buffer }
+    ] })
+    const contents: Map<string, Buffer> = await mocks.indexer.options.readAttachments('account-1', 'message-1')
+    expect([...contents.values()].map((value) => value.toString('hex'))).toEqual([Buffer.from('hello').toString('hex'), '0102'])
+    expect([...contents.keys()][0]).toMatch(/^part-0-/)
+
+    await request({ type: 'accounts:upsert', payload: mocks.account })
+    expect(mocks.indexer.resumeAccount).toHaveBeenCalledWith('account-1')
+    await request({ type: 'accounts:disconnect', payload: { accountId: 'account-1', mode: 'archive' } })
+    expect(mocks.indexer.cancelAccount).not.toHaveBeenCalled()
+    await request({ type: 'accounts:disconnect', payload: { accountId: 'account-1', mode: 'delete' } })
+    expect(mocks.indexer.cancelAccount).toHaveBeenCalledWith('account-1')
+    expect(mocks.indexer.cancelAccount.mock.invocationCallOrder[0]).toBeLessThan(mocks.db.disconnectAccount.mock.invocationCallOrder.at(-1)!)
+    mocks.fs.existsSync.mockReset()
+    mocks.fs.existsSync.mockReturnValue(false)
+  })
+
   it('shuts down cleanly', async () => {
+    // Touch the import service so shutdown has a running service to halt.
+    await request({ type: 'import:list' })
     await expect(request({ type: 'shutdown' })).resolves.toMatchObject({ result: undefined })
+    expect(localMocks.service.halt).toHaveBeenCalled()
+    expect(mocks.indexer.stop).toHaveBeenCalled()
+    expect(mocks.extractor.close).toHaveBeenCalled()
     expect(mocks.db.close).toHaveBeenCalledOnce()
     await expect(request({ type: 'accounts:list' })).resolves.toMatchObject({ error: { message: 'Database is not initialized' } })
   })

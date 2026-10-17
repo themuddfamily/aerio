@@ -85,6 +85,31 @@ describe('ProductivityStore', () => {
     store.close()
   })
 
+  it('persists provider contact groups and local distribution lists', () => {
+    const store = new ProductivityStore(':memory:')
+    const group = { id: 'account:group', remoteId: 'contactGroups/abc', accountId: 'account', provider: 'gmail' as const, name: 'Team', system: false, readOnly: false }
+    store.replaceAccount('account', 'gmail', { ...data, contactGroups: [group] })
+    expect(store.snapshot().contactGroups).toEqual([group])
+    expect(store.accountData('account').contactGroups).toEqual([group])
+    store.upsertContactGroup({ ...group, name: 'Renamed' })
+    expect(store.snapshot().contactGroups).toEqual([{ ...group, name: 'Renamed' }])
+    store.deleteContactGroup(group.id)
+    expect(store.snapshot()).not.toHaveProperty('contactGroups')
+    store.replaceAccount('account', 'gmail', { ...data, contactGroups: [group] })
+    store.removeAccount('account')
+    expect(store.snapshot()).not.toHaveProperty('contactGroups')
+
+    const list = { id: 'list-1', name: 'Book club', source: 'local' as const, members: [{ email: 'guest@example.test' }] }
+    store.saveLocal({ tasks: [], notes: [], contacts: [], contactLists: [list] })
+    expect(store.localSnapshot().contactLists).toEqual([list])
+    // Older snapshots and backups without the field leave saved lists in place.
+    store.saveLocal({ tasks: [], notes: [], contacts: [] })
+    expect(store.localSnapshot().contactLists).toEqual([list])
+    store.saveLocal({ tasks: [], notes: [], contacts: [], contactLists: [] })
+    expect(store.localSnapshot()).toEqual({ tasks: [], notes: [], contacts: [] })
+    store.close()
+  })
+
   it('rolls transactions back if account replacement or local persistence fails', () => {
     for (const operation of ['replace', 'local'] as const) {
       const store = new ProductivityStore(':memory:')

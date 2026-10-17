@@ -12,7 +12,7 @@ interface Props {
 
 const emptyStatus: MailCredentialStatus = { configured: false }
 
-const providerPresentation: Record<MailProviderId, { action: string; detail: string }> = {
+const providerPresentation: Record<MailProviderPreset['id'], { action: string; detail: string }> = {
   gmail: { action: 'Continue with Google', detail: 'Gmail, Calendar and Contacts' },
   microsoft: { action: 'Continue with Microsoft', detail: 'Outlook.com, Hotmail and Microsoft 365' },
   icloud: { action: 'Continue with iCloud', detail: 'Use an Apple app-specific password' },

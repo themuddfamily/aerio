@@ -63,7 +63,7 @@ async function fixture(platform: string, arch = 'x64') {
   await put(`${resources}/app-update.yml`, 'provider: github\nowner: themuddfamily\nrepo: aerio\n')
   for (const file of ['icon.png', 'trayTemplate.png', 'trayTemplate@2x.png']) await put(`${resources}/build/${file}`, 'fixture resource')
   await put('source/package.json', JSON.stringify({ name: packageJson.name, version: packageJson.version, main: packageJson.main }))
-  for (const file of ['dist/index.html', 'dist-electron/main/main.js', 'dist-electron/main/mail-worker.js', 'dist-electron/preload/preload.cjs']) await put(`source/${file}`, 'fixture application')
+  for (const file of ['dist/index.html', 'dist-electron/main/main.js', 'dist-electron/main/mail-worker.js', 'dist-electron/main/attachment-extract-worker.js', 'dist-electron/preload/preload.cjs']) await put(`source/${file}`, 'fixture application')
   const archive = join(directory, resources, 'app.asar')
   await asar.createPackage(join(directory, 'source'), archive)
   const manifest = platform === 'mac' ? 'latest-mac.yml' : `latest-linux${arch === 'x64' ? '' : `-${arch}`}.yml`

@@ -61,6 +61,7 @@ describe('preload bridge', () => {
     await api().productivity.saveLocal({ notes: [] })
     await api().productivity.exportLocalData()
     await api().productivity.importLocalData()
+    await api().productivity.availability({ calendarId: 'calendar-1', attendees: ['a@example.com'], start: '2026-10-20T00:00:00Z', end: '2026-10-21T00:00:00Z' })
     await api().window.minimize()
     await api().window.maximize()
     await api().window.close()
@@ -74,6 +75,7 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('app-lock:lock')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('app-lock:unlock', 'long passphrase')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('productivity:sync', 'account-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('productivity:availability', { calendarId: 'calendar-1', attendees: ['a@example.com'], start: '2026-10-20T00:00:00Z', end: '2026-10-21T00:00:00Z' })
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('productivity:contact-create', 'account-1', { id: 'contact-1', name: 'Ada' })
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('productivity:contact-update', { id: 'contact-1', name: 'Ada' })
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('productivity:contact-delete', 'contact-1')
@@ -172,6 +174,14 @@ describe('preload bridge', () => {
     await mail.rules.save({ name: 'Rule' })
     await mail.rules.delete('rule-1')
     await mail.rules.run('rule-1')
+    await mail.serverRules!.capabilities('account-1')
+    await mail.serverRules!.list('account-1')
+    await mail.serverRules!.upload('rule-1')
+    await mail.serverRules!.delete('account-1', 'filter-1')
+    await mail.serverRules!.setEnabled('account-1', 'filter-1', false)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:server-rules:upload', 'rule-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:server-rules:delete', 'account-1', 'filter-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:server-rules:set-enabled', 'account-1', 'filter-1', false)
     await mail.savedSearches.list()
     await mail.savedSearches.save({ name: 'Invoices', query: 'invoice', folder: 'all', filters: {} })
     await mail.savedSearches.delete('search-1')
@@ -186,6 +196,24 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:save', expect.objectContaining({ name: 'Triage' }))
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:delete', 'quick-1')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:run', 'quick-1', [{ accountId: 'account-1', threadIds: ['thread-1'] }])
+    const imports = mail.imports!
+    await imports.ensureLocalFolders()
+    await imports.choose('folder')
+    await imports.start({ paths: ['C:\\mail'], duplicates: 'review', mboxVariant: 'mboxrd' })
+    await imports.list()
+    await imports.pause('job-1')
+    await imports.resume('job-1')
+    await imports.cancel('job-1')
+    await imports.dismiss('job-1')
+    await imports.items('job-1')
+    await imports.resolve('job-1', ['0:0'], 'discard')
+    await imports.transfer({ sourceAccountId: 'account-1', threadIds: ['thread-1'], destinationLabelId: 'folder:local-1', mode: 'copy' })
+    for (const channel of ['mail:local:ensure', 'mail:import:list']) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:import:choose', 'folder')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:import:start', expect.objectContaining({ paths: ['C:\\mail'] }))
+    for (const action of ['pause', 'resume', 'cancel', 'dismiss', 'items']) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(`mail:import:${action}`, 'job-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:import:resolve', 'job-1', ['0:0'], 'discard')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:local:transfer', expect.objectContaining({ mode: 'copy' }))
     await mail.templates.list('welcome')
     await mail.templates.save({ kind: 'snippet', name: 'Hi', html: 'Hi' })
     await mail.templates.delete('template-1')
@@ -215,7 +243,7 @@ describe('preload bridge', () => {
     for (const expected of [
       'gmail:credentials:status', 'mail:credentials:microsoft-configure', 'mail:providers:presets',
       'mail:accounts:connect-imap', 'mail:accounts:imap-update', 'mail:threads:list', 'mail:folders:unread-counts', 'mail:accounts:unread-counts', 'mail:message:source',
-      'mail:drafts:schedule', 'mail:rules:run', 'mail:sync:rebuild', 'mail:attachment:save', 'mail:diagnostics:export',
+      'mail:drafts:schedule', 'mail:rules:run', 'mail:server-rules:capabilities', 'mail:server-rules:list', 'mail:sync:rebuild', 'mail:attachment:save', 'mail:diagnostics:export',
       'mail:templates:list', 'mail:templates:save', 'mail:templates:delete', 'mail:templates:use', 'mail:templates:export', 'mail:templates:import',
       'mail:identities:list', 'mail:identities:save', 'mail:identities:delete', 'mail:identities:refresh', 'mail:signatures:list', 'mail:signatures:save', 'mail:signatures:delete'
     ]) expect(channels).toContain(expected)
@@ -249,6 +277,31 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:get', 'account-1')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:update', 'account-1', settings)
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:disable', 'account-1')
+  })
+
+  it('exposes cloud attachments with exact IPC channels and a removable progress listener', async () => {
+    const cloud = api().mail.cloudAttachments
+    const share = { audience: 'anyone', role: 'view' }
+    const calls: Array<[string, unknown[], () => Promise<unknown>]> = [
+      ['mail:cloud:status', ['account-1'], () => cloud.status('account-1')],
+      ['mail:cloud:connect', ['account-1'], () => cloud.connect('account-1')],
+      ['mail:cloud:upload', ['upload-1', 'account-1', 'C:\\file.pdf', share], () => cloud.upload('upload-1', 'account-1', 'C:\\file.pdf', share)],
+      ['mail:cloud:cancel', ['upload-1'], () => cloud.cancel('upload-1')],
+      ['mail:cloud:pending', ['account-1'], () => cloud.pending('account-1')],
+      ['mail:cloud:resume', ['upload-1'], () => cloud.resume('upload-1')],
+      ['mail:cloud:discard', ['upload-1'], () => cloud.discard('upload-1')],
+      ['mail:cloud:verify', ['account-1', ['https://x.test']], () => cloud.verify('account-1', ['https://x.test'])]
+    ]
+    for (const [channel, args, call] of calls) {
+      await call()
+      expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel, ...args)
+    }
+    const progress = vi.fn()
+    const stop = cloud.onProgress(progress)
+    mocks.listeners.get('mail:cloud:progress')?.[0]({}, { uploadId: 'upload-1', sentBytes: 1 })
+    expect(progress).toHaveBeenCalledWith({ uploadId: 'upload-1', sentBytes: 1 })
+    stop()
+    expect(mocks.ipcRenderer.removeListener).toHaveBeenCalledWith('mail:cloud:progress', expect.any(Function))
   })
 
   it('reports initial and changing network connectivity', async () => {

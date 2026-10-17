@@ -7,6 +7,7 @@ Open **Folders & labels** from the Mail sidebar footer, or right-click a sidebar
 | Gmail | `users.labels` create/patch/delete | By name (`Parent/Child`); renaming a parent also renames its children | Fixed Gmail palette only | The label is removed; its messages stay in All Mail |
 | Microsoft 365 / Outlook | Graph `mailFolders` create, `childFolders`, PATCH, `move`, DELETE | `parentMailFolderId` | Not supported | Graph DELETE (Outlook keeps the folder in Deleted Items) |
 | IMAP providers | `CREATE` / `RENAME` / `DELETE` via ImapFlow | Server hierarchy delimiter and namespace prefix | Not supported | Messages are first moved to the special-use Trash, then the folder is deleted, but only if it is verified empty |
+| Local Folders | Local database only; works offline and nothing reaches a server | `parentId`, stable ids, `/` not allowed in names | Not supported | Messages move to Trash and the folder is removed (see [mail import and Local Folders](mail-import-local-folders.md)) |
 
 ## Safety rules
 

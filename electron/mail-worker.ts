@@ -32,12 +32,17 @@ import { MailFolderManager } from './mail/folder-management'
 import { sanitizeMessageHtmlWithReport } from './mail/message-security'
 import { buildNewMailNotification } from './mail/new-mail'
 import { messageIdFromMime } from './mail/reply-watches'
+import { mailRuleTriggersForLabels } from '../src/lib/mail-rules'
 import { parseMessageSource } from './mail/message-source'
 import { runMailQuickAction } from './mail/quick-actions'
+import { MailImportService } from './mail/mail-import'
+import { transferToLocalFolders } from './mail/local-folders'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createMime, createMimeBuffer } from './mail/mime-builder'
 import { describeSenderRejection, parseGmailSendAs, parseMicrosoftProxyAddresses, resolveDraftSender } from './mail/sender-identity'
 import { createReceiptService } from './mail/receipts'
+import { AttachmentContentIndexer } from './mail/attachment-text-indexer'
+import { AttachmentExtractRunner } from './mail/attachment-extract-runner'
 import { supportedSendOptions } from '../src/lib/mail-send-options'
 import {
   BACKGROUND_MAIL_POLL_INTERVAL_MS,
@@ -49,6 +54,8 @@ const port = parentPort!
 if (!port) throw new Error('The Aerio mail worker must run in a worker thread')
 
 let database: MailDatabase | undefined
+let attachmentIndexer: AttachmentContentIndexer | undefined
+let attachmentExtractor: AttachmentExtractRunner | undefined
 let contentPath = ''
 let online = true
 let operationTimer: NodeJS.Timeout | undefined
@@ -138,6 +145,38 @@ function folderManager() {
   return folderManagerInstance
 }
 
+// Imports run here, off the UI and main threads; messages go through the
+// same parse-and-store path as synchronized mail.
+let importServiceInstance: MailImportService | undefined
+let importChangedAt = 0
+function importService() {
+  if (!database) throw new Error('Database is not initialized')
+  if (!importServiceInstance) {
+    const db = database
+    importServiceInstance = new MailImportService({
+      database: db,
+      store: (accountId, message) => parseRawAndStore(accountId, message),
+      freeBytes: () => {
+        const stats = statfsSync(contentPath)
+        return Number(stats.bavail) * Number(stats.bsize)
+      },
+      emit: (job) => emit({ type: 'import-progress', payload: job }),
+      changed: (accountId, final) => {
+        // Imports touch thousands of messages; refresh open views at most every 2 s.
+        if (!final && Date.now() - importChangedAt < 2_000) return
+        importChangedAt = Date.now()
+        emit({ type: 'mail-changed', payload: { accountId } })
+      }
+    })
+  }
+  return importServiceInstance
+}
+
+function localStoreDeps() {
+  if (!database) throw new Error('Database is not initialized')
+  return { database, store: (accountId: string, message: Parameters<typeof parseRawAndStore>[1]) => parseRawAndStore(accountId, message) }
+}
+
 function addressList(value?: Address[]) {
   if (!value) return []
   return value.flatMap((address) => {
@@ -224,6 +263,7 @@ async function parseRawAndStore(accountId: string, message: {
     remoteUid: message.remoteUid
   }
   database.upsertMessage(record)
+  if (record.attachments.length) attachmentIndexer?.schedule()
   return { record, isNew }
 }
 
@@ -605,6 +645,8 @@ async function syncMicrosoftAccount(accountId: string) {
 
 async function syncAccount(accountId: string, forceFull = false) {
   if (!database || syncing.has(accountId) || syncScheduled.has(accountId)) return
+  // Local Folders have no server to synchronize with.
+  if (database.getAccount(accountId)?.provider === 'local') return
   syncScheduled.add(accountId)
   while (syncing.size >= 2) {
     await sleep(500)
@@ -685,6 +727,10 @@ async function runOperations() {
     emit({ type: 'mail-changed', payload: { accountId: snooze.accountId, threadIds: [snooze.threadId] } })
   }
   processReplyWatches()
+  // Local Folders changes are already applied and need no network.
+  for (const done of database.localMail?.completeDueOperations() ?? []) {
+    emit({ type: 'operation', payload: { id: done.id, accountId: done.accountId, kind: done.kind as MailActionKind, status: 'succeeded' } })
+  }
   if (!online) return
   for (const row of database.dueOperations()) {
     const id = String(row.id)
@@ -692,6 +738,11 @@ async function runOperations() {
     const kind = String(row.kind) as MailActionKind
     const threadIds = JSON.parse(String(row.thread_ids_json)) as string[]
     const labelId = row.label_id ? String(row.label_id) : undefined
+    if (database.getAccount(accountId)?.provider === 'local') {
+      database.updateOperation(id, 'succeeded')
+      emit({ type: 'operation', payload: { id, accountId, kind, status: 'succeeded' } })
+      continue
+    }
     database.updateOperation(id, 'running')
     emit({ type: 'operation', payload: { id, accountId, kind, status: 'running' } })
     try {
@@ -1005,6 +1056,40 @@ async function extractAttachment(accountId: string, messageId: string, attachmen
   writeFileSync(targetPath, content)
 }
 
+/** Every attachment's bytes for one stored message, keyed like the database rows. */
+async function messageAttachmentContents(accountId: string, messageId: string) {
+  const rawPath = database?.getMessageRaw(accountId, messageId)
+  if (!rawPath || !existsSync(rawPath)) return undefined
+  const parsed = await PostalMime.parse(readFileSync(rawPath))
+  return new Map(parsed.attachments.map((attachment, index) => [attachmentId(attachment, index), typeof attachment.content === 'string'
+    ? Buffer.from(attachment.content, attachment.encoding === 'base64' ? 'base64' : 'utf8')
+    : Buffer.from(attachment.content instanceof ArrayBuffer ? new Uint8Array(attachment.content) : attachment.content)]))
+}
+
+// Attachment text is extracted in a separate worker thread with its own heap
+// limit and timeout (see mail/attachment-extract-runner.ts), then indexed for search.
+function startAttachmentIndexing(store: MailDatabase['attachmentText']) {
+  const workerPath = join(import.meta.dirname, 'attachment-extract-worker.js')
+  if (!existsSync(workerPath)) return
+  const extractor = new AttachmentExtractRunner({ workerPath })
+  attachmentExtractor = extractor
+  attachmentIndexer = new AttachmentContentIndexer({
+    store,
+    readAttachments: messageAttachmentContents,
+    extract: (input, signal) => extractor.extract(input, signal)
+  })
+  attachmentIndexer.schedule()
+}
+
+async function stopAttachmentIndexing() {
+  const indexer = attachmentIndexer
+  const extractor = attachmentExtractor
+  attachmentIndexer = undefined
+  attachmentExtractor = undefined
+  await indexer?.stop()
+  await extractor?.close()
+}
+
 async function stageMessageAttachments(draftId: string, accountId: string, messageId: string) {
   if (!database) throw new Error('Database is not initialized')
   const rawPath = database.getMessageRaw(accountId, messageId)
@@ -1042,16 +1127,26 @@ function applyRuleActions(rule: MailRule, threadIds: string[]) {
   return operations
 }
 
-function applyRulesToIncoming(records: ParsedMailMessage[]) {
+// Automatic rules for newly synced mail: incoming rules for received mail,
+// outgoing rules for new Sent copies. The ledger claims each message per
+// trigger before any action runs, so a resync, a folder move that gives an
+// IMAP copy a new id, or an overlapping history pass never processes it twice.
+// Rule actions only change labels/folders and never create messages, so a
+// rule can't trigger itself or another rule.
+function applyRulesToNewMail(records: ParsedMailMessage[]) {
   if (!database) return new Set<string>()
   const silenced = new Set<string>()
   const matches = new Map<string, { rule: MailRule; threadIds: Set<string> }>()
   for (const record of records) {
-    for (const rule of database.matchingRulesForMessage(record)) {
-      const entry = matches.get(rule.id) ?? { rule, threadIds: new Set<string>() }
-      entry.threadIds.add(record.threadId)
-      matches.set(rule.id, entry)
-      if (rule.actions.some((action) => ['archive', 'move', 'trash'].includes(action.action))) silenced.add(record.id)
+    for (const trigger of mailRuleTriggersForLabels(record.labelIds)) {
+      if (!database.hasLocalRules(record.accountId, trigger)) continue
+      if (!database.ruleLedger.claim(record.accountId, record, trigger)) continue
+      for (const rule of database.matchingRulesForMessage(record, trigger)) {
+        const entry = matches.get(rule.id) ?? { rule, threadIds: new Set<string>() }
+        entry.threadIds.add(record.threadId)
+        matches.set(rule.id, entry)
+        if (trigger === 'incoming' && rule.actions.some((action) => ['archive', 'move', 'trash'].includes(action.action))) silenced.add(record.id)
+      }
     }
   }
   for (const { rule, threadIds } of matches.values()) {
@@ -1063,7 +1158,7 @@ function applyRulesToIncoming(records: ParsedMailMessage[]) {
 }
 
 function emitNewMail(accountId: string, records: ParsedMailMessage[]) {
-  const silenced = applyRulesToIncoming(records)
+  const silenced = applyRulesToNewMail(records)
   if (records.length) processReplyWatches(true)
   if (!database?.getAccount(accountId)?.notifications) return
   const payload = buildNewMailNotification(accountId, records.filter((record) => !silenced.has(record.id)))
@@ -1073,8 +1168,14 @@ function emitNewMail(accountId: string, records: ParsedMailMessage[]) {
 async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'initialize') {
     contentPath = command.payload.contentPath
+    await stopAttachmentIndexing()
     database = new MailDatabase(command.payload.databasePath, contentPath)
+    startAttachmentIndexing(database.attachmentText)
     folderManagerInstance = undefined
+    importServiceInstance = undefined
+    // Imports that were queued (not running) when Aerio closed continue now;
+    // interrupted ones wait for the user to resume them.
+    if (database.localMail?.nextQueuedJob()) void importService().pump()
     // Re-read provider folders for any folder change cut off by a restart.
     for (const accountId of database.recoverInterruptedFolderOperations()) void folderManager().refresh(accountId).catch(() => undefined)
     clearInterval(operationTimer)
@@ -1087,12 +1188,14 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'accounts:list') return database.listAccounts()
   if (command.type === 'accounts:upsert') {
     database.upsertAccount(command.payload)
+    attachmentIndexer?.resumeAccount(command.payload.id)
     emit({ type: 'accounts-changed', payload: database.listAccounts() })
     return command.payload
   }
   if (command.type === 'accounts:verify') {
     const account = database.getAccount(command.payload.accountId)
     if (!account) throw new Error('Account not found')
+    if (account.provider === 'local') return
     if (account.provider === 'gmail') await clientFor(account.id).getProfile()
     else if (account.provider === 'microsoft') await microsoftClientFor(account.id).listFolders()
     else await (await imapClientFor(account.id)).verify()
@@ -1100,6 +1203,8 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   }
   if (command.type === 'accounts:disconnect') {
     paused.add(command.payload.accountId)
+    // Stop any extraction in flight for this account; its results could no longer be saved anyway.
+    if (command.payload.mode === 'delete') attachmentIndexer?.cancelAccount(command.payload.accountId)
     database.disconnectAccount(command.payload.accountId, command.payload.mode)
     emit({ type: 'accounts-changed', payload: database.listAccounts() })
     return
@@ -1126,6 +1231,12 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'mail:copy') {
     const { accountId, threadId, messageId, destination } = command.payload
     const account = database.getAccount(accountId)
+    if (account?.provider === 'local') {
+      // A copy between Local Folders duplicates the stored message locally.
+      await transferToLocalFolders(localStoreDeps(), { sourceAccountId: accountId, threadIds: [threadId], messageIds: [messageId], destinationLabelId: destination, mode: 'copy' })
+      emit({ type: 'mail-changed', payload: { accountId } })
+      return
+    }
     if (!account || account.archived) throw new Error('Connect this account before copying messages')
     if (!online) throw new Error('Copying messages requires an internet connection')
     const target = database.listLabels([accountId]).find((label) => label.id === destination)
@@ -1145,6 +1256,12 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     if (!paused.has(accountId)) void syncAccount(accountId)
     emit({ type: 'mail-changed', payload: { accountId } })
     return
+  }
+  // Imported and copied mail never sends read receipts: it was read elsewhere,
+  // often long ago, and Local Folders cannot send mail.
+  if ((command.type === 'receipts:inspect' || command.type === 'receipts:respond') && database.getAccount(command.payload.accountId)?.provider === 'local') {
+    if (command.type === 'receipts:respond') throw new Error('Messages in Local Folders do not send read receipts')
+    return {}
   }
   if (command.type === 'receipts:inspect') {
     return receiptService().inspect(command.payload.accountId, command.payload.messageId, command.payload.policy)
@@ -1298,7 +1415,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'sync:start') {
     const accounts = command.payload.accountId
       ? database.listAccounts().filter((item) => item.id === command.payload.accountId)
-      : database.listAccounts().filter((item) => !item.archived)
+      : database.listAccounts().filter((item) => !item.archived && item.provider !== 'local')
     for (const account of accounts) void syncAccount(account.id)
     return
   }
@@ -1322,6 +1439,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'sync:rebuild') {
     const account = database.getAccount(command.payload.accountId)
     if (!account) throw new Error('Account not found')
+    if (account.provider === 'local') throw new Error('Local Folders are stored only on this computer, so there is nothing to download again')
     if (!account.syncEnabled) throw new Error('Enable synchronization for this account before rebuilding it')
     paused.delete(account.id)
     database.resetForFullSync(account.id)
@@ -1334,6 +1452,33 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     await extractAttachment(command.payload.accountId, command.payload.messageId, command.payload.attachmentId, command.payload.targetPath)
     return
   }
+  if (command.type === 'local:ensure') {
+    const existed = Boolean(database.localMail.account())
+    const account = database.localMail.ensureAccount()
+    if (!existed) emit({ type: 'accounts-changed', payload: database.listAccounts() })
+    return account
+  }
+  if (command.type === 'local:transfer') {
+    const result = await transferToLocalFolders(localStoreDeps(), command.payload)
+    if (result.trashOperation) emit({ type: 'operation', payload: result.trashOperation })
+    emit({ type: 'mail-changed', payload: { accountId: command.payload.sourceAccountId, threadIds: command.payload.threadIds } })
+    const local = database.localMail.account()
+    if (local) emit({ type: 'mail-changed', payload: { accountId: local.id } })
+    return result
+  }
+  if (command.type === 'import:start') {
+    const hadLocal = Boolean(database.localMail.account())
+    const job = importService().start(command.payload)
+    if (!hadLocal) emit({ type: 'accounts-changed', payload: database.listAccounts() })
+    return job
+  }
+  if (command.type === 'import:list') return importService().list()
+  if (command.type === 'import:pause') return importService().pause(command.payload.id)
+  if (command.type === 'import:resume') return importService().resume(command.payload.id)
+  if (command.type === 'import:cancel') return importService().cancel(command.payload.id)
+  if (command.type === 'import:dismiss') return importService().dismiss(command.payload.id)
+  if (command.type === 'import:items') return importService().items(command.payload.jobId)
+  if (command.type === 'import:resolve') return importService().resolve(command.payload.jobId, command.payload.keys, command.payload.decision)
   if (command.type === 'network') {
     online = command.payload.online
     emit({ type: 'connectivity', payload: { online } })
@@ -1351,9 +1496,14 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'shutdown') {
     clearInterval(operationTimer)
     clearInterval(pollTimer)
+    // A running import stops at its next message; it resumes from its saved
+    // cursor after the user chooses Resume on the next start.
+    importServiceInstance?.halt()
+    await stopAttachmentIndexing()
     database.close()
     database = undefined
     folderManagerInstance = undefined
+    importServiceInstance = undefined
     return
   }
 }

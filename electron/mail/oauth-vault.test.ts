@@ -432,6 +432,22 @@ describe('OAuthVault access tokens', () => {
     expect(vault.grantedScopes('blank', 'microsoft')).toBeUndefined()
   })
 
+  it('reports mailbox-settings scopes for server rules and never refreshes them into legacy grants', async () => {
+    const vault = new OAuthVault(vaultPath, { microsoftClientId })
+    privateData(vault).googleTokens = { granted: { scope: 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.settings.basic' }, legacy: { scope: 'https://www.googleapis.com/auth/gmail.modify' } }
+    privateData(vault).microsoftTokens = { granted: { accessToken: 'a', refreshToken: 'r', expiresAt: 0, scope: 'Mail.ReadWrite MailboxSettings.ReadWrite' }, legacy: { accessToken: 'a', refreshToken: 'r', expiresAt: 0 } }
+    expect(vault.mailSettingsAccess('granted', 'gmail', 'server-rules')).toMatchObject({ granted: true, missing: [] })
+    expect(vault.mailSettingsAccess('legacy', 'gmail', 'server-rules')).toMatchObject({ granted: false, missing: ['https://www.googleapis.com/auth/gmail.settings.basic'], message: expect.stringContaining('Reconnect') })
+    expect(vault.mailSettingsAccess('granted', 'microsoft', 'automatic-replies')).toMatchObject({ granted: true })
+    // An untracked legacy grant is tried; a provider 403 then asks for a reconnect.
+    expect(vault.mailSettingsAccess('legacy', 'microsoft', 'server-rules')).toMatchObject({ granted: true, known: false })
+    expect(vault.mailSettingsAccess('imap-1', 'imap', 'server-rules')).toMatchObject({ supported: false })
+    const fetch = vi.fn().mockResolvedValue(jsonResponse({ access_token: 'renewed', expires_in: 120 }))
+    vi.stubGlobal('fetch', fetch)
+    await vault.microsoftAccessToken('legacy')
+    expect(((fetch.mock.calls[0][1] as RequestInit).body as URLSearchParams).get('scope')).not.toContain('MailboxSettings')
+  })
+
   it('returns a sufficiently fresh Microsoft token from memory', async () => {
     const vault = new OAuthVault(vaultPath, { microsoftClientId })
     privateCache(vault).set('microsoft-1', { token: 'cached', expiresAt: Date.now() + 120_000 })
@@ -611,6 +627,40 @@ describe('OAuthVault interactive authorization', () => {
     expect(opened.searchParams.get('scope')).toContain('MailboxSettings.ReadWrite')
     expect(privateData(vault).microsoftTokens[account.accountId]).toMatchObject({ accessToken: 'access', refreshToken: 'refresh' })
     expect(mocks.servers[0].close).toHaveBeenCalledOnce()
+  })
+
+  it('asks for opt-in cloud storage scopes only when requested and keeps them on later reconnects', async () => {
+    const microsoftAccount = { accountId: 'b5e7f0d4b3e0a2c1f9e8d7c6', email: 'person@example.test' }
+    const authorizeMicrosoft = async (vault: OAuthVault, options?: { additionalScopes?: string[] }) => {
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(jsonResponse({ access_token: 'access', refresh_token: 'refresh', scope: 'Mail.ReadWrite Files.ReadWrite' }))
+        .mockResolvedValueOnce(jsonResponse({ id: 'profile-id', mail: 'person@example.test' })))
+      await vault.authorizeMicrosoft(undefined, options).catch(() => undefined)
+      return new URL(String(mocks.shell.openExternal.mock.calls.at(-1)?.[0])).searchParams.get('scope')!.split(' ')
+    }
+    const vault = new OAuthVault(vaultPath, { microsoftClientId })
+    expect(await authorizeMicrosoft(vault)).not.toContain('Files.ReadWrite')
+    expect(await authorizeMicrosoft(vault, { additionalScopes: ['Files.ReadWrite'] })).toContain('Files.ReadWrite')
+    privateData(vault).microsoftTokens[microsoftAccount.accountId] = { accessToken: 'a', refreshToken: 'r', expiresAt: 0, scope: 'https://graph.microsoft.com/Files.ReadWrite Mail.ReadWrite' }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error_description: 'stop' }, false)))
+    await vault.authorizeMicrosoft(microsoftAccount).catch(() => undefined)
+    expect(new URL(String(mocks.shell.openExternal.mock.calls.at(-1)?.[0])).searchParams.get('scope')).toContain('Files.ReadWrite')
+
+    const google = new OAuthVault(vaultPath, { googleConfig })
+    const scopesFor = async (expected?: { accountId: string; email: string }, options?: { additionalScopes?: string[] }) => {
+      const client = googleClient({ getToken: vi.fn().mockRejectedValue(new Error('stop')) })
+      client.generateAuthUrl.mockImplementation((value: Record<string, unknown>) => `https://accounts.google.com/o/oauth2/v2/auth?state=${String(value.state)}`)
+      mocks.oauthQueue.push(client, googleClient({ getToken: vi.fn().mockRejectedValue(new Error('stop')) }))
+      await google.authorize(expected, options).catch(() => undefined)
+      return client.generateAuthUrl.mock.calls[0][0] as { scope: string[]; include_granted_scopes?: boolean }
+    }
+    const plain = await scopesFor({ accountId: 'other', email: 'x@example.test' })
+    expect(plain.scope).not.toContain('https://www.googleapis.com/auth/drive.file')
+    expect(plain.include_granted_scopes).toBeUndefined()
+    privateData(google).googleTokens.drive = { refresh_token: 'r', scope: 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/drive.file' }
+    expect((await scopesFor({ accountId: 'drive', email: 'x@example.test' })).scope).toContain('https://www.googleapis.com/auth/drive.file')
+    expect(await scopesFor({ accountId: 'other', email: 'x@example.test' }, { additionalScopes: ['https://www.googleapis.com/auth/drive.file'] }))
+      .toMatchObject({ scope: expect.arrayContaining(['https://www.googleapis.com/auth/gmail.modify', 'https://www.googleapis.com/auth/drive.file']), include_granted_scopes: true })
   })
 
   it('requires Microsoft configuration and renewable token credentials', async () => {

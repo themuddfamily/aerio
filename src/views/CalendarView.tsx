@@ -4,14 +4,21 @@ import {
 } from 'lucide-react'
 import {
   addDays, addMonths, addWeeks, eachDayOfInterval, endOfMonth, endOfWeek, format,
-  isSameDay, isSameMonth, parseISO, startOfMonth, startOfWeek, subDays, subMonths, subWeeks
+  isSameDay, isSameMonth, parseISO, startOfDay, startOfMonth, startOfWeek, subDays, subMonths, subWeeks
 } from 'date-fns'
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { uid } from '../lib/domain'
-import type { AppState, CalendarEvent } from '../types'
+import type { AppState, CalendarEvent, RecurrenceEditScope } from '../types'
 import Modal from '../components/Modal'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { preserveEventInterchangeFields } from '../lib/interchange-plan'
+import { SchedulingAssistantButton } from '../components/SchedulingAssistant'
+import {
+  addDaysIso, eventRecurrenceRule, expandCalendarEvents, formatRecurrenceRule, isAllDayEvent,
+  isRecurringEvent, parseRecurrenceRule, simpleRecurrenceFor
+} from '../lib/recurrence'
+import { isIanaTimeZone, localTimeZone, resolveTimeZoneName, timeZoneOffsetLabel, timeZoneOptions, wallTimeInZone, wallTimeToUtc } from '../lib/time-zones'
+import { RecurrenceScopeChooser, RepeatField } from './RecurrenceFields'
 
 type CalendarMode = 'month' | 'week' | 'day' | 'agenda'
 
@@ -22,14 +29,57 @@ interface CalendarViewProps {
   writableCalendarIds: ReadonlySet<string>
   onSync(): Promise<void> | void
   onEnableEditing(): Promise<void> | void
-  onSaveProviderEvent(event: CalendarEvent, exists: boolean): Promise<void>
-  onDeleteProviderEvent(event: CalendarEvent): Promise<void>
+  onSaveProviderEvent(event: CalendarEvent, exists: boolean, scope?: RecurrenceEditScope): Promise<void>
+  onDeleteProviderEvent(event: CalendarEvent, scope?: RecurrenceEditScope): Promise<void>
   syncing?: boolean
   sourceMessage?: string
   interchangePanel?: React.ReactNode
 }
 
-const eventOnDay = (event: CalendarEvent, date: Date) => isSameDay(parseISO(event.start), date)
+// Agenda and "Up next" expand repeating events this many days ahead.
+const AGENDA_DAYS = 90
+const SECONDARY_ZONE_KEY = 'aerio.calendar.secondaryTimeZone'
+
+const byStart = (a: CalendarEvent, b: CalendarEvent) => Date.parse(a.start) - Date.parse(b.start) || a.title.localeCompare(b.title)
+
+const eventOnDay = (event: CalendarEvent, date: Date) => {
+  if (!isAllDayEvent(event)) return isSameDay(parseISO(event.start), date)
+  const day = format(date, 'yyyy-MM-dd')
+  const start = event.start.slice(0, 10)
+  return start === day || (start <= day && day < event.end.slice(0, 10))
+}
+
+const timeLabel = (event: CalendarEvent) => isAllDayEvent(event) ? 'All day' : format(parseISO(event.start), 'HH:mm')
+const timeRangeLabel = (event: CalendarEvent) => isAllDayEvent(event) ? 'All day' : `${format(parseISO(event.start), 'HH:mm')} – ${format(parseISO(event.end), 'HH:mm')}`
+
+// Synced provider events arrive already expanded (Google singleEvents, Microsoft calendarView), so only
+// local and imported events are expanded here.
+const expandsLocally = (event: CalendarEvent) => !('remoteId' in event)
+
+// Occurrences generated here, local overrides, and synced provider instances all belong to a series.
+export const isSeriesMember = (event: CalendarEvent) => Boolean(event.occurrenceOf || event.seriesId || (event.recurrenceId && event.sourceUid))
+
+function zoneTime(ms: number, zone: string) {
+  try {
+    return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: zone }).format(ms)
+  } catch {
+    return ''
+  }
+}
+
+// Several hundred zone options are rendered once per list rather than on every keystroke in the editor.
+const ZoneOptions = memo(function ZoneOptions({ zones }: { zones: string[] }) {
+  return <>{zones.map((zone) => <option key={zone} value={zone}>{zone.replace(/_/g, ' ')}</option>)}</>
+})
+
+function readSecondaryZone() {
+  try {
+    const value = localStorage.getItem(SECONDARY_ZONE_KEY) ?? ''
+    return isIanaTimeZone(value) ? value : ''
+  } catch {
+    return ''
+  }
+}
 
 export default function CalendarView({
   state, query, onToast, writableCalendarIds,
@@ -51,11 +101,33 @@ export default function CalendarView({
     setActiveCalendars((current) => new Set([...current, ...state.accounts.map((account) => account.id)]))
   }, [calendarIds])
 
+  const [secondaryZone, setSecondaryZoneState] = useState(readSecondaryZone)
+  const secondaryZones = useMemo(() => timeZoneOptions(secondaryZone || undefined), [secondaryZone])
+  const setSecondaryZone = (zone: string) => {
+    setSecondaryZoneState(zone)
+    try {
+      if (zone) localStorage.setItem(SECONDARY_ZONE_KEY, zone)
+      else localStorage.removeItem(SECONDARY_ZONE_KEY)
+    } catch {
+      // The choice still applies for this session.
+    }
+  }
+
   const filtered = useMemo(() => state.events
     .filter((event) => activeCalendars.has(event.calendarId))
     .filter((event) => !query || `${event.title} ${event.location ?? ''} ${event.description ?? ''}`.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => a.start.localeCompare(b.start)),
   [activeCalendars, query, state.events])
+
+  const today = startOfDay(new Date()).getTime()
+  const range = useMemo(() => {
+    if (mode === 'month') return { start: startOfWeek(startOfMonth(cursor), { weekStartsOn: 1 }), end: startOfDay(addDays(endOfWeek(endOfMonth(cursor), { weekStartsOn: 1 }), 1)) }
+    if (mode === 'week') return { start: startOfWeek(cursor, { weekStartsOn: 1 }), end: startOfDay(addDays(endOfWeek(cursor, { weekStartsOn: 1 }), 1)) }
+    if (mode === 'day') return { start: startOfDay(cursor), end: startOfDay(addDays(cursor, 1)) }
+    return { start: subDays(today, 1), end: addDays(today, AGENDA_DAYS) }
+  }, [mode, cursor, today])
+  const visible = useMemo(() => expandCalendarEvents(filtered, range.start, range.end, { expand: expandsLocally }).sort(byStart), [filtered, range])
+  const upcoming = useMemo(() => expandCalendarEvents(filtered, subDays(today, 1), addDays(today, AGENDA_DAYS), { expand: expandsLocally }).sort(byStart), [filtered, today])
 
   const move = (direction: -1 | 1) => {
     if (mode === 'month') setCursor((date) => direction > 0 ? addMonths(date, 1) : subMonths(date, 1))
@@ -81,10 +153,35 @@ export default function CalendarView({
     onToast('Event deleted')
   }
 
+  const deleteSeriesEvent = async (event: CalendarEvent, scope: RecurrenceEditScope) => {
+    await onDeleteProviderEvent(event, scope)
+    onToast(scope === 'occurrence' ? 'Event deleted' : scope === 'following' ? 'This and following events deleted' : 'Series deleted')
+  }
+
   const duplicateEvent = async (event: CalendarEvent) => {
-    const duplicate = { ...event, id: uid('event'), title: `${event.title} (copy)` }
+    // A copy of one occurrence is a single event at that time; a copy of a series keeps its rule.
+    const { occurrenceOf: _occurrenceOf, seriesId: _seriesId, originalStart: _originalStart, recurrenceId: _recurrenceId, sourceUid: _sourceUid, ...rest } = event
+    const duplicate: CalendarEvent = { ...rest, id: uid('event'), title: `${event.title} (copy)` }
+    if (isSeriesMember(event)) {
+      duplicate.recurrence = 'none'
+      delete duplicate.recurrenceRule
+      delete duplicate.recurrenceExceptions
+    }
     await onSaveProviderEvent(duplicate, false)
     onToast('Event duplicated')
+  }
+
+  const deleteItems = (event: CalendarEvent): ContextMenuItem[] => {
+    const run = (action: () => Promise<void>) => async () => {
+      try { await action() }
+      catch (error) { onToast(error instanceof Error ? error.message : 'Event could not be deleted') }
+    }
+    if (!isSeriesMember(event)) return [{ label: 'Delete event', icon: Trash2, separatorBefore: true, danger: true, action: run(() => deleteEvent(event)) }]
+    return [
+      { label: 'Delete this event', icon: Trash2, separatorBefore: true, danger: true, action: run(() => deleteSeriesEvent(event, 'occurrence')) },
+      { label: 'Delete this and following events', icon: Trash2, danger: true, action: run(() => deleteSeriesEvent(event, 'following')) },
+      { label: 'Delete all events in the series', icon: Trash2, danger: true, action: run(() => deleteSeriesEvent(event, 'series')) }
+    ]
   }
 
   const eventMenu = (event: CalendarEvent): ContextMenuItem[] => [
@@ -94,10 +191,7 @@ export default function CalendarView({
       catch (error) { onToast(error instanceof Error ? error.message : 'Event could not be duplicated') }
     } }] satisfies ContextMenuItem[] : []),
     { label: 'Copy event details', icon: Copy, action: () => copyText(`${event.title}\n${format(parseISO(event.start), 'PPpp')} – ${format(parseISO(event.end), 'PPpp')}${event.location ? `\n${event.location}` : ''}`) },
-    ...(canEditEvent(event) ? [{ label: 'Delete event', icon: Trash2, separatorBefore: true, danger: true, action: async () => {
-      try { await deleteEvent(event) }
-      catch (error) { onToast(error instanceof Error ? error.message : 'Event could not be deleted') }
-    } }] satisfies ContextMenuItem[] : [])
+    ...(canEditEvent(event) ? deleteItems(event) : [])
   ]
 
   const showEventMenu = (contextEvent: React.MouseEvent, event: CalendarEvent) => showContextMenu(contextEvent, eventMenu(event), event.title)
@@ -169,12 +263,20 @@ export default function CalendarView({
         {interchangePanel}
         <div className="up-next-card">
           <span className="eyebrow">Up next</span>
-          {filtered.filter((event) => new Date(event.end) >= new Date()).slice(0, 2).map((event) => (
+          {upcoming.filter((event) => new Date(event.end) >= new Date()).slice(0, 2).map((event) => (
             <button key={event.id} onClick={() => setEditing(event)} onContextMenu={(contextEvent) => showEventMenu(contextEvent, event)}>
               <span className="event-dot" style={{ background: event.color }} />
-              <span><strong>{event.title}</strong><small>{format(parseISO(event.start), 'EEE · HH:mm')}</small></span>
+              <span><strong>{event.title}</strong><small>{format(parseISO(event.start), 'EEE')} · {timeLabel(event)}</small></span>
             </button>
           ))}
+        </div>
+        <div className="sidebar-group calendar-zone-group">
+          <label className="sidebar-label" htmlFor="calendar-secondary-zone">Secondary time zone</label>
+          <select id="calendar-secondary-zone" value={secondaryZone} onChange={(event) => setSecondaryZone(event.target.value)}>
+            <option value="">None</option>
+            <ZoneOptions zones={secondaryZones} />
+          </select>
+          <small className="provider-source-note">Shown beside the hours in week and day views. Your zone: {localTimeZone().replace(/_/g, ' ')}</small>
         </div>
       </aside>
       <section className="module-panel calendar-panel">
@@ -191,10 +293,10 @@ export default function CalendarView({
             ))}
           </div>
         </header>
-        {mode === 'month' && <MonthGrid cursor={cursor} events={filtered} onSelectEvent={setEditing} onCreate={createOn} onContextEvent={showEventMenu} onContextDate={showDateMenu} />}
-        {mode === 'week' && <TimeGrid dates={eachDayOfInterval({ start: startOfWeek(cursor, { weekStartsOn: 1 }), end: endOfWeek(cursor, { weekStartsOn: 1 }) })} events={filtered} onSelectEvent={setEditing} onCreate={createOn} onContextEvent={showEventMenu} onContextDate={showDateMenu} />}
-        {mode === 'day' && <TimeGrid dates={[cursor]} events={filtered} onSelectEvent={setEditing} onCreate={createOn} onContextEvent={showEventMenu} onContextDate={showDateMenu} />}
-        {mode === 'agenda' && <Agenda events={filtered} onSelect={setEditing} onContextEvent={showEventMenu} />}
+        {mode === 'month' && <MonthGrid cursor={cursor} events={visible} onSelectEvent={setEditing} onCreate={createOn} onContextEvent={showEventMenu} onContextDate={showDateMenu} />}
+        {mode === 'week' && <TimeGrid dates={eachDayOfInterval({ start: startOfWeek(cursor, { weekStartsOn: 1 }), end: endOfWeek(cursor, { weekStartsOn: 1 }) })} events={visible} secondaryZone={secondaryZone} onSelectEvent={setEditing} onCreate={createOn} onContextEvent={showEventMenu} onContextDate={showDateMenu} />}
+        {mode === 'day' && <TimeGrid dates={[cursor]} events={visible} secondaryZone={secondaryZone} onSelectEvent={setEditing} onCreate={createOn} onContextEvent={showEventMenu} onContextDate={showDateMenu} />}
+        {mode === 'agenda' && <Agenda events={visible} onSelect={setEditing} onContextEvent={showEventMenu} />}
       </section>
       {editing && (
         <EventEditor
@@ -205,19 +307,21 @@ export default function CalendarView({
           readOnly={editing === 'new' ? false : !canEditEvent(editing)}
           writableCalendarIds={writableCalendarIds}
           onClose={() => setEditing(null)}
-          onSave={async (event) => {
-            const exists = state.events.some((item) => item.id === event.id)
+          onSave={async (event, scope) => {
+            const exists = Boolean(scope) || state.events.some((item) => item.id === event.id)
             try {
-              await onSaveProviderEvent(event, exists)
-              onToast(exists ? 'Event updated' : 'Event created')
+              if (scope) await onSaveProviderEvent(event, exists, scope)
+              else await onSaveProviderEvent(event, exists)
+              onToast(scope === 'following' ? 'This and following events updated' : scope === 'series' ? 'Series updated' : exists ? 'Event updated' : 'Event created')
               setEditing(null)
             } catch (error) {
               onToast(error instanceof Error ? error.message : 'Event could not be saved')
             }
           }}
-          onDelete={editing === 'new' || !canEditEvent(editing) ? undefined : async () => {
+          onDelete={editing === 'new' || !canEditEvent(editing) ? undefined : async (scope) => {
             try {
-              await deleteEvent(editing)
+              if (scope) await deleteSeriesEvent(editing, scope)
+              else await deleteEvent(editing)
               setEditing(null)
             } catch (error) {
               onToast(error instanceof Error ? error.message : 'Event could not be deleted')
@@ -258,7 +362,7 @@ function MonthGrid({ cursor, events, onSelectEvent, onCreate, onContextEvent, on
             <button className={`day-number ${isSameDay(day, new Date()) ? 'today' : ''}`} onClick={() => onCreate(day)} onContextMenu={(event) => onContextDate(event, day)}>{format(day, 'd')}</button>
             {dayEvents.slice(0, 3).map((event) => (
               <button className="calendar-event" key={event.id} style={{ '--event-color': event.color } as React.CSSProperties} onClick={() => onSelectEvent(event)} onDoubleClick={(doubleClickEvent) => doubleClickEvent.stopPropagation()} onContextMenu={(contextEvent) => onContextEvent(contextEvent, event)}>
-                <span>{format(parseISO(event.start), 'HH:mm')}</span>{event.title}
+                <span>{timeLabel(event)}</span>{isSeriesMember(event) || isRecurringEvent(event) ? <Repeat2 className="repeat-icon" size={9} aria-label="Repeats" /> : null}{event.title}
               </button>
             ))}
             {dayEvents.length > 3 && <span className="more-events">+{dayEvents.length - 3} more</span>}
@@ -269,23 +373,43 @@ function MonthGrid({ cursor, events, onSelectEvent, onCreate, onContextEvent, on
   )
 }
 
-function TimeGrid({ dates, events, onSelectEvent, onCreate, onContextEvent, onContextDate }: { dates: Date[]; events: CalendarEvent[]; onSelectEvent(event: CalendarEvent): void; onCreate(date: Date): void; onContextEvent(contextEvent: React.MouseEvent, event: CalendarEvent): void; onContextDate(event: React.MouseEvent, date: Date): void }) {
+function TimeGrid({ dates, events, secondaryZone, onSelectEvent, onCreate, onContextEvent, onContextDate }: { dates: Date[]; events: CalendarEvent[]; secondaryZone?: string; onSelectEvent(event: CalendarEvent): void; onCreate(date: Date): void; onContextEvent(contextEvent: React.MouseEvent, event: CalendarEvent): void; onContextDate(event: React.MouseEvent, date: Date): void }) {
   const hours = Array.from({ length: 13 }, (_, index) => index + 7)
+  const allDay = events.filter(isAllDayEvent)
+  const timed = events.filter((event) => !isAllDayEvent(event))
+  const localZone = localTimeZone()
+  const hourMs = (hour: number) => {
+    const value = new Date(dates[0])
+    value.setHours(hour, 0, 0, 0)
+    return value.getTime()
+  }
+  const showAllDay = allDay.some((event) => dates.some((date) => eventOnDay(event, date)))
+  const eventButton = (event: CalendarEvent, className: string, label: string) => (
+    <button key={event.id} className={className} style={{ '--event-color': event.color } as React.CSSProperties} onClick={() => onSelectEvent(event)} onDoubleClick={(doubleClickEvent) => doubleClickEvent.stopPropagation()} onContextMenu={(contextEvent) => onContextEvent(contextEvent, event)}><strong>{event.title}</strong><span>{label}</span></button>
+  )
   return (
     <div className="time-grid-wrap">
       <div className="time-grid-header">
-        <span />
+        <span className="time-zone-labels">{secondaryZone && <><small title={localZone}>{timeZoneOffsetLabel(hourMs(12), localZone)}</small><small title={secondaryZone}>{timeZoneOffsetLabel(hourMs(12), secondaryZone)}</small></>}</span>
         {dates.map((date) => <div key={date.toISOString()} className={isSameDay(date, new Date()) ? 'today' : ''}><strong>{format(date, 'EEE')}</strong><span>{format(date, 'd')}</span></div>)}
       </div>
       <div className="time-grid">
+        {showAllDay && (
+          <div className="time-row all-day-row">
+            <time>All day</time>
+            {dates.map((date) => <div className="time-slot" key={date.toISOString()} onContextMenu={(event) => onContextDate(event, date)}>
+              {allDay.filter((event) => eventOnDay(event, date)).map((event) => eventButton(event, 'time-event all-day-event', 'All day'))}
+            </div>)}
+          </div>
+        )}
         {hours.map((hour) => (
           <div className="time-row" key={hour}>
-            <time>{`${hour.toString().padStart(2, '0')}:00`}</time>
+            <time>{`${hour.toString().padStart(2, '0')}:00`}{secondaryZone && <small className="secondary-time">{zoneTime(hourMs(hour), secondaryZone)}</small>}</time>
             {dates.map((date) => {
-              const slotEvents = events.filter((event) => eventOnDay(event, date) && parseISO(event.start).getHours() === hour)
+              const slotEvents = timed.filter((event) => eventOnDay(event, date) && parseISO(event.start).getHours() === hour)
               const slotDate = new Date(date); slotDate.setHours(hour)
               return <div className="time-slot" key={date.toISOString()} onDoubleClick={() => onCreate(slotDate)} onContextMenu={(event) => onContextDate(event, slotDate)}>
-                {slotEvents.map((event) => <button key={event.id} className="time-event" style={{ '--event-color': event.color } as React.CSSProperties} onClick={() => onSelectEvent(event)} onDoubleClick={(doubleClickEvent) => doubleClickEvent.stopPropagation()} onContextMenu={(contextEvent) => onContextEvent(contextEvent, event)}><strong>{event.title}</strong><span>{format(parseISO(event.start), 'HH:mm')} – {format(parseISO(event.end), 'HH:mm')}</span></button>)}
+                {slotEvents.map((event) => eventButton(event, 'time-event', timeRangeLabel(event)))}
               </div>
             })}
           </div>
@@ -303,7 +427,7 @@ function Agenda({ events, onSelect, onContextEvent }: { events: CalendarEvent[];
         <button className="agenda-row" key={event.id} onClick={() => onSelect(event)} onContextMenu={(contextEvent) => onContextEvent(contextEvent, event)}>
           <div className="agenda-date"><strong>{format(parseISO(event.start), 'd')}</strong><span>{format(parseISO(event.start), 'MMM')}</span></div>
           <span className="event-line" style={{ background: event.color }} />
-          <div><h3>{event.title}</h3><p><Clock3 size={14} /> {format(parseISO(event.start), 'HH:mm')} – {format(parseISO(event.end), 'HH:mm')} {event.location && <><MapPin size={14} /> {event.location}</>}</p></div>
+          <div><h3>{event.title}</h3><p><Clock3 size={14} /> {timeRangeLabel(event)} {event.location && <><MapPin size={14} /> {event.location}</>}</p></div>
           <span className="spacer" />
           <span className="attendee-count"><Users size={15} /> {event.attendees.length}</span>
         </button>
@@ -312,55 +436,150 @@ function Agenda({ events, onSelect, onContextEvent }: { events: CalendarEvent[];
   )
 }
 
-function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, writableCalendarIds, onClose, onSave, onDelete }: { event?: CalendarEvent; date: Date; defaultCalendarId?: string; state: AppState; readOnly?: boolean; writableCalendarIds: ReadonlySet<string>; onClose(): void; onSave(event: CalendarEvent): Promise<void> | void; onDelete?(): Promise<void> | void }) {
-  const initialStart = event ? parseISO(event.start) : new Date(date)
-  if (!event) initialStart.setHours(initialStart.getHours() || 10, 0, 0, 0)
-  const initialEnd = event ? parseISO(event.end) : new Date(initialStart.getTime() + 60 * 60 * 1000)
+const pad2 = (value: number) => String(value).padStart(2, '0')
+
+function wallInput(ms: number, zone: string) {
+  const wall = wallTimeInZone(ms, zone)
+  return `${wall.year}-${pad2(wall.month)}-${pad2(wall.day)}T${pad2(wall.hour)}:${pad2(wall.minute)}`
+}
+
+function parseWallInput(value: string, zone: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value)
+  if (!match) return Number.NaN
+  return wallTimeToUtc({ year: Number(match[1]), month: Number(match[2]), day: Number(match[3]), hour: Number(match[4]), minute: Number(match[5]), second: 0 }, zone)
+}
+
+const DATE_INPUT = /^\d{4}-\d{2}-\d{2}$/
+
+function initialTimes(event: CalendarEvent | undefined, date: Date, zone: string) {
+  if (event && isAllDayEvent(event)) {
+    const start = event.start.slice(0, 10)
+    const lastDay = addDaysIso(event.end.slice(0, 10), -1)
+    return { start, end: lastDay < start ? start : lastDay }
+  }
+  if (event) return { start: wallInput(Date.parse(event.start), zone), end: wallInput(Date.parse(event.end), zone) }
+  const start = new Date(date)
+  start.setHours(start.getHours() || 10, 0, 0, 0)
+  return { start: format(start, "yyyy-MM-dd'T'HH:mm"), end: format(new Date(start.getTime() + 60 * 60 * 1000), "yyyy-MM-dd'T'HH:mm") }
+}
+
+function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, writableCalendarIds, onClose, onSave, onDelete }: { event?: CalendarEvent; date: Date; defaultCalendarId?: string; state: AppState; readOnly?: boolean; writableCalendarIds: ReadonlySet<string>; onClose(): void; onSave(event: CalendarEvent, scope?: RecurrenceEditScope): Promise<void> | void; onDelete?(scope?: RecurrenceEditScope): Promise<void> | void }) {
+  const localZone = localTimeZone()
+  const [zone, setZone] = useState(() => resolveTimeZoneName(event?.timeZone) ?? localZone)
+  const [allDay, setAllDay] = useState(() => Boolean(event && isAllDayEvent(event)))
+  const [times] = useState(() => initialTimes(event, date, resolveTimeZoneName(event?.timeZone) ?? localZone))
+  const [initialRule] = useState(() => {
+    const rule = event ? eventRecurrenceRule(event) : undefined
+    return rule ? formatRecurrenceRule(rule) : undefined
+  })
   const [title, setTitle] = useState(event?.title ?? '')
-  const [start, setStart] = useState(format(initialStart, "yyyy-MM-dd'T'HH:mm"))
-  const [end, setEnd] = useState(format(initialEnd, "yyyy-MM-dd'T'HH:mm"))
+  const [start, setStart] = useState(times.start)
+  const [end, setEnd] = useState(times.end)
   const [calendarId, setCalendarId] = useState(event?.calendarId ?? defaultCalendarId ?? state.accounts[0].id)
   const [location, setLocation] = useState(event?.location ?? '')
   const [description, setDescription] = useState(event?.description ?? '')
   const [attendees, setAttendees] = useState(event?.attendees.join(', ') ?? '')
-  const [recurrence, setRecurrence] = useState<CalendarEvent['recurrence']>(event?.recurrence ?? 'none')
+  const [rule, setRule] = useState<string | undefined>(initialRule)
   const [reminderMinutes, setReminderMinutes] = useState(event?.reminderMinutes ?? 15)
   const [busy, setBusy] = useState<'save' | 'delete'>()
+  const [pendingScope, setPendingScope] = useState<'save' | 'delete'>()
   const color = state.accounts.find((account) => account.id === calendarId)?.color ?? '#6659e8'
-  const startTime = Date.parse(start)
-  const endTime = Date.parse(end)
-  const canSave = Boolean(title.trim()) && Number.isFinite(startTime) && Number.isFinite(endTime) && endTime > startTime
+  const providerInstance = Boolean(event && 'remoteId' in event && event.seriesId)
+  const seriesMember = Boolean(event && isSeriesMember(event))
+  const providerName = state.accounts.find((account) => account.id === event?.calendarId)?.provider === 'microsoft' ? 'Microsoft' : 'Google'
+  const startTime = allDay ? (DATE_INPUT.test(start) ? Date.parse(start) : Number.NaN) : parseWallInput(start, zone)
+  const endTime = allDay ? (DATE_INPUT.test(end) ? Date.parse(end) : Number.NaN) : parseWallInput(end, zone)
+  const canSave = Boolean(title.trim()) && Number.isFinite(startTime) && Number.isFinite(endTime) && (allDay ? endTime >= startTime : endTime > startTime)
+  const zones = useMemo(() => timeZoneOptions(zone, localZone), [zone, localZone])
+
+  const toggleAllDay = (checked: boolean) => {
+    setAllDay(checked)
+    if (checked) {
+      const startDay = start.slice(0, 10)
+      setStart(startDay)
+      setEnd(end.slice(0, 10) < startDay ? startDay : end.slice(0, 10))
+    } else {
+      setStart(`${start.slice(0, 10)}T09:00`)
+      setEnd(`${end.slice(0, 10)}T10:00`)
+    }
+  }
+
+  const build = (): CalendarEvent => {
+    const base: CalendarEvent = {
+      id: event?.id ?? uid('event'), calendarId, title: title.trim(),
+      start: allDay ? start : new Date(startTime).toISOString(),
+      end: allDay ? addDaysIso(end, 1) : new Date(endTime).toISOString(),
+      location, description, color,
+      attendees: attendees.split(',').map((value) => value.trim()).filter(Boolean), reminderMinutes,
+      allDay: allDay || undefined,
+      timeZone: allDay ? undefined : zone,
+      recurrence: 'none'
+    }
+    // Synced occurrences never carry a rule; the provider keeps the series pattern.
+    if (providerInstance) return preserveEventInterchangeFields(event, base)
+    const parsed = parseRecurrenceRule(rule)
+    return preserveEventInterchangeFields(event, { ...base, recurrence: simpleRecurrenceFor(parsed), recurrenceRule: parsed ? rule : undefined })
+  }
+  const save = (scope?: RecurrenceEditScope) => {
+    setBusy('save')
+    void Promise.resolve(scope ? onSave(build(), scope) : onSave(build())).finally(() => setBusy(undefined))
+  }
+  const remove = (scope?: RecurrenceEditScope) => {
+    if (!onDelete) return
+    setBusy('delete')
+    void Promise.resolve(scope ? onDelete(scope) : onDelete()).finally(() => setBusy(undefined))
+  }
+  const localHint = !allDay && zone !== localZone && Number.isFinite(startTime) && Number.isFinite(endTime)
+    ? `${format(startTime, 'EEE d MMM, HH:mm')} – ${format(endTime, isSameDay(startTime, endTime) ? 'HH:mm' : 'EEE d MMM, HH:mm')} in your time zone (${localZone.replace(/_/g, ' ')})`
+    : undefined
 
   return (
     <Modal title={readOnly ? 'Event details' : event ? 'Edit event' : 'New event'} subtitle={readOnly ? 'Synchronized from your provider.' : 'Keep time intentional.'} closeEnabled={!busy} onClose={onClose}>
       <div className="form-stack">
         <label className="field-label">Event title<input autoFocus value={title} disabled={readOnly} onChange={(e) => setTitle(e.target.value)} placeholder="Add a title" /></label>
         <div className="form-grid-2">
-          <label className="field-label">Starts<input type="datetime-local" value={start} disabled={readOnly} onChange={(e) => setStart(e.target.value)} /></label>
-          <label className="field-label">Ends<input type="datetime-local" value={end} disabled={readOnly} onChange={(e) => setEnd(e.target.value)} /></label>
+          <label className="field-label">Starts<input type={allDay ? 'date' : 'datetime-local'} value={start} disabled={readOnly} onChange={(e) => setStart(e.target.value)} /></label>
+          <label className="field-label">Ends<input type={allDay ? 'date' : 'datetime-local'} value={end} disabled={readOnly} onChange={(e) => setEnd(e.target.value)} /></label>
         </div>
         <div className="form-grid-2">
-          <label className="field-label">Calendar<select value={calendarId} disabled={readOnly || Boolean(event)} onChange={(e) => setCalendarId(e.target.value)}>{state.accounts.filter((account) => writableCalendarIds.has(account.id) || account.id === event?.calendarId).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
-          <label className="field-label">Repeat<select value={recurrence} disabled={readOnly} onChange={(e) => setRecurrence(e.target.value as CalendarEvent['recurrence'])}><option value="none">Doesn’t repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>
+          <label className="check-label event-all-day"><input type="checkbox" checked={allDay} disabled={readOnly} onChange={(e) => toggleAllDay(e.target.checked)} /> All day</label>
+          {!allDay && <label className="field-label">Time zone<select value={zone} disabled={readOnly} onChange={(e) => setZone(e.target.value)}><ZoneOptions zones={zones} /></select></label>}
         </div>
-        <label className="field-label">Reminder<select value={reminderMinutes} disabled={readOnly} onChange={(e) => setReminderMinutes(Number(e.target.value))}><option value={0}>At event time</option><option value={5}>5 minutes before</option><option value={10}>10 minutes before</option><option value={15}>15 minutes before</option><option value={30}>30 minutes before</option><option value={60}>1 hour before</option><option value={1440}>1 day before</option></select></label>
+        {localHint && <p className="recurrence-note event-zone-hint">{localHint}</p>}
+        <div className="form-grid-2">
+          <label className="field-label">Calendar<select value={calendarId} disabled={readOnly || Boolean(event)} onChange={(e) => setCalendarId(e.target.value)}>{state.accounts.filter((account) => writableCalendarIds.has(account.id) || account.id === event?.calendarId).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
+          <label className="field-label">Reminder<select value={reminderMinutes} disabled={readOnly} onChange={(e) => setReminderMinutes(Number(e.target.value))}><option value={0}>At event time</option><option value={5}>5 minutes before</option><option value={10}>10 minutes before</option><option value={15}>15 minutes before</option><option value={30}>30 minutes before</option><option value={60}>1 hour before</option><option value={1440}>1 day before</option></select></label>
+        </div>
+        <RepeatField
+          value={rule}
+          startDate={start.slice(0, 10)}
+          disabled={readOnly}
+          managedNote={providerInstance ? `Part of a repeating series managed by ${providerName}. Changes can apply to this event, this and following events, or all events; the repeat pattern itself is kept.` : undefined}
+          onChange={setRule}
+        />
         <label className="field-label"><MapPin size={14} /> Location<input value={location} disabled={readOnly} onChange={(e) => setLocation(e.target.value)} placeholder="Add a place or video link" /></label>
         <label className="field-label"><Users size={14} /> Attendees<input value={attendees} disabled={readOnly} onChange={(e) => setAttendees(e.target.value)} placeholder="Separate email addresses with commas" /></label>
+        {!readOnly && !allDay && <SchedulingAssistantButton calendarId={calendarId} organizerEmail={state.accounts.find((account) => account.id === calendarId)?.email} start={start} end={end} inputTimeZone={zone} attendees={attendees}
+          onApply={(selection) => { setStart(selection.start); setEnd(selection.end); setAttendees(selection.attendees.join(', ')) }} />}
         <label className="field-label">Notes<textarea value={description} disabled={readOnly} onChange={(e) => setDescription(e.target.value)} /></label>
-        <footer className="modal-footer">
-          {onDelete && <button className="button danger-subtle" disabled={Boolean(busy)} onClick={() => { setBusy('delete'); void Promise.resolve(onDelete()).finally(() => setBusy(undefined)) }}>{busy === 'delete' ? 'Deleting…' : 'Delete'}</button>}
-          <span className="spacer" />
-          <button className="button ghost" disabled={Boolean(busy)} onClick={onClose}>{readOnly ? 'Close' : 'Cancel'}</button>
-          {!readOnly && <button className="button primary" disabled={!canSave || Boolean(busy)} title={!canSave ? 'Add a title and choose an end time after the start' : undefined} onClick={() => {
-            const next = preserveEventInterchangeFields(event, {
-            id: event?.id ?? uid('event'), calendarId, title: title.trim(),
-            start: new Date(start).toISOString(), end: new Date(end).toISOString(), location, description, color,
-            attendees: attendees.split(',').map((value) => value.trim()).filter(Boolean), reminderMinutes, recurrence
-            })
-            setBusy('save')
-            void Promise.resolve(onSave(next)).finally(() => setBusy(undefined))
-          }}><CalendarDays size={16} /> {busy === 'save' ? 'Saving…' : 'Save event'}</button>}
-        </footer>
+        {pendingScope ? (
+          <footer className="modal-footer">
+            <RecurrenceScopeChooser
+              action={pendingScope}
+              allowOccurrence={pendingScope === 'delete' || rule === initialRule}
+              busy={Boolean(busy)}
+              onChoose={(scope) => pendingScope === 'save' ? save(scope) : remove(scope)}
+              onCancel={() => setPendingScope(undefined)}
+            />
+          </footer>
+        ) : (
+          <footer className="modal-footer">
+            {onDelete && <button className="button danger-subtle" disabled={Boolean(busy)} onClick={() => seriesMember ? setPendingScope('delete') : remove()}>{busy === 'delete' ? 'Deleting…' : 'Delete'}</button>}
+            <span className="spacer" />
+            <button className="button ghost" disabled={Boolean(busy)} onClick={onClose}>{readOnly ? 'Close' : 'Cancel'}</button>
+            {!readOnly && <button className="button primary" disabled={!canSave || Boolean(busy)} title={!canSave ? 'Add a title and choose an end time after the start' : undefined} onClick={() => seriesMember ? setPendingScope('save') : save()}><CalendarDays size={16} /> {busy === 'save' ? 'Saving…' : 'Save event'}</button>}
+          </footer>
+        )}
       </div>
     </Modal>
   )
