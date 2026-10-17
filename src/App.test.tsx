@@ -19,6 +19,7 @@ vi.mock('./views/ConnectedMailView', () => ({ default: (props: any) => <section 
 vi.mock('./views/CalendarView', () => ({ default: (props: any) => <section aria-label="Calendar mock"><span>Calendar query:{props.query}</span><span>{props.sourceMessage}</span><span>Writable:{[...props.writableCalendarIds].join(',')}</span><button onClick={() => void props.onSync()}>Sync calendar</button><button onClick={() => void props.onEnableEditing()}>Enable editing</button><button onClick={() => void props.onSaveProviderEvent(providerEvent, false)}>Create provider event</button><button onClick={() => void props.onSaveProviderEvent(providerEvent, true)}>Update provider event</button><button onClick={() => void props.onDeleteProviderEvent(providerEvent)}>Delete provider event</button></section> }))
 vi.mock('./views/ContactsView', () => ({ default: (props: any) => <section aria-label="Contacts mock"><span>Contacts query:{props.query}</span><button onClick={() => props.onCompose('ada@example.test')}>Email Ada</button><button onClick={() => void props.onSync()}>Sync contacts</button><button onClick={() => void props.onEnableEditing()}>Enable contact editing</button><button onClick={() => void props.onSaveProviderContact(props.providerAccounts[0].id, productivity.contacts[0], false)}>Create provider contact</button><button onClick={() => void props.onSaveProviderContact(props.providerAccounts[0].id, productivity.contacts[0], true)}>Update provider contact</button><button onClick={() => void props.onDeleteProviderContact(productivity.contacts[0].id)}>Delete provider contact</button></section> }))
 vi.mock('./views/TasksView', () => ({ default: (props: any) => <section aria-label="Tasks mock"><button onClick={() => props.onChange({ ...props.state, tasks: [...props.state.tasks, { id: 'task-2', listId: 'inbox', title: 'Added task', priority: 'normal', completed: false, subtasks: [] }] })}>Change tasks</button><button onClick={() => props.onToast('Task toast')}>Task toast</button></section> }))
+vi.mock('./views/ChatView', () => ({ default: (props: any) => <section aria-label="Chat mock"><span>Rooms:{props.snapshot.rooms.length}</span><span>Open:{props.openRequest?.roomId ?? ''}</span></section> }))
 vi.mock('./views/NotesView', () => ({ default: (props: any) => <section aria-label="Notes mock"><button onClick={() => props.onChange({ ...props.state, notes: [...props.state.notes, { id: 'note-2', folder: 'Notes', title: 'Added note', content: '', tags: [], pinned: false, archived: false, updatedAt: '2026-08-08T10:00:00Z' }] })}>Change notes</button></section> }))
 
 const preferences: AppPreferences = {
@@ -104,6 +105,52 @@ beforeEach(() => {
   api.productivity.saveLocal.mockResolvedValue(undefined)
   Object.defineProperty(window, 'aerio', { configurable: true, value: api })
   Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })) })
+})
+
+const chatGate = (enabled: boolean) => ({ enabled, preview: false, checks: [], sdkVersion: 'matrix-js-sdk 43.0.0', message: enabled ? 'Chat is available.' : 'Chat stays unavailable until these checks pass: two-device interoperability.' })
+const chatRoom = { accountId: 'chat-1', roomId: '!r:example.org', name: 'Team', encrypted: true, membership: 'join', isDirect: false, unread: 3, muted: false, previews: false }
+function chatApi(enabled: boolean) {
+  let listener: ((event: any) => void) | undefined
+  return {
+    api: {
+      snapshot: vi.fn(async () => ({ gate: chatGate(enabled), accounts: [], rooms: enabled ? [chatRoom, { ...chatRoom, roomId: '!i:example.org', membership: 'invite', unread: 0 }] : [], verifications: [] })),
+      onEvent: vi.fn((callback: (event: any) => void) => { listener = callback; return vi.fn() })
+    },
+    emit: (event: any) => listener?.(event)
+  }
+}
+
+describe('App Chat gate', () => {
+  it('keeps Chat out of navigation while the gate is closed', async () => {
+    const chat = chatApi(false)
+    Object.defineProperty(window, 'aerio', { configurable: true, value: { ...api, chat: chat.api } })
+    renderApp(); await screen.findByRole('region', { name: 'Mail mock' })
+    await waitFor(() => expect(chat.api.snapshot).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: 'Chat' })).not.toBeInTheDocument()
+    fireEvent.keyDown(window, { key: '6', ctrlKey: true })
+    expect(screen.queryByRole('region', { name: 'Chat mock' })).not.toBeInTheDocument()
+  })
+
+  it('shows Chat with unread and invitation counts once the gate passes, and routes notification clicks', async () => {
+    const chat = chatApi(true)
+    Object.defineProperty(window, 'aerio', { configurable: true, value: { ...api, chat: chat.api } })
+    const user = userEvent.setup()
+    renderApp(); await screen.findByRole('region', { name: 'Mail mock' })
+    const button = await screen.findByRole('button', { name: 'Chat' })
+    expect(button).toHaveTextContent('4')
+    await user.click(button)
+    expect(screen.getByRole('region', { name: 'Chat mock' })).toHaveTextContent('Rooms:2')
+    await user.click(screen.getByRole('button', { name: 'Mail' }))
+    fireEvent.keyDown(window, { key: '6', ctrlKey: true })
+    expect(screen.getByRole('region', { name: 'Chat mock' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Mail' }))
+    act(() => chat.emit({ type: 'open-room', accountId: 'chat-1', roomId: '!r:example.org' }))
+    expect(screen.getByRole('region', { name: 'Chat mock' })).toHaveTextContent('Open:!r:example.org')
+    // A pushed snapshot that closes the gate removes the module again.
+    act(() => chat.emit({ type: 'snapshot', snapshot: { gate: chatGate(false), accounts: [], rooms: [], verifications: [] } }))
+    expect(screen.queryByRole('button', { name: 'Chat' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Chat mock' })).not.toBeInTheDocument()
+  })
 })
 
 describe('App', () => {
