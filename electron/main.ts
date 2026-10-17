@@ -107,6 +107,7 @@ import { registerMailImport } from './mail/mail-import-ipc'
 import { registerMailArchiving } from './mail/mail-archive-ipc'
 import { NOTE_ATTACHMENT_LIMIT, normalizeRichNotes, noteImageAttachment, noteImageDataUrl, parseNoteImageUpload, validNoteRichFields } from './productivity/note-rich-body'
 import { registerMailInboxCategories } from './mail/inbox-categories-ipc'
+import { registerMailboxOwnerIpc } from './mail/mailbox-owner-ipc'
 import { validContactInterchangeFields, validContactLists, validEventInterchangeFields } from '../src/lib/interchange-validation'
 import { contactEditConflict } from '../src/lib/contact-fields'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
@@ -2425,7 +2426,18 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     productivity: requireProductivityStore,
     client: (accountId) => ewsClientFor(requireVault().exchangeCredential(accountId)),
     online: () => taskNetworkOnline && net.isOnline(),
-    diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
+    diagnostic: (record) => diagnostic({ ...record, component: 'provider' }),
+    // Calendars/contacts of attached shared mailboxes and subscribed public folders (E40).
+    sharedFolders: (accountId) => requireMailWorker().request({ type: 'owners:productivity-folders', payload: { accountId } })
+  })
+  registerMailboxOwnerIpc({
+    ipcMain,
+    worker: requireMailWorker,
+    isLocked: () => appLockStatus().locked,
+    productivityChanged: (accountId) => {
+      if (!exchangeService?.hasAccount(accountId)) return
+      void exchangeService.sync(accountId).catch(() => undefined).then(() => exchangeIpc?.broadcast()).catch(() => undefined)
+    }
   })
   exchangeIpc = registerExchangeAccounts({
     ipcMain,

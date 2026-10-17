@@ -108,6 +108,8 @@ const mocks = vi.hoisted(() => {
   method('operationAttempts', () => 0)
   method('rescheduleOperation')
   method('restoreOperationSnapshot')
+  // Shared mailboxes (E40): every conversation in these routing tests belongs to the account's own mailbox.
+  db.mailboxOwners = { ownersOfThreads: vi.fn(() => new Set(['primary'])), tagOperation: vi.fn(), list: vi.fn(() => []), folders: vi.fn(() => []), get: vi.fn() }
   db.identities = {
     draftSender: vi.fn(() => ({})), get: vi.fn(() => undefined), list: vi.fn(() => [{ id: 'account-1:primary' }]), save: vi.fn((_account: any, input: any) => ({ ...input, id: input.id ?? 'alias' })),
     delete: vi.fn(), listSignatures: vi.fn(() => []), saveSignature: vi.fn((input: any) => ({ ...input, id: 'signature' })), deleteSignature: vi.fn(),

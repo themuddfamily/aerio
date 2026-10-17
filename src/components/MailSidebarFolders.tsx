@@ -20,6 +20,7 @@ import {
   type FavoriteRow
 } from '../lib/mail-folder-preferences'
 import { mailFolderLeafName } from '../lib/mail-folders'
+import { ownerBadgeText } from '../lib/mailbox-owners'
 import type { ContextMenuItem } from './ContextMenu'
 import Modal from './Modal'
 
@@ -46,7 +47,8 @@ export function FolderGlyph({ icon, open, label, size = 15 }: { icon?: MailFolde
     const Icon = ICONS[icon]
     return <Icon size={size} />
   }
-  if (label && !label.id.startsWith('folder:')) return <Tag size={size} />
+  if (label?.owner?.root) return <Users size={size} />
+  if (label && !label.id.startsWith('folder:') && !label.owner) return <Tag size={size} />
   return open ? <FolderOpen size={size} /> : <Folder size={size} />
 }
 
@@ -268,6 +270,7 @@ export function MailFolderTreeSidebar({ accounts, labels, accountFilter, appeara
             >
               <FolderGlyph icon={look?.icon} open={selected} label={label} />
               <span style={color ? { color } : undefined}>{leafName}</span>
+              {label.owner && (label.owner.root || label.owner.access !== 'write' || label.owner.status === 'access-removed') && <span className={`mailbox-owner-badge access-${label.owner.status === 'access-removed' ? 'none' : label.owner.access}`} title={`${label.owner.displayName} <${label.owner.address}>`}>{ownerBadgeText(label.owner)}</span>}
               {favorites.has(key) && <Star size={12} className="mail-folder-favorite-mark" aria-hidden="true" />}
               {row.hidden && <EyeOff size={12} className="mail-folder-hidden-mark" aria-hidden="true" />}
             </button>

@@ -287,6 +287,8 @@ export interface AerioDesktopApi {
   meetingHosts?: import('./meeting-host-types').MeetingHostApi
   /** On-premises Exchange (EWS) accounts; optional so test doubles of the API stay valid. */
   exchange?: import('./exchange-types').ExchangeDesktopApi
+  /** Shared/delegated mailboxes, delegates, and public folders (E40). */
+  mailboxOwners?: import('./mailbox-owner-types').MailboxOwnersApi
   contactMerge?: import('./contact-merge-types').ContactMergeDesktopApi
   /** Matrix chat; the Chat module still appears only when its gate passes. */
   chat?: import('./chat-types').ChatDesktopApi

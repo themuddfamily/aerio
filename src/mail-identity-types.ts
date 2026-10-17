@@ -26,9 +26,16 @@ export interface MailSenderIdentity {
   newSignatureId?: string
   /** Signature inserted into replies and forwards. */
   replySignatureId?: string
+  /**
+   * Exchange/Microsoft 365 shared or delegated mailbox (E40): `send-as` sends with From = this
+   * mailbox; `send-on-behalf` sends with From = this mailbox and Sender = the account itself.
+   */
+  delegation?: MailSenderDelegation
   createdAt: string
   updatedAt: string
 }
+
+export type MailSenderDelegation = 'send-as' | 'send-on-behalf'
 
 export interface MailSenderIdentityInput {
   id?: string
@@ -41,6 +48,8 @@ export interface MailSenderIdentityInput {
   /** Empty string clears the assignment. */
   newSignatureId?: string
   replySignatureId?: string
+  /** Manual identities of Exchange and Microsoft 365 accounts only; null clears it. */
+  delegation?: MailSenderDelegation | null
 }
 
 export interface MailSignature {

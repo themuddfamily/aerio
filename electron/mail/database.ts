@@ -52,6 +52,7 @@ import { MailFolderPreferenceStore } from './folder-preferences'
 import { Pop3Store } from './pop3-store'
 import { MailArchiveStore } from './mail-archive-store'
 import { MailInboxCategoryStore } from './inbox-categories'
+import { MailboxOwnerStore } from './mailbox-owner-store'
 import { visibleInboxTab } from '../../src/lib/mail-categories'
 import type { MailBuiltInCategory } from '../../src/mail-category-types'
 
@@ -125,6 +126,7 @@ export class MailDatabase {
   readonly pop3: Pop3Store
   readonly archive: MailArchiveStore
   readonly inboxCategories: MailInboxCategoryStore
+  readonly mailboxOwners: MailboxOwnerStore
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -135,6 +137,7 @@ export class MailDatabase {
     this.db = new DatabaseSync(databasePath, { timeout: 5_000 })
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;')
     this.migrate()
+    this.mailboxOwners = new MailboxOwnerStore(this.db, this)
     this.identities = new MailIdentityStore(this.db)
     this.openPgp = new MailDraftOpenPgpStore(this.db)
     this.smime = new MailDraftSmimeStore(this.db)
@@ -570,8 +573,9 @@ export class MailDatabase {
 
   replaceLabels(accountId: string, labels: MailLabel[]) {
     this.transaction(() => {
-      const before = this.listLabels([accountId])
-      this.stmt('DELETE FROM gmail_labels WHERE account_id=?').run(accountId)
+      // Only the account's own labels; shared mailboxes and public folders keep theirs (E40).
+      const before = this.listLabels([accountId]).filter((label) => !label.owner && !label.id.startsWith('owner:'))
+      this.stmt(`DELETE FROM gmail_labels WHERE account_id=? AND owner_id='primary'`).run(accountId)
       const insert = this.stmt('INSERT INTO gmail_labels(account_id,id,name,type,color,parent_id) VALUES(?,?,?,?,?,?)')
       for (const label of labels) insert.run(accountId, label.id, label.name, label.type, label.color ?? null, label.parentId ?? null)
       // Favorites and folder appearance follow folders renamed in other clients.
@@ -583,14 +587,14 @@ export class MailDatabase {
     const rows = accountIds?.length
       ? this.db.prepare(`SELECT * FROM gmail_labels WHERE account_id IN (${accountIds.map(() => '?').join(',')}) ORDER BY type,name`).all(...accountIds) as DatabaseRow[]
       : this.stmt('SELECT * FROM gmail_labels ORDER BY account_id,type,name').all() as DatabaseRow[]
-    return rows.map((row) => ({
+    return this.mailboxOwners.decorateLabels(rows.map((row) => ({
       accountId: String(row.account_id),
       id: String(row.id),
       name: String(row.name),
       type: String(row.type) as MailLabel['type'],
       color: row.color ? String(row.color) : undefined,
       ...(row.parent_id ? { parentId: String(row.parent_id) } : {})
-    }))
+    })))
   }
 
   updateSyncProgress(progress: SyncProgress, extras?: { pageToken?: string | null; initialHistoryId?: string }) {
@@ -662,7 +666,7 @@ export class MailDatabase {
 
   resetInventory(accountId: string) {
     this.transaction(() => {
-      this.stmt('DELETE FROM gmail_sync_items WHERE account_id=?').run(accountId)
+      this.stmt(`DELETE FROM gmail_sync_items WHERE account_id=? AND owner_id='primary'`).run(accountId)
       this.stmt(`UPDATE gmail_sync_state SET phase='inventory',completed=0,total=0,transferred_bytes=0,page_token=NULL,inventory_complete=0,started_at=?,updated_at=?,message=NULL WHERE account_id=?`)
         .run(nowIso(), nowIso(), accountId)
     })
@@ -703,7 +707,7 @@ export class MailDatabase {
   reconcileInventory(accountId: string) {
     const stale = this.stmt(`
       SELECT id FROM gmail_messages m
-      WHERE account_id=? AND NOT EXISTS(
+      WHERE account_id=? AND owner_id='primary' AND NOT EXISTS(
         SELECT 1 FROM gmail_sync_items s WHERE s.account_id=m.account_id AND s.message_id=m.id
       )
     `).all(accountId) as DatabaseRow[]
@@ -712,7 +716,7 @@ export class MailDatabase {
   }
 
   pendingMessageIds(accountId: string, limit: number) {
-    return (this.stmt(`SELECT message_id,thread_id,remote_folder_id,remote_uid FROM gmail_sync_items WHERE account_id=? AND (status='pending' OR (status='failed' AND attempts<5)) ORDER BY rowid LIMIT ?`).all(accountId, limit) as DatabaseRow[])
+    return (this.stmt(`SELECT message_id,thread_id,remote_folder_id,remote_uid FROM gmail_sync_items WHERE account_id=? AND owner_id='primary' AND (status='pending' OR (status='failed' AND attempts<5)) ORDER BY rowid LIMIT ?`).all(accountId, limit) as DatabaseRow[])
       .map((row) => ({ id: String(row.message_id), threadId: String(row.thread_id), remoteFolderId: row.remote_folder_id ? String(row.remote_folder_id) : undefined, remoteUid: row.remote_uid ? String(row.remote_uid) : undefined }))
   }
 
@@ -1157,11 +1161,13 @@ export class MailDatabase {
           if (input.action === 'trash') labels.add('TRASH')
           else if (input.action === 'untrash') labels.delete('TRASH')
           else if (input.action === 'move' && input.labelId) {
-            if (provider !== 'gmail') for (const label of [...labels]) if (label.startsWith('folder:')) labels.delete(label)
+            if (provider !== 'gmail') for (const label of [...labels]) if (label.startsWith('folder:') || label.startsWith('owner:')) labels.delete(label)
             for (const label of ['INBOX', 'TRASH', 'SPAM', 'ARCHIVE']) labels.delete(label)
             labels.add(input.labelId)
             const destination = String(destinationLabel?.name ?? input.labelId).toLowerCase()
-            if (input.labelId === 'INBOX' || destination === 'inbox') labels.add('INBOX')
+            // Another mailbox's Inbox or Deleted Items is not the account's own (E40).
+            if (input.labelId.startsWith('owner:')) { /* No system labels for shared mailboxes. */ }
+            else if (input.labelId === 'INBOX' || destination === 'inbox') labels.add('INBOX')
             else if (input.labelId === 'TRASH' || /trash|deleted/.test(destination)) labels.add('TRASH')
             else if (input.labelId === 'SPAM' || /spam|junk/.test(destination)) labels.add('SPAM')
             else if (input.labelId === 'ARCHIVE' || destination.includes('archive')) labels.add('ARCHIVE')

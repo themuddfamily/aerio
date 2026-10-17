@@ -39,6 +39,7 @@ export interface MailFolderManagerDeps {
   exchange?(accountId: string): Promise<Pick<ExchangeFolderApi, 'listLabels' | 'folder' | 'createFolder' | 'renameFolder' | 'moveFolder' | 'deleteFolder'>>
 }
 
+const SHARED_FOLDER_MESSAGE = 'Folders of shared mailboxes and public folders are managed on the server, not in Aerio'
 const folderPath = (labelId: string) => labelId.startsWith('folder:') ? labelId.slice(7) : labelId
 
 // Provider folder/label management. Changes run directly against the provider
@@ -65,6 +66,7 @@ export class MailFolderManager {
     const label = labels.find((item) => item.id === labelId)
     if (!label) throw new FolderConflictError('This folder no longer exists. The folder list was refreshed.')
     if (isSystemMailFolder(label)) throw new Error(`${label.name} is a system folder and cannot be changed`)
+    if (label.owner || label.id.startsWith('owner:')) throw new Error(SHARED_FOLDER_MESSAGE)
     return { label, labels }
   }
 
@@ -146,6 +148,7 @@ export class MailFolderManager {
     const nameError = mailFolderNameError(name, account.provider)
     if (nameError) throw new Error(nameError)
     const labels = this.database.listLabels([input.accountId])
+    if (input.parentId?.startsWith('owner:')) throw new Error(SHARED_FOLDER_MESSAGE)
     if (input.parentId && !capabilities.canNest) throw new Error('This provider does not support nested folders')
     const parent = this.validateParent(account.provider, labels, input.parentId)
     const color = this.validateColor(account.provider, input.color)

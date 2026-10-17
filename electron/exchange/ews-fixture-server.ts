@@ -22,6 +22,25 @@ export interface FixtureFolder {
   distinguished?: string
   modifiedSeq: number
   canWrite: boolean
+  /** Another user's mailbox (lower-case address) or 'public' for public folders; unset for the signed-in user. */
+  mailbox?: string
+  /** EffectiveRights Read; false folders are visible but refuse reads. */
+  canRead?: boolean
+}
+
+/** Access of the signed-in user to another mailbox (E40). */
+export interface FixtureMailboxAccess {
+  access: 'read' | 'write' | 'none' | 'missing'
+  sendAs?: boolean
+  sendOnBehalf?: boolean
+}
+
+export interface FixtureDelegate {
+  address: string
+  displayName?: string
+  permissions: Record<string, string>
+  receiveCopies: boolean
+  viewPrivate: boolean
 }
 
 export interface FixtureItem {
@@ -54,6 +73,9 @@ export interface AutodiscoverAnswer {
   redirectAddr?: string
   serverVersion?: string
   displayName?: string
+  /** AlternativeMailbox entries (E40). */
+  alternativeMailboxes?: { type: string; displayName: string; smtpAddress: string }[]
+  publicFolderMailbox?: string
 }
 
 export interface EwsFixtureOptions {
@@ -104,7 +126,15 @@ export class EwsFixtureServer {
   items = new Map<string, FixtureItem>()
   removed = new Map<string, { folderId: string; addedSeq: number; removedSeq: number }>()
   removedFolders = new Map<string, number>()
-  sent: { mime: Buffer; readReceipt: boolean; deliveryReceipt: boolean }[] = []
+  sent: { mime: Buffer; readReceipt: boolean; deliveryReceipt: boolean; from?: string; sender?: string; savedFolderId?: string }[] = []
+  /** The signed-in user's address; other mailboxes are reached through <Mailbox> (E40). */
+  primaryAddress = 'ada@contoso.test'
+  mailboxes = new Map<string, FixtureMailboxAccess>()
+  delegates = new Map<string, FixtureDelegate>()
+  deliverMeetingRequests = 'DelegatesAndSendInformationToMe'
+  /** Public folder requests must carry X-PublicFolderMailbox with this address. */
+  publicFolderMailbox?: string
+  private currentHeaders: IncomingMessage['headers'] = {}
   log: { operation: string; body: string; headers: IncomingMessage['headers'] }[] = []
   autodiscover = new Map<string, AutodiscoverAnswer>()
   /** Next responses for an operation: an error code or 'busy' (ErrorServerBusy with back-off). */
@@ -153,7 +183,8 @@ export class EwsFixtureServer {
 
   addFolder(displayName: string, folderClass = 'IPF.Note', parentId = this.folder('msgfolderroot').id) {
     const id = this.nextId('F')
-    const folder: FixtureFolder = { id, changeKey: 'ck1', parentId, displayName, folderClass, modifiedSeq: ++this.hierarchySeq, canWrite: true }
+    const parent = this.folders.get(parentId)
+    const folder: FixtureFolder = { id, changeKey: 'ck1', parentId, displayName, folderClass, modifiedSeq: ++this.hierarchySeq, canWrite: parent?.mailbox ? parent.canWrite : true, ...(parent?.mailbox ? { mailbox: parent.mailbox } : {}) }
     this.folders.set(id, folder)
     return folder
   }
@@ -208,6 +239,88 @@ export class EwsFixtureServer {
     const moved = { ...item, id, folderId, addedSeq: seq, modifiedSeq: seq, changeKey: `ck${seq}`, readOnlyChangeSeq: undefined, props: new Map(item.props) }
     this.items.set(id, moved)
     return moved
+  }
+
+  // --- Other mailboxes and public folders (E40) ---------------------------------------------------
+
+  /** Adds another user's mailbox with distinguished folders; `access` decides EffectiveRights. */
+  addMailbox(address: string, options: FixtureMailboxAccess) {
+    const mailbox = address.toLowerCase()
+    this.mailboxes.set(mailbox, { ...options })
+    const ids: Record<string, FixtureFolder> = {}
+    for (const [distinguished, displayName, folderClass] of DISTINGUISHED) {
+      const id = this.nextId('F')
+      ids[distinguished] = { id, changeKey: 'ck1', displayName, folderClass, distinguished, modifiedSeq: ++this.hierarchySeq, canWrite: options.access === 'write', mailbox }
+      this.folders.set(id, ids[distinguished])
+    }
+    for (const folder of Object.values(ids)) if (folder.distinguished !== 'msgfolderroot') folder.parentId = ids.msgfolderroot.id
+    return ids
+  }
+
+  mailboxFolder(address: string, distinguished: string) {
+    const found = [...this.folders.values()].find((folder) => folder.mailbox === address.toLowerCase() && folder.distinguished === distinguished)
+    if (!found) throw new Error(`No ${distinguished} folder in ${address}`)
+    return found
+  }
+
+  /** Changes the user's access to a mailbox (revoking it, or Reviewer <-> Editor). */
+  setMailboxAccess(address: string, access: FixtureMailboxAccess['access']) {
+    const mailbox = address.toLowerCase()
+    const entry = this.mailboxes.get(mailbox)
+    this.mailboxes.set(mailbox, { ...entry, access })
+    if (access === 'read' || access === 'write') for (const folder of this.folders.values()) if (folder.mailbox === mailbox) folder.canWrite = access === 'write'
+  }
+
+  /** Creates the public folder root; requests must be routed with X-PublicFolderMailbox: `mailbox`. */
+  enablePublicFolders(mailbox: string) {
+    this.publicFolderMailbox = mailbox.toLowerCase()
+    const id = this.nextId('F')
+    const root: FixtureFolder = { id, changeKey: 'ck1', displayName: 'IPM_SUBTREE', folderClass: 'IPF.Note', distinguished: 'publicfoldersroot', modifiedSeq: ++this.hierarchySeq, canWrite: false, mailbox: 'public' }
+    this.folders.set(id, root)
+    return root
+  }
+
+  addPublicFolder(displayName: string, folderClass = 'IPF.Note', parentId?: string, canWrite = false) {
+    const parent = parentId ?? [...this.folders.values()].find((folder) => folder.distinguished === 'publicfoldersroot')!.id
+    const id = this.nextId('F')
+    const folder: FixtureFolder = { id, changeKey: 'ck1', parentId: parent, displayName, folderClass, modifiedSeq: ++this.hierarchySeq, canWrite, mailbox: 'public' }
+    this.folders.set(id, folder)
+    return folder
+  }
+
+  /** Why the current request may not read `folder`, as an EWS response code. */
+  private denied(folder: FixtureFolder | undefined) {
+    if (!folder?.mailbox) return undefined
+    if (folder.mailbox === 'public') {
+      const routed = String(this.currentHeaders['x-publicfoldermailbox'] ?? '').toLowerCase()
+      return routed && routed === this.publicFolderMailbox ? (folder.canRead === false ? 'ErrorAccessDenied' : undefined) : 'ErrorNoPublicFolderReplicaAvailable'
+    }
+    const entry = this.mailboxes.get(folder.mailbox)
+    if (!entry || entry.access === 'missing') return 'ErrorNonExistentMailbox'
+    if (entry.access === 'none' || folder.canRead === false) return 'ErrorAccessDenied'
+    return undefined
+  }
+
+  /** Why the current request may not change items in `folder`. */
+  private writeDenied(folder: FixtureFolder | undefined) {
+    const read = this.denied(folder)
+    if (read) return read
+    return folder?.mailbox && !folder.canWrite ? 'ErrorAccessDenied' : undefined
+  }
+
+  /** Resolves a folder id element; an unknown other mailbox reports ErrorNonExistentMailbox. */
+  private lookup(element: XmlElement | undefined): { folder?: FixtureFolder; error?: string } {
+    const folder = this.resolveFolder(element)
+    if (!folder) {
+      const mailbox = text(child(child(element, 'Mailbox'), 'EmailAddress')).trim().toLowerCase()
+      if (mailbox && mailbox !== this.primaryAddress) {
+        const entry = this.mailboxes.get(mailbox)
+        return { error: !entry || entry.access === 'missing' ? 'ErrorNonExistentMailbox' : entry.access === 'none' ? 'ErrorAccessDenied' : 'ErrorFolderNotFound' }
+      }
+      return { error: 'ErrorFolderNotFound' }
+    }
+    const error = this.denied(folder)
+    return error ? { error } : { folder }
   }
 
   invalidateSyncStates() { this.generation++ }
@@ -314,6 +427,7 @@ export class EwsFixtureServer {
     const operationElement = child(root, 'Body')?.children[0]
     const operation = operationElement?.name ?? ''
     this.log.push({ operation, body, headers: request.headers })
+    this.currentHeaders = request.headers
     const pending = this.failures.get(operation)
     const failure = pending?.shift()
     if (failure === 'busy') {
@@ -325,7 +439,9 @@ export class EwsFixtureServer {
       SyncFolderItems: (element) => this.syncItems(element), GetItem: (element) => this.getItem(element), UpdateItem: (element) => this.updateItem(element),
       MoveItem: (element) => this.moveOrCopy(element, 'MoveItem'), CopyItem: (element) => this.moveOrCopy(element, 'CopyItem'), DeleteItem: (element) => this.deleteItem(element),
       CreateItem: (element) => this.createItem(element), CreateFolder: (element) => this.createFolder(element), UpdateFolder: (element) => this.updateFolder(element),
-      MoveFolder: (element) => this.moveFolder(element), DeleteFolder: (element) => this.deleteFolder(element)
+      MoveFolder: (element) => this.moveFolder(element), DeleteFolder: (element) => this.deleteFolder(element),
+      FindItem: (element) => this.findItem(element), GetDelegate: (element) => this.getDelegate(element), AddDelegate: (element) => this.writeDelegates(element, 'AddDelegate'),
+      UpdateDelegate: (element) => this.writeDelegates(element, 'UpdateDelegate'), RemoveDelegate: (element) => this.removeDelegate(element)
     }
     const handler = handlers[operation]
     if (!handler) {
@@ -356,7 +472,9 @@ export class EwsFixtureServer {
     const email = /<EMailAddress>([^<]+)<\/EMailAddress>/.exec(body)?.[1] ?? ''
     const account = answer.redirectAddr ? `<Action>redirectAddr</Action><RedirectAddr>${answer.redirectAddr}</RedirectAddr>`
       : answer.redirectUrl ? `<Action>redirectUrl</Action><RedirectUrl>${answer.redirectUrl}</RedirectUrl>`
-        : `<AccountType>email</AccountType><Action>settings</Action><Protocol><Type>EXCH</Type><Server>exch01.contoso.test</Server><ServerVersion>${answer.serverVersion ?? '73C28880'}</ServerVersion><EwsUrl>${answer.ewsUrl ?? this.url}</EwsUrl></Protocol>`
+        : `<AccountType>email</AccountType><Action>settings</Action><Protocol><Type>EXCH</Type><Server>exch01.contoso.test</Server><ServerVersion>${answer.serverVersion ?? '73C28880'}</ServerVersion><EwsUrl>${answer.ewsUrl ?? this.url}</EwsUrl></Protocol>` +
+          (answer.alternativeMailboxes ?? []).map((entry) => `<AlternativeMailbox><Type>${entry.type}</Type><DisplayName>${escapeXml(entry.displayName)}</DisplayName><SmtpAddress>${entry.smtpAddress}</SmtpAddress></AlternativeMailbox>`).join('') +
+          (answer.publicFolderMailbox ? `<PublicFolderInformation><SmtpAddress>${answer.publicFolderMailbox}</SmtpAddress></PublicFolderInformation>` : '')
     const xml = `<?xml version="1.0" encoding="utf-8"?><Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006"><Response xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a"><User><DisplayName>${answer.displayName ?? 'Ada Lovelace'}</DisplayName><AutoDiscoverSMTPAddress>${email}</AutoDiscoverSMTPAddress></User><Account>${account}</Account></Response></Autodiscover>`
     response.statusCode = 200
     response.setHeader('Content-Type', 'text/xml')
@@ -367,7 +485,11 @@ export class EwsFixtureServer {
 
   private resolveFolder(element: XmlElement | undefined) {
     if (!element) return undefined
-    if (element.name === 'DistinguishedFolderId') return [...this.folders.values()].find((folder) => folder.distinguished === element.attributes.Id)
+    if (element.name === 'DistinguishedFolderId') {
+      const address = text(child(child(element, 'Mailbox'), 'EmailAddress')).trim().toLowerCase()
+      const mailbox = element.attributes.Id === 'publicfoldersroot' ? 'public' : address && address !== this.primaryAddress ? address : undefined
+      return [...this.folders.values()].find((folder) => folder.distinguished === element.attributes.Id && folder.mailbox === mailbox)
+    }
     return this.folders.get(element.attributes.Id ?? '')
   }
 
@@ -375,13 +497,13 @@ export class EwsFixtureServer {
     const tag = folder.folderClass === 'IPF.Appointment' ? 'CalendarFolder' : folder.folderClass === 'IPF.Contact' ? 'ContactsFolder' : 'Folder'
     const count = [...this.items.values()].filter((item) => item.folderId === folder.id).length
     const childCount = [...this.folders.values()].filter((item) => item.parentId === folder.id).length
-    return `<t:${tag}><t:FolderId Id="${folder.id}" ChangeKey="${folder.changeKey}"/>${folder.parentId ? `<t:ParentFolderId Id="${folder.parentId}"/>` : ''}<t:FolderClass>${folder.folderClass}</t:FolderClass><t:DisplayName>${escapeXml(folder.displayName)}</t:DisplayName><t:TotalCount>${count}</t:TotalCount><t:ChildFolderCount>${childCount}</t:ChildFolderCount><t:EffectiveRights><t:CreateAssociated>true</t:CreateAssociated><t:CreateContents>${folder.canWrite}</t:CreateContents><t:CreateHierarchy>true</t:CreateHierarchy><t:Delete>${folder.canWrite}</t:Delete><t:Modify>${folder.canWrite}</t:Modify><t:Read>true</t:Read></t:EffectiveRights></t:${tag}>`
+    return `<t:${tag}><t:FolderId Id="${folder.id}" ChangeKey="${folder.changeKey}"/>${folder.parentId ? `<t:ParentFolderId Id="${folder.parentId}"/>` : ''}<t:FolderClass>${folder.folderClass}</t:FolderClass><t:DisplayName>${escapeXml(folder.displayName)}</t:DisplayName><t:TotalCount>${count}</t:TotalCount><t:ChildFolderCount>${childCount}</t:ChildFolderCount><t:EffectiveRights><t:CreateAssociated>true</t:CreateAssociated><t:CreateContents>${folder.canWrite}</t:CreateContents><t:CreateHierarchy>true</t:CreateHierarchy><t:Delete>${folder.canWrite}</t:Delete><t:Modify>${folder.canWrite}</t:Modify><t:Read>${folder.canRead !== false}</t:Read></t:EffectiveRights></t:${tag}>`
   }
 
   private getFolder(element: XmlElement) {
     return reply('GetFolder', (child(element, 'FolderIds')?.children ?? []).map((id) => {
-      const folder = this.resolveFolder(id)
-      return folder ? ok('GetFolder', `<m:Folders>${this.folderXml(folder)}</m:Folders>`) : fail('GetFolder', 'ErrorFolderNotFound')
+      const { folder, error } = this.lookup(id)
+      return folder ? ok('GetFolder', `<m:Folders>${this.folderXml(folder)}</m:Folders>`) : fail('GetFolder', error ?? 'ErrorFolderNotFound')
     }))
   }
 
@@ -391,8 +513,8 @@ export class EwsFixtureServer {
   }
 
   private findFolder(element: XmlElement) {
-    const parent = this.resolveFolder(child(element, 'ParentFolderIds')?.children[0])
-    if (!parent) return reply('FindFolder', [fail('FindFolder', 'ErrorFolderNotFound')])
+    const { folder: parent, error } = this.lookup(child(element, 'ParentFolderIds')?.children[0])
+    if (!parent) return reply('FindFolder', [fail('FindFolder', error ?? 'ErrorFolderNotFound')])
     const all = element.attributes.Traversal === 'Shallow' ? [...this.folders.values()].filter((folder) => folder.parentId === parent.id) : this.descendants(parent.id)
     const view = child(element, 'IndexedPageFolderView')
     const offset = Number(view?.attributes.Offset ?? 0)
@@ -414,7 +536,7 @@ export class EwsFixtureServer {
   private syncHierarchy(element: XmlElement) {
     const since = this.parseState(text(child(element, 'SyncState')).trim() || undefined, 'H')
     if (since === undefined) return reply('SyncFolderHierarchy', [fail('SyncFolderHierarchy', 'ErrorInvalidSyncStateData')])
-    const changes = [...this.folders.values()].filter((folder) => folder.modifiedSeq > since && folder.distinguished !== 'msgfolderroot')
+    const changes = [...this.folders.values()].filter((folder) => folder.modifiedSeq > since && folder.distinguished !== 'msgfolderroot' && !folder.mailbox)
       .map((folder) => `<t:${since === 0 ? 'Create' : 'Update'}>${this.folderXml(folder)}</t:${since === 0 ? 'Create' : 'Update'}>`)
     for (const [id, removedSeq] of this.removedFolders) if (removedSeq > since && since > 0) changes.push(`<t:Delete><t:FolderId Id="${id}"/></t:Delete>`)
     return reply('SyncFolderHierarchy', [ok('SyncFolderHierarchy', `<m:SyncState>${this.state('H', this.hierarchySeq)}</m:SyncState><m:IncludesLastFolderInRange>true</m:IncludesLastFolderInRange><m:Changes>${changes.join('')}</m:Changes>`)])
@@ -477,8 +599,9 @@ export class EwsFixtureServer {
   }
 
   private syncItems(element: XmlElement) {
-    const folder = this.resolveFolder(child(element, 'SyncFolderId')?.children[0])
-    if (!folder) return reply('SyncFolderItems', [fail('SyncFolderItems', 'ErrorFolderNotFound')])
+    const { folder, error } = this.lookup(child(element, 'SyncFolderId')?.children[0])
+    if (!folder) return reply('SyncFolderItems', [fail('SyncFolderItems', error ?? 'ErrorFolderNotFound')])
+    if (folder.mailbox === 'public') return reply('SyncFolderItems', [fail('SyncFolderItems', 'ErrorInvalidOperation', 'SyncFolderItems is not supported for public folders.')])
     const since = this.parseState(text(child(element, 'SyncState')).trim() || undefined, `I${folder.id}`)
     if (since === undefined) return reply('SyncFolderItems', [fail('SyncFolderItems', 'ErrorInvalidSyncStateData', 'Synchronization state data is corrupt or otherwise invalid.')])
     const max = Number(text(child(element, 'MaxChangesReturned')) || 512)
@@ -505,6 +628,8 @@ export class EwsFixtureServer {
     const includeMime = text(child(child(element, 'ItemShape'), 'IncludeMimeContent')).trim() === 'true'
     return reply('GetItem', (child(element, 'ItemIds')?.children ?? []).map((id) => {
       const item = this.items.get(id.attributes.Id ?? '')
+      const denied = item ? this.denied(this.folders.get(item.folderId)) : undefined
+      if (denied) return fail('GetItem', denied)
       return item ? ok('GetItem', `<m:Items>${this.itemXml(item, includeMime)}</m:Items>`) : fail('GetItem', 'ErrorItemNotFound', 'The specified object was not found in the store.')
     }))
   }
@@ -528,6 +653,8 @@ export class EwsFixtureServer {
       }
       const item = this.items.get(idElement?.attributes.Id ?? '')
       if (!item) return fail('UpdateItem', 'ErrorItemNotFound', 'The specified object was not found in the store.')
+      const refused = this.writeDenied(this.folders.get(item.folderId))
+      if (refused) return fail('UpdateItem', refused, 'Access is denied. Check credentials and try again.')
       if (neverOverwrite && idElement.attributes.ChangeKey && idElement.attributes.ChangeKey !== item.changeKey) {
         return fail('UpdateItem', 'ErrorIrresolvableConflict', 'The send or update operation could not be performed because the change key passed in the request does not match the current change key for the item.')
       }
@@ -570,6 +697,8 @@ export class EwsFixtureServer {
     return reply(operation, (child(element, 'ItemIds')?.children ?? []).map((id) => {
       const item = this.items.get(id.attributes.Id ?? '')
       if (!item || !target) return fail(operation, item ? 'ErrorFolderNotFound' : 'ErrorItemNotFound')
+      const refused = (operation === 'MoveItem' ? this.writeDenied(this.folders.get(item.folderId)) : this.denied(this.folders.get(item.folderId))) ?? this.writeDenied(target)
+      if (refused) return fail(operation, refused, 'Access is denied. Check credentials and try again.')
       if (operation === 'MoveItem') {
         const moved = this.moveItem(item.id, target.id)!
         return ok(operation, `<m:Items><t:Message><t:ItemId Id="${moved.id}" ChangeKey="${moved.changeKey}"/></t:Message></m:Items>`)
@@ -605,8 +734,17 @@ export class EwsFixtureServer {
       if (spec.name === 'Message') {
         const mime = Buffer.from(text(child(spec, 'MimeContent')).replace(/\s+/g, ''), 'base64')
         const subject = /^Subject: (.*)$/m.exec(mime.toString('utf8'))?.[1]?.trim() ?? '(No subject)'
+        const headerAddress = (name: string) => { const value = new RegExp(`^${name}: (.*)$`, 'mi').exec(mime.toString('utf8').split(/\r?\n\r?\n/)[0])?.[1] ?? ''; return (/<([^>]+)>/.exec(value)?.[1] ?? value).trim().toLowerCase() }
+        const from = text(child(child(child(spec, 'From'), 'Mailbox'), 'EmailAddress')).trim().toLowerCase() || headerAddress('From')
+        const sender = text(child(child(child(spec, 'Sender'), 'Mailbox'), 'EmailAddress')).trim().toLowerCase() || headerAddress('Sender')
+        if ((disposition === 'SendAndSaveCopy' || disposition === 'SendOnly') && from && from !== this.primaryAddress) {
+          const entry = this.mailboxes.get(from)
+          const allowed = sender && sender !== from ? entry?.sendOnBehalf : entry?.sendAs
+          if (!allowed) return fail('CreateItem', 'ErrorSendAsDenied', 'The user account which was used to submit this request does not have the right to send mail on behalf of the specified sending account.')
+        }
+        if (target && target.mailbox && this.writeDenied(target)) return fail('CreateItem', 'ErrorAccessDenied', 'Access is denied. Check credentials and try again.')
         if (disposition === 'SendAndSaveCopy' || disposition === 'SendOnly') {
-          this.sent.push({ mime, readReceipt: text(child(spec, 'IsReadReceiptRequested')).trim() === 'true', deliveryReceipt: text(child(spec, 'IsDeliveryReceiptRequested')).trim() === 'true' })
+          this.sent.push({ mime, readReceipt: text(child(spec, 'IsReadReceiptRequested')).trim() === 'true', deliveryReceipt: text(child(spec, 'IsDeliveryReceiptRequested')).trim() === 'true', ...(from ? { from } : {}), ...(sender ? { sender } : {}), ...(target ? { savedFolderId: target.id } : {}) })
           if (disposition === 'SendOnly') return ok('CreateItem', '<m:Items/>')
         }
         const folder = target ?? this.folder(disposition === 'SaveOnly' ? 'drafts' : 'sentitems')
@@ -622,6 +760,69 @@ export class EwsFixtureServer {
       const item = this.addItem(target.id, spec.name === 'Contact' ? 'contact' : 'calendar', props)
       return ok('CreateItem', `<m:Items><t:${spec.name}><t:ItemId Id="${item.id}" ChangeKey="${item.changeKey}"/></t:${spec.name}></m:Items>`)
     }))
+  }
+
+  private findItem(element: XmlElement) {
+    const { folder, error } = this.lookup(child(element, 'ParentFolderIds')?.children[0])
+    if (!folder) return reply('FindItem', [fail('FindItem', error ?? 'ErrorFolderNotFound')])
+    const view = child(element, 'IndexedPageItemView')
+    const offset = Number(view?.attributes.Offset ?? 0)
+    const max = Number(view?.attributes.MaxEntriesReturned ?? 1000)
+    const all = [...this.items.values()].filter((item) => item.folderId === folder.id)
+    const page = all.slice(offset, offset + max)
+    const last = offset + page.length >= all.length
+    return reply('FindItem', [ok('FindItem', `<m:RootFolder IndexedPagingOffset="${offset + page.length}" TotalItemsInView="${all.length}" IncludesLastItemInRange="${last}"><t:Items>${page.map((item) => this.itemXml(item)).join('')}</t:Items></m:RootFolder>`)])
+  }
+
+  private delegateXml(delegate: FixtureDelegate) {
+    const levels = ['Calendar', 'Tasks', 'Inbox', 'Contacts', 'Notes'].map((folder) => `<t:${folder}FolderPermissionLevel>${delegate.permissions[folder.toLowerCase()] ?? 'None'}</t:${folder}FolderPermissionLevel>`).join('')
+    return `<m:DelegateUserResponseMessageType ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:DelegateUser><t:UserId><t:PrimarySmtpAddress>${delegate.address}</t:PrimarySmtpAddress>${delegate.displayName ? `<t:DisplayName>${escapeXml(delegate.displayName)}</t:DisplayName>` : ''}</t:UserId><t:DelegatePermissions>${levels}</t:DelegatePermissions><t:ReceiveCopiesOfMeetingMessages>${delegate.receiveCopies}</t:ReceiveCopiesOfMeetingMessages><t:ViewPrivateItems>${delegate.viewPrivate}</t:ViewPrivateItems></m:DelegateUser></m:DelegateUserResponseMessageType>`
+  }
+
+  private delegateResponse(operation: string, messages: string) {
+    return `<m:${operation}Response ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode>${messages ? `<m:ResponseMessages>${messages}</m:ResponseMessages>` : ''}<m:DeliverMeetingRequests>${this.deliverMeetingRequests}</m:DeliverMeetingRequests></m:${operation}Response>`
+  }
+
+  private delegateFailure(operation: string, code: string) {
+    return `<m:${operation}Response ResponseClass="Error"><m:MessageText>${code}</m:MessageText><m:ResponseCode>${code}</m:ResponseCode><m:DescriptiveLinkKey>0</m:DescriptiveLinkKey></m:${operation}Response>`
+  }
+
+  private delegateOwnerOk(element: XmlElement) {
+    return text(child(child(element, 'Mailbox'), 'EmailAddress')).trim().toLowerCase() === this.primaryAddress
+  }
+
+  private getDelegate(element: XmlElement) {
+    if (!this.delegateOwnerOk(element)) return this.delegateFailure('GetDelegate', 'ErrorAccessDenied')
+    return this.delegateResponse('GetDelegate', [...this.delegates.values()].map((delegate) => this.delegateXml(delegate)).join(''))
+  }
+
+  private writeDelegates(element: XmlElement, operation: 'AddDelegate' | 'UpdateDelegate') {
+    if (!this.delegateOwnerOk(element)) return this.delegateFailure(operation, 'ErrorAccessDenied')
+    const messages: string[] = []
+    for (const user of children(child(element, 'DelegateUsers'), 'DelegateUser')) {
+      const address = text(child(child(user, 'UserId'), 'PrimarySmtpAddress')).trim().toLowerCase()
+      const exists = this.delegates.has(address)
+      if (operation === 'AddDelegate' && exists) { messages.push('<m:DelegateUserResponseMessageType ResponseClass="Error"><m:MessageText>Delegate already exists</m:MessageText><m:ResponseCode>ErrorDelegateAlreadyExists</m:ResponseCode></m:DelegateUserResponseMessageType>'); continue }
+      if (operation === 'UpdateDelegate' && !exists) { messages.push('<m:DelegateUserResponseMessageType ResponseClass="Error"><m:MessageText>Not a delegate</m:MessageText><m:ResponseCode>ErrorNotDelegate</m:ResponseCode></m:DelegateUserResponseMessageType>'); continue }
+      const permissions: Record<string, string> = {}
+      for (const level of child(user, 'DelegatePermissions')?.children ?? []) permissions[level.name.replace('FolderPermissionLevel', '').toLowerCase()] = text(level).trim()
+      const delegate: FixtureDelegate = { address, permissions, receiveCopies: text(child(user, 'ReceiveCopiesOfMeetingMessages')).trim() === 'true', viewPrivate: text(child(user, 'ViewPrivateItems')).trim() === 'true' }
+      this.delegates.set(address, delegate)
+      messages.push(this.delegateXml(delegate))
+    }
+    const delivery = text(child(element, 'DeliverMeetingRequests')).trim()
+    if (delivery) this.deliverMeetingRequests = delivery
+    return this.delegateResponse(operation, messages.join(''))
+  }
+
+  private removeDelegate(element: XmlElement) {
+    if (!this.delegateOwnerOk(element)) return this.delegateFailure('RemoveDelegate', 'ErrorAccessDenied')
+    const messages = children(child(element, 'UserIds'), 'UserId').map((user) => {
+      const address = text(child(user, 'PrimarySmtpAddress')).trim().toLowerCase()
+      if (!this.delegates.delete(address)) return '<m:DelegateUserResponseMessageType ResponseClass="Error"><m:MessageText>Not a delegate</m:MessageText><m:ResponseCode>ErrorNotDelegate</m:ResponseCode></m:DelegateUserResponseMessageType>'
+      return '<m:DelegateUserResponseMessageType ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode></m:DelegateUserResponseMessageType>'
+    })
+    return this.delegateResponse('RemoveDelegate', messages.join(''))
   }
 }
 

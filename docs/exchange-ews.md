@@ -108,7 +108,8 @@ Delegation and public folders (E40), directory lookup (E41), and Exchange Notes 
 | `electron/exchange/autodiscover.ts` | POX Autodiscover with injectable HTTP/DNS for tests |
 | `electron/exchange/ews-mail.ts`, `ews-items.ts` | Mail sync/actions/drafts/folders; CalendarItem/Contact mapping and update builders |
 | `electron/exchange/exchange-productivity.ts`, `exchange-store.ts`, `exchange-ipc.ts` | Calendar/Contacts service, its SQLite store, and IPC (`exchange:*`, exposed as `window.aerio.exchange`) |
-| `electron/exchange/ews-fixture-server.ts` | In-process EWS + Autodiscover responder used by the tests |
+| `electron/exchange/ews-shared-mailbox.ts`, `ews-delegation.ts` | Other mailboxes (`FolderRef.mailbox`, EffectiveRights), public folders (`withHttpHeaders` for X-AnchorMailbox/X-PublicFolderMailbox, `FindItem` listing), send as/on behalf, and GetDelegate/AddDelegate/UpdateDelegate/RemoveDelegate (E40) |
+| `electron/exchange/ews-fixture-server.ts` | In-process EWS + Autodiscover responder used by the tests, including other mailboxes with access levels, public folders, delegates, and send-as/on-behalf permissions |
 
 A new operation such as `ResolveNames` should be a thin helper over `call()`, returning parsed values and `EwsError`s instead of throwing for item-level failures.
 
@@ -126,7 +127,8 @@ The suites use `electron/exchange/ews-fixture-server.ts`, a `node:http` SOAP res
 ## Limitations
 
 - Behavior against real Exchange servers has not been verified yet. See the live-server validation matrix below. The fixture follows Microsoft's published EWS and Autodiscover documentation.
-- Free/busy lookup (`GetUserAvailability`), tasks, notes, delegate and shared mailboxes, public folders, the global address list, and server-side rules and automatic replies are not implemented for Exchange accounts. E40, E41, and E43 cover several of these.
+- Free/busy lookup (`GetUserAvailability`), tasks, notes, the global address list, and server-side rules and automatic replies are not implemented for Exchange accounts. E41 and E43 cover several of these.
+- Shared and delegated mailboxes, delegate management, and public folders are described in [Shared mailboxes, delegation, and public folders](shared-mailboxes-delegation.md). Their own limits: messages are not moved or copied between mailboxes, folders of other mailboxes cannot be created, renamed, or deleted, public folders are listed in full on every sync (EWS has no `SyncFolderItems` for them), and public calendars and contacts are read-only.
 - EWS push and streaming notifications are not used. Mail is polled at the IMAP cadence (at most every minute), and Calendar/Contacts every 15 minutes or on **Sync now**.
 - Messages moved in another client are downloaded again because EWS `ItemId`s change on move.
 - "This and following" edits to repeating Exchange events are not supported. Editing a series from one occurrence moves the whole series by the same offset.

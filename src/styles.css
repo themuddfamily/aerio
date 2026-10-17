@@ -5046,3 +5046,25 @@ button.mail-folder-twisty:hover { background: var(--surface-hover); color: var(-
 .exchange-credentials { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
 .exchange-credentials.attention { border-color: var(--danger); background: var(--danger-soft); }
 .exchange-credentials p { margin: 0 0 6px; font-size: 10.5px; }
+
+/* Shared/delegated mailboxes and public folders (E40) */
+.mailbox-owner-badge, .mailbox-access-badge { flex: none; margin-inline-start: auto; padding: 0 6px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 9px; line-height: 15px; white-space: nowrap; }
+.mailbox-owner-badge.access-read, .mailbox-access-badge.access-read { border-color: var(--warning, var(--line)); }
+.mailbox-owner-badge.access-none, .mailbox-access-badge.access-none { border-color: var(--danger); color: var(--danger); }
+.mailbox-access-badge.access-write { border-color: var(--accent, var(--line)); }
+.mailbox-readonly-banner { margin: 0 0 6px; padding: 6px 10px; border: 1px solid var(--warning, var(--line)); border-radius: 8px; background: var(--surface-2); font-size: 11px; }
+.shared-mailboxes-section h3 { display: flex; align-items: center; gap: 6px; }
+.shared-mailbox-list, .shared-mailbox-discovery ul, .public-folder-tree, .public-folder-tree ul, .delegate-list { margin: 6px 0; padding: 0; list-style: none; }
+.shared-mailbox-row { display: grid; gap: 6px; margin-bottom: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.shared-mailbox-row.status-access-removed { border-color: var(--danger); background: var(--danger-soft); }
+.shared-mailbox-head, .shared-mailbox-discovery li, .public-folder-row { display: flex; align-items: center; gap: 8px; }
+.shared-mailbox-head span, .shared-mailbox-discovery li span { display: grid; flex: 1; min-width: 0; }
+.shared-mailbox-head small, .shared-mailbox-discovery small, .public-folder-name small, .shared-mailbox-folders small { color: var(--muted); font-size: 9.5px; overflow-wrap: anywhere; }
+.shared-mailbox-note { margin: 4px 0; color: var(--muted); font-size: 10.5px; }
+.shared-mailbox-folders { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+.shared-mailbox-folders th, .shared-mailbox-folders td { padding: 3px 6px; border-bottom: 1px solid var(--line); text-align: start; }
+.shared-mailbox-attach, .delegate-add, .delegate-permissions { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin: 6px 0; }
+.public-folder-browser, .delegation-editor { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.public-folder-name { flex: 1; min-width: 0; }
+.public-folder-subscribe { display: flex; align-items: center; gap: 4px; font-size: 10.5px; white-space: nowrap; }
+.delegate-list li { margin-bottom: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }

@@ -48,10 +48,11 @@ const SCOPES = [
   'https://www.googleapis.com/auth/contacts',
   'https://www.googleapis.com/auth/tasks'
 ]
-const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'MailboxSettings.ReadWrite', 'Calendars.ReadWrite', 'Contacts.ReadWrite', 'Tasks.ReadWrite']
+// The .Shared permissions open shared and delegated mailboxes through /users/{address} (E40).
+const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'MailboxSettings.ReadWrite', 'Calendars.ReadWrite', 'Contacts.ReadWrite', 'Tasks.ReadWrite', 'Mail.ReadWrite.Shared', 'Mail.Send.Shared', 'Calendars.ReadWrite.Shared']
 // Permissions added after the first release. A legacy grant without a stored
 // scope list must never ask for these during a silent refresh.
-const MICROSOFT_INTERACTIVE_ONLY_SCOPES = new Set(['Tasks.ReadWrite', 'MailboxSettings.ReadWrite'])
+const MICROSOFT_INTERACTIVE_ONLY_SCOPES = new Set(['Tasks.ReadWrite', 'MailboxSettings.ReadWrite', 'Mail.ReadWrite.Shared', 'Mail.Send.Shared', 'Calendars.ReadWrite.Shared'])
 // Opt-in permissions (cloud attachments) are requested only when the user asks
 // for them, and requested again on later reconnects so a reconnect never drops them.
 const OPTIONAL_GOOGLE_SCOPES = ['https://www.googleapis.com/auth/drive.file']

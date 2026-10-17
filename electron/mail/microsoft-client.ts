@@ -69,6 +69,14 @@ export interface GraphAutomaticRepliesSetting {
   scheduledEndDateTime?: GraphDateTimeTimeZone
 }
 
+export interface GraphCalendar {
+  id: string
+  name: string
+  canEdit?: boolean
+  isDefaultCalendar?: boolean
+  owner?: { name?: string; address?: string }
+}
+
 export class MicrosoftGraphError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) {
     super(message)
@@ -77,7 +85,13 @@ export class MicrosoftGraphError extends Error {
 }
 
 export class MicrosoftGraphClient {
-  constructor(private readonly token: () => Promise<string>) {}
+  /**
+   * `mailbox` addresses another user's or a shared mailbox (/users/{address}) for the folder and
+   * message operations (E40); without it they use the signed-in mailbox (/me).
+   */
+  constructor(private readonly token: () => Promise<string>, private readonly options: { mailbox?: string } = {}) {}
+
+  private get base() { return this.options.mailbox ? `/users/${encodeURIComponent(this.options.mailbox)}` : '/me' }
 
   private async response(path: string, init: RequestInit = {}, attempt = 0): Promise<Response> {
     const response = await fetch(path.startsWith('https://') ? path : `https://graph.microsoft.com/v1.0${path}`, {
@@ -115,7 +129,7 @@ export class MicrosoftGraphClient {
 
   async listFolders() {
     const all: GraphFolder[] = []
-    let next: string | undefined = '/me/mailFolders?$top=100&includeHiddenFolders=true&$select=id,displayName,parentMailFolderId,childFolderCount'
+    let next: string | undefined = `${this.base}/mailFolders?$top=100&includeHiddenFolders=true&$select=id,displayName,parentMailFolderId,childFolderCount`
     while (next) {
       const page: GraphPage<GraphFolder> = await this.request(next)
       all.push(...page.value)
@@ -124,7 +138,7 @@ export class MicrosoftGraphClient {
     for (let index = 0; index < all.length; index += 1) {
       const parent = all[index]
       if (!parent.childFolderCount) continue
-      let childrenNext: string | undefined = `/me/mailFolders/${encodeURIComponent(parent.id)}/childFolders?$top=100&includeHiddenFolders=true&$select=id,displayName,parentMailFolderId,childFolderCount`
+      let childrenNext: string | undefined = `${this.base}/mailFolders/${encodeURIComponent(parent.id)}/childFolders?$top=100&includeHiddenFolders=true&$select=id,displayName,parentMailFolderId,childFolderCount`
       while (childrenNext) {
         const page: GraphPage<GraphFolder> = await this.request(childrenNext)
         for (const child of page.value) if (!all.some((item) => item.id === child.id)) all.push(child)
@@ -133,7 +147,7 @@ export class MicrosoftGraphClient {
     }
     const wellKnown = ['inbox', 'sentitems', 'drafts', 'deleteditems', 'archive', 'junkemail']
     const special = await Promise.all(wellKnown.map(async (name) => {
-      try { return { ...(await this.request<GraphFolder>(`/me/mailFolders/${name}?$select=id,displayName,parentMailFolderId,childFolderCount`)), specialUse: name } }
+      try { return { ...(await this.request<GraphFolder>(`${this.base}/mailFolders/${name}?$select=id,displayName,parentMailFolderId,childFolderCount`)), specialUse: name } }
       catch { return undefined }
     }))
     for (const folder of special) {
@@ -147,7 +161,7 @@ export class MicrosoftGraphClient {
 
   async delta(folderId: string, deltaLink?: string) {
     const messages: GraphMessage[] = []
-    let next: string | undefined = deltaLink ?? `/me/mailFolders/${encodeURIComponent(folderId)}/messages/delta?$select=id,conversationId,parentFolderId,receivedDateTime,sentDateTime,isRead,importance,flag,isDraft,categories,inferenceClassification&$top=100`
+    let next: string | undefined = deltaLink ?? `${this.base}/mailFolders/${encodeURIComponent(folderId)}/messages/delta?$select=id,conversationId,parentFolderId,receivedDateTime,sentDateTime,isRead,importance,flag,isDraft,categories,inferenceClassification&$top=100`
     let checkpoint: string | undefined
     while (next) {
       const page: GraphPage<GraphMessage> = await this.request(next)
@@ -159,26 +173,31 @@ export class MicrosoftGraphClient {
   }
 
   async rawMessage(id: string) {
-    const response = await this.response(`/me/messages/${encodeURIComponent(id)}/$value`, { headers: { Accept: 'message/rfc822' } })
+    const response = await this.response(`${this.base}/messages/${encodeURIComponent(id)}/$value`, { headers: { Accept: 'message/rfc822' } })
     if (!response.ok) throw new MicrosoftGraphError(`Microsoft could not download a message (${response.status})`, response.status)
     return response.arrayBuffer()
   }
 
   async messageRaw(id: string) {
-    const response = await this.response(`/me/messages/${encodeURIComponent(id)}/$value`, { headers: { Accept: 'message/rfc822' } })
+    const response = await this.response(`${this.base}/messages/${encodeURIComponent(id)}/$value`, { headers: { Accept: 'message/rfc822' } })
     if (!response.ok) throw new MicrosoftGraphError(`Microsoft could not download a message (${response.status})`, response.status)
     return Buffer.from(await response.arrayBuffer())
   }
 
+  /** Read/flag/importance/category state of one message (for downloads resumed without a delta page). */
+  messageState(id: string) {
+    return this.request<GraphMessage>(`${this.base}/messages/${encodeURIComponent(id)}?$select=id,changeKey,conversationId,parentFolderId,receivedDateTime,isRead,importance,flag,categories`)
+  }
+
   async copyMessage(id: string, destinationId: string) {
-    await this.request(`/me/messages/${encodeURIComponent(id)}/copy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destinationId }) })
+    await this.request(`${this.base}/messages/${encodeURIComponent(id)}/copy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destinationId }) })
   }
 
   async applyAction(ids: string[], action: MailActionKind, folderId?: string) {
     for (const id of ids) {
       if (action === 'trash' || action === 'archive' || action === 'untrash' || action === 'unarchive' || action === 'label' || action === 'move') {
         if (!folderId) throw new Error('Microsoft did not expose the destination mail folder')
-        await this.request(`/me/messages/${encodeURIComponent(id)}/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destinationId: folderId }) })
+        await this.request(`${this.base}/messages/${encodeURIComponent(id)}/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destinationId: folderId }) })
       } else {
         const body = action === 'read' ? { isRead: true }
           : action === 'unread' ? { isRead: false }
@@ -186,7 +205,7 @@ export class MicrosoftGraphClient {
               : action === 'unstar' ? { flag: { flagStatus: 'notFlagged' } }
                 : action === 'important' ? { importance: 'high' }
                   : action === 'unimportant' ? { importance: 'normal' } : undefined
-        if (body) await this.request(`/me/messages/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        if (body) await this.request(`${this.base}/messages/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       }
     }
   }
@@ -195,7 +214,7 @@ export class MicrosoftGraphClient {
   async permanentDeleteMessages(ids: string[]) {
     for (const id of ids) {
       try {
-        await this.request(`/me/messages/${encodeURIComponent(id)}/permanentDelete`, { method: 'POST' })
+        await this.request(`${this.base}/messages/${encodeURIComponent(id)}/permanentDelete`, { method: 'POST' })
       } catch (error) {
         if (!(error instanceof MicrosoftGraphError && error.status === 404)) throw error
       }
@@ -269,7 +288,7 @@ export class MicrosoftGraphClient {
   }
 
   folder(id: string) {
-    return this.request<GraphFolder & { totalItemCount?: number }>(`/me/mailFolders/${encodeURIComponent(id)}?$select=id,displayName,parentMailFolderId,childFolderCount,totalItemCount`)
+    return this.request<GraphFolder & { totalItemCount?: number }>(`${this.base}/mailFolders/${encodeURIComponent(id)}?$select=id,displayName,parentMailFolderId,childFolderCount,totalItemCount`)
   }
 
   createFolder(displayName: string, parentId?: string) {
@@ -288,6 +307,31 @@ export class MicrosoftGraphClient {
 
   deleteFolder(id: string) {
     return this.request<void>(`/me/mailFolders/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
+
+  /** Calendars of this mailbox with whether the signed-in user may edit them (shared mailboxes, E40). */
+  async listCalendars() {
+    const all: GraphCalendar[] = []
+    let next: string | undefined = `${this.base}/calendars?$top=100&$select=id,name,canEdit,owner,isDefaultCalendar`
+    while (next) {
+      const page: GraphPage<GraphCalendar> = await this.request(next)
+      all.push(...page.value)
+      next = page['@odata.nextLink']
+    }
+    return all
+  }
+
+  /** Sets From (and Sender for send on behalf) on a staged draft of the signed-in user. */
+  async setMessageSender(id: string, from: string, sender?: string) {
+    await this.request(`/me/messages/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: { emailAddress: { address: from } }, ...(sender ? { sender: { emailAddress: { address: sender } } } : {}) })
+    })
+  }
+
+  sendDraft(id: string) {
+    return this.request<void>(`/me/messages/${encodeURIComponent(id)}/send`, { method: 'POST' })
   }
 
   /** Needs MailboxSettings.Read or MailboxSettings.ReadWrite. */

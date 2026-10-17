@@ -182,6 +182,29 @@ const api: AerioDesktopApi = {
       return () => ipcRenderer.removeListener('exchange:changed', listener)
     }
   },
+  // Shared/delegated mailboxes, delegates, and public folders (E40).
+  mailboxOwners: {
+    list: (accountId) => ipcRenderer.invoke('mailbox-owners:list', accountId),
+    discover: (accountId) => ipcRenderer.invoke('mailbox-owners:discover', accountId),
+    attach: (input) => ipcRenderer.invoke('mailbox-owners:attach', input),
+    update: (input) => ipcRenderer.invoke('mailbox-owners:update', input),
+    remove: (accountId, ownerId) => ipcRenderer.invoke('mailbox-owners:remove', accountId, ownerId),
+    sync: (accountId, ownerId) => ipcRenderer.invoke('mailbox-owners:sync', accountId, ownerId),
+    publicFolders: {
+      browse: (accountId, parentFolderId) => ipcRenderer.invoke('mailbox-owners:public-folders', accountId, parentFolderId),
+      subscribe: (accountId, folderId, subscribed) => ipcRenderer.invoke('mailbox-owners:subscribe', accountId, folderId, subscribed)
+    },
+    delegates: {
+      get: (accountId) => ipcRenderer.invoke('mailbox-owners:delegates', accountId),
+      save: (input) => ipcRenderer.invoke('mailbox-owners:save-delegate', input),
+      remove: (accountId, address) => ipcRenderer.invoke('mailbox-owners:remove-delegate', accountId, address),
+      setMeetingDelivery: (accountId, delivery) => ipcRenderer.invoke('mailbox-owners:meeting-delivery', accountId, delivery)
+    },
+    held: {
+      list: (accountId) => ipcRenderer.invoke('mailbox-owners:held', accountId),
+      resolve: (operationId, decision) => ipcRenderer.invoke('mailbox-owners:resolve-held', operationId, decision)
+    }
+  },
   // Matrix chat: display snapshots and commands only; tokens and keys never cross this bridge.
   chat: {
     snapshot: () => ipcRenderer.invoke('chat:snapshot'),

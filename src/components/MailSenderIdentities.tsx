@@ -13,6 +13,8 @@ interface IdentityEdit {
   replyTo: string
   newSignatureId: string
   replySignatureId: string
+  /** Send as / on behalf of a shared mailbox (Exchange, Microsoft 365; E40). */
+  delegation: '' | 'send-as' | 'send-on-behalf'
 }
 
 const friendlyError = (error: unknown, fallback: string) =>
@@ -22,7 +24,8 @@ const editFor = (identity: MailSenderIdentity): IdentityEdit => ({
   name: identity.name,
   replyTo: identity.replyTo.join(', '),
   newSignatureId: identity.newSignatureId ?? '',
-  replySignatureId: identity.replySignatureId ?? ''
+  replySignatureId: identity.replySignatureId ?? '',
+  delegation: identity.delegation ?? ''
 })
 const statusText: Record<MailSenderIdentity['status'], string> = { verified: 'Authorized', pending: 'Verification pending', unverified: 'Not verified by provider' }
 const sourceText: Record<MailSenderIdentity['source'], string> = { primary: 'Account address', gmail: 'Gmail send-as', microsoft: 'Microsoft alias', manual: 'Added in Aerio' }
@@ -73,10 +76,12 @@ export default function MailSenderIdentities({ account, onToast }: MailSenderIde
       replyTo: splitList(edit.replyTo),
       newSignatureId: edit.newSignatureId,
       replySignatureId: edit.replySignatureId,
+      ...(delegationAvailable(identity) ? { delegation: edit.delegation || null } : {}),
       ...changes
     }), changes.isDefault ? `${identity.email} is now the default From address` : 'Sender address saved', 'Sender address could not be saved')
   }
 
+  const delegationAvailable = (identity: MailSenderIdentity) => identity.source === 'manual' && (account.provider === 'exchange' || account.provider === 'microsoft')
   const update = (id: string, changes: Partial<IdentityEdit>) => setEdits((current) => ({ ...current, [id]: { ...current[id], ...changes } }))
   const dirty = (identity: MailSenderIdentity) => {
     const edit = edits[identity.id]
@@ -113,7 +118,7 @@ export default function MailSenderIdentities({ account, onToast }: MailSenderIde
         return <div className="sender-identity" key={identity.id}>
           <div className="sender-identity-head">
             <strong>{identity.email}</strong>
-            <small>{sourceText[identity.source]} · {statusText[identity.status]}</small>
+            <small>{sourceText[identity.source]} · {statusText[identity.status]}{identity.delegation ? ` · ${identity.delegation === 'send-as' ? 'Send as' : 'Send on behalf'}` : ''}</small>
             <label className="sender-default"><input type="radio" name={`default-${account.id}`} checked={identity.isDefault} disabled={Boolean(busy)} onChange={() => void saveIdentity(identity, { isDefault: true })} /> Default</label>
           </div>
           <div className="sender-identity-fields">
@@ -121,6 +126,11 @@ export default function MailSenderIdentities({ account, onToast }: MailSenderIde
             <label className="field"><span>Reply-To</span><input aria-label={`Reply-To for ${identity.email}`} value={edit.replyTo} placeholder="Optional" onChange={(event) => update(identity.id, { replyTo: event.target.value })} /></label>
             <label className="field"><span>New messages</span><select aria-label={`New-message signature for ${identity.email}`} value={edit.newSignatureId} onChange={(event) => update(identity.id, { newSignatureId: event.target.value })}>{signatureOptions}</select></label>
             <label className="field"><span>Replies and forwards</span><select aria-label={`Reply signature for ${identity.email}`} value={edit.replySignatureId} onChange={(event) => update(identity.id, { replySignatureId: event.target.value })}>{signatureOptions}</select></label>
+            {delegationAvailable(identity) && <label className="field"><span>Shared mailbox</span><select aria-label={`Sending mode for ${identity.email}`} value={edit.delegation} onChange={(event) => update(identity.id, { delegation: event.target.value as IdentityEdit['delegation'] })}>
+              <option value="">Alias of this account</option>
+              <option value="send-as">Send as (From: this mailbox)</option>
+              <option value="send-on-behalf">Send on behalf (Sender: you)</option>
+            </select></label>}
           </div>
           <div className="settings-actions">
             {dirty(identity) && <button className="button ghost small" disabled={Boolean(busy)} onClick={() => void saveIdentity(identity)}><Save size={14} /> Save</button>}
