@@ -154,10 +154,15 @@ const mocks = vi.hoisted(() => {
     sanitize: vi.fn((html: string, remote?: boolean) => `safe:${remote}:${html}`),
     source: vi.fn(() => ({ headers: 'headers', source: 'source' })),
     fs: {
-      copyFileSync: vi.fn(), existsSync: vi.fn(() => false), mkdirSync: vi.fn(), readFileSync: vi.fn(() => Buffer.from('raw')),
+      copyFileSync: vi.fn(), existsSync: vi.fn((_path?: unknown) => false), mkdirSync: vi.fn(), readFileSync: vi.fn(() => Buffer.from('raw')),
       readdirSync: vi.fn((): string[] => []), renameSync: vi.fn(), rmSync: vi.fn(),
       statfsSync: vi.fn(() => ({ bavail: 2n, bsize: 4096n })), writeFileSync: vi.fn()
     },
+    indexer: {
+      schedule: vi.fn(), cancelAccount: vi.fn(), resumeAccount: vi.fn(), stop: vi.fn().mockResolvedValue(undefined),
+      options: undefined as any
+    },
+    extractor: { extract: vi.fn().mockResolvedValue({ status: 'indexed', text: 'x', truncated: false }), close: vi.fn().mockResolvedValue(undefined), options: undefined as any },
     setCredential(value: any) { credential = value; credentialError = undefined },
     setCredentialError(value: string) { credential = undefined; credentialError = value },
     emit(message: any) { messageHandler?.(message) }
@@ -184,6 +189,12 @@ vi.mock('./mail/imap-client', () => ({
 vi.mock('./mail/message-security', () => ({ sanitizeMessageHtmlWithReport: (html: string, remote?: boolean) => ({ html: mocks.sanitize(html, remote), remoteContent: { remoteImages: 1, trackers: [] } }) }))
 vi.mock('./mail/new-mail', () => ({ buildNewMailNotification: mocks.notification }))
 vi.mock('./mail/message-source', () => ({ parseMessageSource: mocks.source }))
+vi.mock('./mail/attachment-index', () => ({
+  AttachmentContentIndexer: vi.fn(function (options: any) { mocks.indexer.options = options; return mocks.indexer })
+}))
+vi.mock('./mail/attachment-extract-runner', () => ({
+  AttachmentExtractRunner: vi.fn(function (options: any) { mocks.extractor.options = options; return mocks.extractor })
+}))
 vi.mock('./mail/mime-builder', () => ({ createMime: vi.fn(() => 'mime'), createMimeBuffer: vi.fn(() => Buffer.from('mime')) }))
 
 import './mail-worker'
@@ -1186,8 +1197,45 @@ describe.sequential('mail worker protocol routing', () => {
     await vi.waitFor(() => expect(watches.activateForDraft).toHaveBeenCalledWith('watched-delivery', expect.objectContaining({ messageIdHeader: '<sent-id@aerio.local>', threadId: 'gmail-thread' })))
   })
 
+  it('runs attachment-content indexing in an isolated extractor worker', async () => {
+    // Without the built extractor entry (as under Vitest), indexing stays off.
+    expect(mocks.indexer.options).toBeUndefined()
+    mocks.fs.existsSync.mockImplementation((path: any) => String(path).endsWith('attachment-extract-worker.js'))
+    mocks.db.attachmentText = { kind: 'store' }
+    await request({ type: 'initialize', payload: { databasePath: 'mail.db', contentPath: 'C:\\content' } })
+    expect(String(mocks.extractor.options.workerPath)).toMatch(/attachment-extract-worker\.js$/)
+    expect(mocks.indexer.options.store).toBe(mocks.db.attachmentText)
+    expect(mocks.indexer.schedule).toHaveBeenCalled()
+
+    await mocks.indexer.options.extract({ filename: 'a.txt', mimeType: 'text/plain', content: Buffer.from('a') }, AbortSignal.timeout(1_000))
+    expect(mocks.extractor.extract).toHaveBeenCalledWith(expect.objectContaining({ filename: 'a.txt' }), expect.any(AbortSignal))
+    mocks.db.getMessageRaw.mockReturnValueOnce(undefined)
+    await expect(mocks.indexer.options.readAttachments('account-1', 'gone')).resolves.toBeUndefined()
+    mocks.db.getMessageRaw.mockReturnValueOnce('C:\\content\\raw.eml')
+    mocks.fs.existsSync.mockReturnValueOnce(true)
+    mocks.postalParse.mockResolvedValueOnce({ attachments: [
+      { filename: 'a.txt', mimeType: 'text/plain', content: 'aGVsbG8=', encoding: 'base64' },
+      { filename: 'b.bin', mimeType: 'application/octet-stream', content: new Uint8Array([1, 2]).buffer }
+    ] })
+    const contents: Map<string, Buffer> = await mocks.indexer.options.readAttachments('account-1', 'message-1')
+    expect([...contents.values()].map((value) => value.toString('hex'))).toEqual([Buffer.from('hello').toString('hex'), '0102'])
+    expect([...contents.keys()][0]).toMatch(/^part-0-/)
+
+    await request({ type: 'accounts:upsert', payload: mocks.account })
+    expect(mocks.indexer.resumeAccount).toHaveBeenCalledWith('account-1')
+    await request({ type: 'accounts:disconnect', payload: { accountId: 'account-1', mode: 'archive' } })
+    expect(mocks.indexer.cancelAccount).not.toHaveBeenCalled()
+    await request({ type: 'accounts:disconnect', payload: { accountId: 'account-1', mode: 'delete' } })
+    expect(mocks.indexer.cancelAccount).toHaveBeenCalledWith('account-1')
+    expect(mocks.indexer.cancelAccount.mock.invocationCallOrder[0]).toBeLessThan(mocks.db.disconnectAccount.mock.invocationCallOrder.at(-1)!)
+    mocks.fs.existsSync.mockReset()
+    mocks.fs.existsSync.mockReturnValue(false)
+  })
+
   it('shuts down cleanly', async () => {
     await expect(request({ type: 'shutdown' })).resolves.toMatchObject({ result: undefined })
+    expect(mocks.indexer.stop).toHaveBeenCalled()
+    expect(mocks.extractor.close).toHaveBeenCalled()
     expect(mocks.db.close).toHaveBeenCalledOnce()
     await expect(request({ type: 'accounts:list' })).resolves.toMatchObject({ error: { message: 'Database is not initialized' } })
   })

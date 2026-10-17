@@ -12,7 +12,7 @@ Remaining release work and optional future features are tracked in [ROADMAP.md](
 - Complete mailbox inventory, including Spam and Trash, followed by newest-first offline download
 - Raw RFC 2822 messages, MIME bodies, and attachments stored locally
 - Resumable sync checkpoints, Gmail History, Microsoft delta links, IMAP folder reconciliation, 15-second active/one-minute background polling, and manual pause/resume
-- SQLite-backed folder views, infinite scrolling, and full-text offline search
+- SQLite-backed folder views, infinite scrolling, and full-text offline search, including text extracted from PDF, Office, and text attachments
 - Single and multi-select Archive, read/unread, star, importance, move, label, and Trash actions
 - Optimistic local changes with exact-state Undo, retry/backoff, and a durable provider operation queue
 - Editable provider drafts with idle autosave, rich-text composition, recipient suggestions, signatures, forwarding attachments, scheduled delivery, ten-second Undo Send, SMTP delivery, and an offline Outbox
@@ -147,7 +147,7 @@ The app uses Electron 43, React 19, TypeScript, Vite, and local SQLite databases
 
 - The renderer is sandboxed and has no Node.js access.
 - The main process owns OAuth, OS dialogs, safe storage, external navigation, and a typed IPC boundary.
-- A dedicated Node worker owns the normalized mail database, Gmail/Graph/IMAP synchronization, SMTP delivery, MIME parsing, full-text search, queued mutations, and drafts.
+- A dedicated Node worker owns the normalized mail database, Gmail/Graph/IMAP synchronization, SMTP delivery, MIME parsing, full-text search, queued mutations, and drafts. Attachment text extraction runs in its own nested worker thread with a heap cap and per-file timeout.
 - Main-process Google and Microsoft productivity connectors normalize Calendar and Contacts into an isolated SQLite cache. Failed refreshes retain the last good snapshot; disconnecting removes that account’s cached productivity data.
 - Application preferences use their own small SQLite database; provider data and local Contacts/Tasks/Notes retain their existing dedicated stores.
 

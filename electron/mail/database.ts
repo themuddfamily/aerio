@@ -31,6 +31,7 @@ import type {
 import { compileMailSearchQuery } from '../../src/lib/mail-search-query'
 import { normalizeSendOptions } from '../../src/lib/mail-send-options'
 import { ReplyWatchStore } from './reply-watches'
+import { AttachmentTextStore } from './attachment-text-store'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -108,6 +109,7 @@ export class MailDatabase {
   private readonly db: DatabaseSync
   private statements = new Map<string, StatementSync>()
   readonly replyWatches: ReplyWatchStore
+  readonly attachmentText: AttachmentTextStore
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -119,6 +121,7 @@ export class MailDatabase {
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;')
     this.migrate()
     this.replyWatches = new ReplyWatchStore(this.db)
+    this.attachmentText = new AttachmentTextStore(this.db)
   }
 
   close() {
@@ -503,6 +506,7 @@ export class MailDatabase {
     const rawRows = this.stmt('SELECT raw_path FROM gmail_messages WHERE account_id=?').all(accountId) as DatabaseRow[]
     this.transaction(() => {
       this.stmt('DELETE FROM gmail_fts WHERE account_id=?').run(accountId)
+      this.attachmentText.deleteAccount(accountId)
       this.stmt('DELETE FROM gmail_accounts WHERE id=?').run(accountId)
     })
     for (const row of rawRows) {
@@ -709,9 +713,11 @@ export class MailDatabase {
       for (const attachment of message.attachments) {
         insertAttachment.run(message.accountId, message.id, attachment.id, attachment.filename, attachment.mimeType, attachment.size, attachment.contentId ?? null)
       }
+      // Keep extracted text for attachments that are unchanged, so a re-download doesn't re-extract them.
+      this.attachmentText.prune(message.accountId, message.id)
       this.stmt('DELETE FROM gmail_fts WHERE account_id=? AND message_id=?').run(message.accountId, message.id)
       this.stmt('INSERT INTO gmail_fts(account_id,message_id,thread_id,subject,sender,recipients,body,attachment_names) VALUES(?,?,?,?,?,?,?,?)')
-        .run(message.accountId, message.id, message.threadId, message.subject, `${message.fromName} ${message.fromEmail}`, [...message.to, ...message.cc].join(' '), message.text, message.attachments.map((item) => item.filename).join(' '))
+        .run(message.accountId, message.id, message.threadId, message.subject, `${message.fromName} ${message.fromEmail}`, [...message.to, ...message.cc].join(' '), message.text, this.attachmentText.searchValue(message.accountId, message.id))
       const upsertRecipient = this.stmt(`INSERT INTO gmail_recipients(account_id,email,name,last_used_at) VALUES(?,?,?,?)
         ON CONFLICT(account_id,email) DO UPDATE SET name=COALESCE(excluded.name,gmail_recipients.name),last_used_at=MAX(gmail_recipients.last_used_at,excluded.last_used_at)`)
       const recipients = [{ name: message.fromName || undefined, email: message.fromEmail.toLowerCase() }, ...[...message.to, ...message.cc].map(addressParts)]
@@ -774,6 +780,7 @@ export class MailDatabase {
     }
     this.transaction(() => {
       this.stmt('DELETE FROM gmail_fts WHERE account_id=? AND message_id=?').run(accountId, messageId)
+      this.attachmentText.deleteMessage(accountId, messageId)
       this.stmt('DELETE FROM gmail_sync_items WHERE account_id=? AND message_id=?').run(accountId, messageId)
       this.stmt('DELETE FROM gmail_messages WHERE account_id=? AND id=?').run(accountId, messageId)
     })
@@ -1021,7 +1028,8 @@ export class MailDatabase {
         filename: String(item.filename),
         mimeType: String(item.mime_type),
         size: Number(item.size),
-        contentId: item.content_id ? String(item.content_id) : undefined
+        contentId: item.content_id ? String(item.content_id) : undefined,
+        textIndex: this.attachmentText.textIndex(accountId, String(row.id), String(item.id), Number(item.size))
       }))
     }))
     return { accountId, id: threadId, subject: messages.at(-1)?.subject ?? '(No subject)', messages }

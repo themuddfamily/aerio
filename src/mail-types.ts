@@ -102,6 +102,30 @@ export interface MailThreadSummary {
   snoozedUntil?: string
 }
 
+/**
+ * Outcome of local attachment-content extraction. `pending` means the
+ * attachment has not been processed yet; every other state is final until the
+ * extractor version changes or the attachment itself changes.
+ */
+export type MailAttachmentTextStatus =
+  | 'pending'
+  | 'indexed'
+  | 'empty'
+  | 'unsupported'
+  | 'encrypted'
+  | 'too-large'
+  | 'timeout'
+  | 'memory-limit'
+  | 'failed'
+
+export interface MailAttachmentTextIndex {
+  status: MailAttachmentTextStatus
+  /** The extracted text hit the per-attachment limit, so only the start is searchable. */
+  truncated?: boolean
+  detail?: string
+  indexedAt?: string
+}
+
 export interface MailAttachment {
   id: string
   messageId: string
@@ -109,6 +133,7 @@ export interface MailAttachment {
   mimeType: string
   size: number
   contentId?: string
+  textIndex?: MailAttachmentTextIndex
 }
 
 export interface MailMessageDetail {
