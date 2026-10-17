@@ -125,6 +125,7 @@ export type MailWorkerCommand =
   | { type: 'import:resolve'; payload: { jobId: string; keys: string[]; decision: 'import' | 'discard' } }
   | { type: 'network'; payload: { online: boolean } }
   | { type: 'polling'; payload: { intervalMs: number; immediate?: boolean } }
+  | { type: 'pop3'; payload: import('./mail/pop3-sync').Pop3WorkerCommand }
   | { type: 'shutdown' }
 
 export type MailWorkerResult =
@@ -176,6 +177,8 @@ export type MailWorkerResult =
   | import('../src/mail-types').MailImportJob[]
   | import('../src/mail-types').MailImportItem[]
   | import('../src/mail-types').MailLocalTransferResult
+  | import('./mail/pop3-store').Pop3StoredSettings
+  | import('../src/pop3-types').Pop3AccountStatus
 
 export interface WorkerRequest {
   kind: 'request'
@@ -193,6 +196,7 @@ export interface WorkerResponse {
 export type AccountCredential =
   | { type: 'oauth'; accessToken: string }
   | { type: 'imap'; config: ImapAccountInput }
+  | { type: 'pop3'; config: import('../src/pop3-types').Pop3ConnectionConfig }
 
 export interface WorkerCredentialRequest {
   kind: 'credential-request'

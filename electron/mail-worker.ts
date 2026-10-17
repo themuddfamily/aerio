@@ -38,6 +38,9 @@ import { parseMessageSource } from './mail/message-source'
 import { runMailQuickAction } from './mail/quick-actions'
 import { MailImportService } from './mail/mail-import'
 import { transferToLocalFolders } from './mail/local-folders'
+import { mailProviderKeepsFoldersLocally } from '../src/lib/local-folders'
+import { Pop3Service } from './mail/pop3-sync'
+import { pop3SmtpConfig } from './mail/pop3-settings'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createCalendarMimeBuffer, createMime, createMimeBuffer } from './mail/mime-builder'
 import { calendarPartsFromRaw } from './mail/invitation-parts'
@@ -154,8 +157,44 @@ function clientFor(accountId: string) {
 
 async function imapClientFor(accountId: string) {
   const credential = await getCredential(accountId)
+  // POP3 accounts send through the same SMTP path; their mail never uses IMAP.
+  if (credential.type === 'pop3') return new ImapSmtpClient(pop3SmtpConfig(credential.config))
   if (credential.type !== 'imap') throw new Error('The IMAP account does not have server credentials')
   return new ImapSmtpClient(credential.config)
+}
+
+let pop3ServiceInstance: Pop3Service | undefined
+let pop3ChangedAt = 0
+function pop3Service() {
+  if (!database) throw new Error('Database is not initialized')
+  pop3ServiceInstance ??= new Pop3Service({
+    database,
+    credential: async (accountId) => {
+      const credential = await getCredential(accountId)
+      if (credential.type !== 'pop3') throw new Error('The POP3 account does not have server credentials')
+      return credential.config
+    },
+    store: (accountId, message, commit) => parseRawAndStore(accountId, message, commit),
+    assertCanSync,
+    emitProgress: (payload) => emit({ type: 'sync-progress', payload }),
+    changed: (accountId) => {
+      if (Date.now() - pop3ChangedAt < 2_000) return
+      pop3ChangedAt = Date.now()
+      emit({ type: 'mail-changed', payload: { accountId } })
+    }
+  })
+  return pop3ServiceInstance
+}
+
+async function syncPop3Account(accountId: string) {
+  if (!database) throw new Error('Database is not initialized')
+  const firstSync = !database.getAccountHistory(accountId)
+  const result = await pop3Service().sync(accountId)
+  database.setAccountHistory(accountId, `pop3:${Date.now()}`, true)
+  emit({ type: 'accounts-changed', payload: database.listAccounts() })
+  for (const changed of result.changedAccounts) emit({ type: 'mail-changed', payload: { accountId: changed } })
+  // The first download of an existing maildrop is not "new mail".
+  if (!firstSync) emitNewMail(accountId, result.newMessages)
 }
 
 function microsoftClientFor(accountId: string) {
@@ -244,7 +283,7 @@ async function parseRawAndStore(accountId: string, message: {
   sizeEstimate?: number
   remoteFolderId?: string
   remoteUid?: string
-}) {
+}, commit?: (record: ParsedMailMessage) => void) {
   if (!database) throw new Error('Database is not initialized')
   const isNew = !database.hasMessage(accountId, message.id)
   const raw = message.raw
@@ -293,7 +332,9 @@ async function parseRawAndStore(accountId: string, message: {
     remoteFolderId: message.remoteFolderId,
     remoteUid: message.remoteUid
   }
-  database.upsertMessage(record)
+  // `commit` (the POP3 UIDL checkpoint) is saved in the same transaction as the message.
+  if (commit) database.transaction(() => { database!.upsertMessage(record); commit(record) })
+  else database.upsertMessage(record)
   if (record.attachments.length) attachmentIndexer?.schedule()
   return { record, isNew }
 }
@@ -693,7 +734,8 @@ async function syncAccount(accountId: string, forceFull = false) {
   try {
     const provider = database.getAccount(accountId)?.provider
     if (forceFull) database.resetInventory(accountId)
-    if (provider === 'microsoft') await syncMicrosoftAccount(accountId)
+    if (provider === 'pop3') await syncPop3Account(accountId)
+    else if (provider === 'microsoft') await syncMicrosoftAccount(accountId)
     else if (provider && provider !== 'gmail') await syncImapAccount(accountId)
     else if (forceFull || !database.getAccountHistory(accountId)) await downloadInventory(accountId)
     else await incrementalSync(accountId)
@@ -769,8 +811,8 @@ async function runOperations() {
     const kind = String(row.kind) as MailActionKind
     const threadIds = JSON.parse(String(row.thread_ids_json)) as string[]
     const labelId = row.label_id ? String(row.label_id) : undefined
-    // Local Folders and local-only actions (pins) never reach a provider.
-    if (database.getAccount(accountId)?.provider === 'local' || isLocalOnlyMailAction(kind)) {
+    // Local Folders, POP3 folders, and local-only actions (pins) never reach a provider.
+    if (mailProviderKeepsFoldersLocally(database.getAccount(accountId)?.provider) || isLocalOnlyMailAction(kind)) {
       database.updateOperation(id, 'succeeded')
       emit({ type: 'operation', payload: { id, accountId, kind, status: 'succeeded' } })
       continue
@@ -941,7 +983,8 @@ async function saveDraft(input: MailDraftInput) {
   if (!database) throw new Error('Database is not initialized')
   input = stageDraftAttachments(input)
   // An encrypted draft stays on this device: syncing it would store plaintext with the provider.
-  const canSync = online && !input.openPgp?.encrypt && !input.smime?.encrypt && draftRecipientsAreSyncable(input.to, input.cc, input.bcc)
+  // POP3 has no server Drafts folder; its drafts are kept only on this device.
+  const canSync = online && !input.openPgp?.encrypt && !input.smime?.encrypt && draftRecipientsAreSyncable(input.to, input.cc, input.bcc) && database.getAccount(input.accountId)?.provider !== 'pop3'
   let result = database.saveDraft(input, { status: canSync ? 'syncing' : 'local' })
   if (!canSync) return result
   try {
@@ -1008,6 +1051,9 @@ async function transmitMessage(input: MailDraftInput, provider: MailAccountSumma
   // An alias also becomes the SMTP envelope sender; the server decides whether it is allowed.
   await (sender?.identity ? client.send(mime, recipients, input.sendOptions, sender.identity.email) : client.send(mime, recipients, input.sendOptions))
   if (remoteDraftId) await client.deleteDraft(remoteDraftId)
+  // POP3 has no server Sent folder, so Aerio keeps the sent copy locally. It was
+  // already delivered, so a failure here must not report the send as failed.
+  if (provider === 'pop3') await pop3Service().recordSent(input.accountId, mime).catch(() => undefined)
   return { messageIdHeader: messageIdFromMime(mime) }
 }
 
@@ -1298,6 +1344,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     startAttachmentIndexing(database.attachmentText)
     folderManagerInstance = undefined
     importServiceInstance = undefined
+    pop3ServiceInstance = undefined
     // Imports that were queued (not running) when Aerio closed continue now;
     // interrupted ones wait for the user to resume them.
     if (database.localMail?.nextQueuedJob()) void importService().pump()
@@ -1329,6 +1376,10 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     if (account.provider === 'local') return
     if (account.provider === 'gmail') await clientFor(account.id).getProfile()
     else if (account.provider === 'microsoft') await microsoftClientFor(account.id).listFolders()
+    else if (account.provider === 'pop3') {
+      await pop3Service().verify(account.id)
+      await (await imapClientFor(account.id)).verifySmtp()
+    }
     else await (await imapClientFor(account.id)).verify()
     return
   }
@@ -1368,6 +1419,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
       emit({ type: 'mail-changed', payload: { accountId } })
       return
     }
+    if (account?.provider === 'pop3') throw new Error('POP3 folders are kept on this computer and can’t hold a second copy of a message. Move it to another folder, or copy it to Local Folders instead.')
     if (!account || account.archived) throw new Error('Connect this account before copying messages')
     if (!online) throw new Error('Copying messages requires an internet connection')
     const target = database.listLabels([accountId]).find((label) => label.id === destination)
@@ -1617,6 +1669,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     const account = database.getAccount(command.payload.accountId)
     if (!account) throw new Error('Account not found')
     if (account.provider === 'local') throw new Error('Local Folders are stored only on this computer, so there is nothing to download again')
+    if (account.provider === 'pop3') throw new Error('POP3 mail lives on this computer once downloaded, and Aerio downloads each message only once, so there is nothing to rebuild')
     if (!account.syncEnabled) throw new Error('Enable synchronization for this account before rebuilding it')
     paused.delete(account.id)
     database.resetForFullSync(account.id)
@@ -1671,6 +1724,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     if (command.payload.immediate) pollAccounts()
     return
   }
+  if (command.type === 'pop3') return pop3Service().command(command.payload)
   if (command.type === 'shutdown') {
     clearInterval(operationTimer)
     clearInterval(pollTimer)
@@ -1684,6 +1738,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     database = undefined
     folderManagerInstance = undefined
     importServiceInstance = undefined
+    pop3ServiceInstance = undefined
     return
   }
 }

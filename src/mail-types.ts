@@ -1,10 +1,10 @@
 export type MailAccountStatus = 'connecting' | 'syncing' | 'ready' | 'paused' | 'needs-auth' | 'archived' | 'error'
 export type MailSyncPhase = 'idle' | 'inventory' | 'downloading' | 'catch-up' | 'incremental' | 'paused' | 'complete' | 'error'
 export type MailActionKind = 'archive' | 'unarchive' | 'read' | 'unread' | 'star' | 'unstar' | 'important' | 'unimportant' | 'trash' | 'untrash' | 'label' | 'unlabel' | 'move' | 'pin' | 'unpin'
-export type MailProviderId = 'gmail' | 'microsoft' | 'icloud' | 'yahoo' | 'fastmail' | 'imap' | 'proton-bridge' | 'local'
+export type MailProviderId = 'gmail' | 'microsoft' | 'icloud' | 'yahoo' | 'fastmail' | 'imap' | 'proton-bridge' | 'local' | 'pop3'
 
 export interface ImapAccountInput {
-  provider: Exclude<MailProviderId, 'gmail' | 'microsoft' | 'local'>
+  provider: Exclude<MailProviderId, 'gmail' | 'microsoft' | 'local' | 'pop3'>
   email: string
   displayName?: string
   username: string
@@ -873,6 +873,8 @@ export interface MailDesktopApi {
   }
   /** Mail import and Local Folders; optional so test doubles of the API stay valid. */
   imports?: MailImportApi
+  /** POP3 accounts (E38); optional so test doubles of the API stay valid. */
+  pop3?: import('./pop3-types').Pop3Api
   onEvent(callback: (event: MailWorkerEvent) => void): () => void
 }
 

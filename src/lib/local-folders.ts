@@ -7,6 +7,9 @@ export const LOCAL_FOLDER_DELIMITER = '/'
 
 export const isLocalFoldersAccount = (account: Pick<MailAccountSummary, 'provider'> | undefined) => account?.provider === 'local'
 
+/** Providers whose folder tree exists only in Aerio: Local Folders, and POP3 accounts (which have no server folders). */
+export const mailProviderKeepsFoldersLocally = (provider: MailAccountSummary['provider'] | undefined) => provider === 'local' || provider === 'pop3'
+
 export function localFoldersAccount(): MailAccountSummary {
   return {
     id: LOCAL_FOLDERS_ACCOUNT_ID,

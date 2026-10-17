@@ -80,7 +80,9 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
         { label: 'Reply watches', count: countRows(db, 'mail_reply_watches', `status='pending'`) },
         { label: 'Pinned conversations', count: countRows(db, 'mail_pins') },
         { label: 'Favorite folders', count: countRows(db, 'mail_folder_favorites') },
-        { label: 'Unfinished mail merges', count: countRows(db, 'mail_merge_jobs', MAIL_MERGE_ACTIVE) }
+        { label: 'Unfinished mail merges', count: countRows(db, 'mail_merge_jobs', MAIL_MERGE_ACTIVE) },
+        // POP3 UIDL checkpoints: a restored account does not download these messages again.
+        { label: 'POP3 download checkpoints', count: countRows(db, 'pop3_uidls') }
       ]
     },
     {

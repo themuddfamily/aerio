@@ -4,6 +4,7 @@ import type { MailAccountSummary, ImapServerSettings } from '../mail-types'
 import MailAutomaticRepliesSection from './MailAutomaticRepliesSection'
 import Modal from './Modal'
 import MailSenderIdentities from './MailSenderIdentities'
+import { Pop3AccountSettingsSection } from './Pop3Account'
 
 interface MailAccountSettingsModalProps {
   account: MailAccountSummary
@@ -25,7 +26,7 @@ export default function MailAccountSettingsModal({ account, onSaved, onClose, on
   const [password, setPassword] = useState('')
 
   useEffect(() => {
-    if (account.provider === 'gmail' || account.provider === 'microsoft') return
+    if (account.provider === 'gmail' || account.provider === 'microsoft' || account.provider === 'pop3') return
     void window.aerio.mail.accounts.imapSettings(account.id).then(setServer).catch((error) => onToast(error instanceof Error ? error.message : 'Server settings could not be loaded'))
   }, [account.id, account.provider, onToast])
 
@@ -137,9 +138,10 @@ export default function MailAccountSettingsModal({ account, onSaved, onClose, on
         <div className="settings-actions">
           <button className="button ghost" disabled={Boolean(busy)} onClick={() => void verify()}><ShieldCheck size={15} /> {busy === 'verify' ? 'Testing…' : 'Test connection'}</button>
           {(account.provider === 'gmail' || account.provider === 'microsoft') && <button className="button ghost" disabled={Boolean(busy)} onClick={() => void reconnect()}><RefreshCw size={15} /> {busy === 'reconnect' ? 'Waiting for sign-in…' : 'Reconnect'}</button>}
-          <button className="button danger-subtle" disabled={Boolean(busy) || !syncEnabled} onClick={() => void rebuild()}><RotateCcw size={15} /> {busy === 'rebuild' ? 'Starting…' : 'Rebuild local mailbox'}</button>
+          {account.provider !== 'pop3' && <button className="button danger-subtle" disabled={Boolean(busy) || !syncEnabled} onClick={() => void rebuild()}><RotateCcw size={15} /> {busy === 'rebuild' ? 'Starting…' : 'Rebuild local mailbox'}</button>}
         </div>
       </section>
+      {account.provider === 'pop3' && <Pop3AccountSettingsSection account={account} onToast={onToast} />}
       {server && <section>
         <h3>IMAP and SMTP servers</h3>
         <p>The saved password remains encrypted and is never displayed. Leave the password blank to keep it.</p>

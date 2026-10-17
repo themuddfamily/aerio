@@ -49,6 +49,7 @@ import { LocalMailStore } from './local-mail-store'
 import { MAIL_PIN_JOIN, MAIL_THREAD_CURSOR_CLAUSE, MAIL_THREAD_CURSOR_PARAMS, MAIL_THREAD_ORDER, MailPinStore, decodeMailThreadCursor, encodeMailThreadCursor, mailThreadCursorParams } from './mail-pins'
 import { isLocalOnlyMailAction } from '../../src/lib/mail-pins'
 import { MailFolderPreferenceStore } from './folder-preferences'
+import { Pop3Store } from './pop3-store'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -115,6 +116,7 @@ export class MailDatabase {
   readonly mailMerge: MailMergeStore
   readonly pins: MailPinStore
   readonly folderPreferences: MailFolderPreferenceStore
+  readonly pop3: Pop3Store
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -135,6 +137,7 @@ export class MailDatabase {
     this.mailMerge = new MailMergeStore(this.db)
     this.pins = new MailPinStore(this.db)
     this.folderPreferences = new MailFolderPreferenceStore(this.db)
+    this.pop3 = new Pop3Store(this.db)
   }
 
   close() {
@@ -149,8 +152,13 @@ export class MailDatabase {
     return statement
   }
 
+  private transactionDepth = 0
+
+  /** Runs `callback` in one transaction; a nested call joins the outer one. */
   transaction<T>(callback: () => T): T {
+    if (this.transactionDepth) return callback()
     this.db.exec('BEGIN IMMEDIATE')
+    this.transactionDepth += 1
     try {
       const result = callback()
       this.db.exec('COMMIT')
@@ -158,6 +166,8 @@ export class MailDatabase {
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
+    } finally {
+      this.transactionDepth -= 1
     }
   }
 
@@ -1349,7 +1359,8 @@ export class MailDatabase {
   }
 
   draftsToSync() {
-    return this.stmt(`SELECT * FROM gmail_drafts WHERE status='local' ORDER BY updated_at LIMIT 20`).all() as DatabaseRow[]
+    // POP3 drafts never sync: the protocol has no server Drafts folder.
+    return this.stmt(`SELECT * FROM gmail_drafts WHERE status='local' AND account_id NOT IN (SELECT id FROM gmail_accounts WHERE provider='pop3') ORDER BY updated_at LIMIT 20`).all() as DatabaseRow[]
   }
 
   updateDraftResult(id: string, result: MailDraftResult) {

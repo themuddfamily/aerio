@@ -77,6 +77,7 @@ import { AiAssistantStore, registerAiAssistant } from './mail/ai-assistant'
 import { MailTemplateStore, parseMailTemplateBackup, type MailTemplateBackup } from './mail/template-store'
 import { registerMailTemplates } from './mail/template-tools'
 import { registerMailIdentities, validateDraftSender } from './mail/identity-ipc'
+import { registerPop3Ipc } from './mail/pop3-ipc'
 import { registerMailMerge } from './mail/mail-merge-ipc'
 import { AutomaticRepliesService, registerAutomaticReplies } from './mail/automatic-replies'
 import { AvailabilityService, registerAvailability } from './productivity/availability'
@@ -1513,6 +1514,7 @@ function registerIpc() {
     return mailTemplateStore
   }, approveAttachment: (path) => approvedAttachmentPaths.add(path) })
   registerMailIdentities({ worker: requireMailWorker })
+  registerPop3Ipc({ worker: requireMailWorker, vault: requireVault, accountColor, locked: () => appLockStatus().locked, setProvider: (accountId, provider) => { if (provider) accountProviders.set(accountId, provider); else accountProviders.delete(accountId) } })
   registerMailMerge({ worker: requireMailWorker, validateMessage: (draft) => validateDraft(draft) })
   registerOpenPgp({ keyring: requireOpenPgp(), worker: requireMailWorker })
   registerSmime({ store: requireSmime(), worker: requireMailWorker })
