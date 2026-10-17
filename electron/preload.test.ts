@@ -61,6 +61,7 @@ describe('preload bridge', () => {
     await api().productivity.saveLocal({ notes: [] })
     await api().productivity.exportLocalData()
     await api().productivity.importLocalData()
+    await api().productivity.availability({ calendarId: 'calendar-1', attendees: ['a@example.com'], start: '2026-10-20T00:00:00Z', end: '2026-10-21T00:00:00Z' })
     await api().window.minimize()
     await api().window.maximize()
     await api().window.close()
@@ -74,6 +75,7 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('app-lock:lock')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('app-lock:unlock', 'long passphrase')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('productivity:sync', 'account-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('productivity:availability', { calendarId: 'calendar-1', attendees: ['a@example.com'], start: '2026-10-20T00:00:00Z', end: '2026-10-21T00:00:00Z' })
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('productivity:contact-create', 'account-1', { id: 'contact-1', name: 'Ada' })
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('productivity:contact-update', { id: 'contact-1', name: 'Ada' })
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('productivity:contact-delete', 'contact-1')
@@ -213,6 +215,24 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:save', expect.objectContaining({ name: 'Triage' }))
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:delete', 'quick-1')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:run', 'quick-1', [{ accountId: 'account-1', threadIds: ['thread-1'] }])
+    const imports = mail.imports!
+    await imports.ensureLocalFolders()
+    await imports.choose('folder')
+    await imports.start({ paths: ['C:\\mail'], duplicates: 'review', mboxVariant: 'mboxrd' })
+    await imports.list()
+    await imports.pause('job-1')
+    await imports.resume('job-1')
+    await imports.cancel('job-1')
+    await imports.dismiss('job-1')
+    await imports.items('job-1')
+    await imports.resolve('job-1', ['0:0'], 'discard')
+    await imports.transfer({ sourceAccountId: 'account-1', threadIds: ['thread-1'], destinationLabelId: 'folder:local-1', mode: 'copy' })
+    for (const channel of ['mail:local:ensure', 'mail:import:list']) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:import:choose', 'folder')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:import:start', expect.objectContaining({ paths: ['C:\\mail'] }))
+    for (const action of ['pause', 'resume', 'cancel', 'dismiss', 'items']) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(`mail:import:${action}`, 'job-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:import:resolve', 'job-1', ['0:0'], 'discard')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:local:transfer', expect.objectContaining({ mode: 'copy' }))
     await mail.templates.list('welcome')
     await mail.templates.save({ kind: 'snippet', name: 'Hi', html: 'Hi' })
     await mail.templates.delete('template-1')
@@ -267,6 +287,29 @@ describe('preload bridge', () => {
     expect(Object.keys(ai).sort()).toEqual(['cancel', 'compose', 'configure', 'search', 'status', 'suggestReplies', 'summarize'])
   })
 
+  it('exposes OpenPGP key management and message crypto with exact IPC channels', async () => {
+    const openPgp = api().openPgp!
+    const ref = { accountId: 'a', threadId: 't', messageId: 'm' }
+    const calls: [string, ...unknown[]][] = []
+    const call = async (promise: Promise<unknown>, channel: string, ...args: unknown[]) => { await promise; calls.push([channel, ...args]) }
+    await call(openPgp.status(), 'openpgp:status')
+    await call(openPgp.generate({ name: 'A', email: 'a@example.test', passphrase: 'p' }), 'openpgp:generate', { name: 'A', email: 'a@example.test', passphrase: 'p' })
+    await call(openPgp.importText('key', 'pass'), 'openpgp:import-text', 'key', 'pass')
+    await call(openPgp.importFile(), 'openpgp:import-file', undefined)
+    await call(openPgp.exportPublic('F'), 'openpgp:export-public', 'F')
+    await call(openPgp.exportPrivate('F', 'p'), 'openpgp:export-private', 'F', 'p')
+    await call(openPgp.delete('F'), 'openpgp:delete', 'F')
+    await call(openPgp.setVerification('F', 'verified'), 'openpgp:verification', 'F', 'verified')
+    await call(openPgp.unlock('F', 'p'), 'openpgp:unlock', 'F', 'p')
+    await call(openPgp.forgetPassphrases(), 'openpgp:forget')
+    await call(openPgp.preflight({ accountId: 'a', recipients: [], options: {} }), 'openpgp:preflight', { accountId: 'a', recipients: [], options: {} })
+    await call(openPgp.inspect(ref), 'openpgp:inspect', ref)
+    await call(openPgp.decrypt(ref, 'p'), 'openpgp:decrypt', ref, 'p')
+    await call(openPgp.saveAttachment(ref, 0), 'openpgp:save-attachment', ref, 0)
+    for (const [channel, ...args] of calls) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel, ...args)
+    expect(Object.keys(openPgp)).toHaveLength(calls.length)
+  })
+
   it('exposes provider automatic replies with exact IPC channels', async () => {
     const replies = api().mail.automaticReplies
     const settings = { enabled: true, subject: 'Away', internalMessage: 'Back Monday', externalMessage: '', externalAudience: 'all' }
@@ -276,6 +319,31 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:get', 'account-1')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:update', 'account-1', settings)
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:disable', 'account-1')
+  })
+
+  it('exposes cloud attachments with exact IPC channels and a removable progress listener', async () => {
+    const cloud = api().mail.cloudAttachments
+    const share = { audience: 'anyone', role: 'view' }
+    const calls: Array<[string, unknown[], () => Promise<unknown>]> = [
+      ['mail:cloud:status', ['account-1'], () => cloud.status('account-1')],
+      ['mail:cloud:connect', ['account-1'], () => cloud.connect('account-1')],
+      ['mail:cloud:upload', ['upload-1', 'account-1', 'C:\\file.pdf', share], () => cloud.upload('upload-1', 'account-1', 'C:\\file.pdf', share)],
+      ['mail:cloud:cancel', ['upload-1'], () => cloud.cancel('upload-1')],
+      ['mail:cloud:pending', ['account-1'], () => cloud.pending('account-1')],
+      ['mail:cloud:resume', ['upload-1'], () => cloud.resume('upload-1')],
+      ['mail:cloud:discard', ['upload-1'], () => cloud.discard('upload-1')],
+      ['mail:cloud:verify', ['account-1', ['https://x.test']], () => cloud.verify('account-1', ['https://x.test'])]
+    ]
+    for (const [channel, args, call] of calls) {
+      await call()
+      expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel, ...args)
+    }
+    const progress = vi.fn()
+    const stop = cloud.onProgress(progress)
+    mocks.listeners.get('mail:cloud:progress')?.[0]({}, { uploadId: 'upload-1', sentBytes: 1 })
+    expect(progress).toHaveBeenCalledWith({ uploadId: 'upload-1', sentBytes: 1 })
+    stop()
+    expect(mocks.ipcRenderer.removeListener).toHaveBeenCalledWith('mail:cloud:progress', expect.any(Function))
   })
 
   it('reports initial and changing network connectivity', async () => {

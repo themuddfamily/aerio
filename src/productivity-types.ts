@@ -1,4 +1,4 @@
-import type { Attachment, CalendarEvent, Contact, ContactList, Note, Task } from './types'
+import type { Attachment, CalendarEvent, Contact, ContactList, Note, RecurrenceEditScope, Task } from './types'
 
 export type ProductivityProvider = 'gmail' | 'microsoft'
 export type ProductivityModule = 'calendar' | 'contacts'
@@ -100,8 +100,8 @@ export interface ProductivityDesktopApi {
   snapshot(): Promise<ProductivitySnapshot>
   sync(accountId: string): Promise<ProductivitySnapshot>
   createEvent(event: CalendarEvent): Promise<ProductivitySnapshot>
-  updateEvent(event: CalendarEvent): Promise<ProductivitySnapshot>
-  deleteEvent(eventId: string): Promise<ProductivitySnapshot>
+  updateEvent(event: CalendarEvent, scope?: RecurrenceEditScope): Promise<ProductivitySnapshot>
+  deleteEvent(eventId: string, scope?: RecurrenceEditScope): Promise<ProductivitySnapshot>
   createContact(accountId: string, contact: Contact): Promise<ProductivityContactWriteResult>
   updateContact(contact: Contact): Promise<ProductivityContactWriteResult>
   deleteContact(contactId: string): Promise<ProductivitySnapshot>
@@ -115,4 +115,6 @@ export interface ProductivityDesktopApi {
   saveLocal(snapshot: LocalModuleSnapshot): Promise<void>
   exportLocalData(): Promise<LocalDataBackupResult>
   importLocalData(): Promise<LocalModuleSnapshot | undefined>
+  /** Free/busy lookup for the scheduling assistant, answered by the calendar's provider. */
+  availability?(request: import('./scheduling-types').AvailabilityRequest): Promise<import('./scheduling-types').AvailabilityResult>
 }

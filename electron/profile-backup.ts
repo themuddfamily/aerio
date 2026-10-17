@@ -27,11 +27,12 @@ const SQLITE_SIDECARS = ['-wal', '-shm', '-journal']
  */
 export const PROFILE_BACKUP_EXCLUSIONS = [
   'oauth-vault.dat (OAuth access/refresh tokens, IMAP/SMTP passwords, and their secure-storage encryption)',
+  'openpgp-keyring.dat (OpenPGP public and passphrase-protected private keys; export keys explicitly to move them)',
   'App-lock passphrase verifier (the current device keeps its own app lock)',
   'Diagnostic logs, window bounds, and update caches',
   'Earlier restore staging and rollback copies'
 ]
-const FORBIDDEN_NAMES = new Set(['oauth-vault.dat'])
+const FORBIDDEN_NAMES = new Set(['oauth-vault.dat', 'openpgp-keyring.dat'])
 
 export interface ProfileRestoreContext {
   userData: string

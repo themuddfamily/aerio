@@ -1,10 +1,10 @@
 export type MailAccountStatus = 'connecting' | 'syncing' | 'ready' | 'paused' | 'needs-auth' | 'archived' | 'error'
 export type MailSyncPhase = 'idle' | 'inventory' | 'downloading' | 'catch-up' | 'incremental' | 'paused' | 'complete' | 'error'
 export type MailActionKind = 'archive' | 'unarchive' | 'read' | 'unread' | 'star' | 'unstar' | 'important' | 'unimportant' | 'trash' | 'untrash' | 'label' | 'unlabel' | 'move'
-export type MailProviderId = 'gmail' | 'microsoft' | 'icloud' | 'yahoo' | 'fastmail' | 'imap' | 'proton-bridge'
+export type MailProviderId = 'gmail' | 'microsoft' | 'icloud' | 'yahoo' | 'fastmail' | 'imap' | 'proton-bridge' | 'local'
 
 export interface ImapAccountInput {
-  provider: Exclude<MailProviderId, 'gmail' | 'microsoft'>
+  provider: Exclude<MailProviderId, 'gmail' | 'microsoft' | 'local'>
   email: string
   displayName?: string
   username: string
@@ -19,7 +19,8 @@ export interface ImapAccountInput {
 }
 
 export interface MailProviderPreset {
-  id: MailProviderId
+  /** Local Folders are created from the import dialog, never from account setup. */
+  id: Exclude<MailProviderId, 'local'>
   name: string
   description: string
   auth: 'google-oauth' | 'microsoft-oauth' | 'app-password' | 'password' | 'bridge'
@@ -524,6 +525,8 @@ export interface MailDraftInput {
   fromIdentityId?: string
   replyTo?: string[]
   sendOptions?: MailSendOptions
+  /** OpenPGP Sign/Encrypt choice; delivery aborts rather than sending plaintext when it cannot be honored. */
+  openPgp?: import('./openpgp-types').MailOpenPgpOptions
 }
 
 export type MailImportance = 'low' | 'normal' | 'high'
@@ -763,6 +766,7 @@ export interface MailDiagnosticHealth {
 export interface MailDesktopApi {
   messageTools: MessageToolsApi
   automaticReplies: MailAutomaticRepliesApi
+  cloudAttachments: import('./cloud-attachment-types').CloudAttachmentsApi
   credentials: {
     status(): Promise<MailCredentialStatus>
     import(): Promise<MailCredentialStatus>
@@ -860,6 +864,8 @@ export interface MailDesktopApi {
     delete(id: string): Promise<void>
     run(id: string, targets: MailQuickActionTarget[]): Promise<MailQuickActionRunResult>
   }
+  /** Mail import and Local Folders; optional so test doubles of the API stay valid. */
+  imports?: MailImportApi
   onEvent(callback: (event: MailWorkerEvent) => void): () => void
 }
 
@@ -872,3 +878,91 @@ export type MailWorkerEvent =
   | { type: 'new-mail'; payload: { accountId: string; count: number; threadId?: string; subject?: string; sender?: string } }
   | { type: 'draft-delivery'; payload: MailDraftResult }
   | { type: 'reply-watch'; payload: { watch: MailReplyWatch; reason: 'replied' | 'expired' } }
+  | { type: 'import-progress'; payload: MailImportJob }
+
+export type MailImportStatus = 'queued' | 'running' | 'paused' | 'interrupted' | 'cancelled' | 'completed' | 'failed'
+export type MailImportDuplicatePolicy = 'review' | 'import'
+export type MailboxVariant = 'mboxrd' | 'mboxo'
+
+export interface MailImportStartInput {
+  paths: string[]
+  /** Existing Local Folders folder that receives the imported hierarchy; top level when omitted. */
+  parentLabelId?: string
+  duplicates: MailImportDuplicatePolicy
+  mboxVariant: MailboxVariant
+}
+
+export interface MailImportJob {
+  id: string
+  accountId: string
+  status: MailImportStatus
+  /** Short description of what is imported, such as the chosen file or folder name. */
+  label: string
+  sources: number
+  imported: number
+  duplicates: number
+  failed: number
+  skipped: number
+  /** Held duplicates still waiting for a decision. */
+  pendingReview: number
+  processedBytes: number
+  totalBytes: number
+  currentSource?: string
+  error?: string
+  createdAt: string
+  updatedAt: string
+  finishedAt?: string
+}
+
+export type MailImportItemStatus = 'duplicate' | 'failed' | 'skipped' | 'imported' | 'discarded'
+
+export interface MailImportItem {
+  key: string
+  jobId: string
+  status: MailImportItemStatus
+  reason: string
+  source: string
+  subject: string
+  from: string
+  date?: string
+  size: number
+  messageIdHeader?: string
+  /** The Local Folders message this one duplicates. */
+  duplicateOf?: { messageId: string; subject: string }
+}
+
+export interface MailImportChooseResult {
+  paths: string[]
+  /** Chosen paths Aerio cannot import, with the reason shown to the user. */
+  unsupported: { path: string; reason: string }[]
+}
+
+export interface MailLocalTransferInput {
+  sourceAccountId: string
+  threadIds: string[]
+  destinationLabelId: string
+  mode: 'copy' | 'move'
+}
+
+export interface MailLocalTransferResult {
+  copied: number
+  /** Messages already present in the destination folder. */
+  skipped: number
+  /** Messages whose original was not downloaded, so there was nothing to copy. */
+  missing: number
+  trashOperation?: PendingOperation
+}
+
+export interface MailImportApi {
+  ensureLocalFolders(): Promise<MailAccountSummary>
+  choose(kind: 'files' | 'folder'): Promise<MailImportChooseResult>
+  start(input: MailImportStartInput): Promise<MailImportJob>
+  list(): Promise<MailImportJob[]>
+  pause(id: string): Promise<MailImportJob>
+  resume(id: string): Promise<MailImportJob>
+  cancel(id: string): Promise<MailImportJob>
+  dismiss(id: string): Promise<void>
+  items(jobId: string): Promise<MailImportItem[]>
+  resolve(jobId: string, keys: string[], decision: 'import' | 'discard'): Promise<MailImportJob>
+  transfer(input: MailLocalTransferInput): Promise<MailLocalTransferResult>
+}

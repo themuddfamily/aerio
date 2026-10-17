@@ -9,7 +9,7 @@ import CalendarView from './CalendarView'
 
 const calendarEvent = (overrides: Partial<CalendarEvent> = {}): CalendarEvent => ({
   id: 'event-1', calendarId: 'google', title: 'Planning session', start: '2026-08-08T10:00:00Z', end: '2026-08-08T11:00:00Z',
-  location: 'Studio', description: 'Plan the release', color: '#6558e8', attendees: ['ada@example.test'], reminderMinutes: 15, recurrence: 'weekly', ...overrides
+  location: 'Studio', description: 'Plan the release', color: '#6558e8', attendees: ['ada@example.test'], reminderMinutes: 15, recurrence: 'none', ...overrides
 })
 const state = (events: CalendarEvent[] = [calendarEvent()]): AppState => ({
   accounts: [

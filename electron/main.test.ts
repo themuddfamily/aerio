@@ -132,6 +132,8 @@ const mocks = vi.hoisted(() => {
     createEvent: vi.fn(async (_calendar: any, input: any) => ({ ...input, accountId: 'a1b2', provider: 'gmail', remoteId: 'remote', readOnly: false })),
     updateEvent: vi.fn(async (_calendar: any, _current: any, input: any) => ({ ...input, accountId: 'a1b2', provider: 'gmail', remoteId: 'remote', readOnly: false })),
     deleteEvent: vi.fn(async () => undefined),
+    updateEventSeries: vi.fn(async () => undefined),
+    deleteEventSeries: vi.fn(async () => undefined),
     createContact: vi.fn(async (input: any) => ({ ...input, id: 'a1b2:google-contact:people/new', accountId: 'a1b2', provider: 'gmail', remoteId: 'people/new', readOnly: false })),
     updateContact: vi.fn(async (_current: any, input: any) => ({ ...input, accountId: 'a1b2', provider: 'gmail', remoteId: 'people/existing', readOnly: false })),
     deleteContact: vi.fn(async () => undefined),
@@ -176,7 +178,7 @@ const mocks = vi.hoisted(() => {
     ipcHandlers, appHandlers, protocolHandlers, windows, notifications, trays, FakeBrowserWindow, FakeDatabaseSync,
     setLinuxLoginItem: vi.fn(),
     linuxTrayHostAvailable: vi.fn(async () => true),
-    vault, worker, MailWorkerClient, store, google, microsoft, updateManager, taskService, diagnosticLogger, imapClient, image,
+    vault, worker, openPgp: { lock: vi.fn(), protect: vi.fn() }, assertOpenPgpSendable: vi.fn(async () => undefined), MailWorkerClient, store, google, microsoft, updateManager, taskService, diagnosticLogger, imapClient, image,
     get accounts() { return accounts }, set accounts(value: any[]) { accounts = value },
     failWorker(error: Error) { workerFailure = error }, emitWorker(event: any) { workerEvent?.(event) },
     setOpenResult(value: any) { dialogOpenResult = value }, setSaveResult(value: any) { dialogSaveResult = value },
@@ -231,7 +233,7 @@ const mocks = vi.hoisted(() => {
 vi.mock('electron', () => ({
   app: mocks.app, BrowserWindow: mocks.FakeBrowserWindow, dialog: mocks.dialog, ipcMain: mocks.ipcMain,
   Menu: mocks.Menu, nativeImage: mocks.nativeImage, net: mocks.net, Notification: mocks.Notification,
-  protocol: mocks.protocol, shell: mocks.shell, Tray: mocks.Tray
+  protocol: mocks.protocol, safeStorage: {}, shell: mocks.shell, Tray: mocks.Tray
 }))
 vi.mock('node:fs', () => mocks.fs)
 vi.mock('node:dns/promises', () => ({ lookup: mocks.lookup }))
@@ -241,6 +243,8 @@ vi.mock('./tray-availability', () => ({ linuxTrayHostAvailable: mocks.linuxTrayH
 vi.mock('./mail/oauth-vault', () => ({ OAuthVault: vi.fn(function () { return mocks.vault }) }))
 vi.mock('./mail/worker-client', () => ({ MailWorkerClient: mocks.MailWorkerClient }))
 vi.mock('./mail/ai-assistant', () => ({ AiAssistantStore: vi.fn(), registerAiAssistant: vi.fn() }))
+vi.mock('./mail/openpgp-keyring', () => ({ OpenPgpKeyring: vi.fn(function () { return mocks.openPgp }) }))
+vi.mock('./mail/openpgp-ipc', () => ({ registerOpenPgp: vi.fn(), assertOpenPgpSendable: mocks.assertOpenPgpSendable }))
 vi.mock('./mail/imap-client', () => ({ ImapSmtpClient: vi.fn(function () { return mocks.imapClient }) }))
 vi.mock('./mail/provider-presets', () => ({ PROVIDER_PRESETS: [{ id: 'gmail' }], validateImapAccount: mocks.validateImap }))
 vi.mock('./diagnostics', () => ({ DiagnosticLogger: vi.fn(function () { return mocks.diagnosticLogger }) }))
@@ -371,6 +375,8 @@ describe.sequential('Electron main process', () => {
     expect(() => invoke('app-lock:enable', 'short')).toThrow(/8 to 256/)
     expect(invoke('app-lock:enable', 'correct horse battery staple')).toEqual({ enabled: true, locked: false })
     expect(invoke('app-lock:lock')).toEqual({ enabled: true, locked: true })
+    // Locking also drops every cached OpenPGP passphrase.
+    expect(mocks.openPgp.lock).toHaveBeenCalled()
     expect(mocks.windows[0].webContents.send).toHaveBeenCalledWith('app-lock:status-changed', { enabled: true, locked: true })
     expect(() => invoke('window:open-message', { source: 'connected', accountId: 'a1b2', threadId: 'thread', title: 'Locked' })).toThrow(/Unlock Aerio/)
     const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
@@ -445,6 +451,12 @@ describe.sequential('Electron main process', () => {
     const sendable = { ...draft, to: ['reader@example.test'] }
     await invoke('mail:drafts:send', sendable)
     await invoke('mail:drafts:schedule', sendable, new Date(Date.now() + 60_000).toISOString())
+    // A Sign/Encrypt draft that cannot be protected is never handed to the worker.
+    mocks.assertOpenPgpSendable.mockRejectedValueOnce(new Error('No OpenPGP public key for: reader@example.test.'))
+    mocks.worker.request.mockClear()
+    await expect(invoke('mail:drafts:send', { ...sendable, openPgp: { encrypt: true, ignored: 1 } })).rejects.toThrow(/No OpenPGP public key/)
+    expect(mocks.assertOpenPgpSendable).toHaveBeenLastCalledWith(mocks.openPgp, mocks.worker, expect.objectContaining({ openPgp: { encrypt: true } }))
+    expect(mocks.worker.request).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'drafts:send' }))
     await expect(invoke('mail:drafts:list', ['a1b2'])).resolves.toHaveLength(1)
     await expect(invoke('mail:drafts:get', 'draft-1')).resolves.toMatchObject({ id: 'draft-1' })
     await invoke('mail:drafts:stage-message-attachments', 'draft', 'a1b2', 'message')
@@ -887,6 +899,28 @@ describe.sequential('Electron main process', () => {
     await expect(invoke('productivity:event-delete', 'event')).resolves.toBeDefined()
     expect(mocks.google.deleteEvent).toHaveBeenCalled()
     expect(() => invoke('productivity:event-delete', '')).toThrow(/valid event/)
+  })
+
+  it('routes series-wide and this-and-following calendar writes to the series master', async () => {
+    const calendar = { id: 'calendar', accountId: 'abcdef', provider: 'gmail', remoteId: 'remote-calendar', name: 'Work', canWrite: true }
+    const input = {
+      id: 'instance', calendarId: 'calendar', title: 'Standup', start: '2026-08-10T09:00:00Z', end: '2026-08-10T09:30:00Z',
+      color: '#6558e8', attendees: [], reminderMinutes: 15, recurrence: 'none', seriesId: 'series', originalStart: '2026-08-10T09:00:00Z', timeZone: 'Europe/London'
+    }
+    const current = { ...input, accountId: 'abcdef', provider: 'gmail', remoteId: 'series_20260810', readOnly: false }
+    mocks.setStoreSnapshot({ calendars: [calendar], events: [current], contacts: [], sync: [] })
+    await expect(invoke('productivity:event-update', { ...input, title: 'Renamed' }, 'series')).resolves.toBeDefined()
+    expect(mocks.google.updateEventSeries).toHaveBeenCalledWith(calendar, current, expect.objectContaining({ title: 'Renamed' }), 'series')
+    // The write is followed by a refresh, which replaces the stored events.
+    mocks.setStoreSnapshot({ calendars: [calendar], events: [current], contacts: [], sync: [] })
+    await expect(invoke('productivity:event-delete', 'instance', 'following')).resolves.toBeDefined()
+    expect(mocks.google.deleteEventSeries).toHaveBeenCalledWith(calendar, current, 'following')
+    mocks.setStoreSnapshot({ calendars: [calendar], events: [current], contacts: [], sync: [] })
+    await expect(invoke('productivity:event-update', input, 'occurrence')).resolves.toBeDefined()
+    expect(mocks.google.updateEvent).toHaveBeenCalledWith(calendar, current, expect.objectContaining({ id: 'instance' }))
+    expect(() => invoke('productivity:event-update', input, 'everything')).toThrow(/which events/)
+    expect(() => invoke('productivity:event-delete', 'instance', 'everything')).toThrow(/which events/)
+    expect(() => invoke('productivity:event-update', { ...input, occurrenceOf: 'master' })).toThrow(/valid event/)
   })
 
   it('rejects unavailable, read-only, moved, and unsupported calendar writes', async () => {

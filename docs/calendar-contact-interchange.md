@@ -83,4 +83,4 @@ These have not been verified against live services:
 - real feeds from Google, Outlook, or iCloud
 - the conversion of imported events and contacts by Google and Microsoft provider APIs
 
-Recurring events still display only their first occurrence in Aerio's views; recurrence expansion is outside this feature.
+Since E24, the views expand imported recurring events: they show every occurrence, apply `EXDATE`s, and replace overridden occurrences, while rules Aerio cannot evaluate are kept unchanged. See [calendar recurrence and time zones](calendar-recurrence-time-zones.md).
