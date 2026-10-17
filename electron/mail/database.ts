@@ -50,6 +50,7 @@ import { MAIL_PIN_JOIN, MAIL_THREAD_CURSOR_CLAUSE, MAIL_THREAD_CURSOR_PARAMS, MA
 import { isLocalOnlyMailAction } from '../../src/lib/mail-pins'
 import { MailFolderPreferenceStore } from './folder-preferences'
 import { Pop3Store } from './pop3-store'
+import { MailArchiveStore } from './mail-archive-store'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -117,6 +118,7 @@ export class MailDatabase {
   readonly pins: MailPinStore
   readonly folderPreferences: MailFolderPreferenceStore
   readonly pop3: Pop3Store
+  readonly archive: MailArchiveStore
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -138,6 +140,7 @@ export class MailDatabase {
     this.pins = new MailPinStore(this.db)
     this.folderPreferences = new MailFolderPreferenceStore(this.db)
     this.pop3 = new Pop3Store(this.db)
+    this.archive = new MailArchiveStore(this.db, this)
   }
 
   close() {

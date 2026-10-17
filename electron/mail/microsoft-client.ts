@@ -183,6 +183,17 @@ export class MicrosoftGraphClient {
     }
   }
 
+  /** Permanently deletes individual messages (not moved to Deleted Items). Already-missing messages count as deleted. */
+  async permanentDeleteMessages(ids: string[]) {
+    for (const id of ids) {
+      try {
+        await this.request(`/me/messages/${encodeURIComponent(id)}/permanentDelete`, { method: 'POST' })
+      } catch (error) {
+        if (!(error instanceof MicrosoftGraphError && error.status === 404)) throw error
+      }
+    }
+  }
+
   async saveDraft(raw: Buffer, existingId?: string, options?: MailSendOptions) {
     if (existingId) await this.request(`/me/messages/${encodeURIComponent(existingId)}`, { method: 'DELETE' }).catch(() => undefined)
     const result = await this.request<{ id?: string; changeKey?: string }>('/me/messages', {

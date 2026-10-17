@@ -455,6 +455,15 @@ const api: AerioDesktopApi = {
       update: (accountId, input) => ipcRenderer.invoke('mail:pop3:update', accountId, input),
       status: (accountId) => ipcRenderer.invoke('mail:pop3:status', accountId)
     },
+    archiving: {
+      get: (accountId) => ipcRenderer.invoke('mail:archive:get', accountId),
+      save: (input) => ipcRenderer.invoke('mail:archive:save', input),
+      preview: (input) => ipcRenderer.invoke('mail:archive:preview', input),
+      runNow: (accountId) => ipcRenderer.invoke('mail:archive:run', accountId),
+      resume: (jobId) => ipcRenderer.invoke('mail:archive:resume', jobId),
+      cancel: (jobId) => ipcRenderer.invoke('mail:archive:cancel', jobId),
+      items: (jobId) => ipcRenderer.invoke('mail:archive:items', jobId)
+    },
     sync: {
       start: (accountId) => ipcRenderer.invoke('mail:sync:start', accountId),
       pause: (accountId) => ipcRenderer.invoke('mail:sync:pause', accountId),
