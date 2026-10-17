@@ -285,6 +285,12 @@ export const ICS = (uid: string, summary: string, extra = '') => [
   'DTSTART:20261020T090000Z', 'DTEND:20261020T100000Z', `SUMMARY:${summary}`, ...(extra ? extra.split('\n') : []), 'END:VEVENT', 'END:VCALENDAR', ''
 ].join('\r\n')
 
+/** A calendar object with one VJOURNAL (a note). `extra` lines are added inside the VJOURNAL. */
+export const VJOURNAL = (uid: string, summary: string, description: string, extra = '') => [
+  'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Fixture//EN', 'BEGIN:VJOURNAL', `UID:${uid}`, 'DTSTAMP:20260101T000000Z',
+  `SUMMARY:${summary}`, `DESCRIPTION:${description.replace(/\n/g, '\\n')}`, ...(extra ? extra.split('\n') : []), 'END:VJOURNAL', 'END:VCALENDAR', ''
+].join('\r\n')
+
 export const VCF = (uid: string, name: string, extra = '') => [
   'BEGIN:VCARD', 'VERSION:3.0', `UID:${uid}`, `FN:${name}`, `N:${name.split(' ').reverse().join(';')};;;`, ...(extra ? extra.split('\n') : []), 'END:VCARD', ''
 ].join('\r\n')

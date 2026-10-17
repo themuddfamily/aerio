@@ -287,6 +287,8 @@ export interface AerioDesktopApi {
   meetingHosts?: import('./meeting-host-types').MeetingHostApi
   /** On-premises Exchange (EWS) accounts; optional so test doubles of the API stay valid. */
   exchange?: import('./exchange-types').ExchangeDesktopApi
+  /** Server-synchronized Notes (CalDAV VJOURNAL, Exchange Notes) and vNote import; optional for test doubles. */
+  serverNotes?: import('./server-notes-types').ServerNotesDesktopApi
   contactMerge?: import('./contact-merge-types').ContactMergeDesktopApi
   /** Matrix chat; the Chat module still appears only when its gate passes. */
   chat?: import('./chat-types').ChatDesktopApi

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { CalendarSync, KeyRound, RefreshCw, Trash2 } from 'lucide-react'
 import type { DavAccountSummary, DavPresetId, DavReviewItem, DavSnapshot } from '../dav-types'
 import { DAV_PRESETS, davPreset } from '../lib/dav-presets'
+import { confirmServerNotesRemoval } from '../lib/server-notes-removal'
 
 const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : fallback
 const formatTime = (value?: string) => value ? new Date(value).toLocaleString() : ''
@@ -92,7 +93,7 @@ export default function DavAccountsSection() {
                   <button className="button ghost" disabled={Boolean(busy)} onClick={() => void run(`sync:${account.id}`, () => api.sync(account.id), 'Synchronized.', 'Synchronization failed')}><RefreshCw size={15} /> {busy === `sync:${account.id}` ? 'Syncing…' : 'Sync now'}</button>
                   {confirmRemove === account.id
                     ? <>
-                      <button className="button danger-subtle" disabled={Boolean(busy)} onClick={() => { setConfirmRemove(undefined); void run(`remove:${account.id}`, () => api.removeAccount(account.id), 'Account removed from Aerio. Nothing was deleted on the server.', 'The account could not be removed') }}>Remove{account.pendingWrites ? ` and discard ${account.pendingWrites} unsent change${account.pendingWrites === 1 ? '' : 's'}` : ''}</button>
+                      <button className="button danger-subtle" disabled={Boolean(busy)} onClick={() => { setConfirmRemove(undefined); void (async () => { if (await confirmServerNotesRemoval(account.id, account.name)) await run(`remove:${account.id}`, () => api.removeAccount(account.id), 'Account removed from Aerio. Nothing was deleted on the server.', 'The account could not be removed') })() }}>Remove{account.pendingWrites ? ` and discard ${account.pendingWrites} unsent change${account.pendingWrites === 1 ? '' : 's'}` : ''}</button>
                       <button className="button ghost" onClick={() => setConfirmRemove(undefined)}>Cancel</button>
                     </>
                     : <button className="button ghost" aria-label={`Remove ${account.name}`} disabled={Boolean(busy)} onClick={() => setConfirmRemove(account.id)}><Trash2 size={15} /> Remove</button>}

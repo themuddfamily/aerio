@@ -182,6 +182,26 @@ const api: AerioDesktopApi = {
       return () => ipcRenderer.removeListener('exchange:changed', listener)
     }
   },
+  // Server-synchronized Notes (CalDAV VJOURNAL and Exchange Notes) and vNote import.
+  serverNotes: {
+    snapshot: () => ipcRenderer.invoke('server-notes:snapshot'),
+    onChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, snapshot: import('../src/server-notes-types').ServerNotesSnapshot) => callback(snapshot)
+      ipcRenderer.on('server-notes:changed', listener)
+      return () => ipcRenderer.removeListener('server-notes:changed', listener)
+    },
+    sync: (accountId) => ipcRenderer.invoke('server-notes:sync', accountId),
+    create: (folderId, note) => ipcRenderer.invoke('server-notes:create', folderId, note),
+    update: (note) => ipcRenderer.invoke('server-notes:update', note),
+    remove: (noteId) => ipcRenderer.invoke('server-notes:remove', noteId),
+    resolve: (reviewId, resolution) => ipcRenderer.invoke('server-notes:resolve', reviewId, resolution),
+    transfer: (request) => ipcRenderer.invoke('server-notes:transfer', request),
+    chooseVNoteFile: (target) => ipcRenderer.invoke('server-notes:vnote-choose', target),
+    previewVNote: (token, target) => ipcRenderer.invoke('server-notes:vnote-preview', token, target),
+    importVNote: (request) => ipcRenderer.invoke('server-notes:vnote-import', request),
+    accountSummary: (accountId) => ipcRenderer.invoke('server-notes:account-summary', accountId),
+    copyAccountToLocal: (accountId) => ipcRenderer.invoke('server-notes:copy-account-local', accountId)
+  },
   // Matrix chat: display snapshots and commands only; tokens and keys never cross this bridge.
   chat: {
     snapshot: () => ipcRenderer.invoke('chat:snapshot'),

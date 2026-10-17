@@ -134,6 +134,20 @@ attachments. A file is deleted only when no note references it any more.
   the local module database and the `note-attachments` directory, so rich
   bodies and pictures are included without changes.
 
+## Server-synchronized notes
+
+Notes in CalDAV VJOURNAL collections and Exchange Notes folders
+([server-synchronized Notes](server-notes.md)) use this same format and
+editor. On the server, the sanitized `html` is stored as `X-ALT-DESC` (CalDAV)
+or an HTML `Body` (Exchange). Each `data-aerio-note-image="<id>"` becomes
+`src="cid:<id>"`, and the picture travels as an attachment that carries the
+same id (`X-AERIO-ATTACHMENT-ID` or the EWS `ContentId`). Coming back, `cid:`
+pictures are turned into managed inline attachments again, and the body goes
+through the main-process sanitizer above. Server notes own separate copies of
+their picture files in `note-attachments`. Copying or moving a note between
+Local and a server folder copies its files, so the local cleanup and the
+server-notes cleanup never delete each other's files.
+
 ## Limits
 
 - The 5 MB per-picture limit matches composer inline images. Larger images can

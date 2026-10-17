@@ -19,6 +19,7 @@ The layout is an allowlist. Only these profile entries are copied:
 | `dav.sqlite` | CalDAV/CardDAV accounts (no passwords), discovered collections with sync tokens and ctags, the resource cache with ETags, and pending writes |
 | `mcp-automation.sqlite` | [External automation (MCP)](mcp-automation.md) capability and account-scope choices (client token hashes and the send idempotency ledger are removed) |
 | `exchange.sqlite` | On-premises Exchange (EWS) Calendar and Contacts: account status, folders with sync states, the item cache with ChangeKeys, and pending writes (held for review after a restore). Exchange passwords and tokens stay in `oauth-vault.dat`. |
+| `server-notes.sqlite` | [Server-synchronized Notes](server-notes.md): CalDAV VJOURNAL and Exchange Notes folders with sync states, the note cache (raw VJOURNAL text, ETags/ChangeKeys), local color/pin/archive state, pending note writes (held for review after a restore), and vNote import identities. Their files are in `note-attachments/`. |
 | `mail/` | Downloaded `.eml` files and staged draft attachments |
 | `note-attachments/`, `template-attachments/` | Managed attachment copies |
 

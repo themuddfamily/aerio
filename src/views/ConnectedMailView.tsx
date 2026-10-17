@@ -68,6 +68,7 @@ import { visibleMailLabels } from '../lib/mail-labels'
 import { isLocalOnlyMailAction, mailListGroupStart, pendingOperationsMessage, pinActionFor, threadIdsByAccount } from '../lib/mail-pins'
 import { isMailboxRefreshing, shouldShowDetailedSync } from '../lib/mail-sync'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
+import { confirmServerNotesRemoval } from '../lib/server-notes-removal'
 
 interface ConnectedMailViewProps {
   onToast(message: string): void
@@ -501,14 +502,14 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
 
   const disconnect = async (account: MailAccountSummary) => {
     const keep = window.confirm(`Disconnect ${account.email}?\n\nOK keeps its downloaded mail as a read-only archive. Cancel lets you choose whether to delete it.`)
+    const mode = keep ? 'archive' : window.confirm(account.provider === 'pop3'
+      ? `Delete all mail stored for ${account.email} on this computer? The POP3 server is not changed, but messages already removed from it, plus your local Sent mail and folders, cannot be recovered.`
+      : `Delete all downloaded mail for ${account.email}? The provider mailbox itself will not be changed.`) ? 'delete' : undefined
+    if (!mode) return
+    // Exchange Notes (docs/server-notes.md) are removed with the account; offer to keep a Local copy.
+    if (account.provider === 'exchange' && !(await confirmServerNotesRemoval(account.id, account.email))) return
     try {
-      if (keep) {
-        await window.aerio.mail.accounts.disconnect(account.id, 'archive')
-      } else if (window.confirm(account.provider === 'pop3'
-        ? `Delete all mail stored for ${account.email} on this computer? The POP3 server is not changed, but messages already removed from it, plus your local Sent mail and folders, cannot be recovered.`
-        : `Delete all downloaded mail for ${account.email}? The provider mailbox itself will not be changed.`)) {
-        await window.aerio.mail.accounts.disconnect(account.id, 'delete')
-      } else return
+      await window.aerio.mail.accounts.disconnect(account.id, mode)
       await refreshAccounts()
       onToast('Account disconnected')
     } catch (error) {

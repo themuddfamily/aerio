@@ -7,6 +7,7 @@ import { holdMailMergesForRestore, MAIL_MERGE_ACTIVE } from './mail/mail-merge-s
 import { MailTemplateStore } from './mail/template-store'
 import { DavStore, prepareRestoredDavDatabase } from './productivity/dav-store'
 import { ExchangeStore, prepareRestoredExchangeDatabase } from './exchange/exchange-store'
+import { prepareRestoredServerNotesDatabase, ServerNotesStore } from './productivity/server-notes-store'
 import { InterchangeStore } from './productivity/interchange-store'
 import { InvitationStore } from './productivity/invitation-store'
 import { MeetingLinkStore } from './productivity/meeting-link-store'
@@ -145,6 +146,19 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
       summarize: (db) => [
         { label: 'Exchange calendar and contacts folders', count: countRows(db, 'exchange_folders') },
         { label: 'Pending Exchange calendar and contact changes', count: countRows(db, 'exchange_operations', `status IN ('queued','held')`) }
+      ]
+    },
+    {
+      // Server-synchronized Notes (CalDAV VJOURNAL, Exchange Notes). Their pictures and files are in note-attachments.
+      file: 'server-notes.sqlite',
+      label: 'Server-synchronized notes cache and pending note changes',
+      prepareRestore: (path) => {
+        new ServerNotesStore(path).close()
+        withDatabase(path, (db) => prepareRestoredServerNotesDatabase(db))
+      },
+      summarize: (db) => [
+        { label: 'Server-synchronized notes', count: countRows(db, 'server_notes', 'ignored=0') },
+        { label: 'Pending note changes', count: countRows(db, 'server_note_operations', `status IN ('queued','held')`) }
       ]
     },
     {

@@ -91,13 +91,17 @@ Every request sends `<t:RequestServerVersion Version="Exchange2013_SP1"/>`. All 
 - **Offline queue.** Every write is first saved in `exchange.sqlite` and shown at once. Network errors, HTTP 5xx/429, and transient EWS codes (`ErrorServerBusy` and similar) keep it queued with back-off from 30 seconds up to 30 minutes. The queue is retried every minute, on reconnect, and on sync. A create that is deleted before it was sent never reaches the server.
 - **Capabilities** are reported per account in Settings: mail, calendar, and contacts read/write, folder management, and detected limitations. The general provider catalog (`src/providers/provider.ts`) also lists Exchange.
 
+## Notes
+
+The `notes` distinguished folder and other `IPF.StickyNote` folders appear in the Notes module. Sticky notes are `Message` items with `ItemClass` `IPM.StickyNote`. `Subject`, `Body` (HTML or text), `Categories`, and `FileAttachment`s are synchronized with `SyncFolderItems`, `GetItem`, `GetAttachment`, `CreateItem`, `UpdateItem` (changed fields only, `NeverOverwrite`), `CreateAttachment`/`DeleteAttachment`, and `DeleteItem`. Outlook's note color and other extended properties are never changed. Their cache and queue are in `server-notes.sqlite`, and disconnecting the account removes them after an offer to copy them to Local Notes. See [Server-synchronized Notes](server-notes.md).
+
 ## Backups
 
 `exchange.sqlite` is part of the full-profile backup: per-account status, calendar and contacts folders with their sync states, the item cache, and queued writes. Mail for Exchange accounts is in `aerio.sqlite` like other accounts. Credentials are not backed up. After a restore, the mail account needs sign-in again, and queued Exchange writes are **held** in review so an old change cannot be resent silently.
 
 ## For developers: the EWS layer
 
-Delegation and public folders (E40), directory lookup (E41), and Exchange Notes (E43) build on these modules:
+Delegation and public folders (E40) and directory lookup (E41) build on these modules. Exchange Notes (E43, [server-synchronized Notes](server-notes.md)) already do, in `electron/exchange/exchange-notes.ts`:
 
 | Module | Role |
 | --- | --- |
@@ -108,6 +112,7 @@ Delegation and public folders (E40), directory lookup (E41), and Exchange Notes 
 | `electron/exchange/autodiscover.ts` | POX Autodiscover with injectable HTTP/DNS for tests |
 | `electron/exchange/ews-mail.ts`, `ews-items.ts` | Mail sync/actions/drafts/folders; CalendarItem/Contact mapping and update builders |
 | `electron/exchange/exchange-productivity.ts`, `exchange-store.ts`, `exchange-ipc.ts` | Calendar/Contacts service, its SQLite store, and IPC (`exchange:*`, exposed as `window.aerio.exchange`) |
+| `electron/exchange/exchange-notes.ts` | Exchange Notes adapter (`IPM.StickyNote` items and their FileAttachments) for the server-notes service in `electron/productivity/server-notes-service.ts` |
 | `electron/exchange/ews-fixture-server.ts` | In-process EWS + Autodiscover responder used by the tests |
 
 A new operation such as `ResolveNames` should be a thin helper over `call()`, returning parsed values and `EwsError`s instead of throwing for item-level failures.
@@ -121,12 +126,13 @@ The suites use `electron/exchange/ews-fixture-server.ts`, a `node:http` SOAP res
 - `autodiscover.test.ts`: domain and autodiscover-host endpoints, the HTTP redirect method with cross-domain consent, SRV, `redirectAddr`/`redirectUrl`, and not-found reporting
 - `ews-mail.test.ts`: real `MailDatabase` sync, folder labels, page checkpoints with an interrupted-and-resumed first sync, incremental creates/read flags/moves/deletes, invalid-state resync, expired sessions, queued actions surviving a restart, drafts, and folder management
 - `exchange-productivity.test.ts`: discovery and capabilities, mapping, paging/incremental/invalid-state, create/update/delete with `ChangeKey`, `ErrorIrresolvableConflict` review with both resolutions, delete conflicts, contacts with indexed fields, the durable offline queue across a restart, session expiry and recovery, occurrences and series, and restore holds
+- `exchange-notes.test.ts`: Notes folder discovery and rights, sticky-note mapping, SyncState changes/deletions/invalid state, field-only updates that keep extended properties, FileAttachment create/read/delete with inline `cid:` pictures, and ChangeKey conflicts across a restart (the fixture's `addNotesFolder`, `noteProps`, and `GetAttachment`/`CreateAttachment`/`DeleteAttachment`)
 - `exchange-ipc.test.ts`, `preload-exchange.test.ts`, `ExchangeAccount.test.tsx`, plus Exchange cases in `main.test.ts` and `mail-worker.test.ts`: IPC validation, connect/verify/rollback, reauth, renderer flows, and routing
 
 ## Limitations
 
 - Behavior against real Exchange servers has not been verified yet. See the live-server validation matrix below. The fixture follows Microsoft's published EWS and Autodiscover documentation.
-- Free/busy lookup (`GetUserAvailability`), tasks, notes, delegate and shared mailboxes, public folders, the global address list, and server-side rules and automatic replies are not implemented for Exchange accounts. E40, E41, and E43 cover several of these.
+- Free/busy lookup (`GetUserAvailability`), tasks, delegate and shared mailboxes, public folders, the global address list, and server-side rules and automatic replies are not implemented for Exchange accounts. E40 and E41 cover several of these. Notes in the `notes` folder and other `IPF.StickyNote` folders synchronize with Aerio Notes; see [Server-synchronized Notes](server-notes.md).
 - EWS push and streaming notifications are not used. Mail is polled at the IMAP cadence (at most every minute), and Calendar/Contacts every 15 minutes or on **Sync now**.
 - Messages moved in another client are downloaded again because EWS `ItemId`s change on move.
 - "This and following" edits to repeating Exchange events are not supported. Editing a series from one occurrence moves the whole series by the same offset.

@@ -39,6 +39,10 @@ Calendars and contacts can live on different hosts (iCloud, Fastmail), and each 
 
 Each calendar and address book can be hidden in Settings without removing the account.
 
+### Notes (VJOURNAL)
+
+Collections whose `supported-calendar-component-set` explicitly includes `VJOURNAL` (journal-only or mixed) also appear as notes folders in the Notes module. That module has its own cache, queue, and conflict review in `server-notes.sqlite`. It reuses this client, `sync-collection`/ctag pulls, and `If-Match` writes, and it routes only `VJOURNAL` objects to Notes. Events in a mixed collection stay in Calendar. Edits patch only the changed properties of the server's raw text. See [Server-synchronized Notes](server-notes.md). Removing the account also removes its cached notes, after an offer to copy them to Local Notes.
+
 ## Synchronization
 
 `electron/productivity/dav-sync.ts` pulls one collection at a time:
@@ -89,7 +93,7 @@ Every create, edit, or delete is first saved in `dav_operations` and shown immed
 ## Known limits
 
 - The behavior of the real iCloud, Fastmail, and Nextcloud servers has not been verified against live accounts. The presets, the separate iCloud hosts, and the quirks above follow published documentation and are covered only by the controlled fixture.
-- CalDAV scheduling (RFC 6638 inbox/outbox and iTIP invitations), free/busy, VTODO, VJOURNAL, and creating or sharing collections are not implemented.
+- CalDAV scheduling (RFC 6638 inbox/outbox and iTIP invitations), free/busy, VTODO, and creating or sharing collections are not implemented.
 - Editing a single occurrence that has no override yet edits the whole series (recurrence editing is E24).
 - When two clients edit the same item, Aerio doesn't merge field by field. You choose one version in review.
 - New contacts go to the first writable, visible address book of the account.

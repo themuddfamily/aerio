@@ -28,7 +28,7 @@ export interface FixtureItem {
   id: string
   changeKey: string
   folderId: string
-  kind: 'message' | 'calendar' | 'contact'
+  kind: 'message' | 'calendar' | 'contact' | 'note'
   addedSeq: number
   modifiedSeq: number
   /** Only the read flag changed since `readSeq` (reported as ReadFlagChange). */
@@ -40,9 +40,13 @@ export interface FixtureItem {
   conversationId?: string
   isDraft?: boolean
   received?: string
-  /** Calendar/contact properties as serialized type elements, by local name. */
+  /** Calendar/contact/note properties as serialized type elements, by local name. */
   props: Map<string, string>
+  /** FileAttachments (notes). */
+  attachments?: FixtureAttachment[]
 }
+
+export interface FixtureAttachment { id: string; name: string; contentType: string; contentId?: string; isInline: boolean; content: Buffer }
 
 export interface AutodiscoverAnswer {
   status?: number
@@ -171,9 +175,9 @@ export class EwsFixtureServer {
     return item
   }
 
-  /** Adds a calendar item or contact from serialized `t:` property elements. */
-  addItem(folderId: string, kind: 'calendar' | 'contact', props: Record<string, string>) {
-    const id = this.nextId(kind === 'calendar' ? 'C' : 'P')
+  /** Adds a calendar item, contact, or sticky note from serialized `t:` property elements. */
+  addItem(folderId: string, kind: 'calendar' | 'contact' | 'note', props: Record<string, string>) {
+    const id = this.nextId(kind === 'calendar' ? 'C' : kind === 'note' ? 'N' : 'P')
     const seq = ++this.seq
     const item: FixtureItem = { id, changeKey: `ck${seq}`, folderId, kind, addedSeq: seq, modifiedSeq: seq, props: new Map(Object.entries(props)) }
     this.items.set(id, item)
@@ -325,7 +329,8 @@ export class EwsFixtureServer {
       SyncFolderItems: (element) => this.syncItems(element), GetItem: (element) => this.getItem(element), UpdateItem: (element) => this.updateItem(element),
       MoveItem: (element) => this.moveOrCopy(element, 'MoveItem'), CopyItem: (element) => this.moveOrCopy(element, 'CopyItem'), DeleteItem: (element) => this.deleteItem(element),
       CreateItem: (element) => this.createItem(element), CreateFolder: (element) => this.createFolder(element), UpdateFolder: (element) => this.updateFolder(element),
-      MoveFolder: (element) => this.moveFolder(element), DeleteFolder: (element) => this.deleteFolder(element)
+      MoveFolder: (element) => this.moveFolder(element), DeleteFolder: (element) => this.deleteFolder(element),
+      GetAttachment: (element) => this.getAttachment(element), CreateAttachment: (element) => this.createAttachment(element), DeleteAttachment: (element) => this.deleteAttachment(element)
     }
     const handler = handlers[operation]
     if (!handler) {
@@ -469,6 +474,10 @@ export class EwsFixtureServer {
     if (item.kind === 'message') {
       return `<t:Message>${includeMime && item.mime ? `<t:MimeContent CharacterSet="UTF-8">${item.mime.toString('base64')}</t:MimeContent>` : ''}<t:ItemId Id="${item.id}" ChangeKey="${item.changeKey}"/><t:ParentFolderId Id="${item.folderId}"/><t:ItemClass>IPM.Note</t:ItemClass><t:Size>${item.mime?.length ?? 0}</t:Size><t:DateTimeReceived>${item.received}</t:DateTimeReceived><t:Importance>${item.importance}</t:Importance><t:IsDraft>${Boolean(item.isDraft)}</t:IsDraft><t:Flag><t:FlagStatus>${item.flagged ? 'Flagged' : 'NotFlagged'}</t:FlagStatus></t:Flag><t:ConversationId Id="${item.conversationId}"/><t:IsRead>${item.isRead}</t:IsRead></t:Message>`
     }
+    if (item.kind === 'note') {
+      const attachments = item.attachments?.length ? `<t:Attachments>${item.attachments.map((attachment) => `<t:FileAttachment><t:AttachmentId Id="${attachment.id}"/><t:Name>${escapeXml(attachment.name)}</t:Name><t:ContentType>${escapeXml(attachment.contentType)}</t:ContentType>${attachment.contentId ? `<t:ContentId>${escapeXml(attachment.contentId)}</t:ContentId>` : ''}<t:Size>${attachment.content.length}</t:Size><t:IsInline>${attachment.isInline}</t:IsInline></t:FileAttachment>`).join('')}</t:Attachments>` : ''
+      return `<t:Message><t:ItemId Id="${item.id}" ChangeKey="${item.changeKey}"/><t:ParentFolderId Id="${item.folderId}"/>${[...item.props.values()].join('')}${attachments}</t:Message>`
+    }
     const tag = item.kind === 'calendar' ? 'CalendarItem' : 'Contact'
     const extras = item.kind === 'calendar'
       ? `${item.props.has('CalendarItemType') ? '' : `<t:CalendarItemType>${item.props.has('Recurrence') ? 'RecurringMaster' : 'Single'}</t:CalendarItemType>`}${item.props.has('MyResponseType') ? '' : '<t:MyResponseType>Organizer</t:MyResponseType>'}`
@@ -561,7 +570,8 @@ export class EwsFixtureServer {
       }
       this.bump(item)
       if (readOnly && item.kind === 'message') item.readOnlyChangeSeq = item.modifiedSeq
-      return ok('UpdateItem', `<m:Items><t:${item.kind === 'message' ? 'Message' : item.kind === 'calendar' ? 'CalendarItem' : 'Contact'}><t:ItemId Id="${item.id}" ChangeKey="${item.changeKey}"/></t:${item.kind === 'message' ? 'Message' : item.kind === 'calendar' ? 'CalendarItem' : 'Contact'}></m:Items>`)
+      const tag = item.kind === 'message' || item.kind === 'note' ? 'Message' : item.kind === 'calendar' ? 'CalendarItem' : 'Contact'
+      return ok('UpdateItem', `<m:Items><t:${tag}><t:ItemId Id="${item.id}" ChangeKey="${item.changeKey}"/></t:${tag}></m:Items>`)
     }))
   }
 
@@ -598,10 +608,87 @@ export class EwsFixtureServer {
     }))
   }
 
+  // --- Attachments (notes) ---------------------------------------------------------------------
+
+  /** Adds the distinguished Notes folder (IPF.StickyNote); mailboxes without one answer ErrorFolderNotFound. */
+  addNotesFolder() {
+    const existing = [...this.folders.values()].find((folder) => folder.distinguished === 'notes')
+    if (existing) return existing
+    const folder = this.addFolder('Notes', 'IPF.StickyNote')
+    folder.distinguished = 'notes'
+    return folder
+  }
+
+  /** Adds a FileAttachment to an item as another client would (bumps its ChangeKey). */
+  attach(itemId: string, input: { name: string; contentType: string; content: Buffer; contentId?: string; isInline?: boolean }) {
+    const item = this.items.get(itemId)
+    if (!item) throw new Error('No such item')
+    const attachment: FixtureAttachment = { id: this.nextId('A'), name: input.name, contentType: input.contentType, content: input.content, isInline: Boolean(input.isInline), ...(input.contentId ? { contentId: input.contentId } : {}) }
+    item.attachments = [...(item.attachments ?? []), attachment]
+    this.bump(item)
+    return attachment
+  }
+
+  private attachmentFrom(file: XmlElement): FixtureAttachment {
+    const contentId = text(child(file, 'ContentId')).trim()
+    return {
+      id: this.nextId('A'), name: text(child(file, 'Name')), contentType: text(child(file, 'ContentType')) || 'application/octet-stream',
+      ...(contentId ? { contentId } : {}), isInline: text(child(file, 'IsInline')).trim() === 'true', content: Buffer.from(text(child(file, 'Content')).replace(/\s+/g, ''), 'base64')
+    }
+  }
+
+  private findAttachment(id: string) {
+    for (const item of this.items.values()) {
+      const attachment = item.attachments?.find((entry) => entry.id === id)
+      if (attachment) return { item, attachment }
+    }
+    return undefined
+  }
+
+  private getAttachment(element: XmlElement) {
+    return reply('GetAttachment', (child(element, 'AttachmentIds')?.children ?? []).map((id) => {
+      const found = this.findAttachment(id.attributes.Id ?? '')
+      if (!found) return fail('GetAttachment', 'ErrorItemNotFound')
+      const { attachment } = found
+      return ok('GetAttachment', `<m:Attachments><t:FileAttachment><t:AttachmentId Id="${attachment.id}"/><t:Name>${escapeXml(attachment.name)}</t:Name><t:ContentType>${escapeXml(attachment.contentType)}</t:ContentType>${attachment.contentId ? `<t:ContentId>${escapeXml(attachment.contentId)}</t:ContentId>` : ''}<t:Size>${attachment.content.length}</t:Size><t:IsInline>${attachment.isInline}</t:IsInline><t:Content>${attachment.content.toString('base64')}</t:Content></t:FileAttachment></m:Attachments>`)
+    }))
+  }
+
+  private createAttachment(element: XmlElement) {
+    const parent = child(element, 'ParentItemId')
+    const item = this.items.get(parent?.attributes.Id ?? '')
+    if (!item) return reply('CreateAttachment', [fail('CreateAttachment', 'ErrorItemNotFound')])
+    if (parent?.attributes.ChangeKey && parent.attributes.ChangeKey !== item.changeKey) return reply('CreateAttachment', [fail('CreateAttachment', 'ErrorIrresolvableConflict')])
+    const created = children(child(element, 'Attachments'), 'FileAttachment').map((file) => this.attachmentFrom(file))
+    item.attachments = [...(item.attachments ?? []), ...created]
+    this.bump(item)
+    return reply('CreateAttachment', created.map((attachment) => ok('CreateAttachment', `<m:Attachments><t:FileAttachment><t:AttachmentId Id="${attachment.id}" RootItemId="${item.id}" RootItemChangeKey="${item.changeKey}"/></t:FileAttachment></m:Attachments>`)))
+  }
+
+  private deleteAttachment(element: XmlElement) {
+    return reply('DeleteAttachment', (child(element, 'AttachmentIds')?.children ?? []).map((id) => {
+      const found = this.findAttachment(id.attributes.Id ?? '')
+      if (!found) return fail('DeleteAttachment', 'ErrorItemNotFound')
+      found.item.attachments = found.item.attachments!.filter((attachment) => attachment !== found.attachment)
+      this.bump(found.item)
+      return ok('DeleteAttachment', `<m:RootItemId RootItemId="${found.item.id}" RootItemChangeKey="${found.item.changeKey}"/>`)
+    }))
+  }
+
   private createItem(element: XmlElement) {
     const disposition = element.attributes.MessageDisposition
     const target = this.resolveFolder(child(element, 'SavedItemFolderId')?.children[0])
     return reply('CreateItem', (child(element, 'Items')?.children ?? []).map((spec) => {
+      if (spec.name === 'Message' && !child(spec, 'MimeContent')) {
+        // A sticky note (ItemClass IPM.StickyNote) saved into a Notes folder.
+        if (!target) return fail('CreateItem', 'ErrorFolderNotFound')
+        if (!target.canWrite) return fail('CreateItem', 'ErrorAccessDenied', 'Access is denied. Check credentials and try again.')
+        const props: Record<string, string> = {}
+        for (const property of spec.children) if (property.name !== 'Attachments') props[property.name] = serialize(property)
+        const item = this.addItem(target.id, 'note', props)
+        item.attachments = children(child(spec, 'Attachments'), 'FileAttachment').map((file) => this.attachmentFrom(file))
+        return ok('CreateItem', `<m:Items><t:Message><t:ItemId Id="${item.id}" ChangeKey="${item.changeKey}"/></t:Message></m:Items>`)
+      }
       if (spec.name === 'Message') {
         const mime = Buffer.from(text(child(spec, 'MimeContent')).replace(/\s+/g, ''), 'base64')
         const subject = /^Subject: (.*)$/m.exec(mime.toString('utf8'))?.[1]?.trim() ?? '(No subject)'
@@ -649,4 +736,13 @@ export const contactProps = (input: { name: string; given?: string; surname?: st
   ...(input.email ? { EmailAddresses: `<t:EmailAddresses><t:Entry Key="EmailAddress1">${escapeXml(input.email)}</t:Entry></t:EmailAddresses>` } : {}),
   ...(input.phone ? { PhoneNumbers: `<t:PhoneNumbers><t:Entry Key="MobilePhone">${escapeXml(input.phone)}</t:Entry></t:PhoneNumbers>` } : {}),
   ...(input.surname ? { Surname: `<t:Surname>${escapeXml(input.surname)}</t:Surname>` } : {})
+})
+
+/** Serialized `t:` elements for a fixture sticky note. `extra` keeps unmodeled properties (e.g. an ExtendedProperty for the note color). */
+export const noteProps = (input: { subject: string; body?: string; html?: boolean; categories?: string[]; extra?: Record<string, string> }) => ({
+  ItemClass: '<t:ItemClass>IPM.StickyNote</t:ItemClass>',
+  Subject: `<t:Subject>${escapeXml(input.subject)}</t:Subject>`,
+  Body: `<t:Body BodyType="${input.html ? 'HTML' : 'Text'}">${escapeXml(input.body ?? '')}</t:Body>`,
+  ...(input.categories?.length ? { Categories: `<t:Categories>${input.categories.map((value) => `<t:String>${escapeXml(value)}</t:String>`).join('')}</t:Categories>` } : {}),
+  ...input.extra
 })
