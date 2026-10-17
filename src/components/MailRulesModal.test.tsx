@@ -221,4 +221,165 @@ describe('MailRulesModal', () => {
     expect(await screen.findByText('Updated rule')).toBeInTheDocument()
     expect(screen.getByText('Receipts')).toBeInTheDocument()
   })
+
+  it('edits advanced conditions, exceptions, and the outgoing trigger', async () => {
+    api.save.mockImplementation(async (input: any) => rule({ ...input, id: 'saved' }))
+    render(<MailRulesModal accounts={[account()]} labels={labels} onToast={vi.fn()} onClose={vi.fn()} />)
+    await screen.findByText('No rules yet')
+    fireEvent.click(screen.getByRole('button', { name: /New rule/ }))
+    fireEvent.change(screen.getByPlaceholderText('e.g. Project updates'), { target: { value: 'Sent proposals' } })
+    fireEvent.change(screen.getByLabelText('Apply to'), { target: { value: 'outgoing' } })
+    fireEvent.change(screen.getByLabelText('Condition 1 field'), { target: { value: 'header' } })
+    fireEvent.change(screen.getByLabelText('Condition 1 header name'), { target: { value: 'List-Id' } })
+    fireEvent.change(screen.getByLabelText('Condition 1 value'), { target: { value: 'projects' } })
+    fireEvent.click(screen.getByRole('button', { name: /Add condition/ }))
+    fireEvent.change(screen.getByLabelText('Condition 2 field'), { target: { value: 'size' } })
+    expect(within(screen.getByLabelText('Condition 2 comparison')).getAllByRole('option').map((option) => option.textContent)).toEqual(['more than', 'less than'])
+    fireEvent.change(screen.getByLabelText('Condition 2 value'), { target: { value: '500' } })
+    fireEvent.click(screen.getByRole('button', { name: /Add condition/ }))
+    fireEvent.change(screen.getByLabelText('Condition 3 field'), { target: { value: 'age' } })
+    expect(within(screen.getByLabelText('Condition 3 comparison')).getByRole('option', { name: 'older than' })).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Condition 3 field'), { target: { value: 'label' } })
+    fireEvent.change(screen.getByLabelText('Condition 3 value'), { target: { value: 'projects' } })
+    fireEvent.click(screen.getByRole('button', { name: /Add exception/ }))
+    fireEvent.change(screen.getByLabelText('Exception 1 field'), { target: { value: 'has-attachment' } })
+    fireEvent.change(screen.getByLabelText('Exception 1 value'), { target: { value: 'no' } })
+    fireEvent.click(screen.getByRole('button', { name: /Add exception/ }))
+    fireEvent.change(screen.getByLabelText('Exception 2 field'), { target: { value: 'importance' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Remove exception 2' }))
+    fireEvent.click(screen.getByRole('button', { name: /Save rule/ }))
+    await waitFor(() => expect(api.save).toHaveBeenCalledWith(expect.objectContaining({
+      trigger: 'outgoing',
+      conditions: [
+        { field: 'header', operator: 'contains', value: 'projects', headerName: 'List-Id' },
+        { field: 'size', operator: 'greater-than', value: '500' },
+        { field: 'label', operator: 'is', value: 'projects' }
+      ],
+      exceptions: [{ field: 'has-attachment', operator: 'is', value: 'no' }]
+    })))
+  })
+
+  describe('server rules', () => {
+    let server: Record<string, ReturnType<typeof vi.fn>>
+    let reconnect: ReturnType<typeof vi.fn>
+    const capabilities = (overrides: Record<string, unknown> = {}) => ({
+      accountId: 'account-1', provider: 'gmail', supported: true, permission: 'granted', missingScopes: [], conditions: [], actions: [], matchModes: ['all', 'any'],
+      exceptions: true, outgoing: false, updateInPlace: false, canDisable: false, ...overrides
+    })
+
+    beforeEach(() => {
+      server = {
+        capabilities: vi.fn().mockResolvedValue(capabilities()),
+        list: vi.fn().mockResolvedValue([]),
+        upload: vi.fn(async (id: string) => ({ rule: rule({ id, execution: 'server', serverRuleId: 'filter-1' }), serverRule: {}, mapping: { supported: true, issues: [] } })),
+        delete: vi.fn().mockResolvedValue(undefined),
+        setEnabled: vi.fn()
+      }
+      reconnect = vi.fn().mockResolvedValue(undefined)
+      Object.defineProperty(window, 'aerio', { configurable: true, value: { mail: { rules: api, serverRules: server, accounts: { reconnect } } } })
+    })
+
+    it('uploads a compatible rule after confirmation and marks it server-executed', async () => {
+      api.list.mockResolvedValue([rule()])
+      const onToast = vi.fn()
+      render(<MailRulesModal accounts={[account()]} labels={labels} onToast={onToast} onClose={vi.fn()} />)
+      fireEvent.click(await screen.findByTitle('Run on the server'))
+      await waitFor(() => expect(server.upload).toHaveBeenCalledWith('rule-1'))
+      expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('stop running it on this computer'))
+      expect(await screen.findByText(/Runs on server/)).toBeInTheDocument()
+      expect(onToast).toHaveBeenCalledWith('Rule now runs on the server')
+      expect(screen.getByTitle('Update the server copy')).toBeInTheDocument()
+    })
+
+    it('explains unsupported mappings instead of uploading', async () => {
+      api.list.mockResolvedValue([rule({ conditions: [{ field: 'age', operator: 'greater-than', value: '3' }] })])
+      const onToast = vi.fn()
+      render(<MailRulesModal accounts={[account()]} labels={labels} onToast={onToast} onClose={vi.fn()} />)
+      fireEvent.click(await screen.findByTitle('Run on the server'))
+      expect(onToast).toHaveBeenCalledWith(expect.stringContaining('can’t check a message’s age'))
+      expect(server.upload).not.toHaveBeenCalled()
+    })
+
+    it('offers a reconnect when the settings permission is missing', async () => {
+      server.capabilities.mockResolvedValue(capabilities({ permission: 'missing', reason: 'Reconnect to allow gmail.settings.basic' }))
+      api.list.mockResolvedValue([rule()])
+      const onToast = vi.fn()
+      render(<MailRulesModal accounts={[account()]} labels={labels} onToast={onToast} onClose={vi.fn()} />)
+      fireEvent.click(await screen.findByTitle('Run on the server'))
+      await waitFor(() => expect(reconnect).toHaveBeenCalledWith('account-1'))
+      expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('gmail.settings.basic'))
+      await waitFor(() => expect(onToast).toHaveBeenCalledWith('Account reconnected'))
+      expect(server.upload).not.toHaveBeenCalled()
+
+      fireEvent.click(screen.getByRole('button', { name: /Server rules/ }))
+      expect(await screen.findByText('Server rules aren’t available')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /Reconnect account/ }))
+      await waitFor(() => expect(reconnect).toHaveBeenCalledTimes(2))
+    })
+
+    it('shows server compatibility while editing and re-uploads server-executed rules on save', async () => {
+      const existing = rule({ execution: 'server', serverRuleId: 'filter-1', conditions: [{ field: 'from', operator: 'contains', value: 'news' }] })
+      api.list.mockResolvedValue([existing])
+      api.save.mockImplementation(async (input: any) => ({ ...existing, ...input }))
+      const onToast = vi.fn()
+      render(<MailRulesModal accounts={[account()]} labels={labels} onToast={onToast} onClose={vi.fn()} />)
+      await screen.findByTitle('Update the server copy')
+      fireEvent.click(screen.getByTitle('Edit rule'))
+      const section = screen.getByRole('region', { name: 'Server compatibility' })
+      expect(within(section).getByText('Runs on the server')).toBeInTheDocument()
+      expect(within(section).getByText(/whole words/)).toBeInTheDocument()
+      expect(screen.getByLabelText('Apply to')).toBeDisabled()
+      fireEvent.change(screen.getByLabelText('Condition 1 field'), { target: { value: 'age' } })
+      expect(within(section).getByText(/Condition 1: Server rules run when mail arrives/)).toBeInTheDocument()
+      fireEvent.change(screen.getByLabelText('Condition 1 field'), { target: { value: 'subject' } })
+      server.upload.mockRejectedValueOnce(new Error('Gmail unavailable'))
+      fireEvent.click(screen.getByRole('button', { name: /Save rule/ }))
+      await waitFor(() => expect(onToast).toHaveBeenCalledWith('Rule saved, but the server copy was not updated: Gmail unavailable'))
+      fireEvent.click(screen.getByTitle('Edit rule'))
+      fireEvent.click(screen.getByRole('button', { name: /Save rule/ }))
+      await waitFor(() => expect(onToast).toHaveBeenCalledWith('Rule saved and updated on the server'))
+    })
+
+    it('keeps Gmail server rules on and switches Outlook rules on the server', async () => {
+      api.list.mockResolvedValue([rule({ execution: 'server', serverRuleId: 'filter-1' }), rule({ id: 'rule-2', name: 'Outlook', accountId: 'account-2', execution: 'server', serverRuleId: 'outlook-1' })])
+      server.capabilities.mockImplementation(async (accountId: string) => capabilities(accountId === 'account-2' ? { accountId, provider: 'microsoft', canDisable: true } : {}))
+      server.setEnabled.mockResolvedValue({ id: 'outlook-1', enabled: false })
+      const onToast = vi.fn()
+      render(<MailRulesModal accounts={[account(), account({ id: 'account-2', provider: 'microsoft', email: 'work@example.test' })]} labels={labels} onToast={onToast} onClose={vi.fn()} />)
+      await screen.findByText('Outlook')
+      const toggles = screen.getAllByRole('checkbox')
+      fireEvent.click(toggles[0])
+      expect(onToast).toHaveBeenCalledWith(expect.stringContaining('Gmail filters can’t be turned off'))
+      fireEvent.click(toggles[1])
+      await waitFor(() => expect(server.setEnabled).toHaveBeenCalledWith('account-2', 'outlook-1', false))
+      expect(api.save).not.toHaveBeenCalled()
+    })
+
+    it('lists, switches, and removes server rules per account', async () => {
+      server.capabilities.mockImplementation(async (accountId: string) => capabilities(accountId === 'account-2' ? { accountId, provider: 'microsoft', canDisable: true } : {}))
+      server.list.mockImplementation(async (accountId: string) => accountId === 'account-2'
+        ? [{ id: 'outlook-1', accountId, provider: 'microsoft', name: 'Receipts', enabled: true, conditions: ['Subject contains receipt'], exceptions: ['Sender contains boss'], actions: ['Move to Receipts'], linkedRuleId: 'rule-1' }]
+        : [])
+      server.setEnabled.mockResolvedValue({ id: 'outlook-1', enabled: false })
+      const onToast = vi.fn()
+      render(<MailRulesModal accounts={[account(), account({ id: 'account-2', provider: 'microsoft', email: 'work@example.test' })]} labels={labels} onToast={onToast} onClose={vi.fn()} />)
+      await screen.findByText('No rules yet')
+      fireEvent.click(screen.getByRole('button', { name: /Server rules/ }))
+      expect(await screen.findByText('No server rules')).toBeInTheDocument()
+      fireEvent.change(screen.getByLabelText('Server rules account'), { target: { value: 'account-2' } })
+      expect(await screen.findByText('Receipts · from Aerio')).toBeInTheDocument()
+      expect(screen.getByText('Except: Sender contains boss')).toBeInTheDocument()
+      fireEvent.click(screen.getByLabelText('Server rule Receipts on'))
+      await waitFor(() => expect(server.setEnabled).toHaveBeenCalledWith('account-2', 'outlook-1', false))
+      fireEvent.click(screen.getByTitle('Remove from server'))
+      await waitFor(() => expect(server.delete).toHaveBeenCalledWith('account-2', 'outlook-1'))
+      expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('kept, turned off'))
+      await waitFor(() => expect(onToast).toHaveBeenCalledWith('Server rule removed'))
+      server.list.mockRejectedValueOnce(new Error('Graph unavailable'))
+      fireEvent.change(screen.getByLabelText('Server rules account'), { target: { value: 'account-1' } })
+      expect(await screen.findByText('Graph unavailable')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /Back to rules/ }))
+      expect(await screen.findByText('No rules yet')).toBeInTheDocument()
+    })
+  })
 })

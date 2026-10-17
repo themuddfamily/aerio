@@ -468,14 +468,24 @@ export interface MailReplyWatchInput {
   deadlineAt?: string
 }
 
-export type MailRuleConditionField = 'from' | 'to' | 'subject' | 'body'
-export type MailRuleConditionOperator = 'contains' | 'equals' | 'starts-with' | 'ends-with'
+// Text fields compare with contains/equals/starts-with/ends-with; the others
+// use 'is' (has-attachment yes|no, importance high|normal|low, label <labelId>)
+// or greater-than/less-than (size in KB, age in days).
+export type MailRuleConditionField = 'from' | 'to' | 'cc' | 'subject' | 'body' | 'header' | 'has-attachment' | 'size' | 'age' | 'importance' | 'label'
+export type MailRuleConditionOperator = 'contains' | 'equals' | 'starts-with' | 'ends-with' | 'is' | 'greater-than' | 'less-than'
 
 export interface MailRuleCondition {
   field: MailRuleConditionField
   operator: MailRuleConditionOperator
   value: string
+  /** Header name for field 'header', e.g. List-Id. */
+  headerName?: string
 }
+
+/** incoming: newly received mail; outgoing: newly synced Sent mail. */
+export type MailRuleTrigger = 'incoming' | 'outgoing'
+/** local: Aerio applies the rule; server: the provider runs its copy and Aerio skips it. */
+export type MailRuleExecution = 'local' | 'server'
 
 export interface MailRuleAction {
   action: Extract<MailActionKind, 'archive' | 'read' | 'star' | 'important' | 'trash' | 'label' | 'move'>
@@ -490,6 +500,12 @@ export interface MailRuleInput {
   match: 'all' | 'any'
   conditions: MailRuleCondition[]
   actions: MailRuleAction[]
+  /** "Except if" clauses: the rule is skipped when any exception matches. */
+  exceptions?: MailRuleCondition[]
+  trigger?: MailRuleTrigger
+  execution?: MailRuleExecution
+  /** Provider filter/rule id once the rule is uploaded to the server. */
+  serverRuleId?: string
 }
 
 export interface MailRule extends Omit<MailRuleInput, 'id'> {
@@ -606,6 +622,7 @@ export interface MailDesktopApi {
     delete(id: string): Promise<void>
     run(id: string): Promise<MailRuleRunResult>
   }
+  serverRules?: import('./mail-server-rule-types').MailServerRulesApi
   savedSearches: {
     list(): Promise<MailSavedSearch[]>
     save(input: MailSavedSearchInput): Promise<MailSavedSearch>

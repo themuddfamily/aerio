@@ -32,6 +32,7 @@ import { MailFolderManager } from './mail/folder-management'
 import { sanitizeMessageHtmlWithReport } from './mail/message-security'
 import { buildNewMailNotification } from './mail/new-mail'
 import { messageIdFromMime } from './mail/reply-watches'
+import { mailRuleTriggersForLabels } from '../src/lib/mail-rules'
 import { parseMessageSource } from './mail/message-source'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createMime, createMimeBuffer } from './mail/mime-builder'
@@ -1019,16 +1020,26 @@ function applyRuleActions(rule: MailRule, threadIds: string[]) {
   return operations
 }
 
-function applyRulesToIncoming(records: ParsedMailMessage[]) {
+// Automatic rules for newly synced mail: incoming rules for received mail,
+// outgoing rules for new Sent copies. The ledger claims each message per
+// trigger before any action runs, so a resync, a folder move that gives an
+// IMAP copy a new id, or an overlapping history pass never processes it twice.
+// Rule actions only change labels/folders and never create messages, so a
+// rule can't trigger itself or another rule.
+function applyRulesToNewMail(records: ParsedMailMessage[]) {
   if (!database) return new Set<string>()
   const silenced = new Set<string>()
   const matches = new Map<string, { rule: MailRule; threadIds: Set<string> }>()
   for (const record of records) {
-    for (const rule of database.matchingRulesForMessage(record)) {
-      const entry = matches.get(rule.id) ?? { rule, threadIds: new Set<string>() }
-      entry.threadIds.add(record.threadId)
-      matches.set(rule.id, entry)
-      if (rule.actions.some((action) => ['archive', 'move', 'trash'].includes(action.action))) silenced.add(record.id)
+    for (const trigger of mailRuleTriggersForLabels(record.labelIds)) {
+      if (!database.hasLocalRules(record.accountId, trigger)) continue
+      if (!database.ruleLedger.claim(record.accountId, record, trigger)) continue
+      for (const rule of database.matchingRulesForMessage(record, trigger)) {
+        const entry = matches.get(rule.id) ?? { rule, threadIds: new Set<string>() }
+        entry.threadIds.add(record.threadId)
+        matches.set(rule.id, entry)
+        if (trigger === 'incoming' && rule.actions.some((action) => ['archive', 'move', 'trash'].includes(action.action))) silenced.add(record.id)
+      }
     }
   }
   for (const { rule, threadIds } of matches.values()) {
@@ -1040,7 +1051,7 @@ function applyRulesToIncoming(records: ParsedMailMessage[]) {
 }
 
 function emitNewMail(accountId: string, records: ParsedMailMessage[]) {
-  const silenced = applyRulesToIncoming(records)
+  const silenced = applyRulesToNewMail(records)
   if (records.length) processReplyWatches(true)
   if (!database?.getAccount(accountId)?.notifications) return
   const payload = buildNewMailNotification(accountId, records.filter((record) => !silenced.has(record.id)))

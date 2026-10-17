@@ -67,6 +67,8 @@ const mocks = vi.hoisted(() => {
   method('queuedDrafts', () => [])
   method('getDueDraft')
   method('matchingRulesForMessage', () => [])
+  method('hasLocalRules', () => true)
+  db.ruleLedger = { claim: vi.fn(() => true), processed: vi.fn(() => false) }
   method('rawPath', () => 'C:\\content\\raw.eml')
   method('hasMessage', () => false)
   method('upsertMessage')
@@ -388,10 +390,49 @@ describe.sequential('mail worker protocol routing', () => {
     expect(mocks.db.upsertMessage).toHaveBeenCalledWith(expect.objectContaining({ subject: 'Worker message', fromEmail: 'ada@example.test', to: ['Grace <grace@example.test>'] }))
     expect(mocks.db.deleteMessage).toHaveBeenCalledWith('account-1', 'deleted-message')
     expect(mocks.db.recordRuleMatch).toHaveBeenCalledWith('incoming-rule', 1)
+    expect(mocks.db.ruleLedger.claim).toHaveBeenCalledWith('account-1', expect.objectContaining({ id: 'new-message' }), 'incoming')
+    expect(mocks.db.matchingRulesForMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 'new-message' }), 'incoming')
     expect(mocks.notification).toHaveBeenCalled()
     expect(mocks.posted).toContainEqual(expect.objectContaining({ kind: 'event', event: expect.objectContaining({ type: 'sync-progress', payload: expect.objectContaining({ phase: 'complete' }) }) }))
     mocks.db.matchingRulesForMessage.mockReturnValue([])
     mocks.notification.mockReturnValue(undefined)
+  })
+
+  it('runs outgoing rules on new Sent copies and never reprocesses a message the rule ledger already claimed', async () => {
+    mocks.fs.statfsSync.mockReturnValue({ bavail: 2_000_000n, bsize: 4096n })
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.getAccountHistory.mockReturnValue('5')
+    mocks.db.hasMessage.mockReturnValue(false)
+    mocks.db.recordRuleMatch.mockClear()
+    mocks.db.matchingRulesForMessage.mockClear()
+    mocks.db.ruleLedger.claim.mockImplementation(((_accountId: string, message: { id: string }) => message.id !== 'repeat-message') as any)
+    mocks.db.matchingRulesForMessage.mockImplementation(((_message: unknown, trigger: string) => trigger === 'outgoing'
+      ? [{ id: 'outgoing-rule', accountId: 'account-1', enabled: true, name: 'File sent', trigger: 'outgoing', conditions: [], actions: [{ action: 'star' }] }]
+      : []) as any)
+    mocks.gmail.listHistory.mockResolvedValueOnce({
+      historyId: '6',
+      history: [{ id: '6', messagesAdded: [
+        { message: { id: 'sent-message', threadId: 'sent-thread' } },
+        { message: { id: 'repeat-message', threadId: 'repeat-thread' } },
+        { message: { id: 'draft-message', threadId: 'draft-thread' } }
+      ] }]
+    })
+    mocks.gmail.getRawMessage.mockImplementation(async (id: string) => ({
+      id, threadId: id.replace('message', 'thread'), historyId: '6', raw: Buffer.from(`raw:${id}`).toString('base64url'),
+      labelIds: id === 'sent-message' ? ['SENT'] : id === 'draft-message' ? ['DRAFT'] : ['INBOX'], internalDate: '1786183200000'
+    }))
+    mocks.postalParse.mockResolvedValue({ from: { address: 'person@example.test' }, subject: 'Sent', attachments: [] })
+
+    await request({ type: 'sync:start', payload: { accountId: 'account-1' } })
+    await vi.waitFor(() => expect(mocks.db.setAccountHistory).toHaveBeenCalledWith('account-1', '6', true))
+    await vi.waitFor(() => expect(mocks.db.recordRuleMatch).toHaveBeenCalledWith('outgoing-rule', 1))
+    expect(mocks.db.matchingRulesForMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 'sent-message' }), 'outgoing')
+    expect(mocks.db.matchingRulesForMessage).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'sent-message' }), 'incoming')
+    expect(mocks.db.matchingRulesForMessage).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'repeat-message' }), expect.anything())
+    expect(mocks.db.ruleLedger.claim).not.toHaveBeenCalledWith('account-1', expect.objectContaining({ id: 'draft-message' }), expect.anything())
+    mocks.db.ruleLedger.claim.mockImplementation(() => true)
+    mocks.db.matchingRulesForMessage.mockImplementation(() => [])
+    mocks.db.getAccountHistory.mockReturnValue(undefined)
   })
 
   it('runs Microsoft delta synchronization including removed folders and messages', async () => {

@@ -12,6 +12,7 @@ import {
 } from './oauth-config'
 import { sendOAuthCallbackPage } from './oauth-callback-page'
 import { assertSecureCredentialStorage } from './secure-storage'
+import { GMAIL_SETTINGS_BASIC_SCOPE, MICROSOFT_MAILBOX_SETTINGS_SCOPE, mailSettingsScopeStatus, type MailSettingsFeature } from './mail-settings-scopes'
 
 interface StoredOAuthData {
   googleConfig?: DesktopOAuthConfig
@@ -34,9 +35,12 @@ const SCOPES = [
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/contacts',
-  'https://www.googleapis.com/auth/tasks'
+  'https://www.googleapis.com/auth/tasks',
+  GMAIL_SETTINGS_BASIC_SCOPE
 ]
-const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.ReadWrite', 'Contacts.ReadWrite', 'Tasks.ReadWrite']
+const MICROSOFT_SCOPES = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.ReadWrite', 'Contacts.ReadWrite', 'Tasks.ReadWrite', MICROSOFT_MAILBOX_SETTINGS_SCOPE]
+// Scopes added after release are granted only by an interactive reconnect.
+const MICROSOFT_LATER_SCOPES = new Set(['Tasks.ReadWrite', MICROSOFT_MAILBOX_SETTINGS_SCOPE])
 
 export class OAuthVault {
   private data: StoredOAuthData = { googleTokens: {}, googleCalendarWrite: {}, microsoftTokens: {}, imapAccounts: {} }
@@ -361,7 +365,7 @@ export class OAuthVault {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       // Refresh renews the granted permissions; added Tasks consent belongs in
       // an interactive reconnect, not a legacy mailbox's token refresh.
-      body: new URLSearchParams({ client_id: clientId, grant_type: 'refresh_token', refresh_token: current.refreshToken, scope: current.scope ?? MICROSOFT_SCOPES.filter((scope) => scope !== 'Tasks.ReadWrite').join(' ') })
+      body: new URLSearchParams({ client_id: clientId, grant_type: 'refresh_token', refresh_token: current.refreshToken, scope: current.scope ?? MICROSOFT_SCOPES.filter((scope) => !MICROSOFT_LATER_SCOPES.has(scope)).join(' ') })
     })
     const token = await response.json() as { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string; error_description?: string }
     if (!response.ok || !token.access_token) throw new Error(token.error_description ?? 'Microsoft token refresh failed')
@@ -395,6 +399,24 @@ export class OAuthVault {
       credentials = this.data.microsoftTokens[accountId]
     }
     return new Set((credentials?.scope ?? '').split(/\s+/).filter(Boolean)).has('Contacts.ReadWrite')
+  }
+
+  /** The provider's granted-scope string for an OAuth account, if recorded. */
+  grantedScopes(accountId: string, provider: MailProviderId) {
+    if (provider === 'gmail') {
+      if (!this.data.googleTokens[accountId]) this.load()
+      return this.data.googleTokens[accountId]?.scope
+    }
+    if (provider === 'microsoft') {
+      if (!this.data.microsoftTokens[accountId]) this.load()
+      return this.data.microsoftTokens[accountId]?.scope
+    }
+    return undefined
+  }
+
+  /** Whether the account may use mailbox-settings features (server rules, automatic replies). */
+  mailSettingsAccess(accountId: string, provider: MailProviderId, feature: MailSettingsFeature) {
+    return mailSettingsScopeStatus(provider, this.grantedScopes(accountId, provider), feature)
   }
 
   storeImap(accountId: string, input: ImapAccountInput) {

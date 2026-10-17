@@ -52,6 +52,7 @@ import { ImapSmtpClient } from './mail/imap-client'
 import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
 import { MailWorkerClient } from './mail/worker-client'
 import { validateCreateFolder, validateDeleteFolder, validateFolderReference, validateUpdateFolder } from './mail/folder-validation'
+import { registerMailRuleHandlers } from './mail/server-rule-ipc'
 import { DiagnosticLogger, type DiagnosticRecord } from './diagnostics'
 import { UpdateManager } from './update-manager'
 import { ProductivityStore } from './productivity/store'
@@ -257,31 +258,6 @@ function validateFutureDate(value: unknown, label: string) {
   if (!Number.isFinite(timestamp) || timestamp <= Date.now()) throw new Error(`${label} must be in the future`)
   if (timestamp > Date.now() + 366 * 24 * 60 * 60 * 1_000) throw new Error(`${label} cannot be more than one year away`)
   return new Date(timestamp).toISOString()
-}
-
-function validateRule(input: MailRuleInput): MailRuleInput {
-  if (!input || typeof input !== 'object') throw new Error('The rule is invalid')
-  if (input.id !== undefined && (typeof input.id !== 'string' || !input.id || input.id.length > 200)) throw new Error('The rule id is invalid')
-  if (typeof input.accountId !== 'string' || !input.accountId || input.accountId.length > 200) throw new Error('Choose an account for this rule')
-  if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200) throw new Error('Give this rule a name')
-  if (typeof input.enabled !== 'boolean' || !['all', 'any'].includes(input.match)) throw new Error('Choose how this rule should match')
-  if (!Array.isArray(input.conditions) || input.conditions.length < 1 || input.conditions.length > 10) throw new Error('Add between one and ten conditions')
-  if (!Array.isArray(input.actions) || input.actions.length < 1 || input.actions.length > 10) throw new Error('Add between one and ten actions')
-  const fields = new Set(['from', 'to', 'subject', 'body'])
-  const operators = new Set(['contains', 'equals', 'starts-with', 'ends-with'])
-  const actions = new Set(['archive', 'read', 'star', 'important', 'trash', 'label', 'move'])
-  for (const condition of input.conditions) {
-    if (!condition || !fields.has(condition.field) || !operators.has(condition.operator) || typeof condition.value !== 'string' || !condition.value.trim() || condition.value.length > 500) throw new Error('Finish every rule condition')
-  }
-  for (const action of input.actions) {
-    if (!action || !actions.has(action.action)) throw new Error('Choose a valid rule action')
-    if ((action.action === 'label' || action.action === 'move') && (typeof action.labelId !== 'string' || !action.labelId || action.labelId.length > 500)) throw new Error('Choose a label or folder for the rule')
-  }
-  return {
-    ...input,
-    name: input.name.trim(),
-    conditions: input.conditions.map((condition) => ({ ...condition, value: condition.value.trim() }))
-  }
 }
 
 function requireProductivityStore() {
@@ -1707,8 +1683,17 @@ function registerIpc() {
     requireMailWorker().request<MailFolderDeletePreview>({ type: 'folders:delete-preview', payload: validateFolderReference(accountId, labelId) }))
   ipcMain.handle('mail:rules:list', (_event, accountIds?: string[]) =>
     requireMailWorker().request<MailRule[]>({ type: 'rules:list', payload: { accountIds } }))
-  ipcMain.handle('mail:rules:save', (_event, input: MailRuleInput) =>
-    requireMailWorker().request<MailRule>({ type: 'rules:save', payload: validateRule(input) }))
+  registerMailRuleHandlers(ipcMain, {
+    request: (command) => requireMailWorker().request(command),
+    provider: (accountId) => accountProviders.get(accountId),
+    accessToken: async (accountId, provider) => {
+      const credential = await requireVault().credential(accountId, provider)
+      if (credential.type !== 'oauth') throw new Error('This account has no server rules')
+      return credential.accessToken
+    },
+    access: (accountId, provider) => requireVault().mailSettingsAccess(accountId, provider, 'server-rules'),
+    diagnostic: (event, accountId, details) => diagnostic({ level: 'info', component: 'provider', event, accountId, details })
+  })
   ipcMain.handle('mail:rules:delete', (_event, id: string) => {
     if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid rule id')
     return requireMailWorker().request({ type: 'rules:delete', payload: { id } })

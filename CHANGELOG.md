@@ -6,6 +6,12 @@
 
 - QuickText snippets and whole-message mail templates with subject, sanitized HTML, and managed attachments; search, edit, and insert them from the composer without losing the editor selection, and back them up with local data or as a standalone template file.
 - Watch for replies: turn it on in the composer or from a sent message’s menu, with an optional deadline. Aerio matches replies by Message-ID references and the provider thread for the sending account, notifies from the background or tray when a recipient answers or the deadline passes without a reply, and lists active and past watches under Mail › Reply watches, where they can be cancelled.
+- Advanced mail rules: Cc, header, attachment, size, age, importance, and folder/label conditions; “except if” exceptions; and outgoing rules that run on new Sent mail. A per-message ledger keyed by Message-ID makes sure a message is never processed twice, including after resyncs and IMAP folder moves. Existing rules keep their stored format and behavior.
+- Server rules: upload a rule as a Gmail filter (`users.settings.filters`) or an Outlook inbox rule (Graph `messageRules`), list, update, turn off (Outlook), or remove provider rules, and see which conditions or actions can't map to the server. An uploaded rule runs only on the server. Accounts without the new `gmail.settings.basic` or `MailboxSettings.ReadWrite` permission are asked to reconnect.
+
+### Changed
+
+- Incoming rules no longer run on new drafts or Sent-only copies; use an outgoing rule for sent mail. “Equals” on To or Cc now also matches a single recipient’s address or name.
 
 ## 0.5.0 — 2026-08-08
 

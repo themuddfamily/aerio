@@ -172,6 +172,13 @@ const api: AerioDesktopApi = {
       delete: (id) => ipcRenderer.invoke('mail:rules:delete', id),
       run: (id) => ipcRenderer.invoke('mail:rules:run', id)
     },
+    serverRules: {
+      capabilities: (accountId) => ipcRenderer.invoke('mail:server-rules:capabilities', accountId),
+      list: (accountId) => ipcRenderer.invoke('mail:server-rules:list', accountId),
+      upload: (ruleId) => ipcRenderer.invoke('mail:server-rules:upload', ruleId),
+      delete: (accountId, serverRuleId) => ipcRenderer.invoke('mail:server-rules:delete', accountId, serverRuleId),
+      setEnabled: (accountId, serverRuleId, enabled) => ipcRenderer.invoke('mail:server-rules:set-enabled', accountId, serverRuleId, enabled)
+    },
     savedSearches: {
       list: () => ipcRenderer.invoke('mail:saved-searches:list'),
       save: (input) => ipcRenderer.invoke('mail:saved-searches:save', input),
