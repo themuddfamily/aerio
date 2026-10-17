@@ -237,5 +237,6 @@ export interface AerioDesktopApi {
   onComposeCommand(callback: () => void): () => void
   mail: import('./mail-types').MailDesktopApi
   ai: import('./ai-assistant-types').AiAssistantApi
+  openPgp?: import('./openpgp-types').OpenPgpApi
   interchange: import('./interchange-types').InterchangeDesktopApi
 }

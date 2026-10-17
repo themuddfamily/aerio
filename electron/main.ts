@@ -73,6 +73,7 @@ import { MailTemplateStore, parseMailTemplateBackup, type MailTemplateBackup } f
 import { registerMailTemplates } from './mail/template-tools'
 import { registerMailIdentities, validateDraftSender } from './mail/identity-ipc'
 import { AutomaticRepliesService, registerAutomaticReplies } from './mail/automatic-replies'
+import { AvailabilityService, registerAvailability } from './productivity/availability'
 import { CloudAttachmentService, CloudAttachmentStateStore, registerCloudAttachments } from './mail/cloud-attachments'
 import { assertSecureCredentialStorage } from './mail/secure-storage'
 import { GoogleProductivityConnector } from './productivity/google-connector'
@@ -81,6 +82,7 @@ import { InterchangeStore } from './productivity/interchange-store'
 import { registerCalendarContactInterchange } from './productivity/interchange-ipc'
 import { carryPendingConferences } from './productivity/online-meetings'
 import { validEventConference } from '../src/lib/online-meetings'
+import { registerMailImport } from './mail/mail-import-ipc'
 import { validContactInterchangeFields, validContactLists, validEventInterchangeFields } from '../src/lib/interchange-validation'
 import { contactEditConflict } from '../src/lib/contact-fields'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
@@ -95,6 +97,9 @@ import { fetchRemoteImage } from './mail/remote-image-fetch'
 import { applyPendingProfileRestore, finalizeProfileRestore } from './profile-backup'
 import { PROFILE_BACKUP_LAYOUT } from './profile-backup-layout'
 import { registerProfileBackup } from './profile-backup-tools'
+import { OpenPgpKeyring } from './mail/openpgp-keyring'
+import { assertOpenPgpSendable, registerOpenPgp } from './mail/openpgp-ipc'
+import { normalizeOpenPgpOptions } from './mail/openpgp-draft-store'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -127,6 +132,7 @@ let failedUnlockAttempts = 0
 let unlockBlockedUntil = 0
 let oauthVault: OAuthVault | null = null
 let mailWorker: MailWorkerClient | null = null
+let openPgpKeyring: OpenPgpKeyring | null = null
 const accountProviders = new Map<string, MailAccountSummary['provider']>()
 const approvedAttachmentPaths = new Set<string>()
 let quitting = false
@@ -233,6 +239,11 @@ function requireMailWorker() {
   return mailWorker
 }
 
+function requireOpenPgp() {
+  if (!openPgpKeyring) throw new Error('OpenPGP is not ready. The message was not sent; your draft is kept.')
+  return openPgpKeyring
+}
+
 function requireVault() {
   if (!oauthVault) throw new Error('Secure mail storage is not ready')
   return oauthVault
@@ -259,6 +270,7 @@ function validateDraft(input: MailDraftInput, forSend = false) {
   if (input.attachmentPaths.length > 50) throw new Error('A message cannot contain more than 50 attachments')
   validateDraftSender(input, forSend)
   input.sendOptions = normalizeSendOptions(input.sendOptions)
+  input.openPgp = normalizeOpenPgpOptions(input.openPgp)
   if (input.attachmentPaths.some((path) => typeof path !== 'string' || !approvedAttachmentPaths.has(path))) {
     throw new Error('A draft referenced a file that was not selected through Aerio')
   }
@@ -792,6 +804,8 @@ function updateMailPolling(immediate = false) {
 async function initializeMail() {
   const userData = app.getPath('userData')
   oauthVault = new OAuthVault(join(userData, 'oauth-vault.dat'), builtInOAuthClients)
+  // Deliberately outside the profile-backup allowlist: keys leave only by explicit export.
+  openPgpKeyring = new OpenPgpKeyring(join(userData, 'openpgp-keyring.dat'), { storage: safeStorage, isLocked: () => applicationLocked })
   mailWorker = new MailWorkerClient(
     join(import.meta.dirname, 'mail-worker.js'),
     (accountId) => requireVault().credential(accountId, accountProviders.get(accountId) ?? 'gmail'),
@@ -807,7 +821,8 @@ async function initializeMail() {
       if (event.type === 'reply-watch') showReplyWatchNotification(event.payload)
       mainWindow?.webContents.send('mail:event', event)
       for (const window of messageWindows.values()) if (!window.isDestroyed()) window.webContents.send('mail:event', event)
-    }
+    },
+    (request) => requireOpenPgp().protect(request.message, request)
   )
   await mailWorker.request({
     type: 'initialize',
@@ -1049,6 +1064,7 @@ function disableAppLock(passphrase: unknown) {
 function lockApplication() {
   if (!loadAppLockRecord()) return appLockStatus()
   applicationLocked = true
+  openPgpKeyring?.lock()
   for (const window of messageWindows.values()) window.close()
   return publishAppLockStatus()
 }
@@ -1374,6 +1390,7 @@ function registerIpc() {
     return mailTemplateStore
   }, approveAttachment: (path) => approvedAttachmentPaths.add(path) })
   registerMailIdentities({ worker: requireMailWorker })
+  registerOpenPgp({ keyring: requireOpenPgp(), worker: requireMailWorker })
   registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
   } })
@@ -1385,6 +1402,14 @@ function registerIpc() {
     grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider)
   })
   registerAutomaticReplies(ipcMain, () => automaticReplies)
+  const availability = new AvailabilityService({
+    calendars: () => requireProductivityStore().snapshot().calendars,
+    accountEmail: async (accountId) => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId)?.email,
+    googleToken: (accountId) => requireVault().accessToken(accountId),
+    microsoftToken: (accountId) => requireVault().microsoftAccessToken(accountId),
+    grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider)
+  })
+  registerAvailability(ipcMain, () => availability)
   const cloudAttachments = new CloudAttachmentService({
     account: async (accountId) => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId),
     googleToken: (accountId) => requireVault().accessToken(accountId),
@@ -1823,10 +1848,16 @@ function registerIpc() {
   })
   ipcMain.handle('mail:drafts:save', (_event, input: MailDraftInput) =>
     requireMailWorker().request({ type: 'drafts:save', payload: validateDraft(input) }))
-  ipcMain.handle('mail:drafts:send', (_event, input: MailDraftInput) =>
-    requireMailWorker().request({ type: 'drafts:send', payload: validateDraft(input, true) }))
-  ipcMain.handle('mail:drafts:schedule', (_event, input: MailDraftInput, deliveryAt: string) =>
-    requireMailWorker().request({ type: 'drafts:schedule', payload: { input: validateDraft(input, true), deliveryAt: validateFutureDate(deliveryAt, 'Scheduled send time') } }))
+  // Sign/Encrypt drafts are checked before queuing; delivery checks again and never falls back to plaintext.
+  ipcMain.handle('mail:drafts:send', (_event, input: MailDraftInput) => {
+    const draft = validateDraft(input, true)
+    return assertOpenPgpSendable(requireOpenPgp(), requireMailWorker(), draft).then(() => requireMailWorker().request({ type: 'drafts:send', payload: draft }))
+  })
+  ipcMain.handle('mail:drafts:schedule', (_event, input: MailDraftInput, deliveryAt: string) => {
+    const draft = validateDraft(input, true)
+    const at = validateFutureDate(deliveryAt, 'Scheduled send time')
+    return assertOpenPgpSendable(requireOpenPgp(), requireMailWorker(), draft).then(() => requireMailWorker().request({ type: 'drafts:schedule', payload: { input: draft, deliveryAt: at } }))
+  })
   ipcMain.handle('mail:drafts:cancel-send', (_event, id: string) => {
     if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid queued message id')
     return requireMailWorker().request<MailDraftResult>({ type: 'drafts:cancel-send', payload: { id } })
@@ -1991,6 +2022,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   taskPolling = setInterval(() => { void taskService?.poll().catch(() => {}) }, 60_000)
   taskPolling.unref()
   registerIpc()
+  registerMailImport({ ipcMain, worker: requireMailWorker, localAccount: (account) => accountProviders.set(account.id, account.provider) })
   profileBackups = registerProfileBackup({
     userData: app.getPath('userData'),
     appVersion: app.getVersion(),
