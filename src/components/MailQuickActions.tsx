@@ -2,10 +2,18 @@ import { ArrowDown, ArrowUp, Pencil, Plus, Save, Trash2, X, Zap } from 'lucide-r
 import { useCallback, useEffect, useState } from 'react'
 import type { MailAccountSummary, MailActionKind, MailLabel, MailQuickAction, MailQuickActionInput, MailQuickActionStep } from '../mail-types'
 import {
-  MAX_QUICK_ACTION_STEPS, QUICK_ACTION_STEP_LABELS, describeQuickActionStep, quickActionDestinations, quickActionShortcutLabel,
+  MAX_QUICK_ACTION_STEPS, QUICK_ACTION_STEP_LABELS, describeQuickActionStep, quickActionDestinations,
   quickActionStepNeedsDestination
 } from '../lib/mail-quick-actions'
+import { quickActionCommandId } from '../lib/keymap'
+import { useKeymap } from '../lib/use-keymap'
 import Modal from './Modal'
+
+/** Current key for a Quick Action slot, from the editable keymap (Settings → Keyboard shortcuts). */
+function useQuickActionSlotLabel() {
+  const { label } = useKeymap()
+  return (slot: number) => label(quickActionCommandId(slot))
+}
 
 export function useMailQuickActions(onToast: (message: string) => void) {
   const [quickActions, setQuickActions] = useState<MailQuickAction[]>([])
@@ -48,9 +56,10 @@ interface MailQuickActionButtonsProps {
 
 /** Toolbar buttons for quick actions the user pinned to the toolbar. */
 export function MailQuickActionButtons({ quickActions, disabled, className, onRun }: MailQuickActionButtonsProps) {
+  const slotLabel = useQuickActionSlotLabel()
   const pinned = quickActions.filter((item) => item.showInToolbar)
   if (!pinned.length) return null
-  return <>{pinned.map((item) => <button key={item.id} className={className} disabled={disabled} title={`Run quick action “${item.name}”${item.shortcut ? ` (${quickActionShortcutLabel(item.shortcut)})` : ''}`} onClick={() => onRun(item)}><Zap size={15} /><span>{item.name}</span></button>)}</>
+  return <>{pinned.map((item) => <button key={item.id} className={className} disabled={disabled} title={`Run quick action “${item.name}”${item.shortcut && slotLabel(item.shortcut) ? ` (${slotLabel(item.shortcut)})` : ''}`} onClick={() => onRun(item)}><Zap size={15} /><span>{item.name}</span></button>)}</>
 }
 
 interface MailQuickActionsModalProps {
@@ -66,6 +75,7 @@ const newStep = (): MailQuickActionStep => ({ action: 'read' })
 
 export function MailQuickActionsModal({ accounts, labels, quickActions, onSave, onDelete, onClose }: MailQuickActionsModalProps) {
   const writableAccounts = accounts.filter((account) => !account.archived)
+  const slotLabel = useQuickActionSlotLabel()
   const [editing, setEditing] = useState<MailQuickActionInput>()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
@@ -105,7 +115,7 @@ export function MailQuickActionsModal({ accounts, labels, quickActions, onSave, 
       <div className="mail-rules-list">
         {!quickActions.length && <div className="rules-empty"><Zap size={26} /><strong>No quick actions yet</strong><span>Combine steps like mark as read, apply a label, and archive into one action.</span></div>}
         {quickActions.map((item) => <article key={item.id}>
-          <span className="rule-copy"><strong>{item.name}</strong><small>{item.accountId ? accounts.find((candidate) => candidate.id === item.accountId)?.email ?? 'Missing account' : 'Any account'}{item.shortcut ? ` · ${quickActionShortcutLabel(item.shortcut)}` : ''}{item.showInToolbar ? ' · On toolbar' : ''}</small><small>{item.steps.map((step) => describeQuickActionStep(step, labels, item.accountId)).join(' → ')}</small></span>
+          <span className="rule-copy"><strong>{item.name}</strong><small>{item.accountId ? accounts.find((candidate) => candidate.id === item.accountId)?.email ?? 'Missing account' : 'Any account'}{item.shortcut ? ` · ${slotLabel(item.shortcut) ?? `Shortcut slot ${item.shortcut} (no key assigned)`}` : ''}{item.showInToolbar ? ' · On toolbar' : ''}</small><small>{item.steps.map((step) => describeQuickActionStep(step, labels, item.accountId)).join(' → ')}</small></span>
           <button className="icon-button" title="Edit quick action" aria-label={`Edit ${item.name}`} onClick={() => edit({ ...item })}><Pencil size={15} /></button>
           <button className="icon-button danger" title="Delete quick action" aria-label={`Delete ${item.name}`} onClick={() => void remove(item)}><Trash2 size={15} /></button>
         </article>)}
@@ -137,7 +147,7 @@ export function MailQuickActionsModal({ accounts, labels, quickActions, onSave, 
         <div className="rule-grid">
           <label className="field"><span>Keyboard shortcut</span><select value={editing.shortcut ?? ''} onChange={(event) => setEditing({ ...editing, shortcut: event.target.value ? Number(event.target.value) : undefined })}><option value="">None</option>{[1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) => {
             const owner = quickActions.find((item) => item.shortcut === slot && item.id !== editing.id)
-            return <option key={slot} value={slot} disabled={Boolean(owner)}>{quickActionShortcutLabel(slot)}{owner ? ` (used by ${owner.name})` : ''}</option>
+            return <option key={slot} value={slot} disabled={Boolean(owner)}>{slotLabel(slot) ?? `Slot ${slot} (no key assigned)`}{owner ? ` (used by ${owner.name})` : ''}</option>
           })}</select></label>
           <label className="rule-enabled"><input type="checkbox" checked={editing.showInToolbar} onChange={(event) => setEditing({ ...editing, showInToolbar: event.target.checked })} /> Show on the message and selection toolbars</label>
         </div>

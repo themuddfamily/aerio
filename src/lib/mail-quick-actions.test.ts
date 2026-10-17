@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  describeQuickActionStep, quickActionDestinations, quickActionShortcutLabel, quickActionShortcutSlot, quickActionTargets,
+  describeQuickActionStep, quickActionDestinations, quickActionTargets,
   summarizeQuickActionRun, validateMailQuickAction, validateMailQuickActionTargets
 } from './mail-quick-actions'
+import { defaultKeymap, matchKeymapCommand, quickActionCommandId, shortcutLabel } from './keymap'
 
 describe('mail quick actions', () => {
   it('normalizes valid quick actions and rejects unsafe or incomplete ones', () => {
@@ -44,15 +45,18 @@ describe('mail quick actions', () => {
     expect(describeQuickActionStep({ action: 'move', labelId: 'INBOX' })).toBe('Move to folder or label: Inbox')
   })
 
-  it('maps Ctrl/Cmd+Shift+digit to shortcut slots', () => {
-    const key = (code: string, extra = {}) => ({ ctrlKey: true, metaKey: false, shiftKey: true, altKey: false, code, ...extra })
-    expect(quickActionShortcutSlot(key('Digit3'))).toBe(3)
-    expect(quickActionShortcutSlot(key('Numpad9', { ctrlKey: false, metaKey: true }))).toBe(9)
-    expect(quickActionShortcutSlot(key('Digit0'))).toBeUndefined()
-    expect(quickActionShortcutSlot(key('Digit3', { shiftKey: false }))).toBeUndefined()
-    expect(quickActionShortcutSlot(key('Digit3', { altKey: true }))).toBeUndefined()
-    expect(quickActionShortcutLabel(4, false)).toBe('Ctrl+Shift+4')
-    expect(quickActionShortcutLabel(4, true)).toBe('Cmd+Shift+4')
+  it('maps Ctrl/Cmd+Shift+digit to shortcut slots through the default keymap', () => {
+    const pc = defaultKeymap('windows')
+    const mac = defaultKeymap('mac')
+    const key = (code: string, extra = {}) => ({ key: '#', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false, code, target: null, ...extra })
+    const slot = (keymap: typeof pc, event: ReturnType<typeof key>) => matchKeymapCommand(keymap, event, { context: 'mail' })
+    expect(slot(pc, key('Digit3'))).toBe(quickActionCommandId(3))
+    expect(slot(mac, key('Numpad9', { ctrlKey: false, metaKey: true }))).toBe(quickActionCommandId(9))
+    expect(slot(pc, key('Digit0'))).toBeUndefined()
+    expect(slot(pc, key('Digit3', { shiftKey: false, key: '3' }))).toBeUndefined()
+    expect(slot(pc, key('Digit3', { altKey: true }))).toBeUndefined()
+    expect(shortcutLabel(pc, quickActionCommandId(4))).toBe('Ctrl+Shift+4')
+    expect(shortcutLabel(mac, quickActionCommandId(4))).toBe('Cmd+Shift+4')
   })
 
   it('summarizes successes, skipped accounts, and partial failures', () => {

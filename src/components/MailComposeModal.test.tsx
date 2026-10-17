@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MailAccountSummary, MailDraftRecord, MailDraftResult, MailThreadDetail } from '../mail-types'
 import { ContextMenuProvider } from './ContextMenu'
 import MailComposeModal from './MailComposeModal'
+import { KeymapProvider } from '../lib/use-keymap'
 
 const accounts: MailAccountSummary[] = [{
   id: 'account', provider: 'gmail', email: 'me@example.test', displayName: 'Me', color: '#123456', status: 'ready', archived: false,
@@ -107,6 +108,29 @@ describe('MailComposeModal', () => {
     await user.click(screen.getAllByRole('button', { name: /^Send$/ }).at(-1)!)
     await waitFor(() => expect(failed.onToast).toHaveBeenCalledWith('Provider rejected it'))
     expect(failed.onClose).not.toHaveBeenCalled()
+  })
+
+  it('saves and sends with the editable message-editor shortcuts from any compose field', async () => {
+    const callbacks = renderCompose({ initialTo: 'reader@example.test' })
+    const editor = document.querySelector('.compose-rich-body') as HTMLElement
+    const to = screen.getByPlaceholderText('name@example.com')
+    fireEvent.keyDown(editor, { key: 's', code: 'KeyS', ctrlKey: true })
+    await waitFor(() => expect(api.mail.drafts.save).toHaveBeenCalledWith(expect.objectContaining({ to: ['reader@example.test'] })))
+    expect(api.mail.drafts.send).not.toHaveBeenCalled()
+    fireEvent.keyDown(to, { key: 'Enter', code: 'Enter' })
+    expect(api.mail.drafts.send).not.toHaveBeenCalled()
+    fireEvent.keyDown(to, { key: 'Enter', code: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(callbacks.onSent).toHaveBeenCalledWith(expect.objectContaining({ status: 'send-pending' })))
+  })
+
+  it('uses a remapped send shortcut and ignores the cleared default', async () => {
+    const callbacks = { onClose: vi.fn(), onSent: vi.fn(), onToast: vi.fn() }
+    render(<KeymapProvider platform="windows" overrides={{ version: 1, bindings: { 'compose.send': ['Alt+S'] } }}><ContextMenuProvider><MailComposeModal accounts={accounts} initialTo="reader@example.test" {...callbacks} /></ContextMenuProvider></KeymapProvider>)
+    const to = screen.getByPlaceholderText('name@example.com')
+    fireEvent.keyDown(to, { key: 'Enter', code: 'Enter', ctrlKey: true })
+    expect(api.mail.drafts.send).not.toHaveBeenCalled()
+    fireEvent.keyDown(to, { key: 'ß', code: 'KeyS', altKey: true })
+    await waitFor(() => expect(callbacks.onSent).toHaveBeenCalled())
   })
 
   it('schedules future delivery and can clear the selected delivery time', async () => {

@@ -4851,3 +4851,26 @@ img.avatar.contact-photo { object-fit: cover; }
 .chat-composer-context { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; color: var(--text-soft); font-size: 10.5px; }
 .chat-composer-row { display: flex; align-items: flex-end; gap: 8px; }
 .chat-composer textarea { flex: 1; min-height: 38px; max-height: 160px; padding: 8px 10px; resize: vertical; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); color: var(--text); font: inherit; font-size: 12px; }
+/* Keyboard shortcuts editor (src/components/KeyboardShortcutsSection.tsx) */
+.keymap-toolbar { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; }
+.keymap-search { flex: 1; display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-2); color: var(--muted); }
+.keymap-search:focus-within { border-color: var(--accent); }
+.keymap-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 11px; }
+.keymap-conflicts, .keymap-pending { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--danger); border-radius: 8px; background: var(--danger-soft); font-size: 10.5px; }
+.keymap-conflicts { flex-direction: column; align-items: flex-start; }
+.keymap-conflicts ul { margin: 0; padding-left: 16px; }
+.keymap-pending > span { flex: 1; min-width: 180px; }
+.keymap-group { margin-top: 10px; }
+.keymap-group-label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.keymap-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.keymap-list > li { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.keymap-list > li.conflicted { border-color: var(--danger); }
+.keymap-command { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.keymap-command strong { font-size: 11px; }
+.keymap-command small { color: var(--muted); font-size: 9.5px; }
+.keymap-binding { min-width: 120px; min-height: 28px; display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px; padding: 3px 8px; border: 1px dashed var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--text); font-size: 10.5px; }
+.keymap-binding:hover, .keymap-binding:focus-visible { border-color: var(--accent); }
+.keymap-binding.recording { border-style: solid; border-color: var(--accent); background: var(--accent-soft); }
+.keymap-binding em { color: var(--muted); font-style: normal; }
+.keymap-binding kbd, .keymap-conflicts kbd, .keymap-pending kbd { padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface-2); font: inherit; font-size: 10px; }
+.app-info-note { display: block; margin: 8px 4px 0; color: var(--muted); font-size: 10.5px; }

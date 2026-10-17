@@ -3,6 +3,8 @@ import { useRef, type ClipboardEvent, type DragEvent, type KeyboardEvent, type R
 import { INLINE_IMAGE_MAX_BYTES, INLINE_IMAGE_TYPES } from '../lib/mail-rich-text'
 import { inlineImageHtml, parseTableSize, sanitizePastedHtml, tableHtml } from '../lib/mail-paste'
 import { insertHtmlAtRange } from './MailTemplatePicker'
+import { matchKeymapCommand } from '../lib/keymap'
+import { useKeymap } from '../lib/use-keymap'
 
 interface MailFormattingToolbarProps {
   editorRef: RefObject<HTMLDivElement | null>
@@ -64,9 +66,11 @@ export async function insertImageFiles(editor: HTMLElement, files: File[], onCha
  */
 export function useRichEditorInput({ editorRef, onEditorChange, onToast }: Omit<MailFormattingToolbarProps, 'children'>) {
   const plainNextPaste = useRef(false)
+  const { keymap } = useKeymap()
   return {
     onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-      plainNextPaste.current = (event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'v'
+      // The binding is editable (compose.pastePlain); the native paste still runs and onPaste strips formatting.
+      plainNextPaste.current = matchKeymapCommand(keymap, event, { context: 'compose', available: ['compose.pastePlain'] }) === 'compose.pastePlain'
     },
     onPaste(event: ClipboardEvent<HTMLDivElement>) {
       const editor = event.currentTarget

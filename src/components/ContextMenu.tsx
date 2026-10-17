@@ -7,6 +7,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import type { LucideIcon } from 'lucide-react'
+import { ariaKeyShortcuts } from '../lib/keymap'
 
 export interface ContextMenuItem {
   label: string
@@ -216,6 +217,7 @@ function ContextMenuPopup({ menu, onClose }: { menu: OpenMenu; onClose(restoreFo
             type="button"
             role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
             aria-checked={item.checked === undefined ? undefined : item.checked}
+            aria-keyshortcuts={item.shortcut ? ariaKeyShortcuts(item.shortcut) : undefined}
             className={`${item.danger ? 'danger' : ''} ${item.separatorBefore ? 'separated' : ''}`}
             data-index={index}
             disabled={item.disabled}
@@ -226,7 +228,7 @@ function ContextMenuPopup({ menu, onClose }: { menu: OpenMenu; onClose(restoreFo
           >
             <span className="context-menu-icon">{item.checked ? <Check size={15} /> : Icon ? <Icon size={15} /> : null}</span>
             <span>{item.label}</span>
-            {item.shortcut && <kbd>{item.shortcut}</kbd>}
+            {item.shortcut && <kbd aria-hidden="true">{item.shortcut}</kbd>}
           </button>
         )
       })}

@@ -21,22 +21,23 @@ import type { InterchangeSnapshot } from './interchange-types'
 import type { DavSnapshot } from './dav-types'
 import type { Account, AppLockStatus, AppPreferences, AppState, CalendarEvent, Contact, ContactList, ModuleId, RecurrenceEditScope } from './types'
 import type { MailAccountSummary, MailQuickAction } from './mail-types'
-import { quickActionShortcutLabel } from './lib/mail-quick-actions'
+import { quickActionCommandId, resolveKeymap, shortcutLabel } from './lib/keymap'
+import { KeymapProvider, useKeymapCommands, type KeymapHandlers } from './lib/use-keymap'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from './productivity-types'
 import { uid, unreadCount } from './lib/domain'
 import { planLocalRecurrenceDelete, planLocalRecurrenceSave, storedEvent, type LocalRecurrencePlan } from './lib/recurrence-edit'
 import { useContextMenu } from './components/ContextMenu'
 import { useDialogFocus } from './lib/dialog-focus'
 
-const modules: { id: ModuleId; label: string; icon: typeof Mail; shortcut: string }[] = [
-  { id: 'mail', label: 'Mail', icon: Mail, shortcut: '1' },
-  { id: 'calendar', label: 'Calendar', icon: CalendarDays, shortcut: '2' },
-  { id: 'contacts', label: 'Contacts', icon: ContactRound, shortcut: '3' },
-  { id: 'tasks', label: 'Tasks', icon: CheckCircle2, shortcut: '4' },
-  { id: 'notes', label: 'Notes', icon: NotebookPen, shortcut: '5' }
+const modules: { id: ModuleId; label: string; icon: typeof Mail }[] = [
+  { id: 'mail', label: 'Mail', icon: Mail },
+  { id: 'calendar', label: 'Calendar', icon: CalendarDays },
+  { id: 'contacts', label: 'Contacts', icon: ContactRound },
+  { id: 'tasks', label: 'Tasks', icon: CheckCircle2 },
+  { id: 'notes', label: 'Notes', icon: NotebookPen }
 ]
 // Chat joins the rail only while its gate passes (docs/chat-matrix-connector.md).
-const chatModule: typeof modules[number] = { id: 'chat', label: 'Chat', icon: MessagesSquare, shortcut: '6' }
+const chatModule: typeof modules[number] = { id: 'chat', label: 'Chat', icon: MessagesSquare }
 
 const emptyProductivity: ProductivitySnapshot = { calendars: [], events: [], contacts: [], sync: [] }
 const emptyLocalModules: LocalModuleSnapshot = { tasks: [], notes: [], contacts: [] }
@@ -343,29 +344,25 @@ export default function App() {
     setComposeRequest((current) => ({ id: current.id + 1, initialTo }))
   }, [])
 
+  // Remappable global shortcuts come from the keymap registry (src/lib/keymap.ts); Escape stays fixed.
+  const keymap = useMemo(() => resolveKeymap(preferences?.settings.keyboardShortcuts), [preferences?.settings.keyboardShortcuts])
+  const keyLabel = (commandId: string) => shortcutLabel(keymap, commandId)
+  const globalShortcuts: KeymapHandlers = {
+    'app.commandPalette': () => setCommandsOpen((value) => !value),
+    'mail.compose': () => startCompose(),
+    'app.settings': () => setSettingsOpen(true),
+    'app.help': () => setInfoOpen('help'),
+    ...(appLock?.enabled ? { 'app.lock': () => { void window.aerio.appLock.lock() } } : {}),
+    ...Object.fromEntries(visibleModules.map((module) => [`module.${module.id}`, () => setActiveModule(module.id)]))
+  }
+  useKeymapCommands('global', globalShortcuts, { keymap, enabled: Boolean(preferences) && !appLock?.locked })
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const modifier = event.ctrlKey || event.metaKey
-      if (modifier && event.key.toLowerCase() === 'k') {
-        event.preventDefault()
-        setCommandsOpen((value) => !value)
-      }
-      if (modifier && event.key.toLowerCase() === 'n') {
-        event.preventDefault()
-        startCompose()
-      }
-      if (modifier && visibleModules.some((module) => module.shortcut === event.key)) {
-        event.preventDefault()
-        setActiveModule(visibleModules[Number(event.key) - 1].id)
-      }
       if (event.key === 'Escape') {
         setCommandsOpen(false)
         setSettingsOpen(false)
         setProfileOpen(false)
-      }
-      if (modifier && event.key.toLowerCase() === 'l' && appLock?.enabled) {
-        event.preventDefault()
-        void window.aerio.appLock.lock()
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -374,7 +371,7 @@ export default function App() {
       window.removeEventListener('keydown', onKeyDown)
       unsubscribe()
     }
-  }, [appLock?.enabled, startCompose, visibleModules])
+  }, [startCompose])
 
   // Saved mail Quick Actions are listed in the palette while Mail is open, so they run on the visible selection.
   useEffect(() => {
@@ -388,14 +385,15 @@ export default function App() {
 
   const commandItems = useMemo(() => {
     const mailQuick = activeModule === 'mail' ? mailQuickActions.map((item) => ({
-      label: `Run quick action: ${item.name}`, detail: item.shortcut ? quickActionShortcutLabel(item.shortcut).replaceAll('+', ' ') : '', icon: Zap,
+      label: `Run quick action: ${item.name}`, detail: item.shortcut ? keyLabel(quickActionCommandId(item.shortcut)) ?? '' : '', icon: Zap,
       action: () => setMailQuickActionRequest((current) => ({ id: current.id + 1, quickActionId: item.id })), preserveQuery: false
     })) : []
     const quick = [
-      { label: 'Compose a new message', detail: 'Ctrl N', icon: Plus, action: () => startCompose(), preserveQuery: false },
-      ...visibleModules.map((item) => ({ label: `Open ${item.label}`, detail: `Ctrl ${item.shortcut}`, icon: item.icon, action: () => setActiveModule(item.id), preserveQuery: false })),
-      ...(appLock?.enabled ? [{ label: 'Lock Aerio', detail: 'Ctrl L', icon: LockKeyhole, action: () => { void window.aerio.appLock.lock() }, preserveQuery: false }] : []),
-      { label: 'Open settings', detail: '', icon: Settings, action: () => setSettingsOpen(true), preserveQuery: false },
+      { label: 'Compose a new message', detail: keyLabel('mail.compose') ?? '', icon: Plus, action: () => startCompose(), preserveQuery: false },
+      ...visibleModules.map((item) => ({ label: `Open ${item.label}`, detail: keyLabel(`module.${item.id}`) ?? '', icon: item.icon, action: () => setActiveModule(item.id), preserveQuery: false })),
+      ...(appLock?.enabled ? [{ label: 'Lock Aerio', detail: keyLabel('app.lock') ?? '', icon: LockKeyhole, action: () => { void window.aerio.appLock.lock() }, preserveQuery: false }] : []),
+      { label: 'Open settings', detail: keyLabel('app.settings') ?? '', icon: Settings, action: () => setSettingsOpen(true), preserveQuery: false },
+      { label: 'Open help and keyboard shortcuts', detail: keyLabel('app.help') ?? '', icon: HelpCircle, action: () => setInfoOpen('help'), preserveQuery: false },
       ...mailQuick
     ].filter((item) => !query || item.label.toLowerCase().includes(query.toLowerCase()))
     return query.trim()
@@ -403,7 +401,9 @@ export default function App() {
         if (activeModule === 'mail') setMailSearchRequest((current) => ({ id: current.id + 1, query: query.trim() }))
       }, preserveQuery: true }, ...quick]
       : quick
-  }, [activeModule, appLock?.enabled, mailQuickActions, query, startCompose, visibleModules])
+    // keyLabel reads the memoized keymap listed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeModule, appLock?.enabled, keymap, mailQuickActions, query, startCompose, visibleModules])
 
   useEffect(() => setCommandIndex(0), [commandsOpen, query])
 
@@ -469,22 +469,23 @@ export default function App() {
       : 'Calendar and Contacts have not been synchronized yet.'
 
   const showModuleMenu = (event: React.MouseEvent, module: typeof modules[number]) => showContextMenu(event, [
-    { label: `Open ${module.label}`, icon: module.icon, action: () => navigate(module.id) },
-    ...(module.id === 'mail' ? [{ label: 'New message', icon: Plus, separatorBefore: true, action: () => startCompose() }] : []),
+    { label: `Open ${module.label}`, icon: module.icon, shortcut: keyLabel(`module.${module.id}`), action: () => navigate(module.id) },
+    ...(module.id === 'mail' ? [{ label: 'New message', icon: Plus, shortcut: keyLabel('mail.compose'), separatorBefore: true, action: () => startCompose() }] : []),
     { label: `Search ${module.label}`, icon: Search, separatorBefore: module.id !== 'mail', action: () => { navigate(module.id); setCommandsOpen(true) } },
     { label: 'Open on startup', icon: Sparkles, separatorBefore: true, checked: preferences.settings.startModule === module.id, action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, startModule: module.id } }) }
   ], module.label)
 
   return (
+    <KeymapProvider keymap={keymap}>
     <div className="app">
       <TitleBar>
         <button className="command-search" onClick={() => setCommandsOpen(true)} onContextMenu={(event) => showContextMenu(event, [
-          { label: 'Search and commands', icon: Search, action: () => setCommandsOpen(true) },
+          { label: 'Search and commands', icon: Search, shortcut: keyLabel('app.commandPalette'), action: () => setCommandsOpen(true) },
           { label: 'Clear search', icon: X, disabled: !query, action: () => setQuery('') }
         ], 'Search')}>
           <Search size={16} />
           <span>Search {visibleModules.find((item) => item.id === activeModule)?.label.toLowerCase()} or run a command</span>
-          <kbd>Ctrl K</kbd>
+          {keyLabel('app.commandPalette') && <kbd>{keyLabel('app.commandPalette')}</kbd>}
         </button>
       </TitleBar>
       <div className="app-frame">
@@ -496,7 +497,7 @@ export default function App() {
                 ? (chatSnapshot?.rooms ?? []).reduce((total, room) => total + (room.membership === 'invite' ? 1 : room.membership === 'join' && !room.muted ? room.unread : 0), 0)
                 : unreadCount(connectedState, id)
               return (
-                <button key={id} className={activeModule === id ? 'active' : ''} aria-label={label} aria-current={activeModule === id ? 'page' : undefined} title={`${label} · Ctrl ${module.shortcut}`} onClick={() => navigate(id)} onContextMenu={(event) => showModuleMenu(event, module)}>
+                <button key={id} className={activeModule === id ? 'active' : ''} aria-label={label} aria-current={activeModule === id ? 'page' : undefined} title={keyLabel(`module.${id}`) ? `${label} · ${keyLabel(`module.${id}`)}` : label} onClick={() => navigate(id)} onContextMenu={(event) => showModuleMenu(event, module)}>
                   <Icon size={21} strokeWidth={1.9} />
                   {badge > 0 && <em>{badge > 9 ? '9+' : badge}</em>}
                   <span>{label}</span>
@@ -506,9 +507,9 @@ export default function App() {
           </div>
           <div className="rail-bottom">
             <button aria-label="What’s new" title="What’s new" onClick={() => setInfoOpen('whats-new')}><Sparkles size={20} /></button>
-            <button aria-label="Help" title="Help and keyboard shortcuts" onClick={() => setInfoOpen('help')}><HelpCircle size={20} /></button>
-            {appLock.enabled && <button aria-label="Lock Aerio" title="Lock Aerio · Ctrl L" onClick={() => void window.aerio.appLock.lock()}><LockKeyhole size={20} /></button>}
-            <button aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)} onContextMenu={(event) => showContextMenu(event, [{ label: 'Open settings', icon: Settings, action: () => setSettingsOpen(true) }], 'Settings')}><Settings size={20} /></button>
+            <button aria-label="Help" title={`Help and keyboard shortcuts${keyLabel('app.help') ? ` · ${keyLabel('app.help')}` : ''}`} onClick={() => setInfoOpen('help')}><HelpCircle size={20} /></button>
+            {appLock.enabled && <button aria-label="Lock Aerio" title={`Lock Aerio${keyLabel('app.lock') ? ` · ${keyLabel('app.lock')}` : ''}`} onClick={() => void window.aerio.appLock.lock()}><LockKeyhole size={20} /></button>}
+            <button aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)} onContextMenu={(event) => showContextMenu(event, [{ label: 'Open settings', icon: Settings, shortcut: keyLabel('app.settings'), action: () => setSettingsOpen(true) }], 'Settings')}><Settings size={20} /></button>
             <button className="profile-button" aria-label={`Profile: ${profile.displayName}`} title="Your Aerio profile" onClick={() => setProfileOpen(true)} onContextMenu={(event) => showContextMenu(event, [
               { label: 'Open profile', icon: UserRound, action: () => setProfileOpen(true) }
             ], profile.displayName)}><span>{profile.avatarDataUrl ? <img src={profile.avatarDataUrl} alt="" /> : profileInitials}</span><i /></button>
@@ -618,5 +619,6 @@ export default function App() {
       )}
       {toast && <div className="toast" role="status"><CheckCircle2 size={17} />{toast}</div>}
     </div>
+    </KeymapProvider>
   )
 }
