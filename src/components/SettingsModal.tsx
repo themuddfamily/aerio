@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Bell, DatabaseBackup, Download, LockKeyhole, MailCheck, Monitor, Palette, RefreshCw, Stethoscope, Upload } from 'lucide-react'
+import { Bell, CopyX, DatabaseBackup, Download, LockKeyhole, MailCheck, Monitor, Palette, RefreshCw, Stethoscope, Upload } from 'lucide-react'
 import type { AppLockStatus, AppPreferences, AppUpdateStatus, DensityPreference, ModuleId, ThemePreference } from '../types'
 import type { MailDiagnosticHealth, MailReadReceiptPolicy } from '../mail-types'
 import { normalizeReadReceiptPolicy } from '../lib/mail-send-options'
@@ -22,9 +22,11 @@ interface SettingsModalProps {
   onLocalDataRestored?(snapshot: LocalModuleSnapshot): void
   onLocalDataRestoreStart?(): void
   onLocalDataRestoreEnd?(): void
+  /** Opens duplicate cleanup (E32); Settings closes first. */
+  onFindDuplicates?(): void
 }
 
-export default function SettingsModal({ preferences, onChange, onClose, onLocalDataRestored, onLocalDataRestoreStart, onLocalDataRestoreEnd }: SettingsModalProps) {
+export default function SettingsModal({ preferences, onChange, onClose, onLocalDataRestored, onLocalDataRestoreStart, onLocalDataRestoreEnd, onFindDuplicates }: SettingsModalProps) {
   const [health, setHealth] = useState<MailDiagnosticHealth>()
   const [diagnosticStatus, setDiagnosticStatus] = useState<'idle' | 'checking' | 'exporting'>('idle')
   const [diagnosticMessage, setDiagnosticMessage] = useState('')
@@ -235,6 +237,14 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
           </div>
         </section>
         <ProfileBackupSection />
+        {onFindDuplicates && window.aerio.duplicates && <section className="settings-section">
+          <div className="settings-icon"><CopyX size={18} /></div>
+          <div className="settings-content">
+            <h3>Duplicate cleanup</h3>
+            <p>Find duplicate mail, events, and tasks in the accounts, folders, calendars, and lists you choose, review each group side by side, and remove extra copies with undo.</p>
+            <button className="button ghost" onClick={onFindDuplicates}>Find duplicates…</button>
+          </div>
+        </section>}
         <DavAccountsSection />
         <CloudStorageAccountsSection />
         <section className="settings-section">

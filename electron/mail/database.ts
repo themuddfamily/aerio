@@ -46,6 +46,7 @@ import { listContactHistoryPage } from './contact-history'
 import { MailDraftOpenPgpStore } from './openpgp-draft-store'
 import { MailDraftSmimeStore } from './smime-draft-store'
 import { LocalMailStore } from './local-mail-store'
+import { MailDuplicateStore } from './mail-duplicates'
 import { MAIL_PIN_JOIN, MAIL_THREAD_CURSOR_CLAUSE, MAIL_THREAD_CURSOR_PARAMS, MAIL_THREAD_ORDER, MailPinStore, decodeMailThreadCursor, encodeMailThreadCursor, mailThreadCursorParams } from './mail-pins'
 import { isLocalOnlyMailAction } from '../../src/lib/mail-pins'
 
@@ -113,6 +114,7 @@ export class MailDatabase {
   readonly attachmentText: AttachmentTextStore
   readonly mailMerge: MailMergeStore
   readonly pins: MailPinStore
+  readonly duplicates: MailDuplicateStore
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -132,6 +134,7 @@ export class MailDatabase {
     this.attachmentText = new AttachmentTextStore(this.db)
     this.mailMerge = new MailMergeStore(this.db)
     this.pins = new MailPinStore(this.db)
+    this.duplicates = new MailDuplicateStore(this.db, this)
   }
 
   close() {
@@ -416,6 +419,8 @@ export class MailDatabase {
     if (!syncColumns.has('inventory_complete')) this.db.exec(`ALTER TABLE gmail_sync_state ADD COLUMN inventory_complete INTEGER NOT NULL DEFAULT 0`)
     const operationColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_operations)').all() as { name: string }[]).map((column) => column.name))
     if (!operationColumns.has('before_labels_json')) this.db.exec(`ALTER TABLE gmail_operations ADD COLUMN before_labels_json TEXT NOT NULL DEFAULT '{}'`)
+    // Message-level operations (duplicate cleanup) touch only these messages of the listed threads.
+    if (!operationColumns.has('message_ids_json')) this.db.exec('ALTER TABLE gmail_operations ADD COLUMN message_ids_json TEXT')
     const draftColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_drafts)').all() as { name: string }[]).map((column) => column.name))
     if (!draftColumns.has('delivery_at')) this.db.exec('ALTER TABLE gmail_drafts ADD COLUMN delivery_at TEXT')
     if (!draftColumns.has('remote_revision')) this.db.exec('ALTER TABLE gmail_drafts ADD COLUMN remote_revision TEXT')
@@ -1089,7 +1094,7 @@ export class MailDatabase {
     return inverses[action]
   }
 
-  applyLocalAction(input: ApplyMailActionInput, operationId: string = crypto.randomUUID(), delayMs = 10_000): PendingOperation {
+  applyLocalAction(input: ApplyMailActionInput, operationId: string = crypto.randomUUID(), delayMs = 10_000, messageIds?: string[]): PendingOperation {
     if (!this.getAccount(input.accountId)) throw new Error('Account not found')
     if (!input.threadIds.length) throw new Error('Select at least one conversation')
     if ((input.action === 'label' || input.action === 'unlabel' || input.action === 'move') && !input.labelId) throw new Error(input.action === 'move' ? 'Choose a destination' : 'Choose a label')
@@ -1102,7 +1107,8 @@ export class MailDatabase {
     const beforeLabels: Record<string, string[]> = {}
     this.transaction(() => {
       for (const threadId of input.threadIds) {
-        const messageRows = this.stmt('SELECT id,label_ids_json FROM gmail_messages WHERE account_id=? AND thread_id=?').all(input.accountId, threadId) as DatabaseRow[]
+        const messageRows = (this.stmt('SELECT id,label_ids_json FROM gmail_messages WHERE account_id=? AND thread_id=?').all(input.accountId, threadId) as DatabaseRow[])
+          .filter((row) => !messageIds || messageIds.includes(String(row.id)))
         if (!messageRows.length) throw new Error(`Conversation ${threadId} was not found`)
         for (const row of messageRows) {
           const original = json<string[]>(String(row.label_ids_json), [])
@@ -1130,9 +1136,9 @@ export class MailDatabase {
         if (input.action === 'unarchive') this.stmt('DELETE FROM mail_snoozes WHERE account_id=? AND thread_id=?').run(input.accountId, threadId)
       }
       this.stmt(`
-        INSERT INTO gmail_operations(id,account_id,thread_ids_json,kind,label_id,inverse_kind,status,execute_after,undo_until,created_at,updated_at,before_labels_json)
-        VALUES(?,?,?,?,?,?,'queued',?,?,?,?,?)
-      `).run(operationId, input.accountId, JSON.stringify(input.threadIds), input.action, input.labelId ?? null, this.inverseAction(input.action), undoUntil, undoUntil, created, created, JSON.stringify(beforeLabels))
+        INSERT INTO gmail_operations(id,account_id,thread_ids_json,kind,label_id,inverse_kind,status,execute_after,undo_until,created_at,updated_at,before_labels_json,message_ids_json)
+        VALUES(?,?,?,?,?,?,'queued',?,?,?,?,?,?)
+      `).run(operationId, input.accountId, JSON.stringify(input.threadIds), input.action, input.labelId ?? null, this.inverseAction(input.action), undoUntil, undoUntil, created, created, JSON.stringify(beforeLabels), messageIds ? JSON.stringify(messageIds) : null)
     })
     return { id: operationId, accountId: input.accountId, kind: input.action, status: 'queued', undoUntil }
   }
@@ -1152,7 +1158,7 @@ export class MailDatabase {
       this.restoreOperationSnapshot(operationId, 'cancelled')
       return true
     }
-    this.applyLocalAction(input, crypto.randomUUID(), 0)
+    this.applyLocalAction(input, crypto.randomUUID(), 0, row.message_ids_json ? json<string[]>(String(row.message_ids_json), []) : undefined)
     return true
   }
 

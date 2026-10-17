@@ -89,10 +89,15 @@ describe('GmailClient', () => {
     await client.modifyThreads(['thread/1'], ['STARRED'], ['UNREAD'])
     await client.trashThreads(['thread/1'])
     await client.untrashThreads(['thread/1'])
+    // Duplicate cleanup trashes single messages.
+    await client.trashMessages(['message/1'])
+    await client.untrashMessages(['message/1'])
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
       expect.stringContaining('/threads/thread%2F1/modify'),
       expect.stringContaining('/threads/thread%2F1/trash'),
-      expect.stringContaining('/threads/thread%2F1/untrash')
+      expect.stringContaining('/threads/thread%2F1/untrash'),
+      expect.stringContaining('/messages/message%2F1/trash'),
+      expect.stringContaining('/messages/message%2F1/untrash')
     ])
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ addLabelIds: ['STARRED'], removeLabelIds: ['UNREAD'] })
   })

@@ -105,6 +105,16 @@ const api: AerioDesktopApi = {
     associate: (kind, firstId, secondId) => ipcRenderer.invoke('contacts:associate', kind, firstId, secondId),
     removeAssociation: (id) => ipcRenderer.invoke('contacts:association-remove', id)
   },
+  duplicates: {
+    scopes: (kind) => ipcRenderer.invoke('duplicates:scopes', kind),
+    scan: (request) => ipcRenderer.invoke('duplicates:scan', request),
+    remove: (request) => ipcRenderer.invoke('duplicates:remove', request),
+    dismiss: (scanId, groupId) => ipcRenderer.invoke('duplicates:dismiss', scanId, groupId),
+    dismissals: () => ipcRenderer.invoke('duplicates:dismissals'),
+    removeDismissal: (id) => ipcRenderer.invoke('duplicates:dismissal-remove', id),
+    history: () => ipcRenderer.invoke('duplicates:history'),
+    undo: (entryId) => ipcRenderer.invoke('duplicates:undo', entryId)
+  },
   interchange: {
     snapshot: () => ipcRenderer.invoke('interchange:snapshot'),
     onChanged: (callback) => {

@@ -5,6 +5,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TitleBar from './components/TitleBar'
 import SettingsModal from './components/SettingsModal'
+import DuplicateCleanupModal from './components/DuplicateCleanupModal'
 import ProfileModal from './components/ProfileModal'
 import AppInfoModal from './components/AppInfoModal'
 import AppLockScreen from './components/AppLockScreen'
@@ -56,6 +57,7 @@ export default function App() {
   const [activeModule, setActiveModule] = useState<ModuleId>('mail')
   const [query, setQuery] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [duplicatesOpen, setDuplicatesOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [infoOpen, setInfoOpen] = useState<'help' | 'whats-new'>()
@@ -597,7 +599,9 @@ export default function App() {
       {settingsOpen && <SettingsModal preferences={preferences} onChange={setPreferences} onLocalDataRestored={applyLocalSnapshot}
         onLocalDataRestoreStart={() => { localRestoreActive.current = true; clearTimeout(localSaveTimer.current) }}
         onLocalDataRestoreEnd={() => { localRestoreActive.current = false; setLocalSaveRevision((revision) => revision + 1) }}
+        onFindDuplicates={() => { setSettingsOpen(false); setDuplicatesOpen(true) }}
         onClose={() => setSettingsOpen(false)} />}
+      {duplicatesOpen && <DuplicateCleanupModal onClose={() => setDuplicatesOpen(false)} />}
       {infoOpen && <AppInfoModal kind={infoOpen} onClose={() => setInfoOpen(undefined)} />}
       {commandsOpen && (
         <div className="command-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) setCommandsOpen(false) }}>

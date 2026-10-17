@@ -122,6 +122,8 @@ export type MailWorkerCommand =
   | { type: 'import:pause' | 'import:resume' | 'import:cancel' | 'import:dismiss'; payload: { id: string } }
   | { type: 'import:items'; payload: { jobId: string } }
   | { type: 'import:resolve'; payload: { jobId: string; keys: string[]; decision: 'import' | 'discard' } }
+  | { type: 'duplicates:scan'; payload: { scopes: import('./mail/mail-duplicates').MailDuplicateScope[] } }
+  | { type: 'duplicates:trash'; payload: import('./mail/mail-duplicates').MailDuplicateTrashInput }
   | { type: 'network'; payload: { online: boolean } }
   | { type: 'polling'; payload: { intervalMs: number; immediate?: boolean } }
   | { type: 'shutdown' }
@@ -174,6 +176,8 @@ export type MailWorkerResult =
   | import('../src/mail-types').MailImportJob[]
   | import('../src/mail-types').MailImportItem[]
   | import('../src/mail-types').MailLocalTransferResult
+  | import('./mail/mail-duplicates').MailDuplicateScan
+  | import('./mail/mail-duplicates').MailDuplicateTrashResult
 
 export interface WorkerRequest {
   kind: 'request'
