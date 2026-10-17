@@ -9,6 +9,8 @@ import MailTemplatePicker from './MailTemplatePicker'
 import { primaryIdentityId, type MailSenderIdentity, type MailSignature } from '../mail-identity-types'
 import { defaultIdentityId, identityLabel, LEGACY_SIGNATURE_ID, replaceSignatureBlock, replyIdentityId, signatureBlockHtml, signatureBlockUnchanged, signatureForIdentity, QUOTE_ATTRIBUTE, type ComposerSignature } from '../lib/mail-signature'
 import MailSendOptionsControl from './MailSendOptionsControl'
+import MailComposeOpenPgpControl from './MailComposeOpenPgpControl'
+import type { MailOpenPgpOptions } from '../openpgp-types'
 import { ReplyWatchControl, armReplyWatch, replyWatchDeadline, type ReplyWatchSetting } from './MailReplyWatches'
 import { MailAiComposeAssist } from './MailAiComposeAssist'
 import { aiFeatureAvailable, useAiAssistantStatus } from '../lib/use-ai-assistant'
@@ -101,6 +103,7 @@ ${signature}` : ''}${forwardedText}`
   const [html, setHtml] = useState(initialHtml)
   const [attachments, setAttachments] = useState<{ name: string; size: number; path: string }[]>(() => (draft?.attachmentPaths ?? []).map((path) => ({ name: fileName(path), size: 0, path })))
   const [sendOptions, setSendOptions] = useState<MailSendOptions | undefined>(draft?.sendOptions)
+  const [openPgp, setOpenPgp] = useState<MailOpenPgpOptions | undefined>(draft?.openPgp)
   const [replyWatch, setReplyWatch] = useState<ReplyWatchSetting>({ enabled: false, deadline: '' })
   const [scheduledFor, setScheduledFor] = useState(() => localDateTimeValue(draft?.status === 'scheduled' ? draft.deliveryAt : undefined))
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'sending' | 'closing' | 'failed'>(draft?.status === 'failed' ? 'failed' : draft ? 'saved' : 'idle')
@@ -133,8 +136,9 @@ ${signature}` : ''}${forwardedText}`
     attachmentPaths: attachments.map((item) => item.path),
     fromIdentityId: identityId !== primaryIdentityId(accountId) ? identityId : undefined,
     replyTo: replyToField.trim() ? splitAddresses(replyToField) : undefined,
-    ...(sendOptions ? { sendOptions } : {})
-  }), [accountId, attachments, bcc, cc, draft?.inReplyTo, draft?.references, draft?.threadId, draftId, forward, html, identityId, replyMessage, replyTo?.id, replyToField, sendOptions, subject, text, to])
+    ...(sendOptions ? { sendOptions } : {}),
+    ...(openPgp ? { openPgp } : {})
+  }), [accountId, attachments, bcc, cc, draft?.inReplyTo, draft?.references, draft?.threadId, draftId, forward, html, identityId, openPgp, replyMessage, replyTo?.id, replyToField, sendOptions, subject, text, to])
   const fingerprint = useMemo(() => JSON.stringify(input), [input])
   const initialFingerprint = useRef(fingerprint)
   const latestFingerprint = useRef(fingerprint)
@@ -478,6 +482,7 @@ ${signature}` : ''}${forwardedText}`
           {conflict && <button className="button ghost small" disabled={status === 'saving' || status === 'sending'} onClick={() => void saveAsCopy()}><Copy size={15} /> Save as copy</button>}
           <button className="button ghost small danger-subtle" disabled={status === 'sending'} onClick={() => void discard()}><Trash2 size={15} /> Discard</button>
           <MailSendOptionsControl provider={accounts.find((account) => account.id === accountId)?.provider} value={sendOptions} disabled={status === 'sending'} onChange={setSendOptions} />
+          <MailComposeOpenPgpControl accountId={accountId} fromIdentityId={input.fromIdentityId} recipients={[...input.to, ...input.cc, ...input.bcc]} value={openPgp} disabled={status === 'sending'} onChange={setOpenPgp} />
           <span className="spacer" />
           <ReplyWatchControl value={replyWatch} onChange={setReplyWatch} />
           <label className="mail-schedule-field" title="Schedule delivery"><CalendarClock size={15} /><input aria-label="Scheduled delivery time" type="datetime-local" min={localDateTimeValue(new Date(Date.now() + 60_000).toISOString())} value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} />{scheduledFor && <button type="button" aria-label="Clear scheduled delivery" onClick={() => setScheduledFor('')}><X size={13} /></button>}</label>

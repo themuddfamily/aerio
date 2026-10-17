@@ -22,6 +22,7 @@ import type {
   WorkerRequest,
   WorkerResponse,
   WorkerCredentialResponse,
+  WorkerOpenPgpResponse,
   AccountCredential
 } from './mail-protocol'
 import { MailDatabase, type ParsedMailMessage } from './mail/database'
@@ -57,6 +58,7 @@ const paused = new Set<string>()
 const syncing = new Set<string>()
 const syncScheduled = new Set<string>()
 const credentialRequests = new Map<string, { resolve: (value: AccountCredential) => void; reject: (error: Error) => void }>()
+const openPgpRequests = new Map<string, { resolve: (value: string) => void; reject: (error: Error) => void }>()
 const nextRequestAt = new Map<string, number>()
 const draftQueues = new Map<string, Promise<unknown>>()
 const lastAutomaticSyncAt = new Map<string, number>()
@@ -96,6 +98,25 @@ async function getCredential(accountId: string) {
     credentialRequests.set(id, { resolve, reject })
     port.postMessage({ kind: 'credential-request', id, accountId })
   })
+}
+
+const openPgpRequested = (input: MailDraftInput) => Boolean(input.openPgp?.sign || input.openPgp?.encrypt)
+
+/**
+ * Signs and/or encrypts an outgoing message in the main process when the
+ * draft asks for it. Any failure throws, so delivery aborts and the draft is
+ * kept: a protected draft is never sent as plaintext.
+ */
+async function protectOutgoing(mime: Buffer, input: MailDraftInput, from: string | undefined) {
+  const options = input.openPgp
+  if (!options || !openPgpRequested(input)) return mime
+  if (!from) throw new Error('The sender address is unknown, so the message cannot be signed or encrypted. The message was not sent; your draft is kept.')
+  const id = crypto.randomUUID()
+  const message = await new Promise<string>((resolve, reject) => {
+    openPgpRequests.set(id, { resolve, reject })
+    port.postMessage({ kind: 'openpgp-request', id, message: mime.toString('utf8'), from, recipients: [...input.to, ...input.cc, ...input.bcc], options })
+  })
+  return Buffer.from(message, 'utf8')
 }
 
 async function rateLimit(accountId: string) {
@@ -788,7 +809,8 @@ function draftInputFromRow(row: Record<string, string | number | bigint | null>)
     html: row.body_html ? String(row.body_html) : undefined,
     attachmentPaths: JSON.parse(String(row.attachment_paths_json)),
     ...(row.send_options_json ? { sendOptions: JSON.parse(String(row.send_options_json)) } : {}),
-    ...database!.identities.draftSender(String(row.id))
+    ...database!.identities.draftSender(String(row.id)),
+    ...database!.openPgp.get(String(row.id))
   }
 }
 
@@ -855,7 +877,8 @@ async function assertRemoteDraftUnchanged(accountId: string, provider: MailAccou
 async function saveDraft(input: MailDraftInput) {
   if (!database) throw new Error('Database is not initialized')
   input = stageDraftAttachments(input)
-  const canSync = online && draftRecipientsAreSyncable(input.to, input.cc, input.bcc)
+  // An encrypted draft stays on this device: syncing it would store plaintext with the provider.
+  const canSync = online && !input.openPgp?.encrypt && draftRecipientsAreSyncable(input.to, input.cc, input.bcc)
   let result = database.saveDraft(input, { status: canSync ? 'syncing' : 'local' })
   if (!canSync) return result
   try {
@@ -908,19 +931,25 @@ async function deliverDraft(input: MailDraftInput) {
     // Reply watches match on the Message-ID and provider thread of what was actually sent.
     let sent: { messageIdHeader?: string; threadId?: string }
     if (provider === 'gmail') {
-      const raw = createMime({ ...input, id: result.id }, from)
+      const raw = openPgpRequested(input) ? (await protectOutgoing(createMimeBuffer({ ...input, id: result.id }, from), input, from)).toString('base64url') : createMime({ ...input, id: result.id }, from)
       const reference = row?.gmail_draft_id
         ? await clientFor(input.accountId).sendDraft(String(row.gmail_draft_id), raw)
         : await clientFor(input.accountId).sendMessage(raw, input.threadId)
       sent = { messageIdHeader: messageIdFromMime(raw), threadId: reference?.threadId }
     } else if (provider === 'microsoft') {
       // Exchange assigns its own Message-ID; the watch adopts it from the synced Sent copy.
-      await microsoftClientFor(input.accountId).send(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined, input.sendOptions)
+      const mime = await protectOutgoing(createMimeBuffer({ ...input, id: result.id }, from), input, from)
+      if (openPgpRequested(input)) {
+        // Sending the stored provider draft would send its plaintext, so send the protected MIME instead.
+        const client = microsoftClientFor(input.accountId)
+        await client.send(mime, undefined, input.sendOptions)
+        if (row?.gmail_draft_id) await client.deleteDraft(String(row.gmail_draft_id)).catch(() => undefined)
+      } else await microsoftClientFor(input.accountId).send(mime, row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined, input.sendOptions)
       sent = { threadId: input.threadId }
     } else {
       const client = await imapClientFor(input.accountId)
       const recipients = [...input.to, ...input.cc, ...input.bcc]
-      const mime = createMimeBuffer({ ...input, id: result.id }, from, true)
+      const mime = await protectOutgoing(createMimeBuffer({ ...input, id: result.id }, from, true), input, from)
       // An alias also becomes the SMTP envelope sender; the server decides whether it is allowed.
       await (sender?.identity ? client.send(mime, recipients, input.sendOptions, sender.identity.email) : client.send(mime, recipients, input.sendOptions))
       if (row?.gmail_draft_id) await client.deleteDraft(String(row.gmail_draft_id))
@@ -1358,7 +1387,15 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   }
 }
 
-port.on('message', (message: WorkerRequest | WorkerCredentialResponse) => {
+port.on('message', (message: WorkerRequest | WorkerCredentialResponse | WorkerOpenPgpResponse) => {
+  if (message.kind === 'openpgp-response') {
+    const pending = openPgpRequests.get(message.id)
+    if (!pending) return
+    openPgpRequests.delete(message.id)
+    if (typeof message.message === 'string') pending.resolve(message.message)
+    else pending.reject(new Error(message.error ?? 'The message could not be signed or encrypted. The message was not sent; your draft is kept.'))
+    return
+  }
   if (message.kind === 'credential-response') {
     const pending = credentialRequests.get(message.id)
     if (!pending) return

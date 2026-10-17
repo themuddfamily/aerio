@@ -36,6 +36,7 @@ import { compileMailSearchQuery } from '../../src/lib/mail-search-query'
 import { normalizeSendOptions } from '../../src/lib/mail-send-options'
 import { ReplyWatchStore } from './reply-watches'
 import { listAttachmentPage } from './attachment-index'
+import { MailDraftOpenPgpStore } from './openpgp-draft-store'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -112,6 +113,7 @@ export class MailDatabase {
   readonly contentPath: string
   private readonly db: DatabaseSync
   readonly identities: MailIdentityStore
+  readonly openPgp: MailDraftOpenPgpStore
   private statements = new Map<string, StatementSync>()
   readonly replyWatches: ReplyWatchStore
 
@@ -125,6 +127,7 @@ export class MailDatabase {
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;')
     this.migrate()
     this.identities = new MailIdentityStore(this.db)
+    this.openPgp = new MailDraftOpenPgpStore(this.db)
     this.replyWatches = new ReplyWatchStore(this.db)
   }
 
@@ -1201,6 +1204,7 @@ export class MailDatabase {
       sendOptionsJson(input.sendOptions)
     )
     this.identities.saveDraftSender(id, input)
+    this.openPgp.save(id, input.openPgp)
     const stored = this.getDraft(id)
     return {
       id,
@@ -1236,6 +1240,7 @@ export class MailDatabase {
       html: row.body_html ? String(row.body_html) : undefined,
       attachmentPaths: json<string[]>(String(row.attachment_paths_json), []),
       ...this.identities.draftSender(String(row.id)),
+      ...this.openPgp.get(String(row.id)),
       ...(sendOptions ? { sendOptions } : {}),
       status: String(row.status) as MailDraftRecord['status'],
       updatedAt: String(row.updated_at),

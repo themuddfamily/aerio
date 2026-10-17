@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, safeStorage, shell, Tray } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
@@ -88,6 +88,9 @@ import { fetchRemoteImage } from './mail/remote-image-fetch'
 import { applyPendingProfileRestore, finalizeProfileRestore } from './profile-backup'
 import { PROFILE_BACKUP_LAYOUT } from './profile-backup-layout'
 import { registerProfileBackup } from './profile-backup-tools'
+import { OpenPgpKeyring } from './mail/openpgp-keyring'
+import { assertOpenPgpSendable, registerOpenPgp } from './mail/openpgp-ipc'
+import { normalizeOpenPgpOptions } from './mail/openpgp-draft-store'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -120,6 +123,7 @@ let failedUnlockAttempts = 0
 let unlockBlockedUntil = 0
 let oauthVault: OAuthVault | null = null
 let mailWorker: MailWorkerClient | null = null
+let openPgpKeyring: OpenPgpKeyring | null = null
 const accountProviders = new Map<string, MailAccountSummary['provider']>()
 const approvedAttachmentPaths = new Set<string>()
 let quitting = false
@@ -226,6 +230,11 @@ function requireMailWorker() {
   return mailWorker
 }
 
+function requireOpenPgp() {
+  if (!openPgpKeyring) throw new Error('OpenPGP is not ready. The message was not sent; your draft is kept.')
+  return openPgpKeyring
+}
+
 function requireVault() {
   if (!oauthVault) throw new Error('Secure mail storage is not ready')
   return oauthVault
@@ -252,6 +261,7 @@ function validateDraft(input: MailDraftInput, forSend = false) {
   if (input.attachmentPaths.length > 50) throw new Error('A message cannot contain more than 50 attachments')
   validateDraftSender(input, forSend)
   input.sendOptions = normalizeSendOptions(input.sendOptions)
+  input.openPgp = normalizeOpenPgpOptions(input.openPgp)
   if (input.attachmentPaths.some((path) => typeof path !== 'string' || !approvedAttachmentPaths.has(path))) {
     throw new Error('A draft referenced a file that was not selected through Aerio')
   }
@@ -704,6 +714,8 @@ function updateMailPolling(immediate = false) {
 async function initializeMail() {
   const userData = app.getPath('userData')
   oauthVault = new OAuthVault(join(userData, 'oauth-vault.dat'), builtInOAuthClients)
+  // Deliberately outside the profile-backup allowlist: keys leave only by explicit export.
+  openPgpKeyring = new OpenPgpKeyring(join(userData, 'openpgp-keyring.dat'), { storage: safeStorage, isLocked: () => applicationLocked })
   mailWorker = new MailWorkerClient(
     join(import.meta.dirname, 'mail-worker.js'),
     (accountId) => requireVault().credential(accountId, accountProviders.get(accountId) ?? 'gmail'),
@@ -719,7 +731,8 @@ async function initializeMail() {
       if (event.type === 'reply-watch') showReplyWatchNotification(event.payload)
       mainWindow?.webContents.send('mail:event', event)
       for (const window of messageWindows.values()) if (!window.isDestroyed()) window.webContents.send('mail:event', event)
-    }
+    },
+    (request) => requireOpenPgp().protect(request.message, request)
   )
   await mailWorker.request({
     type: 'initialize',
@@ -961,6 +974,7 @@ function disableAppLock(passphrase: unknown) {
 function lockApplication() {
   if (!loadAppLockRecord()) return appLockStatus()
   applicationLocked = true
+  openPgpKeyring?.lock()
   for (const window of messageWindows.values()) window.close()
   return publishAppLockStatus()
 }
@@ -1286,6 +1300,7 @@ function registerIpc() {
     return mailTemplateStore
   }, approveAttachment: (path) => approvedAttachmentPaths.add(path) })
   registerMailIdentities({ worker: requireMailWorker })
+  registerOpenPgp({ keyring: requireOpenPgp(), worker: requireMailWorker })
   registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
   } })
@@ -1697,10 +1712,16 @@ function registerIpc() {
   })
   ipcMain.handle('mail:drafts:save', (_event, input: MailDraftInput) =>
     requireMailWorker().request({ type: 'drafts:save', payload: validateDraft(input) }))
-  ipcMain.handle('mail:drafts:send', (_event, input: MailDraftInput) =>
-    requireMailWorker().request({ type: 'drafts:send', payload: validateDraft(input, true) }))
-  ipcMain.handle('mail:drafts:schedule', (_event, input: MailDraftInput, deliveryAt: string) =>
-    requireMailWorker().request({ type: 'drafts:schedule', payload: { input: validateDraft(input, true), deliveryAt: validateFutureDate(deliveryAt, 'Scheduled send time') } }))
+  // Sign/Encrypt drafts are checked before queuing; delivery checks again and never falls back to plaintext.
+  ipcMain.handle('mail:drafts:send', (_event, input: MailDraftInput) => {
+    const draft = validateDraft(input, true)
+    return assertOpenPgpSendable(requireOpenPgp(), requireMailWorker(), draft).then(() => requireMailWorker().request({ type: 'drafts:send', payload: draft }))
+  })
+  ipcMain.handle('mail:drafts:schedule', (_event, input: MailDraftInput, deliveryAt: string) => {
+    const draft = validateDraft(input, true)
+    const at = validateFutureDate(deliveryAt, 'Scheduled send time')
+    return assertOpenPgpSendable(requireOpenPgp(), requireMailWorker(), draft).then(() => requireMailWorker().request({ type: 'drafts:schedule', payload: { input: draft, deliveryAt: at } }))
+  })
   ipcMain.handle('mail:drafts:cancel-send', (_event, id: string) => {
     if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid queued message id')
     return requireMailWorker().request<MailDraftResult>({ type: 'drafts:cancel-send', payload: { id } })

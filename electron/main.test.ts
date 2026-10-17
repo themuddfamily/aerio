@@ -171,7 +171,7 @@ const mocks = vi.hoisted(() => {
     ipcHandlers, appHandlers, protocolHandlers, windows, notifications, trays, FakeBrowserWindow, FakeDatabaseSync,
     setLinuxLoginItem: vi.fn(),
     linuxTrayHostAvailable: vi.fn(async () => true),
-    vault, worker, MailWorkerClient, store, google, microsoft, updateManager, taskService, diagnosticLogger, imapClient, image,
+    vault, worker, openPgp: { lock: vi.fn(), protect: vi.fn() }, assertOpenPgpSendable: vi.fn(async () => undefined), MailWorkerClient, store, google, microsoft, updateManager, taskService, diagnosticLogger, imapClient, image,
     get accounts() { return accounts }, set accounts(value: any[]) { accounts = value },
     failWorker(error: Error) { workerFailure = error }, emitWorker(event: any) { workerEvent?.(event) },
     setOpenResult(value: any) { dialogOpenResult = value }, setSaveResult(value: any) { dialogSaveResult = value },
@@ -226,7 +226,7 @@ const mocks = vi.hoisted(() => {
 vi.mock('electron', () => ({
   app: mocks.app, BrowserWindow: mocks.FakeBrowserWindow, dialog: mocks.dialog, ipcMain: mocks.ipcMain,
   Menu: mocks.Menu, nativeImage: mocks.nativeImage, net: mocks.net, Notification: mocks.Notification,
-  protocol: mocks.protocol, shell: mocks.shell, Tray: mocks.Tray
+  protocol: mocks.protocol, safeStorage: {}, shell: mocks.shell, Tray: mocks.Tray
 }))
 vi.mock('node:fs', () => mocks.fs)
 vi.mock('node:dns/promises', () => ({ lookup: mocks.lookup }))
@@ -236,6 +236,8 @@ vi.mock('./tray-availability', () => ({ linuxTrayHostAvailable: mocks.linuxTrayH
 vi.mock('./mail/oauth-vault', () => ({ OAuthVault: vi.fn(function () { return mocks.vault }) }))
 vi.mock('./mail/worker-client', () => ({ MailWorkerClient: mocks.MailWorkerClient }))
 vi.mock('./mail/ai-assistant', () => ({ AiAssistantStore: vi.fn(), registerAiAssistant: vi.fn() }))
+vi.mock('./mail/openpgp-keyring', () => ({ OpenPgpKeyring: vi.fn(function () { return mocks.openPgp }) }))
+vi.mock('./mail/openpgp-ipc', () => ({ registerOpenPgp: vi.fn(), assertOpenPgpSendable: mocks.assertOpenPgpSendable }))
 vi.mock('./mail/imap-client', () => ({ ImapSmtpClient: vi.fn(function () { return mocks.imapClient }) }))
 vi.mock('./mail/provider-presets', () => ({ PROVIDER_PRESETS: [{ id: 'gmail' }], validateImapAccount: mocks.validateImap }))
 vi.mock('./diagnostics', () => ({ DiagnosticLogger: vi.fn(function () { return mocks.diagnosticLogger }) }))
@@ -366,6 +368,8 @@ describe.sequential('Electron main process', () => {
     expect(() => invoke('app-lock:enable', 'short')).toThrow(/8 to 256/)
     expect(invoke('app-lock:enable', 'correct horse battery staple')).toEqual({ enabled: true, locked: false })
     expect(invoke('app-lock:lock')).toEqual({ enabled: true, locked: true })
+    // Locking also drops every cached OpenPGP passphrase.
+    expect(mocks.openPgp.lock).toHaveBeenCalled()
     expect(mocks.windows[0].webContents.send).toHaveBeenCalledWith('app-lock:status-changed', { enabled: true, locked: true })
     expect(() => invoke('window:open-message', { source: 'connected', accountId: 'a1b2', threadId: 'thread', title: 'Locked' })).toThrow(/Unlock Aerio/)
     const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
@@ -440,6 +444,12 @@ describe.sequential('Electron main process', () => {
     const sendable = { ...draft, to: ['reader@example.test'] }
     await invoke('mail:drafts:send', sendable)
     await invoke('mail:drafts:schedule', sendable, new Date(Date.now() + 60_000).toISOString())
+    // A Sign/Encrypt draft that cannot be protected is never handed to the worker.
+    mocks.assertOpenPgpSendable.mockRejectedValueOnce(new Error('No OpenPGP public key for: reader@example.test.'))
+    mocks.worker.request.mockClear()
+    await expect(invoke('mail:drafts:send', { ...sendable, openPgp: { encrypt: true, ignored: 1 } })).rejects.toThrow(/No OpenPGP public key/)
+    expect(mocks.assertOpenPgpSendable).toHaveBeenLastCalledWith(mocks.openPgp, mocks.worker, expect.objectContaining({ openPgp: { encrypt: true } }))
+    expect(mocks.worker.request).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'drafts:send' }))
     await expect(invoke('mail:drafts:list', ['a1b2'])).resolves.toHaveLength(1)
     await expect(invoke('mail:drafts:get', 'draft-1')).resolves.toMatchObject({ id: 'draft-1' })
     await invoke('mail:drafts:stage-message-attachments', 'draft', 'a1b2', 'message')

@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => {
   let messageHandler: ((message: any) => void) | undefined
   let credential: any = { type: 'oauth', accessToken: 'token' }
   let credentialError: string | undefined
+  let openPgpReply: (message: any) => { message?: string; error?: string } = () => ({ message: 'PROTECTED' })
   const port = {
     on: vi.fn((_event: string, handler: (message: any) => void) => { messageHandler = handler }),
     postMessage: vi.fn((message: any) => {
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => {
       if (message.kind === 'credential-request') queueMicrotask(() => messageHandler?.({
         kind: 'credential-response', id: message.id, credential, error: credentialError
       }))
+      if (message.kind === 'openpgp-request') queueMicrotask(() => messageHandler?.({ kind: 'openpgp-response', id: message.id, ...openPgpReply(message) }))
     })
   }
 
@@ -121,6 +123,7 @@ const mocks = vi.hoisted(() => {
     process: vi.fn((): any[] => [])
   }
   method('recoverInterruptedFolderOperations', () => [])
+  db.openPgp = { get: vi.fn((): any => ({})) }
 
   const gmail = {
     copyToLabel: vi.fn().mockResolvedValue(undefined),
@@ -173,6 +176,7 @@ const mocks = vi.hoisted(() => {
     },
     setCredential(value: any) { credential = value; credentialError = undefined },
     setCredentialError(value: string) { credential = undefined; credentialError = value },
+    setOpenPgpReply(value: typeof openPgpReply) { openPgpReply = value },
     emit(message: any) { messageHandler?.(message) }
   }
 })
@@ -1287,6 +1291,49 @@ describe.sequential('mail worker protocol routing', () => {
     queueDeliveries([row])
     await request({ type: 'network', payload: { online: true } })
     await vi.waitFor(() => expect(watches.activateForDraft).toHaveBeenCalledWith('watched-delivery', expect.objectContaining({ messageIdHeader: '<sent-id@aerio.local>', threadId: 'gmail-thread' })))
+  })
+
+  it('protects OpenPGP deliveries in the main process and never falls back to plaintext', async () => {
+    const row = (id: string, remote: string | null = null) => ({ id, account_id: 'account-1', thread_id: null, in_reply_to: null, references_json: '[]', to_json: '["ada@example.test"]', cc_json: '[]', bcc_json: '["hidden@example.test"]', subject: 'Secret', body_text: 'Body', body_html: null, attachment_paths_json: '[]', gmail_draft_id: remote })
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.getDraft.mockReturnValue(undefined)
+    mocks.db.openPgp.get.mockImplementation((id: string) => id.startsWith('pgp') ? { openPgp: { sign: true, encrypt: true } } : {})
+    try {
+      mocks.gmail.sendMessage.mockClear()
+      queueDeliveries([row('pgp-ok')])
+      await request({ type: 'network', payload: { online: true } })
+      await vi.waitFor(() => expect(mocks.gmail.sendMessage).toHaveBeenCalledWith(Buffer.from('PROTECTED').toString('base64url'), undefined))
+      expect(mocks.posted.find((message) => message.kind === 'openpgp-request')).toMatchObject({ message: 'mime', recipients: ['ada@example.test', 'hidden@example.test'], options: { sign: true, encrypt: true }, from: expect.stringContaining('person@example.test') })
+
+      mocks.setOpenPgpReply(() => ({ error: 'No OpenPGP public key for: ada@example.test. The message was not sent; your draft is kept.' }))
+      mocks.gmail.sendMessage.mockClear()
+      queueDeliveries([row('pgp-missing-key')])
+      await request({ type: 'network', payload: { online: true } })
+      await vi.waitFor(() => expect(mocks.db.updateDraftResult).toHaveBeenCalledWith('pgp-missing-key', expect.objectContaining({ status: 'failed', error: expect.stringMatching(/No OpenPGP public key.*draft is kept/) })))
+      expect(mocks.gmail.sendMessage).not.toHaveBeenCalled()
+      expect(mocks.posted).toContainEqual({ kind: 'event', event: { type: 'draft-delivery', payload: expect.objectContaining({ id: 'pgp-missing-key', status: 'failed' }) } })
+
+      // Microsoft never sends the stored provider draft, which holds plaintext.
+      mocks.setOpenPgpReply(() => ({ message: 'PROTECTED' }))
+      mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'microsoft' })
+      mocks.db.getDraft.mockReturnValue({ gmail_draft_id: 'remote-plain' })
+      mocks.microsoft.send.mockClear()
+      queueDeliveries([row('pgp-ms', 'remote-plain')])
+      await request({ type: 'network', payload: { online: true } })
+      await vi.waitFor(() => expect(mocks.microsoft.send).toHaveBeenCalledWith(Buffer.from('PROTECTED'), undefined, undefined))
+      await vi.waitFor(() => expect(mocks.microsoft.deleteDraft).toHaveBeenCalledWith('remote-plain'))
+
+      // Encrypted drafts are never uploaded to the provider.
+      mocks.db.getAccount.mockReturnValue(mocks.account)
+      mocks.db.getDraft.mockReturnValue(undefined)
+      mocks.gmail.createDraft.mockClear()
+      await expect(request({ type: 'drafts:save', payload: { id: 'pgp-draft', accountId: 'account-1', to: ['ada@example.test'], cc: [], bcc: [], subject: 'S', text: 'B', references: [], attachmentPaths: [], openPgp: { encrypt: true } } })).resolves.toMatchObject({ result: { status: 'local' } })
+      expect(mocks.gmail.createDraft).not.toHaveBeenCalled()
+    } finally {
+      mocks.setOpenPgpReply(() => ({ message: 'PROTECTED' }))
+      mocks.db.openPgp.get.mockImplementation(() => ({}))
+      mocks.db.getAccount.mockReturnValue(mocks.account)
+    }
   })
 
   it('shuts down cleanly', async () => {
