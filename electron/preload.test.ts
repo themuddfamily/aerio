@@ -84,6 +84,23 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('window:open-message', { accountId: 'account-1', messageId: 'message-1' })
   })
 
+  it('exposes full-profile backup commands with exact IPC channels', async () => {
+    const schedule = { enabled: true, intervalHours: 24, keep: 7, directory: 'C:\Backups' }
+    await api().profileBackup.status()
+    await api().profileBackup.saveSchedule(schedule)
+    await api().profileBackup.chooseDirectory()
+    await api().profileBackup.backupNow()
+    await api().profileBackup.preview()
+    await api().profileBackup.preview('C:\Backups\aerio-profile-1')
+    await api().profileBackup.restore('C:\Backups\aerio-profile-1')
+    await api().profileBackup.dismissRestoreOutcome()
+    for (const channel of ['profile-backup:status', 'profile-backup:choose-directory', 'profile-backup:backup-now', 'profile-backup:dismiss-restore']) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('profile-backup:schedule', schedule)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('profile-backup:preview', undefined)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('profile-backup:preview', 'C:\Backups\aerio-profile-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('profile-backup:restore', 'C:\Backups\aerio-profile-1')
+  })
+
   it('forwards and unsubscribes update, lock, window, compose, and mail events', () => {
     const update = vi.fn()
     const lock = vi.fn()
@@ -161,17 +178,33 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:saved-searches:list')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:saved-searches:save', expect.objectContaining({ name: 'Invoices' }))
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:saved-searches:delete', 'search-1')
+    await mail.quickActions.list()
+    await mail.quickActions.save({ name: 'Triage', steps: [{ action: 'read' }], showInToolbar: true })
+    await mail.quickActions.delete('quick-1')
+    await mail.quickActions.run('quick-1', [{ accountId: 'account-1', threadIds: ['thread-1'] }])
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:list')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:save', expect.objectContaining({ name: 'Triage' }))
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:delete', 'quick-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:run', 'quick-1', [{ accountId: 'account-1', threadIds: ['thread-1'] }])
     await mail.templates.list('welcome')
     await mail.templates.save({ kind: 'snippet', name: 'Hi', html: 'Hi' })
     await mail.templates.delete('template-1')
     await mail.templates.use('template-1')
     await mail.templates.exportBackup()
     await mail.templates.importBackup()
+    await mail.identities.list(['account-1'])
+    await mail.identities.save({ accountId: 'account-1', email: 'alias@example.com', name: 'Alias' })
+    await mail.identities.delete('alias')
+    await mail.identities.refresh('account-1')
+    await mail.identities.signatures.list()
+    await mail.identities.signatures.save({ name: 'Work', html: '<b>Work</b>' })
+    await mail.identities.signatures.delete('signature')
     await mail.sync.start('account-1')
     await mail.sync.pause('account-1')
     await mail.sync.resume('account-1')
     await mail.sync.rebuild('account-1')
     await mail.sync.progress()
+    await mail.attachments.list({ fileTypes: ['pdf'] })
     await mail.attachments.open('account-1', 'message-1', 'attachment-1', 'file.txt')
     await mail.attachments.save('account-1', 'message-1', 'attachment-1', 'file.txt')
     await mail.storage()
@@ -183,10 +216,39 @@ describe('preload bridge', () => {
       'gmail:credentials:status', 'mail:credentials:microsoft-configure', 'mail:providers:presets',
       'mail:accounts:connect-imap', 'mail:accounts:imap-update', 'mail:threads:list', 'mail:folders:unread-counts', 'mail:accounts:unread-counts', 'mail:message:source',
       'mail:drafts:schedule', 'mail:rules:run', 'mail:sync:rebuild', 'mail:attachment:save', 'mail:diagnostics:export',
-      'mail:templates:list', 'mail:templates:save', 'mail:templates:delete', 'mail:templates:use', 'mail:templates:export', 'mail:templates:import'
+      'mail:templates:list', 'mail:templates:save', 'mail:templates:delete', 'mail:templates:use', 'mail:templates:export', 'mail:templates:import',
+      'mail:identities:list', 'mail:identities:save', 'mail:identities:delete', 'mail:identities:refresh', 'mail:signatures:list', 'mail:signatures:save', 'mail:signatures:delete'
     ]) expect(channels).toContain(expected)
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:snooze', 'account-1', ['thread-1'], '2026-08-09T10:00:00Z')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:attachments:list', { fileTypes: ['pdf'] })
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:attachment:open', 'account-1', 'message-1', 'attachment-1', 'file.txt')
+  })
+
+  it('exposes the optional AI assistant without any send or mutate channel', async () => {
+    const ai = api().ai
+    const ref = { accountId: 'account-1', threadId: 'thread-1', messageId: 'message-1' }
+    await ai.status()
+    await ai.configure({ enabled: true })
+    await ai.summarize('r1', ref)
+    await ai.suggestReplies('r2', ref)
+    await ai.compose('r3', { instruction: 'Shorter', draft: 'Hi' })
+    await ai.search('r4', 'invoices')
+    await ai.cancel('r4')
+    for (const [channel, ...args] of [['ai:status'], ['ai:configure', { enabled: true }], ['ai:summarize', 'r1', ref], ['ai:replies', 'r2', ref], ['ai:compose', 'r3', { instruction: 'Shorter', draft: 'Hi' }], ['ai:search', 'r4', 'invoices'], ['ai:cancel', 'r4']] as const) {
+      expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel, ...args)
+    }
+    expect(Object.keys(ai).sort()).toEqual(['cancel', 'compose', 'configure', 'search', 'status', 'suggestReplies', 'summarize'])
+  })
+
+  it('exposes provider automatic replies with exact IPC channels', async () => {
+    const replies = api().mail.automaticReplies
+    const settings = { enabled: true, subject: 'Away', internalMessage: 'Back Monday', externalMessage: '', externalAudience: 'all' }
+    await replies.get('account-1')
+    await replies.update('account-1', settings)
+    await replies.disable('account-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:get', 'account-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:update', 'account-1', settings)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:disable', 'account-1')
   })
 
   it('reports initial and changing network connectivity', async () => {

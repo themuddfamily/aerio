@@ -51,6 +51,25 @@ beforeEach(() => {
 })
 
 describe('MailComposeModal', () => {
+  it('prefills a chosen AI reply above the signature as escaped text without sending, and offers AI drafting only when enabled', async () => {
+    const reply: MailThreadDetail = { accountId: 'account', id: 'thread', subject: 'Plan', messages: [{ accountId: 'account', threadId: 'thread', id: 'm1', subject: 'Plan', fromName: 'Ada', fromEmail: 'ada@example.test', to: ['me@example.test'], cc: [], date: '2026-08-08T09:00:00Z', text: 'Hello', html: '', sanitizedHtml: '', labelIds: [], attachments: [] }] }
+    renderCompose({ replyTo: reply, initialBody: 'Sounds <b>good</b>' })
+    expect(editor().querySelector('b')).toBeNull()
+    expect(editor().textContent).toMatch(/^Sounds <b>good<\/b>.*Aerio User/)
+    expect(api.mail.drafts.send).not.toHaveBeenCalled()
+    expect(screen.queryByTitle('Draft or rephrase with AI')).toBeNull()
+  })
+
+  it('opens the AI drafting panel from the toolbar when the feature is on', async () => {
+    const ai = { status: vi.fn(async () => ({ enabled: true, provider: 'anthropic', model: 'claude-sonnet-5-5', baseUrl: '', hasApiKey: true, features: { summarize: true, compose: true, replies: true, search: true }, includeSenderDetails: false, secureStorage: true })), cancel: vi.fn() }
+    Object.defineProperty(window, 'aerio', { configurable: true, value: { ...api, ai } })
+    const user = userEvent.setup()
+    renderCompose()
+    await user.click(await screen.findByTitle('Draft or rephrase with AI'))
+    expect(screen.getByRole('region', { name: 'AI writing assistant' })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /Include the email/ })).toBeNull()
+  })
+
   it('saves an unfinished recipient as a draft without surfacing a remote validation prefix', async () => {
     const user = userEvent.setup(), callbacks = renderCompose()
     await user.type(rowInput('To'), 'unfinished recipient')

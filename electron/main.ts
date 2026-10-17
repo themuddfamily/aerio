@@ -24,6 +24,8 @@ import type {
   MailRuleRunResult,
   MailSavedSearch,
   MailSavedSearchInput,
+  MailQuickAction,
+  MailQuickActionRunResult,
   MailSnooze,
   MailReplyWatch,
   MailReplyWatchInput,
@@ -34,6 +36,7 @@ import type {
   ImapServerSettings,
   ImapServerSettingsUpdate,
   MailPage,
+  MailAttachmentPage,
   MailFolderUnreadCounts,
   MailAccountUnreadCounts,
   MailAccountSettingsInput,
@@ -52,6 +55,7 @@ import { ImapSmtpClient } from './mail/imap-client'
 import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
 import { MailWorkerClient } from './mail/worker-client'
 import { validateCreateFolder, validateDeleteFolder, validateFolderReference, validateUpdateFolder } from './mail/folder-validation'
+import { normalizeAttachmentQuery } from './mail/attachment-index'
 import { DiagnosticLogger, type DiagnosticRecord } from './diagnostics'
 import { UpdateManager } from './update-manager'
 import { ProductivityStore } from './productivity/store'
@@ -63,17 +67,27 @@ import type { ProviderTaskInput, TaskFieldPatch, TaskLocalMetadata, TaskResoluti
 import { parseTaskBackup } from './productivity/task-backup'
 import { MessageLocalStore } from './mail/message-local-store'
 import { registerMessageTools } from './mail/message-tools'
+import { AiAssistantStore, registerAiAssistant } from './mail/ai-assistant'
 import { MailTemplateStore, parseMailTemplateBackup, type MailTemplateBackup } from './mail/template-store'
 import { registerMailTemplates } from './mail/template-tools'
+import { registerMailIdentities, validateDraftSender } from './mail/identity-ipc'
+import { AutomaticRepliesService, registerAutomaticReplies } from './mail/automatic-replies'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
+import { InterchangeStore } from './productivity/interchange-store'
+import { registerCalendarContactInterchange } from './productivity/interchange-ipc'
+import { validContactInterchangeFields } from '../src/lib/interchange-validation'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
 import { senderDomainFromEmail } from '../src/lib/sender-avatar'
 import { isCompleteMailAddress } from '../src/lib/mail-address'
 import { validateMailSavedSearch } from '../src/lib/mail-saved-search'
+import { validateMailQuickAction, validateMailQuickActionTargets } from '../src/lib/mail-quick-actions'
 import { mailPollingIntervalForWindow } from './mail/polling-policy'
 import { faviconDomainCandidates } from './mail/favicon-domains'
 import { fetchRemoteImage } from './mail/remote-image-fetch'
+import { applyPendingProfileRestore, finalizeProfileRestore } from './profile-backup'
+import { PROFILE_BACKUP_LAYOUT } from './profile-backup-layout'
+import { registerProfileBackup } from './profile-backup-tools'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -113,11 +127,14 @@ let lastBoundsWrite: NodeJS.Timeout | undefined
 let diagnostics: DiagnosticLogger | null = null
 let updates: UpdateManager | null = null
 let productivityStore: ProductivityStore | null = null
+let interchangeStore: InterchangeStore | null = null
+let interchangeService: ReturnType<typeof registerCalendarContactInterchange> | null = null
 let taskService: TaskService | null = null
 let taskPolling: NodeJS.Timeout | undefined
 let taskNetworkOnline = true
 let messageLocalStore: MessageLocalStore | null = null
 let mailTemplateStore: MailTemplateStore | null = null
+let profileBackups: ReturnType<typeof registerProfileBackup> | null = null
 let readyToOpenWindows = false
 const senderFaviconCache = new Map<string, { image: Buffer | null; expiresAt: number }>()
 const senderFaviconCandidateRequests = new Map<string, Promise<Buffer | null>>()
@@ -233,6 +250,7 @@ function validateDraft(input: MailDraftInput, forSend = false) {
   if (typeof input.subject !== 'string' || input.subject.length > 998) throw new Error('The subject is too long')
   if (typeof input.text !== 'string' || (input.html !== undefined && typeof input.html !== 'string') || input.text.length > 20_000_000 || (input.html?.length ?? 0) > 20_000_000) throw new Error('The message body is too large')
   if (input.attachmentPaths.length > 50) throw new Error('A message cannot contain more than 50 attachments')
+  validateDraftSender(input, forSend)
   input.sendOptions = normalizeSendOptions(input.sendOptions)
   if (input.attachmentPaths.some((path) => typeof path !== 'string' || !approvedAttachmentPaths.has(path))) {
     throw new Error('A draft referenced a file that was not selected through Aerio')
@@ -337,7 +355,8 @@ function validLocalModules(value: unknown): value is LocalModuleSnapshot {
         text(attachment.path, 32_767, true) && (attachment.mime === undefined || text(attachment.mime, 300)))))) &&
     (input.contacts ?? []).every((contact) => contact && text(contact.id, 300, true) && text(contact.name, 10_000, true) && text(contact.email, 10_000) &&
       text(contact.group, 300, true) && text(contact.color, 100, true) && typeof contact.favorite === 'boolean' && contact.source === 'local' &&
-      [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || text(field, 1_000_000)))
+      [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || text(field, 1_000_000)) &&
+      validContactInterchangeFields(contact))
 }
 
 interface ArchivedNoteAttachment {
@@ -504,7 +523,8 @@ function validContact(value: unknown): value is Contact {
   const validText = (input: unknown, max: number, required = false) => typeof input === 'string' && input.length <= max && (!required || Boolean(input.trim()))
   return validText(contact.id, 500, true) && validText(contact.name, 10_000, true) && validText(contact.email, 10_000) &&
     validText(contact.group, 300, true) && validText(contact.color, 100, true) && typeof contact.favorite === 'boolean' &&
-    [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || validText(field, 100_000))
+    [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || validText(field, 100_000)) &&
+    validContactInterchangeFields(contact)
 }
 
 function googleCalendarConnector(accountId: string) {
@@ -1265,9 +1285,18 @@ function registerIpc() {
     if (!mailTemplateStore) throw new Error('Template storage is not ready')
     return mailTemplateStore
   }, approveAttachment: (path) => approvedAttachmentPaths.add(path) })
+  registerMailIdentities({ worker: requireMailWorker })
   registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
   } })
+  registerAiAssistant({ worker: requireMailWorker, store: new AiAssistantStore(join(app.getPath('userData'), 'ai-assistant.json'), join(app.getPath('userData'), 'ai-assistant-key.dat')) })
+  const automaticReplies = new AutomaticRepliesService({
+    account: async (accountId) => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId),
+    googleToken: (accountId) => requireVault().accessToken(accountId),
+    microsoftToken: (accountId) => requireVault().microsoftAccessToken(accountId),
+    grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider)
+  })
+  registerAutomaticReplies(ipcMain, () => automaticReplies)
   ipcMain.handle('preferences:load', () => loadPreferences())
   ipcMain.handle('preferences:save', (_event, preferences: AppPreferences) => savePreferences(preferences))
   ipcMain.handle('app-lock:status', () => appLockStatus())
@@ -1725,6 +1754,18 @@ function registerIpc() {
     if (typeof id !== 'string' || !id || id.length > 500) throw new Error('Invalid saved search id')
     return requireMailWorker().request({ type: 'saved-searches:delete', payload: { id } })
   })
+  const quickActionId = (id: unknown) => {
+    if (typeof id !== 'string' || !id || id.length > 500) throw new Error('Invalid quick action id')
+    return id
+  }
+  ipcMain.handle('mail:quick-actions:list', () =>
+    requireMailWorker().request<MailQuickAction[]>({ type: 'quick-actions:list' }))
+  ipcMain.handle('mail:quick-actions:save', (_event, input: unknown) =>
+    requireMailWorker().request<MailQuickAction>({ type: 'quick-actions:save', payload: validateMailQuickAction(input) }))
+  ipcMain.handle('mail:quick-actions:delete', (_event, id: unknown) =>
+    requireMailWorker().request({ type: 'quick-actions:delete', payload: { id: quickActionId(id) } }))
+  ipcMain.handle('mail:quick-actions:run', (_event, id: unknown, targets: unknown) =>
+    requireMailWorker().request<MailQuickActionRunResult>({ type: 'quick-actions:run', payload: { id: quickActionId(id), targets: validateMailQuickActionTargets(targets) } }))
   ipcMain.handle('mail:sync:start', (_event, accountId?: string) =>
     requireMailWorker().request({ type: 'sync:start', payload: { accountId } }))
   ipcMain.handle('mail:sync:pause', (_event, accountId: string) =>
@@ -1762,6 +1803,8 @@ function registerIpc() {
     if (online) void taskService?.flush().catch(() => {})
     return requireMailWorker().request({ type: 'network', payload: { online } })
   })
+  ipcMain.handle('mail:attachments:list', (_event, query: unknown) =>
+    requireMailWorker().request<MailAttachmentPage>({ type: 'attachments:list', payload: normalizeAttachmentQuery(query) }))
   ipcMain.handle('mail:attachment:open', async (_event, accountId: string, messageId: string, attachmentId: string, filename: string) => {
     const directory = join(tmpdir(), 'aerio-attachments')
     mkdirSync(directory, { recursive: true })
@@ -1788,9 +1831,17 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   diagnostic({ level: 'info', component: 'app', event: 'startup', details: { version: app.getVersion(), packaged: app.isPackaged } })
   const menu = applicationMenuTemplate(process.platform, () => openMainWindow())
   Menu.setApplicationMenu(menu ? Menu.buildFromTemplate(menu) : null)
+  // A staged full-profile restore is swapped in before any profile database opens.
+  try {
+    const restored = applyPendingProfileRestore(app.getPath('userData'))
+    if (restored) diagnostic({ level: restored.status === 'applied' ? 'info' : 'error', component: 'app', event: `profile-restore-${restored.status}`, message: restored.error, details: { ...restored.report } })
+  } catch (error) {
+    diagnostic({ level: 'error', component: 'app', event: 'profile-restore-failed', message: error instanceof Error ? error.message : String(error) })
+  }
   await initializePreferencesDatabase()
   await initializeMail()
   productivityStore = new ProductivityStore(join(app.getPath('userData'), 'productivity.sqlite'))
+  interchangeStore = new InterchangeStore(join(app.getPath('userData'), 'productivity.sqlite'))
   taskService = new TaskService(new TaskStore(join(app.getPath('userData'), 'provider-tasks.sqlite')), {
     accounts: () => requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' }),
     access: (id, provider) => provider === 'gmail'
@@ -1805,6 +1856,25 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   taskPolling = setInterval(() => { void taskService?.poll().catch(() => {}) }, 60_000)
   taskPolling.unref()
   registerIpc()
+  profileBackups = registerProfileBackup({
+    userData: app.getPath('userData'),
+    appVersion: app.getVersion(),
+    defaultDirectory: join(app.getPath('documents'), 'Aerio Backups'),
+    layout: PROFILE_BACKUP_LAYOUT,
+    isLocked: () => applicationLocked,
+    relaunch: () => { app.relaunch(); app.quit() },
+    log: (event, details, error) => diagnostic({ level: error ? 'error' : 'info', component: 'app', event, details, message: error === undefined ? undefined : error instanceof Error ? error.message : String(error) })
+  })
+  // Every store opened on the restored data, so the rollback copy is no longer needed.
+  try { finalizeProfileRestore(app.getPath('userData')) } catch { /* Retried on the next launch. */ }
+  interchangeService = registerCalendarContactInterchange({
+    productivity: requireProductivityStore,
+    interchange: () => {
+      if (!interchangeStore) throw new Error('Calendar import and subscription storage is not ready')
+      return interchangeStore
+    },
+    diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
+  })
   registerRemoteImageProtocol()
   readyToOpenWindows = true
   createWindow()
@@ -1832,8 +1902,12 @@ app.on('before-quit', () => {
   quitting = true
   stopTrayMonitor()
   if (taskPolling) clearInterval(taskPolling)
+  profileBackups?.stop()
   void taskService?.close().catch(() => {})
   updates?.stop()
+  interchangeService?.dispose()
+  interchangeStore?.close()
+  interchangeStore = null
   productivityStore?.close()
   messageLocalStore?.close()
   mailTemplateStore?.close()

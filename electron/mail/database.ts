@@ -1,10 +1,12 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { MailIdentityStore } from './identity-store'
 import type {
   ApplyMailActionInput,
   MailAccountSummary,
   MailAttachment,
+  MailAttachmentPage,
   MailDraftInput,
   MailDraftRecord,
   MailDraftResult,
@@ -13,6 +15,8 @@ import type {
   MailRuleInput,
   MailSavedSearch,
   MailSavedSearchInput,
+  MailQuickAction,
+  MailQuickActionInput,
   MailSnooze,
   MailMessageDetail,
   MailThreadDetail,
@@ -32,6 +36,7 @@ import { compileMailSearchQuery } from '../../src/lib/mail-search-query'
 import { normalizeSendOptions } from '../../src/lib/mail-send-options'
 import { ReplyWatchStore } from './reply-watches'
 import { AttachmentTextStore } from './attachment-text-store'
+import { listAttachmentPage } from './attachment-index'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -107,6 +112,7 @@ export function mailRuleMatches(rule: MailRuleInput, message: MailRuleMessage) {
 export class MailDatabase {
   readonly contentPath: string
   private readonly db: DatabaseSync
+  readonly identities: MailIdentityStore
   private statements = new Map<string, StatementSync>()
   readonly replyWatches: ReplyWatchStore
   readonly attachmentText: AttachmentTextStore
@@ -120,6 +126,7 @@ export class MailDatabase {
     this.db = new DatabaseSync(databasePath, { timeout: 5_000 })
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;')
     this.migrate()
+    this.identities = new MailIdentityStore(this.db)
     this.replyWatches = new ReplyWatchStore(this.db)
     this.attachmentText = new AttachmentTextStore(this.db)
   }
@@ -354,6 +361,17 @@ export class MailDatabase {
         folder TEXT NOT NULL DEFAULT 'all',
         label_id TEXT,
         filters_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS mail_quick_actions (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        account_id TEXT REFERENCES gmail_accounts(id) ON DELETE CASCADE,
+        steps_json TEXT NOT NULL DEFAULT '[]',
+        shortcut INTEGER,
+        show_in_toolbar INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -1125,7 +1143,7 @@ export class MailDatabase {
   }
 
   dueOperations(limit = 20) {
-    return this.stmt(`SELECT * FROM gmail_operations WHERE status='queued' AND execute_after<=? ORDER BY created_at LIMIT ?`).all(nowIso(), limit) as DatabaseRow[]
+    return this.stmt(`SELECT * FROM gmail_operations WHERE status='queued' AND execute_after<=? ORDER BY created_at,rowid LIMIT ?`).all(nowIso(), limit) as DatabaseRow[]
   }
 
   updateOperation(id: string, status: PendingOperation['status'], error?: string) {
@@ -1190,6 +1208,7 @@ export class MailDatabase {
       input.subject, input.text, input.html ?? null, JSON.stringify(input.attachmentPaths), status, deliveryAt ?? null, result.error ?? null, updatedAt,
       sendOptionsJson(input.sendOptions)
     )
+    this.identities.saveDraftSender(id, input)
     const stored = this.getDraft(id)
     return {
       id,
@@ -1224,6 +1243,7 @@ export class MailDatabase {
       text: String(row.body_text),
       html: row.body_html ? String(row.body_html) : undefined,
       attachmentPaths: json<string[]>(String(row.attachment_paths_json), []),
+      ...this.identities.draftSender(String(row.id)),
       ...(sendOptions ? { sendOptions } : {}),
       status: String(row.status) as MailDraftRecord['status'],
       updatedAt: String(row.updated_at),
@@ -1413,6 +1433,45 @@ export class MailDatabase {
     this.stmt('DELETE FROM mail_saved_searches WHERE id=?').run(id)
   }
 
+  private quickActionRecord(row: DatabaseRow): MailQuickAction {
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      ...(row.account_id ? { accountId: String(row.account_id) } : {}),
+      steps: json<MailQuickAction['steps']>(String(row.steps_json), []),
+      ...(row.shortcut ? { shortcut: Number(row.shortcut) } : {}),
+      showInToolbar: Boolean(row.show_in_toolbar),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at)
+    }
+  }
+
+  listQuickActions() {
+    return (this.stmt('SELECT * FROM mail_quick_actions ORDER BY name COLLATE NOCASE,created_at').all() as DatabaseRow[]).map((row) => this.quickActionRecord(row))
+  }
+
+  getQuickAction(id: string) {
+    const row = this.stmt('SELECT * FROM mail_quick_actions WHERE id=?').get(id) as DatabaseRow | undefined
+    return row ? this.quickActionRecord(row) : undefined
+  }
+
+  saveQuickAction(input: MailQuickActionInput): MailQuickAction {
+    if (input.accountId && !this.getAccount(input.accountId)) throw new Error('Account not found')
+    const id = input.id ?? crypto.randomUUID()
+    const clash = input.shortcut ? this.stmt('SELECT name FROM mail_quick_actions WHERE shortcut=? AND id<>?').get(input.shortcut, id) as DatabaseRow | undefined : undefined
+    if (clash) throw new Error(`Shortcut ${input.shortcut} is already used by “${String(clash.name)}”`)
+    const timestamp = nowIso()
+    this.stmt(`INSERT INTO mail_quick_actions(id,name,account_id,steps_json,shortcut,show_in_toolbar,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,account_id=excluded.account_id,steps_json=excluded.steps_json,
+      shortcut=excluded.shortcut,show_in_toolbar=excluded.show_in_toolbar,updated_at=excluded.updated_at`)
+      .run(id, input.name, input.accountId ?? null, JSON.stringify(input.steps), input.shortcut ?? null, input.showInToolbar ? 1 : 0, timestamp, timestamp)
+    return this.getQuickAction(id)!
+  }
+
+  deleteQuickAction(id: string) {
+    this.stmt('DELETE FROM mail_quick_actions WHERE id=?').run(id)
+  }
+
   matchingRulesForMessage(message: MailRuleMessage) {
     return this.listRules([message.accountId]).filter((rule) => rule.enabled && mailRuleMatches(rule, message))
   }
@@ -1489,6 +1548,10 @@ export class MailDatabase {
 
   getAttachment(accountId: string, messageId: string, attachmentId: string) {
     return this.stmt('SELECT * FROM gmail_attachments WHERE account_id=? AND message_id=? AND id=?').get(accountId, messageId, attachmentId) as DatabaseRow | undefined
+  }
+
+  listAttachments(query: unknown): MailAttachmentPage {
+    return listAttachmentPage(this.db, query, (path) => this.rawExists(path))
   }
 
   storageStats(freeBytes: number): MailStorageStats {

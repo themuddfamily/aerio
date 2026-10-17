@@ -1,306 +1,200 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { DatabaseSync } from 'node:sqlite'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { MailAttachment } from '../../src/mail-types'
+import { DatabaseSync } from 'node:sqlite'
+import { afterEach, describe, expect, it } from 'vitest'
+import type { MailAccountSummary, MailAttachment, MailAttachmentFileType } from '../../src/mail-types'
 import { MailDatabase, type ParsedMailMessage } from './database'
-import { AttachmentContentIndexer } from './attachment-index'
-import { extractAttachmentText } from './attachment-text-extract'
-import { MAX_MESSAGE_ATTACHMENT_TEXT } from './attachment-text-store'
-import type { AttachmentTextInput, AttachmentTextResult } from './attachment-text-types'
-import { docxFixture, simplePdf } from './attachment-test-fixtures'
+import { MAIL_ATTACHMENT_FILE_TYPES, attachmentFileType, normalizeAttachmentQuery } from './attachment-index'
 
 const directories: string[] = []
-const databases: MailDatabase[] = []
 
-function open() {
-  const directory = mkdtempSync(join(tmpdir(), 'aerio-attachment-index-'))
+const account = (id: string, overrides: Partial<MailAccountSummary> = {}): MailAccountSummary => ({
+  id, provider: 'gmail', email: `${id}@example.com`, displayName: id, color: '#6558e8', status: 'ready',
+  archived: false, signature: '', notifications: true, syncEnabled: true, ...overrides
+})
+
+function setup() {
+  const directory = mkdtempSync(join(tmpdir(), 'aerio-attachments-test-'))
   directories.push(directory)
-  const path = join(directory, 'aerio.sqlite')
-  const database = new MailDatabase(path, join(directory, 'mail'))
-  databases.push(database)
-  for (const id of ['account-1', 'account-2']) database.upsertAccount({
-    id, provider: 'gmail', email: `${id}@example.com`, displayName: id, color: '#6558e8', status: 'ready', archived: false, signature: '', notifications: true, syncEnabled: true
-  })
-  return { database, path }
+  const database = new MailDatabase(join(directory, 'aerio.sqlite'), join(directory, 'mail'))
+  database.upsertAccount(account('account-1'))
+  database.upsertAccount(account('account-2'))
+  return { database, directory }
 }
 
-let sequence = 0
-function message(attachments: Omit<MailAttachment, 'messageId'>[], overrides: Partial<ParsedMailMessage> = {}): ParsedMailMessage {
-  sequence += 1
-  const id = overrides.id ?? `message-${sequence}`
-  return {
-    accountId: 'account-1', id, threadId: `thread-${sequence}`, historyId: '1',
-    internalDate: new Date(Date.UTC(2026, 6, 1) + sequence * 60_000).toISOString(),
-    fromName: 'Ada', fromEmail: 'ada@example.com', to: ['person@example.com'], cc: [], subject: 'Files',
-    references: [], snippet: '', text: 'See attached.', html: '', labelIds: ['INBOX'], sizeEstimate: 100, rawPath: `${id}.eml`,
-    attachments: attachments.map((attachment) => ({ ...attachment, messageId: id })),
-    ...overrides
+const file = (id: string, filename: string, mimeType: string, size = 1_000, contentId?: string): MailAttachment => ({ id, messageId: '', filename, mimeType, size, contentId })
+
+function store(database: MailDatabase, directory: string, overrides: Partial<ParsedMailMessage> & { id: string }, writeRaw = true) {
+  const accountId = overrides.accountId ?? 'account-1'
+  const rawPath = join(directory, `${accountId}-${overrides.id}.eml`)
+  if (writeRaw) writeFileSync(rawPath, 'Subject: test\r\n\r\nbody')
+  const message: ParsedMailMessage = {
+    accountId, threadId: `thread-${overrides.id}`, historyId: '1', internalDate: '2026-07-27T10:00:00.000Z',
+    fromName: 'Ada Lovelace', fromEmail: 'ada@example.com', to: ['person@example.com'], cc: [], subject: 'Quarterly report',
+    messageIdHeader: `<${overrides.id}@example.com>`, references: [], snippet: '', text: '', html: '', labelIds: ['INBOX'],
+    sizeEstimate: 1_000, rawPath, attachments: [], ...overrides
   }
+  database.addInventory(accountId, [{ id: message.id, threadId: message.threadId }])
+  database.upsertMessage(message)
 }
-
-/** Attachment bytes by message and attachment id, standing in for the stored raw messages. */
-type Contents = Map<string, Map<string, Buffer>>
-
-function indexer(database: MailDatabase, contents: Contents, extract?: (input: AttachmentTextInput, signal: AbortSignal) => Promise<AttachmentTextResult>) {
-  const readAttachments = vi.fn(async (_accountId: string, messageId: string) => contents.get(messageId))
-  const extractor = vi.fn(extract ?? (async (input: AttachmentTextInput) => extractAttachmentText(input)))
-  const created = new AttachmentContentIndexer({ store: database.attachmentText, readAttachments, extract: extractor, batchSize: 3 })
-  return { indexer: created, readAttachments, extract: extractor }
-}
-
-const search = (database: MailDatabase, query: string) => database.listThreads({ folder: 'all', search: query }).items.map((item) => item.id).sort()
-const textIndex = (database: MailDatabase, threadId: string) =>
-  Object.fromEntries(database.getThread('account-1', threadId).messages.flatMap((item) => item.attachments).map((item) => [item.filename, item.textIndex?.status]))
 
 afterEach(() => {
-  for (const database of databases.splice(0)) { try { database.close() } catch { /* Already closed. */ } }
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true })
 })
 
-describe('AttachmentContentIndexer', () => {
-  it('indexes supported attachment content for attachment: and unscoped searches', async () => {
-    const { database } = open()
-    const report = message([
-      { id: 'pdf', filename: 'q3.pdf', mimeType: 'application/pdf', size: 0 },
-      { id: 'doc', filename: 'plan.docx', mimeType: '', size: 0 }
-    ])
-    const pdf = simplePdf('BT /F1 12 Tf (Zeppelin manifest) Tj ET', true)
-    const docx = docxFixture(['Falcon roadmap'])
-    report.attachments[0].size = pdf.length
-    report.attachments[1].size = docx.length
-    database.upsertMessage(report)
-    database.upsertMessage(message([], { text: 'Nothing attached here' }))
-    expect(textIndex(database, report.threadId)).toEqual({ 'q3.pdf': 'pending', 'plan.docx': 'pending' })
-    expect(search(database, 'zeppelin')).toEqual([])
-
-    const run = indexer(database, new Map([[report.id, new Map([['pdf', pdf], ['doc', docx]])]]))
-    run.indexer.schedule()
-    await run.indexer.idle()
-
-    expect(run.readAttachments).toHaveBeenCalledTimes(1)
-    expect(search(database, 'attachment:zeppelin')).toEqual([report.threadId])
-    expect(search(database, 'file:"falcon roadmap"')).toEqual([report.threadId])
-    expect(search(database, 'manifest')).toEqual([report.threadId])
-    // Filenames stay searchable alongside the content, and other fields don't see attachment text.
-    expect(search(database, 'attachment:q3')).toEqual([report.threadId])
-    expect(search(database, 'body:zeppelin')).toEqual([])
-    expect(search(database, 'attached -attachment:falcon')).toEqual([`thread-${sequence}`])
-    expect(textIndex(database, report.threadId)).toEqual({ 'q3.pdf': 'indexed', 'plan.docx': 'indexed' })
-    expect(database.attachmentText.stats()).toMatchObject({ pending: 0, indexed: 2 })
+describe('attachmentFileType', () => {
+  it('prefers extensions over generic MIME types and falls back to MIME families', () => {
+    expect(attachmentFileType('application/octet-stream', 'Invoice.PDF')).toBe('pdf')
+    expect(attachmentFileType('text/plain', 'export.csv')).toBe('spreadsheet')
+    expect(attachmentFileType('application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'letter')).toBe('document')
+    expect(attachmentFileType('image/heic', 'IMG_0001')).toBe('image')
+    expect(attachmentFileType('text/calendar', 'invite.ics')).toBe('calendar')
+    expect(attachmentFileType('application/x-msdownload', 'setup.exe')).toBe('other')
   })
 
-  it('records unsupported, oversized, encrypted, and missing attachments without retrying them', async () => {
-    const { database } = open()
-    const encrypted = simplePdf('').toString('latin1').replace('/Root 1 0 R', '/Root 1 0 R /Encrypt 9 0 R')
-    const item = message([
-      { id: 'img', filename: 'photo.png', mimeType: 'image/png', size: 10 },
-      { id: 'big', filename: 'huge.txt', mimeType: 'text/plain', size: 30 * 1024 * 1024 },
-      { id: 'enc', filename: 'locked.pdf', mimeType: 'application/pdf', size: encrypted.length },
-      { id: 'gone', filename: 'missing.txt', mimeType: 'text/plain', size: 5 }
-    ])
-    database.upsertMessage(item)
-    const run = indexer(database, new Map([[item.id, new Map([['enc', Buffer.from(encrypted, 'latin1')]])]]))
-    run.indexer.schedule()
-    await run.indexer.idle()
-
-    expect(run.extract).toHaveBeenCalledTimes(1)
-    expect(textIndex(database, item.threadId)).toEqual({ 'photo.png': 'unsupported', 'huge.txt': 'too-large', 'locked.pdf': 'encrypted', 'missing.txt': 'failed' })
-    const locked = database.getThread('account-1', item.threadId).messages[0].attachments.find((attachment) => attachment.id === 'enc')
-    expect(locked?.textIndex).toMatchObject({ status: 'encrypted', detail: 'The PDF is encrypted or password-protected', indexedAt: expect.any(String) })
-    expect(database.attachmentText.stats()).toMatchObject({ pending: 0, unsupported: 1, 'too-large': 1, encrypted: 1, failed: 1 })
-
-    run.indexer.schedule()
-    await run.indexer.idle()
-    expect(run.extract).toHaveBeenCalledTimes(1)
+  it('agrees with the SQL classifier used for filtering', () => {
+    const { database, directory } = setup()
+    const samples: Array<[string, string]> = [
+      ['application/pdf', 'a'], ['application/octet-stream', 'b.docx'], ['application/vnd.ms-excel', 'c'], ['text/csv', 'd'],
+      ['application/vnd.openxmlformats-officedocument.presentationml.presentation', 'e'], ['application/zip', 'f'], ['image/png', 'g'],
+      ['audio/mpeg', 'h'], ['video/mp4', 'i'], ['text/calendar', 'j'], ['application/json', 'k.json'], ['IMAGE/JPEG', ' L.JPG ']
+    ]
+    store(database, directory, { id: 'mixed', attachments: samples.map(([mime, name], index) => file(`part-${index}`, name, mime)) })
+    const items = database.listAttachments({ pageSize: 100 }).items
+    expect(items).toHaveLength(samples.length)
+    for (const item of items) expect(item.fileType).toBe(attachmentFileType(item.mimeType, item.filename))
+    for (const type of MAIL_ATTACHMENT_FILE_TYPES) {
+      const expected = items.filter((item) => item.fileType === type).length
+      expect(database.listAttachments({ fileTypes: [type] }).total, type).toBe(expected)
+    }
+    database.close()
   })
+})
 
-  it('reindexes incrementally: new mail, changed attachments, and extractor upgrades only', async () => {
-    const { database, path } = open()
-    const first = message([{ id: 'a', filename: 'a.txt', mimeType: 'text/plain', size: 5 }])
-    database.upsertMessage(first)
-    const contents: Contents = new Map([[first.id, new Map([['a', Buffer.from('alpha')]])]])
-    const run = indexer(database, contents)
-    run.indexer.schedule()
-    await run.indexer.idle()
-    expect(run.extract).toHaveBeenCalledTimes(1)
-
-    // A re-download of the same message keeps its text without extracting again.
-    database.upsertMessage({ ...first, labelIds: ['INBOX', 'STARRED'] })
-    expect(search(database, 'attachment:alpha')).toEqual([first.threadId])
-    run.indexer.schedule()
-    await run.indexer.idle()
-    expect(run.extract).toHaveBeenCalledTimes(1)
-
-    const second = message([{ id: 'b', filename: 'b.txt', mimeType: 'text/plain', size: 5 }])
-    database.upsertMessage(second)
-    contents.set(second.id, new Map([['b', Buffer.from('bravo')]]))
-    run.indexer.schedule()
-    await run.indexer.idle()
-    expect(run.extract).toHaveBeenCalledTimes(2)
-    expect(search(database, 'attachment:bravo')).toEqual([second.threadId])
-
-    // A changed attachment (different size) drops the stale text until it is re-extracted.
-    database.upsertMessage({ ...first, attachments: [{ ...first.attachments[0], size: 7 }] })
-    contents.set(first.id, new Map([['a', Buffer.from('charlie')]]))
-    expect(search(database, 'attachment:alpha')).toEqual([])
-    run.indexer.schedule()
-    await run.indexer.idle()
-    expect(run.extract).toHaveBeenCalledTimes(3)
-    expect(search(database, 'attachment:charlie')).toEqual([first.threadId])
-
-    // Rows from an older extractor version are pending again.
-    const raw = new DatabaseSync(path)
-    raw.prepare('UPDATE mail_attachment_text SET extractor_version=0 WHERE message_id=?').run(second.id)
-    raw.close()
-    expect(database.attachmentText.stats().pending).toBe(1)
-    run.indexer.schedule()
-    await run.indexer.idle()
-    expect(run.extract).toHaveBeenCalledTimes(4)
-    expect(database.attachmentText.stats()).toMatchObject({ pending: 0, indexed: 2 })
-  })
-
-  it('processes newest mail first in bounded batches and picks up work scheduled mid-run', async () => {
-    const { database } = open()
-    const contents: Contents = new Map()
-    const messages = Array.from({ length: 7 }, (_, index) => {
-      const item = message([{ id: 'a', filename: `n${index}.txt`, mimeType: 'text/plain', size: 4 }])
-      contents.set(item.id, new Map([['a', Buffer.from(`w${index}xx`.slice(0, 4))]]))
-      database.upsertMessage(item)
-      return item
+describe('normalizeAttachmentQuery', () => {
+  it('clamps and drops malformed renderer input', () => {
+    expect(normalizeAttachmentQuery({
+      accountIds: ['a', 7, ''], fileTypes: ['pdf', 'pdf', 'exe'], pageSize: 5_000, minSize: -1, maxSize: 10.7,
+      search: '   ', sender: ` ${'x'.repeat(500)} `, dateFrom: 'not a date', dateTo: '2026-08-01', includeArchivedAccounts: 'no'
+    })).toEqual({
+      accountIds: ['a'], includeArchivedAccounts: true, includeInline: false, search: undefined, sender: 'x'.repeat(200), recipient: undefined,
+      dateFrom: undefined, dateTo: '2026-08-01', fileTypes: ['pdf'], minSize: undefined, maxSize: 10, cursor: undefined, pageSize: 100
     })
-    const order: string[] = []
-    const run = indexer(database, contents, async (input) => {
-      order.push(input.filename)
-      if (order.length === 2) {
-        const late = message([{ id: 'a', filename: 'late.txt', mimeType: 'text/plain', size: 4 }])
-        contents.set(late.id, new Map([['a', Buffer.from('late')]]))
-        database.upsertMessage(late)
-        run.indexer.schedule()
-      }
-      return extractAttachmentText(input)
-    })
-    run.indexer.schedule()
-    await run.indexer.idle()
-    expect(order.slice(0, 3)).toEqual(['n6.txt', 'n5.txt', 'n4.txt'])
-    expect(order).toHaveLength(messages.length + 1)
-    expect(order).toContain('late.txt')
-    expect(database.attachmentText.stats().pending).toBe(0)
+    expect(normalizeAttachmentQuery(null)).toMatchObject({ pageSize: 50, includeArchivedAccounts: true })
+  })
+})
+
+describe('MailDatabase.listAttachments', () => {
+  it('pages across accounts newest first with a stable keyset cursor', () => {
+    const { database, directory } = setup()
+    for (let index = 0; index < 7; index += 1) {
+      store(database, directory, {
+        id: `message-${index}`,
+        accountId: index % 2 ? 'account-2' : 'account-1',
+        // Two messages share each timestamp so ties must be broken by the cursor.
+        internalDate: `2026-07-${String(10 + Math.floor(index / 2)).padStart(2, '0')}T10:00:00.000Z`,
+        attachments: [file('part-0', `file-${index}-a.pdf`, 'application/pdf'), file('part-1', `file-${index}-b.png`, 'image/png')]
+      })
+    }
+    const seen: string[] = []
+    let cursor: string | undefined
+    let pages = 0
+    do {
+      const page = database.listAttachments({ pageSize: 3, cursor })
+      expect(page.total).toBe(14)
+      seen.push(...page.items.map((item) => `${item.accountId}/${item.messageId}/${item.attachmentId}`))
+      cursor = page.nextCursor
+      pages += 1
+    } while (cursor && pages < 10)
+    expect(pages).toBe(5)
+    expect(new Set(seen).size).toBe(14)
+    const dates = seen.map((key) => database.listAttachments({ pageSize: 100 }).items.find((item) => `${item.accountId}/${item.messageId}/${item.attachmentId}` === key)!.date)
+    expect([...dates].sort().reverse()).toEqual(dates)
+    expect(() => database.listAttachments({ cursor: 'garbage' })).toThrow(/no longer valid/)
+    database.close()
   })
 
-  it('cancels in-flight extraction for a deleted account and removes its index', async () => {
-    const { database } = open()
-    const doomed = message([{ id: 'a', filename: 'a.txt', mimeType: 'text/plain', size: 5 }])
-    const kept = message([{ id: 'a', filename: 'k.txt', mimeType: 'text/plain', size: 4 }], { accountId: 'account-2' })
-    const indexed = message([{ id: 'b', filename: 'b.txt', mimeType: 'text/plain', size: 5 }], { internalDate: '2020-01-01T00:00:00.000Z' })
-    database.upsertMessage(indexed)
-    const contents: Contents = new Map([[doomed.id, new Map([['a', Buffer.from('doomy')]])], [kept.id, new Map([['a', Buffer.from('kept')]])], [indexed.id, new Map([['b', Buffer.from('older')]])]])
-    const first = indexer(database, contents)
-    first.indexer.schedule()
-    await first.indexer.idle()
-    expect(database.attachmentText.stats('account-1').indexed).toBe(1)
+  it('filters by name, sender, recipient, date, type, size, and account', () => {
+    const { database, directory } = setup()
+    store(database, directory, { id: 'report', internalDate: '2026-07-01T09:00:00.000Z', attachments: [file('part-0', 'Q2_report.pdf', 'application/pdf', 2_000_000)] })
+    store(database, directory, { id: 'photos', accountId: 'account-2', internalDate: '2026-07-15T09:00:00.000Z', fromName: 'Grace Hopper', fromEmail: 'grace@navy.test', to: ['team@example.com'], cc: ['boss@example.com'], attachments: [file('part-0', 'beach.jpg', 'image/jpeg', 300_000)] })
+    store(database, directory, { id: 'sheet', internalDate: '2026-07-31T23:30:00.000Z', attachments: [file('part-0', 'budget.xlsx', 'application/octet-stream', 40_000)] })
+    const names = (query: Parameters<MailDatabase['listAttachments']>[0]) => database.listAttachments(query).items.map((item) => item.filename)
+    expect(names({ search: '2_r' })).toEqual(['Q2_report.pdf'])
+    expect(names({ search: '%' })).toEqual([])
+    expect(names({ sender: 'grace' })).toEqual(['beach.jpg'])
+    expect(names({ recipient: 'BOSS@' })).toEqual(['beach.jpg'])
+    expect(names({ dateFrom: '2026-07-15', dateTo: '2026-07-31' })).toEqual(['budget.xlsx', 'beach.jpg'])
+    expect(names({ fileTypes: ['spreadsheet', 'pdf'] })).toEqual(['budget.xlsx', 'Q2_report.pdf'])
+    expect(names({ minSize: 100_000, maxSize: 1_000_000 })).toEqual(['beach.jpg'])
+    expect(names({ accountIds: ['account-2'] })).toEqual(['beach.jpg'])
+    const [photo] = database.listAttachments({ sender: 'grace' }).items
+    expect(photo).toMatchObject({ accountId: 'account-2', threadId: 'thread-photos', messageId: 'photos', attachmentId: 'part-0', fileType: 'image', to: ['team@example.com'], cc: ['boss@example.com'], available: true, accountArchived: false })
+    database.close()
+  })
 
-    database.upsertMessage(doomed)
-    database.upsertMessage(kept)
-    let started!: () => void
-    const extracting = new Promise<void>((resolve) => { started = resolve })
-    const run = indexer(database, contents, (input, signal) => {
-      if (input.filename !== 'a.txt') return Promise.resolve(extractAttachmentText(input))
-      started()
-      return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }))))
-    })
-    run.indexer.schedule()
-    await extracting
-    run.indexer.cancelAccount('account-1')
+  it('hides inline images, trash, spam, and duplicate provider copies by default', () => {
+    const { database, directory } = setup()
+    store(database, directory, { id: 'inline', attachments: [file('part-0', 'logo.png', 'image/png', 4_000, 'logo@cid'), file('part-1', 'terms.pdf', 'application/pdf', 4_000, 'terms@cid')] })
+    store(database, directory, { id: 'trash', labelIds: ['TRASH'], attachments: [file('part-0', 'trashed.pdf', 'application/pdf')] })
+    store(database, directory, { id: 'spam', labelIds: ['SPAM'], attachments: [file('part-0', 'spam.zip', 'application/zip')] })
+    store(database, directory, { id: 'copy-a', threadId: 'thread-copy', messageIdHeader: '<same@example.com>', labelIds: ['INBOX'], attachments: [file('part-0', 'shared.docx', 'application/msword')] })
+    store(database, directory, { id: 'copy-b', threadId: 'thread-copy', messageIdHeader: '<same@example.com>', labelIds: ['folder:Projects'], attachments: [file('part-0', 'shared.docx', 'application/msword')] })
+    expect(database.listAttachments({}).items.map((item) => item.filename).sort()).toEqual(['shared.docx', 'terms.pdf'])
+    expect(database.listAttachments({ includeInline: true }).items.map((item) => item.filename).sort()).toEqual(['logo.png', 'shared.docx', 'terms.pdf'])
+    expect(database.listAttachments({}).items.find((item) => item.filename === 'shared.docx')?.messageId).toBe('copy-b')
+    database.close()
+  })
+
+  it('reports unavailable originals and keeps archived accounts until they are deleted', () => {
+    const { database, directory } = setup()
+    store(database, directory, { id: 'present', attachments: [file('part-0', 'present.pdf', 'application/pdf')] })
+    store(database, directory, { id: 'missing', attachments: [file('part-0', 'missing.pdf', 'application/pdf')] }, false)
+    store(database, directory, { id: 'other', accountId: 'account-2', attachments: [file('part-0', 'other.pdf', 'application/pdf')] })
+    const availability = Object.fromEntries(database.listAttachments({}).items.map((item) => [item.filename, item.available]))
+    expect(availability).toEqual({ 'present.pdf': true, 'missing.pdf': false, 'other.pdf': true })
+
+    database.disconnectAccount('account-2', 'archive')
+    expect(database.listAttachments({}).items.find((item) => item.filename === 'other.pdf')?.accountArchived).toBe(true)
+    expect(database.listAttachments({ includeArchivedAccounts: false }).total).toBe(2)
+
     database.disconnectAccount('account-1', 'delete')
-    await run.indexer.idle()
-
-    expect(database.attachmentText.stats('account-1')).toMatchObject({ pending: 0, indexed: 0 })
-    expect(database.attachmentText.stats('account-2')).toMatchObject({ indexed: 1 })
-    expect(search(database, 'attachment:kept')).toEqual([kept.threadId])
-    expect(search(database, 'attachment:older')).toEqual([])
-    expect(database.attachmentText.searchValue('account-1', indexed.id)).toBe('')
+    const remaining = database.listAttachments({})
+    expect(remaining.items.map((item) => item.filename)).toEqual(['other.pdf'])
+    expect(remaining.total).toBe(1)
+    expect(database.diagnosticHealth().orphanedAttachments).toBe(0)
+    database.close()
   })
 
-  it('removes extracted text with its message and never saves results for deleted messages', async () => {
-    const { database, path } = open()
-    const item = message([{ id: 'a', filename: 'a.txt', mimeType: 'text/plain', size: 5 }])
-    database.upsertMessage(item)
-    const run = indexer(database, new Map([[item.id, new Map([['a', Buffer.from('ghost')]])]]), async (input) => {
-      database.deleteMessage('account-1', item.id)
-      return extractAttachmentText(input)
-    })
-    run.indexer.schedule()
-    await run.indexer.idle()
+  it('pages a large attachment cache without loading it all', () => {
+    const { database, directory } = setup()
+    const path = join(directory, 'aerio.sqlite')
+    database.close()
+    // Bulk-insert directly; going through upsertMessage for thousands of rows is slow and not under test.
     const raw = new DatabaseSync(path)
-    expect(raw.prepare('SELECT COUNT(*) count FROM mail_attachment_text').get()).toEqual({ count: 0 })
-
-    const again = message([{ id: 'a', filename: 'a.txt', mimeType: 'text/plain', size: 5 }])
-    database.upsertMessage(again)
-    const second = indexer(database, new Map([[again.id, new Map([['a', Buffer.from('ghost')]])]]))
-    second.indexer.schedule()
-    await second.indexer.idle()
-    expect(raw.prepare('SELECT COUNT(*) count FROM mail_attachment_text').get()).toEqual({ count: 1 })
-    database.deleteMessage('account-1', again.id)
-    expect(raw.prepare('SELECT COUNT(*) count FROM mail_attachment_text').get()).toEqual({ count: 0 })
+    raw.exec('BEGIN')
+    const thread = raw.prepare(`INSERT INTO gmail_threads(account_id,id,subject,last_date) VALUES('account-1',?,'Bulk',?)`)
+    const messageRow = raw.prepare(`INSERT INTO gmail_messages(account_id,id,thread_id,history_id,internal_date,raw_path) VALUES('account-1',?,?,'1',?,'')`)
+    const attachment = raw.prepare(`INSERT INTO gmail_attachments(account_id,message_id,id,filename,mime_type,size) VALUES('account-1',?,?,?,?,?)`)
+    for (let index = 0; index < 4_000; index += 1) {
+      const date = new Date(Date.UTC(2026, 0, 1) + index * 60_000).toISOString()
+      thread.run(`t${index}`, date)
+      messageRow.run(`m${index}`, `t${index}`, date)
+      attachment.run(`m${index}`, 'part-0', `file-${index}.pdf`, 'application/pdf', index)
+      attachment.run(`m${index}`, 'part-1', `photo-${index}.jpg`, 'image/jpeg', index)
+    }
+    raw.exec('COMMIT')
     raw.close()
-  })
-
-  it('stops on shutdown without saving the cancelled result, and resumes skipped accounts', async () => {
-    const { database } = open()
-    const item = message([{ id: 'a', filename: 'a.txt', mimeType: 'text/plain', size: 5 }])
-    database.upsertMessage(item)
-    const contents: Contents = new Map([[item.id, new Map([['a', Buffer.from('later')]])]])
-    let started!: () => void
-    const extracting = new Promise<void>((resolve) => { started = resolve })
-    const run = indexer(database, contents, (_input, signal) => {
-      started()
-      return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }))))
-    })
-    run.indexer.schedule()
-    await extracting
-    await run.indexer.stop()
-    expect(database.attachmentText.stats().pending).toBe(1)
-    run.indexer.schedule()
-    expect(run.extract).toHaveBeenCalledTimes(1)
-
-    const next = indexer(database, contents)
-    next.indexer.cancelAccount('account-1')
-    next.indexer.schedule()
-    await next.indexer.idle()
-    expect(next.extract).not.toHaveBeenCalled()
-    next.indexer.resumeAccount('account-1')
-    await next.indexer.idle()
-    expect(search(database, 'attachment:later')).toEqual([item.threadId])
-  })
-
-  it('reports extraction errors and caps the text stored per message', async () => {
-    const { database } = open()
-    const item = message([
-      { id: 'a', filename: 'a.txt', mimeType: 'text/plain', size: 1 },
-      { id: 'b', filename: 'b.txt', mimeType: 'text/plain', size: 1 }
-    ])
-    database.upsertMessage(item)
-    const onError = vi.fn()
-    const failing = new AttachmentContentIndexer({
-      store: database.attachmentText,
-      readAttachments: async () => new Map([['a', Buffer.from('x')], ['b', Buffer.from('y')]]),
-      extract: async () => { throw new Error('worker exploded') },
-      onError
-    })
-    failing.schedule()
-    await failing.idle()
-    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'worker exploded' }))
-
-    const huge = 'z'.repeat(MAX_MESSAGE_ATTACHMENT_TEXT)
-    const filling = new AttachmentContentIndexer({
-      store: database.attachmentText,
-      readAttachments: async () => new Map([['a', Buffer.from('x')], ['b', Buffer.from('y')]]),
-      extract: async () => ({ status: 'indexed', text: huge, truncated: false })
-    })
-    filling.schedule()
-    await filling.idle()
-    expect(database.attachmentText.searchValue('account-1', item.id)).toHaveLength(MAX_MESSAGE_ATTACHMENT_TEXT)
+    const reopened = new MailDatabase(path, join(directory, 'mail'))
+    const started = performance.now()
+    const first = reopened.listAttachments({ pageSize: 100, fileTypes: ['pdf'] as MailAttachmentFileType[] })
+    const second = reopened.listAttachments({ pageSize: 100, fileTypes: ['pdf'], cursor: first.nextCursor })
+    expect(performance.now() - started).toBeLessThan(5_000)
+    expect(first.total).toBe(4_000)
+    expect(first.items[0].filename).toBe('file-3999.pdf')
+    expect(second.items[0].filename).toBe('file-3899.pdf')
+    expect(first.items.every((item) => !item.available)).toBe(true)
+    reopened.close()
   })
 })

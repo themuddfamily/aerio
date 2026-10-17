@@ -36,7 +36,7 @@ export default function MessageWindow() {
   const [actionBusy, setActionBusy] = useState<MailActionKind>()
   const [pendingOperation, setPendingOperation] = useState<PendingOperation>()
   const [pendingSend, setPendingSend] = useState<MailDraftResult>()
-  const [mailCompose, setMailCompose] = useState<{ reply: MailThreadDetail; replyAll?: boolean; forward?: boolean }>()
+  const [mailCompose, setMailCompose] = useState<{ reply: MailThreadDetail; replyAll?: boolean; forward?: boolean; initialBody?: string }>()
   const [organizeMode, setOrganizeMode] = useState<'move' | 'label'>()
   const [labels, setLabels] = useState<MailLabel[]>([])
   const [snoozeOpen, setSnoozeOpen] = useState(false)
@@ -48,7 +48,7 @@ export default function MessageWindow() {
   }
 
   const expansion = useThreadExpansion(thread, expandedMessageId, setExpandedMessageId)
-  const messageTools = useMailMessageTools({ accounts, onToast: showToast, collapseAll: expansion.collapseAll, expandAll: expansion.expandAll, onUpdated: (message, local) => setThread((current) => current && ({ ...current, messages: current.messages.map((item) => item.id === message.id ? { ...item, local } : item) })) })
+  const messageTools = useMailMessageTools({ accounts, onToast: showToast, collapseAll: expansion.collapseAll, expandAll: expansion.expandAll, onUpdated: (message, local) => setThread((current) => current && ({ ...current, messages: current.messages.map((item) => item.id === message.id ? { ...item, local } : item) })), onReplyWithText: (message, text) => { const reply = replyThreadFor(message); if (reply) setMailCompose({ reply, initialBody: text }) } })
 
   useEffect(() => {
     if (!source) {
@@ -279,7 +279,7 @@ export default function MessageWindow() {
       </main>
       {pendingOperation && <div className="undo-toast"><span>Mail change queued</span><button onClick={() => void undoMailAction()}><Undo2 size={15} /> Undo</button><button onClick={() => setPendingOperation(undefined)}>Dismiss</button></div>}
       {pendingSend && <div className="undo-toast send-undo-toast"><span>Message will send shortly</span><button onClick={() => void undoSend()}><Undo2 size={15} /> Undo Send</button><button onClick={() => setPendingSend(undefined)}>Dismiss</button></div>}
-      {mailCompose && <MailComposeModal accounts={accounts.filter((account) => !account.archived)} replyTo={mailCompose.reply} replyAll={mailCompose.replyAll} forward={mailCompose.forward} onClose={() => setMailCompose(undefined)} onSent={(result) => { if (result.status === 'send-pending') setPendingSend(result); void reloadMailThread() }} onToast={showToast} />}
+      {mailCompose && <MailComposeModal accounts={accounts.filter((account) => !account.archived)} replyTo={mailCompose.reply} replyAll={mailCompose.replyAll} forward={mailCompose.forward} initialBody={mailCompose.initialBody} onClose={() => setMailCompose(undefined)} onSent={(result) => { if (result.status === 'send-pending') setPendingSend(result); void reloadMailThread() }} onToast={showToast} />}
       {organizeMode && <MailOrganizeModal mode={organizeMode} items={organizeItems} accounts={accounts} labels={labels} onApply={async (requests) => { for (const request of requests) await applyMailAction(request.action, request.labelId) }} onClose={() => setOrganizeMode(undefined)} />}
       {snoozeOpen && source && <MailSnoozeModal count={1} onApply={async (until) => {
         try {

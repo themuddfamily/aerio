@@ -59,7 +59,7 @@ are not indexed.
 
 ### Pipeline and limits
 
-- `electron/mail/attachment-index.ts` runs in the mail worker. Each pass reads
+- `electron/mail/attachment-text-indexer.ts` runs in the mail worker. Each pass reads
   up to 25 attachments that have no result from the current extractor version,
   newest mail first, re-parses each message's stored raw MIME once, and saves
   one result per attachment in `mail_attachment_text`. It runs after

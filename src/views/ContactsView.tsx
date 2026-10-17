@@ -5,6 +5,7 @@ import type { AppState, Contact } from '../types'
 import type { SyncedContact } from '../productivity-types'
 import Modal from '../components/Modal'
 import { uid } from '../lib/domain'
+import { preserveContactInterchangeFields } from '../lib/interchange-plan'
 
 interface ContactsViewProps {
   state: AppState
@@ -19,6 +20,7 @@ interface ContactsViewProps {
   providerAccounts?: { id: string; email: string; provider: 'gmail' | 'microsoft' }[]
   syncing?: boolean
   sourceMessage?: string
+  interchangePanel?: React.ReactNode
 }
 
 const isSyncedContact = (contact: Contact): contact is SyncedContact =>
@@ -26,7 +28,7 @@ const isSyncedContact = (contact: Contact): contact is SyncedContact =>
 
 export default function ContactsView({
   state, query, onCompose, onToast, onSync, onEnableEditing, onLocalContactsChange,
-  onSaveProviderContact, onDeleteProviderContact, providerAccounts = [], syncing = false, sourceMessage
+  onSaveProviderContact, onDeleteProviderContact, providerAccounts = [], syncing = false, sourceMessage, interchangePanel
 }: ContactsViewProps) {
   const { showContextMenu } = useContextMenu()
   const [group, setGroup] = useState('All contacts')
@@ -110,6 +112,7 @@ export default function ContactsView({
             </button>
           ))}
         </div>
+        {interchangePanel}
         <div className="contact-insight"><span className="insight-number">{state.contacts.length}</span><p>contacts</p></div>
       </aside>
       <section className="contact-list-panel">
@@ -144,6 +147,17 @@ export default function ContactsView({
                 <div onContextMenu={(event) => showContextMenu(event, [{ label: selected.phone ? `Call ${selected.name}` : 'No phone number saved', icon: Phone, disabled: !selected.phone, action: () => onToast(`Call ${selected.phone}`) }, { label: 'Copy phone number', icon: Copy, disabled: !selected.phone, action: () => copyText(selected.phone!) }], 'Phone')}><dt><Phone size={15} /> Phone</dt><dd>{selected.phone ?? 'Not added'}</dd></div>
                 <div onContextMenu={(event) => showContextMenu(event, [{ label: 'Copy company', icon: Copy, disabled: !selected.company, action: () => copyText(selected.company!) }], 'Company')}><dt><Building2 size={15} /> Company</dt><dd>{selected.company ?? 'Not added'}</dd></div>
                 <div onContextMenu={(event) => showContextMenu(event, [{ label: 'Copy group', icon: Copy, action: () => copyText(selected.group) }], 'Group')}><dt><MapPin size={15} /> Group</dt><dd>{selected.group}</dd></div>
+                {[
+                  ...(selected.emails ?? []).filter((field) => field.value !== selected.email).map((field) => ({ icon: Mail, label: 'Email', field })),
+                  ...(selected.phones ?? []).filter((field) => field.value !== selected.phone).map((field) => ({ icon: Phone, label: 'Phone', field })),
+                  ...(selected.addresses ?? []).map((field) => ({ icon: MapPin, label: 'Address', field })),
+                  ...(selected.urls ?? []).map((field) => ({ icon: Building2, label: 'Website', field }))
+                ].map(({ icon: Icon, label, field }, index) => (
+                  <div key={`${label}-${index}`} onContextMenu={(event) => showContextMenu(event, [{ label: `Copy ${label.toLowerCase()}`, icon: Copy, action: () => copyText(field.value) }], label)}>
+                    <dt><Icon size={15} /> {label}{field.type ? ` (${field.type})` : ''}</dt><dd>{field.value}</dd>
+                  </div>
+                ))}
+                {selected.birthday && <div><dt><Star size={15} /> Birthday</dt><dd>{selected.birthday}</dd></div>}
               </dl>
             </section>
             <section className="detail-card" onContextMenu={(event) => { if (!window.getSelection()?.toString()) showContextMenu(event, [{ label: 'Copy notes', icon: Copy, disabled: !selected.notes, action: () => copyText(selected.notes!) }], 'Contact notes') }}>
@@ -212,13 +226,13 @@ function ContactEditor({
           <span className="spacer" /><button className="button ghost" onClick={onClose}>Cancel</button>
           <button className="button primary" disabled={!name.trim() || saving} onClick={() => {
             setSaving(true)
-            const next: Contact = {
+            const next: Contact = preserveContactInterchangeFields(contact, {
               id: contact?.id ?? uid('contact'), name: name.trim(), email: email.trim(), phone: phone.trim() || undefined,
               company: company.trim() || undefined, title: title.trim() || undefined, group: group.trim() || (target === 'local' ? 'Personal' : 'Contacts'),
               notes: notes.trim() || undefined, favorite: target === 'local' ? favorite : false,
               color: contact?.color ?? (providerTarget?.provider === 'microsoft' ? '#3b6fd8' : '#4d8f78'),
               ...(target === 'local' ? { source: 'local' as const } : {})
-            }
+            })
             void Promise.resolve(onSave(next, target === 'local' ? undefined : target)).finally(() => setSaving(false))
           }}>{saving ? 'Saving…' : 'Save contact'}</button>
         </footer>
