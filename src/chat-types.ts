@@ -226,6 +226,8 @@ export interface ChatDesktopApi {
   devices(accountId: string): Promise<ChatDeviceSummary[]>
   verifyOwnDevice(accountId: string): Promise<ChatVerificationState>
   verificationAction(accountId: string, requestId: string, action: 'accept' | 'start-sas' | 'confirm' | 'mismatch' | 'cancel'): Promise<void>
-  restoreFromRecoveryKey(accountId: string, recoveryKey: string): Promise<void>
+  restoreFromRecoveryKey(accountId: string, recoveryKey: string): Promise<{ imported: number; total: number }>
+  /** Creates cross-signing, secret storage and a key backup; the recovery key is returned once and never stored. */
+  setupRecovery(accountId: string): Promise<{ recoveryKey?: string; backupComplete?: boolean }>
   onEvent(callback: (event: ChatEvent) => void): () => void
 }
