@@ -24,6 +24,8 @@ import type {
   MailRuleRunResult,
   MailSavedSearch,
   MailSavedSearchInput,
+  MailQuickAction,
+  MailQuickActionRunResult,
   MailSnooze,
   MailReplyWatch,
   MailReplyWatchInput,
@@ -77,6 +79,7 @@ import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productiv
 import { senderDomainFromEmail } from '../src/lib/sender-avatar'
 import { isCompleteMailAddress } from '../src/lib/mail-address'
 import { validateMailSavedSearch } from '../src/lib/mail-saved-search'
+import { validateMailQuickAction, validateMailQuickActionTargets } from '../src/lib/mail-quick-actions'
 import { mailPollingIntervalForWindow } from './mail/polling-policy'
 import { faviconDomainCandidates } from './mail/favicon-domains'
 import { fetchRemoteImage } from './mail/remote-image-fetch'
@@ -1742,6 +1745,18 @@ function registerIpc() {
     if (typeof id !== 'string' || !id || id.length > 500) throw new Error('Invalid saved search id')
     return requireMailWorker().request({ type: 'saved-searches:delete', payload: { id } })
   })
+  const quickActionId = (id: unknown) => {
+    if (typeof id !== 'string' || !id || id.length > 500) throw new Error('Invalid quick action id')
+    return id
+  }
+  ipcMain.handle('mail:quick-actions:list', () =>
+    requireMailWorker().request<MailQuickAction[]>({ type: 'quick-actions:list' }))
+  ipcMain.handle('mail:quick-actions:save', (_event, input: unknown) =>
+    requireMailWorker().request<MailQuickAction>({ type: 'quick-actions:save', payload: validateMailQuickAction(input) }))
+  ipcMain.handle('mail:quick-actions:delete', (_event, id: unknown) =>
+    requireMailWorker().request({ type: 'quick-actions:delete', payload: { id: quickActionId(id) } }))
+  ipcMain.handle('mail:quick-actions:run', (_event, id: unknown, targets: unknown) =>
+    requireMailWorker().request<MailQuickActionRunResult>({ type: 'quick-actions:run', payload: { id: quickActionId(id), targets: validateMailQuickActionTargets(targets) } }))
   ipcMain.handle('mail:sync:start', (_event, accountId?: string) =>
     requireMailWorker().request({ type: 'sync:start', payload: { accountId } }))
   ipcMain.handle('mail:sync:pause', (_event, accountId: string) =>

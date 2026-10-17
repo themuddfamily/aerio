@@ -609,6 +609,49 @@ export interface MailRuleRunResult {
   operations: number
 }
 
+/** One step of a user-defined Quick Action; label, unlabel, and move steps need an account-specific destination. */
+export interface MailQuickActionStep {
+  action: MailActionKind
+  labelId?: string
+}
+
+/** A named, ordered sequence of mail actions. Destinations require the action to be scoped to one account. */
+export interface MailQuickActionInput {
+  id?: string
+  name: string
+  accountId?: string
+  steps: MailQuickActionStep[]
+  /** Keyboard slot 1-9, bound to Ctrl/Cmd+Shift+number. */
+  shortcut?: number
+  showInToolbar: boolean
+}
+
+export interface MailQuickAction extends MailQuickActionInput {
+  id: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface MailQuickActionTarget {
+  accountId: string
+  threadIds: string[]
+}
+
+export interface MailQuickActionRunFailure {
+  accountId: string
+  threadCount: number
+  /** Zero-based step that failed; absent when the whole account group was rejected before any step ran. */
+  step?: number
+  appliedSteps: number
+  error: string
+}
+
+export interface MailQuickActionRunResult {
+  operations: PendingOperation[]
+  updatedThreads: number
+  failures: MailQuickActionRunFailure[]
+}
+
 export interface MailStorageStats {
   totalBytes: number
   freeBytes: number
@@ -725,6 +768,12 @@ export interface MailDesktopApi {
     list(accountIds?: string[]): Promise<MailReplyWatch[]>
     create(input: MailReplyWatchInput): Promise<MailReplyWatch>
     cancel(id: string): Promise<boolean>
+  }
+  quickActions: {
+    list(): Promise<MailQuickAction[]>
+    save(input: MailQuickActionInput): Promise<MailQuickAction>
+    delete(id: string): Promise<void>
+    run(id: string, targets: MailQuickActionTarget[]): Promise<MailQuickActionRunResult>
   }
   onEvent(callback: (event: MailWorkerEvent) => void): () => void
 }

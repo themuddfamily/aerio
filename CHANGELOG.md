@@ -6,6 +6,7 @@
 
 - QuickText snippets and whole-message mail templates with subject, sanitized HTML, and managed attachments; search, edit, and insert them from the composer without losing the editor selection, and back them up with local data or as a standalone template file.
 - Watch for replies: turn it on in the composer or from a sent message’s menu, with an optional deadline. Aerio matches replies by Message-ID references and the provider thread for the sending account, notifies from the background or tray when a recipient answers or the deadline passes without a reply, and lists active and past watches under Mail › Reply watches, where they can be cancelled.
+- User-defined mail Quick Actions: save ordered sequences of mail actions (read, star, label, move, archive, Trash, and more) and run them on the selection from the toolbars, the conversation context menu, the command palette, or Ctrl+Shift+1–9. Steps use the queued operation pipeline with Undo; account-specific destinations are checked at run time and skipped or partly updated accounts are reported. Undo of several queued changes now reverts them newest first, and queued operations created in the same millisecond reach the provider in insertion order.
 
 ## 0.5.0 — 2026-08-08
 

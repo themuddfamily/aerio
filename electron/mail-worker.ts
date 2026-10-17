@@ -33,6 +33,7 @@ import { sanitizeMessageHtmlWithReport } from './mail/message-security'
 import { buildNewMailNotification } from './mail/new-mail'
 import { messageIdFromMime } from './mail/reply-watches'
 import { parseMessageSource } from './mail/message-source'
+import { runMailQuickAction } from './mail/quick-actions'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createMime, createMimeBuffer } from './mail/mime-builder'
 import { createReceiptService } from './mail/receipts'
@@ -1240,6 +1241,17 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'saved-searches:list') return database.listSavedSearches()
   if (command.type === 'saved-searches:save') return database.saveSavedSearch(command.payload)
   if (command.type === 'saved-searches:delete') return database.deleteSavedSearch(command.payload.id)
+  if (command.type === 'quick-actions:list') return database.listQuickActions()
+  if (command.type === 'quick-actions:save') return database.saveQuickAction(command.payload)
+  if (command.type === 'quick-actions:delete') return database.deleteQuickAction(command.payload.id)
+  if (command.type === 'quick-actions:run') {
+    const quickAction = database.getQuickAction(command.payload.id)
+    if (!quickAction) throw new Error('Quick action not found')
+    const { result, changed } = runMailQuickAction(database, quickAction, command.payload.targets)
+    for (const operation of result.operations) emit({ type: 'operation', payload: operation })
+    for (const target of changed) emit({ type: 'mail-changed', payload: target })
+    return result
+  }
   if (command.type === 'sync:start') {
     const accounts = command.payload.accountId
       ? database.listAccounts().filter((item) => item.id === command.payload.accountId)
