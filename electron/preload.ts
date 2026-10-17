@@ -207,6 +207,16 @@ const api: AerioDesktopApi = {
         delete: (id) => ipcRenderer.invoke('mail:signatures:delete', id)
       }
     },
+    merge: {
+      list: () => ipcRenderer.invoke('mail:merge:list'),
+      get: (id) => ipcRenderer.invoke('mail:merge:get', id),
+      create: (input) => ipcRenderer.invoke('mail:merge:create', input),
+      pause: (id) => ipcRenderer.invoke('mail:merge:pause', id),
+      resume: (id) => ipcRenderer.invoke('mail:merge:resume', id),
+      cancel: (id) => ipcRenderer.invoke('mail:merge:cancel', id),
+      resolve: (id, positions, resolution) => ipcRenderer.invoke('mail:merge:resolve', id, positions, resolution),
+      delete: (id) => ipcRenderer.invoke('mail:merge:delete', id)
+    },
     replyWatches: {
       list: (accountIds) => ipcRenderer.invoke('mail:reply-watches:list', accountIds),
       create: (input) => ipcRenderer.invoke('mail:reply-watches:create', input),

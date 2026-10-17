@@ -42,6 +42,10 @@ import { createReceiptService } from './mail/receipts'
 import { AttachmentContentIndexer } from './mail/attachment-text-indexer'
 import { AttachmentExtractRunner } from './mail/attachment-extract-runner'
 import { supportedSendOptions } from '../src/lib/mail-send-options'
+import type { MailMergeJobInput } from '../src/mail-merge-types'
+import { clampMailMergeLimits, MAIL_MERGE_MAX_RECIPIENTS, normalizeMergeRecipients } from '../src/lib/mail-merge'
+import { MailMergeNotSubmittedError, MailMergeRunner } from './mail/mail-merge-runner'
+import { MAIL_MERGE_DAY_MS } from './mail/mail-merge-store'
 import {
   BACKGROUND_MAIL_POLL_INTERVAL_MS,
   clampMailPollingInterval,
@@ -57,6 +61,8 @@ let attachmentExtractor: AttachmentExtractRunner | undefined
 let contentPath = ''
 let online = true
 let operationTimer: NodeJS.Timeout | undefined
+let mailMergeTimer: NodeJS.Timeout | undefined
+let mailMergeRunnerInstance: MailMergeRunner | undefined
 let pollTimer: NodeJS.Timeout | undefined
 const paused = new Set<string>()
 const syncing = new Set<string>()
@@ -897,6 +903,34 @@ async function saveDraft(input: MailDraftInput) {
   return result
 }
 
+/**
+ * Hands one built message to the provider, sending the remote draft when one
+ * exists. Returns the Message-ID and provider thread of what was actually sent
+ * so reply watches can match on them.
+ */
+async function transmitMessage(input: MailDraftInput, provider: MailAccountSummary['provider'], sender: ReturnType<typeof senderFor>, remoteDraftId?: string): Promise<{ messageIdHeader?: string; threadId?: string }> {
+  const from = sender?.from
+  if (provider === 'gmail') {
+    const raw = createMime(input, from)
+    const reference = remoteDraftId
+      ? await clientFor(input.accountId).sendDraft(remoteDraftId, raw)
+      : await clientFor(input.accountId).sendMessage(raw, input.threadId)
+    return { messageIdHeader: messageIdFromMime(raw), threadId: reference?.threadId }
+  }
+  if (provider === 'microsoft') {
+    // Exchange assigns its own Message-ID; the watch adopts it from the synced Sent copy.
+    await microsoftClientFor(input.accountId).send(createMimeBuffer(input, from), remoteDraftId, input.sendOptions)
+    return { threadId: input.threadId }
+  }
+  const client = await imapClientFor(input.accountId)
+  const recipients = [...input.to, ...input.cc, ...input.bcc]
+  const mime = createMimeBuffer(input, from, true)
+  // An alias also becomes the SMTP envelope sender; the server decides whether it is allowed.
+  await (sender?.identity ? client.send(mime, recipients, input.sendOptions, sender.identity.email) : client.send(mime, recipients, input.sendOptions))
+  if (remoteDraftId) await client.deleteDraft(remoteDraftId)
+  return { messageIdHeader: messageIdFromMime(mime) }
+}
+
 async function deliverDraft(input: MailDraftInput) {
   if (!database) throw new Error('Database is not initialized')
   input = stageDraftAttachments(input)
@@ -907,31 +941,10 @@ async function deliverDraft(input: MailDraftInput) {
   try {
     const row = database.getDraft(result.id)
     sender = senderFor(input, true)
-    const from = sender?.from
     // The stored draft keeps the user's choice; only what the provider can honor is sent.
     input = { ...input, sendOptions: supportedSendOptions(input.sendOptions, provider) }
     if (row?.gmail_draft_id) await assertRemoteDraftUnchanged(input.accountId, provider, String(row.gmail_draft_id), row.remote_revision ? String(row.remote_revision) : undefined)
-    // Reply watches match on the Message-ID and provider thread of what was actually sent.
-    let sent: { messageIdHeader?: string; threadId?: string }
-    if (provider === 'gmail') {
-      const raw = createMime({ ...input, id: result.id }, from)
-      const reference = row?.gmail_draft_id
-        ? await clientFor(input.accountId).sendDraft(String(row.gmail_draft_id), raw)
-        : await clientFor(input.accountId).sendMessage(raw, input.threadId)
-      sent = { messageIdHeader: messageIdFromMime(raw), threadId: reference?.threadId }
-    } else if (provider === 'microsoft') {
-      // Exchange assigns its own Message-ID; the watch adopts it from the synced Sent copy.
-      await microsoftClientFor(input.accountId).send(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined, input.sendOptions)
-      sent = { threadId: input.threadId }
-    } else {
-      const client = await imapClientFor(input.accountId)
-      const recipients = [...input.to, ...input.cc, ...input.bcc]
-      const mime = createMimeBuffer({ ...input, id: result.id }, from, true)
-      // An alias also becomes the SMTP envelope sender; the server decides whether it is allowed.
-      await (sender?.identity ? client.send(mime, recipients, input.sendOptions, sender.identity.email) : client.send(mime, recipients, input.sendOptions))
-      if (row?.gmail_draft_id) await client.deleteDraft(String(row.gmail_draft_id))
-      sent = { messageIdHeader: messageIdFromMime(mime) }
-    }
+    const sent = await transmitMessage({ ...input, id: result.id }, provider, sender, row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined)
     result = { ...result, status: 'sent', updatedAt: new Date().toISOString() }
     database.replyWatches.activateForDraft(result.id, { ...sent, sentAt: result.updatedAt })
     removeDraftFiles(result.id)
@@ -996,6 +1009,83 @@ async function processQueuedDrafts() {
     const current = database.getDueDraft(String(row.id))
     if (current) await deliverDraft(draftInputFromRow(current))
   })
+}
+
+/**
+ * Sends one mail merge delivery. Problems found before the provider is
+ * contacted are marked as not submitted so the recipient stays queued.
+ */
+async function sendMergeDelivery(input: MailDraftInput) {
+  let provider: MailAccountSummary['provider']
+  let sender: ReturnType<typeof senderFor>
+  try {
+    const account = database?.getAccount(input.accountId)
+    if (!account || account.archived) throw new Error('Connect this account before sending')
+    if (account.status === 'needs-auth') throw new Error('Reconnect this account before sending')
+    provider = account.provider
+    sender = senderFor(input, true)
+    input = { ...input, sendOptions: supportedSendOptions(input.sendOptions, provider) }
+    const missing = input.attachmentPaths.find((path) => !existsSync(path))
+    if (missing) throw new Error(`An attachment is no longer available: ${basename(missing).replace(/^\d+-/, '')}`)
+    // Fails here, before submission, when the account's credentials are unavailable.
+    await getCredential(input.accountId)
+  } catch (error) {
+    throw new MailMergeNotSubmittedError(error)
+  }
+  try {
+    return await transmitMessage(input, provider, sender)
+  } catch (error) {
+    const rejected = sender ? describeSenderRejection(error, provider, sender) : undefined
+    throw rejected ? new MailMergeNotSubmittedError(rejected) : error
+  }
+}
+
+function mailMergeRunner() {
+  if (!database) throw new Error('Database is not initialized')
+  const store = database.mailMerge
+  mailMergeRunnerInstance ??= new MailMergeRunner({
+    store,
+    online: () => online,
+    send: sendMergeDelivery,
+    emit: (summary) => {
+      emit({ type: 'mail-merge', payload: summary })
+      if (summary.status === 'completed' && summary.counts.sent > 0) {
+        emit({ type: 'mail-changed', payload: { accountId: summary.accountId } })
+        if (!paused.has(summary.accountId)) void syncAccount(summary.accountId)
+      }
+    }
+  })
+  return mailMergeRunnerInstance
+}
+
+function createMailMerge(input: MailMergeJobInput) {
+  if (!database) throw new Error('Database is not initialized')
+  const account = database.getAccount(input.accountId)
+  if (!account || account.archived) throw new Error('Connect this account before starting a mail merge')
+  const { recipients } = normalizeMergeRecipients(input.recipients)
+  if (!recipients.length) throw new Error('Add at least one recipient with a complete email address')
+  if (recipients.length > MAIL_MERGE_MAX_RECIPIENTS) throw new Error(`A mail merge can have at most ${MAIL_MERGE_MAX_RECIPIENTS.toLocaleString('en-US')} recipients`)
+  // Refuse an unusable From address now rather than after the first delivery.
+  senderFor({ ...input, to: [], cc: [], bcc: [] }, true)
+  const id = crypto.randomUUID()
+  // Attachments are copied so discarding the source draft cannot remove them mid-merge.
+  const directory = join(contentPath, 'mail-merge', safeDraftPart(id))
+  mkdirSync(directory, { recursive: true })
+  const attachmentPaths = input.attachmentPaths.map((source, index) => {
+    const target = join(directory, `${index}-${safeDraftPart(basename(source).replace(/^\d+(?:-[a-f0-9]{10})?-/, ''))}`)
+    copyFileSync(source, target)
+    return target
+  })
+  const job = database.mailMerge.create(id, { ...input, recipients, attachmentPaths, limits: clampMailMergeLimits(input.limits, account.provider, account.email) })
+  emit({ type: 'mail-merge', payload: job })
+  void mailMergeRunner().tick().catch(() => undefined)
+  return job
+}
+
+function deleteMailMerge(id: string) {
+  if (!database) throw new Error('Database is not initialized')
+  database.mailMerge.delete(id)
+  rmSync(join(contentPath, 'mail-merge', safeDraftPart(id)), { recursive: true, force: true })
 }
 
 async function extractAttachment(accountId: string, messageId: string, attachmentIdValue: string, targetPath: string) {
@@ -1129,8 +1219,14 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     folderManagerInstance = undefined
     // Re-read provider folders for any folder change cut off by a restart.
     for (const accountId of database.recoverInterruptedFolderOperations()) void folderManager().refresh(accountId).catch(() => undefined)
+    // Deliveries cut off by a restart may have been sent; they wait for review instead of resending.
+    database.mailMerge.recoverInterrupted()
+    database.mailMerge.pruneSendLog(new Date(Date.now() - 2 * MAIL_MERGE_DAY_MS).toISOString())
+    mailMergeRunnerInstance = undefined
     clearInterval(operationTimer)
     clearInterval(pollTimer)
+    clearInterval(mailMergeTimer)
+    mailMergeTimer = setInterval(() => void mailMergeRunner().tick().catch(() => undefined), 1_000)
     operationTimer = setInterval(() => void processOperations(), 2_000)
     schedulePolling(BACKGROUND_MAIL_POLL_INTERVAL_MS)
     return
@@ -1336,6 +1432,21 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'signatures:list') return database.identities.listSignatures()
   if (command.type === 'signatures:save') return database.identities.saveSignature(command.payload)
   if (command.type === 'signatures:delete') return database.identities.deleteSignature(command.payload.id)
+  if (command.type === 'merge:list') return database.mailMerge.list()
+  if (command.type === 'merge:get') return database.mailMerge.get(command.payload.id)
+  if (command.type === 'merge:create') return createMailMerge(command.payload)
+  if (command.type === 'merge:pause' || command.type === 'merge:resume' || command.type === 'merge:cancel') {
+    const store = database.mailMerge
+    const summary = command.type === 'merge:pause' ? store.pause(command.payload.id) : command.type === 'merge:resume' ? store.resume(command.payload.id) : store.cancel(command.payload.id)
+    emit({ type: 'mail-merge', payload: summary })
+    return summary
+  }
+  if (command.type === 'merge:resolve') {
+    const job = database.mailMerge.resolve(command.payload.id, command.payload.positions, command.payload.resolution)
+    emit({ type: 'mail-merge', payload: job })
+    return job
+  }
+  if (command.type === 'merge:delete') return deleteMailMerge(command.payload.id)
   if (command.type === 'saved-searches:list') return database.listSavedSearches()
   if (command.type === 'saved-searches:save') return database.saveSavedSearch(command.payload)
   if (command.type === 'saved-searches:delete') return database.deleteSavedSearch(command.payload.id)
@@ -1406,6 +1517,8 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'shutdown') {
     clearInterval(operationTimer)
     clearInterval(pollTimer)
+    clearInterval(mailMergeTimer)
+    mailMergeRunnerInstance = undefined
     await stopAttachmentIndexing()
     database.close()
     database = undefined

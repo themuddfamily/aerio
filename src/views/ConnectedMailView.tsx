@@ -1,7 +1,7 @@
 import {
   Archive, AtSign, CalendarClock, CheckSquare, ChevronDown, ChevronRight, Clock3, Copy, Download, Edit3, ExternalLink, Eye, FileText, Filter, FolderInput, Forward, Inbox, LoaderCircle, Mail, MailOpen,
   MoreVertical, Paperclip, Pause, Play, Plus, RefreshCw, Reply, ReplyAll, Search, Send, Settings2,
-  Star, Tag, Tags, Trash2, Undo2, UserPlus, WifiOff, X
+  Star, Tag, Tags, Trash2, Undo2, UserPlus, Users, WifiOff, X
 } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MailComposeModal from '../components/MailComposeModal'
@@ -25,6 +25,7 @@ import { quickActionShortcutLabel, quickActionShortcutSlot, quickActionTargets, 
 import type { MailQuickAction, MailSavedSearch, MailSavedSearchInput } from '../mail-types'
 import MailSnoozeModal from '../components/MailSnoozeModal'
 import { MailReplyWatchesModal } from '../components/MailReplyWatches'
+import { MailMergeJobsModal } from '../components/MailMerge'
 import SenderAvatar from '../components/SenderAvatar'
 import ThreadListPreview from '../components/ThreadListPreview'
 import ThreadMessageAccordion from '../components/ThreadMessageAccordion'
@@ -126,6 +127,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [snoozeItems, setSnoozeItems] = useState<MailThreadSummary[]>()
   const [rulesOpen, setRulesOpen] = useState(false)
   const [replyWatchesOpen, setReplyWatchesOpen] = useState(false)
+  const [mailMergesOpen, setMailMergesOpen] = useState(false)
+  const mergeStatuses = useRef(new Map<string, string>())
   const [foldersOpen, setFoldersOpen] = useState<string | true>()
   const [attachmentsOpen, setAttachmentsOpen] = useState(false)
   const [sourceViewer, setSourceViewer] = useState<{ mode: 'headers' | 'source'; subject: string; content: string }>()
@@ -281,6 +284,15 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     }).then(setLabels).catch((error) => onToast(error instanceof Error ? error.message : 'Mail could not start')).finally(() => setLoading(false))
   }, [onToast])
 
+  // Sends interrupted by a restart wait for review; say so once at startup.
+  useEffect(() => {
+    void window.aerio.mail.merge?.list().then((jobs) => {
+      for (const job of jobs) mergeStatuses.current.set(job.id, job.status)
+      const review = jobs.filter((job) => job.status === 'needs-review').length
+      if (review) onToast(`${review === 1 ? 'A mail merge needs' : `${review} mail merges need`} review — open Mail merges`)
+    }).catch(() => undefined)
+  }, [onToast])
+
   useEffect(() => {
     const unsubscribe = window.aerio.mail.onEvent((event) => {
       if (event.type === 'accounts-changed') setAccounts(event.payload)
@@ -300,6 +312,10 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
         if (event.payload.status === 'sent') onToast('Message sent')
         if (event.payload.status === 'failed') onToast(event.payload.error ?? 'Message could not be sent')
         void loadDrafts()
+      }
+      if (event.type === 'mail-merge') {
+        if (event.payload.status === 'needs-review' && mergeStatuses.current.get(event.payload.id) !== 'needs-review') onToast(`Mail merge “${event.payload.name}” needs review: a send may not have gone out`)
+        mergeStatuses.current.set(event.payload.id, event.payload.status)
       }
       if (event.type === 'connectivity' && !event.payload.online) onToast('Offline — changes will be sent when you reconnect')
     })
@@ -956,6 +972,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           <button onClick={() => setAttachmentsOpen(true)}><Paperclip size={14} /> All attachments</button>
           <button onClick={() => setRulesOpen(true)}><Filter size={14} /> Mail rules</button>
           <button onClick={() => setReplyWatchesOpen(true)}><Eye size={14} /> Reply watches</button>
+          {window.aerio.mail.merge && <button onClick={() => setMailMergesOpen(true)}><Users size={14} /> Mail merges</button>}
           <button disabled={!accounts.some((account) => !account.archived)} onClick={() => setFoldersOpen(accountId === 'all' ? true : accountId)}><FolderInput size={14} /> Folders &amp; labels</button>
           <button onClick={() => setQuickActionsOpen(true)}><Zap size={14} /> Quick actions</button>
           <button onClick={() => void showStorage()}><Download size={14} /> Offline storage</button>
@@ -1113,6 +1130,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       {snoozeItems && <MailSnoozeModal count={snoozeItems.length} onApply={(until) => applySnooze(snoozeItems, until)} onClose={() => setSnoozeItems(undefined)} />}
       {savingSearch && <MailSaveSearchModal accounts={accounts} labels={labels} initial={savingSearch} onClose={() => setSavingSearch(undefined)} onSave={async (input) => { const saved = await savedSearches.save(input); openSavedSearch(saved); onToast(`Saved “${saved.name}”`) }} />}
       {replyWatchesOpen && <MailReplyWatchesModal accounts={accounts} onToast={onToast} onClose={() => setReplyWatchesOpen(false)} />}
+      {mailMergesOpen && <MailMergeJobsModal accounts={accounts} onToast={onToast} onClose={() => setMailMergesOpen(false)} />}
       {attachmentsOpen && <MailAttachmentsModal accounts={accounts} onToast={onToast} onClose={() => setAttachmentsOpen(false)} />}
       {quickActionsOpen && <MailQuickActionsModal accounts={accounts} labels={labels} quickActions={quickActions.quickActions} onSave={async (input) => { const saved = await quickActions.save(input); onToast(`Saved “${saved.name}”`) }} onDelete={quickActions.remove} onClose={() => setQuickActionsOpen(false)} />}
       {rulesOpen && <MailRulesModal accounts={accounts} labels={labels} onToast={onToast} onClose={() => setRulesOpen(false)} />}

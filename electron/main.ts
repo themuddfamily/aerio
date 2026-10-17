@@ -72,6 +72,7 @@ import { AiAssistantStore, registerAiAssistant } from './mail/ai-assistant'
 import { MailTemplateStore, parseMailTemplateBackup, type MailTemplateBackup } from './mail/template-store'
 import { registerMailTemplates } from './mail/template-tools'
 import { registerMailIdentities, validateDraftSender } from './mail/identity-ipc'
+import { registerMailMerge } from './mail/mail-merge-ipc'
 import { AutomaticRepliesService, registerAutomaticReplies } from './mail/automatic-replies'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
@@ -1262,6 +1263,7 @@ function registerIpc() {
     return mailTemplateStore
   }, approveAttachment: (path) => approvedAttachmentPaths.add(path) })
   registerMailIdentities({ worker: requireMailWorker })
+  registerMailMerge({ worker: requireMailWorker, validateMessage: (draft) => validateDraft(draft) })
   registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
   } })

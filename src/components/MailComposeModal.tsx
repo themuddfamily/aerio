@@ -1,4 +1,4 @@
-import { Bold, CalendarClock, Copy, Italic, Link, List, Paperclip, Save, Send, Sparkles, Trash2, Underline, X } from 'lucide-react'
+import { Bold, CalendarClock, Copy, Italic, Link, List, Paperclip, Save, Send, Sparkles, Trash2, Underline, Users, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MailAccountSummary, MailDraftInput, MailDraftRecord, MailThreadDetail, MailRecipientSuggestion, MailSendOptions } from '../mail-types'
 import { formatFileSize } from '../lib/domain'
@@ -12,6 +12,7 @@ import MailSendOptionsControl from './MailSendOptionsControl'
 import { ReplyWatchControl, armReplyWatch, replyWatchDeadline, type ReplyWatchSetting } from './MailReplyWatches'
 import { MailAiComposeAssist } from './MailAiComposeAssist'
 import { aiFeatureAvailable, useAiAssistantStatus } from '../lib/use-ai-assistant'
+import MailMergeModal from './MailMerge'
 
 interface MailComposeModalProps {
   accounts: MailAccountSummary[]
@@ -110,6 +111,7 @@ ${signature}` : ''}${forwardedText}`
   const [recipientSuggestions, setRecipientSuggestions] = useState<MailRecipientSuggestion[]>([])
   const ai = useAiAssistantStatus()
   const [aiOpen, setAiOpen] = useState(false)
+  const [mergeOpen, setMergeOpen] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
   const editorHtmlRef = useRef(initialHtml)
   const firstRender = useRef(true)
@@ -478,11 +480,13 @@ ${signature}` : ''}${forwardedText}`
           {conflict && <button className="button ghost small" disabled={status === 'saving' || status === 'sending'} onClick={() => void saveAsCopy()}><Copy size={15} /> Save as copy</button>}
           <button className="button ghost small danger-subtle" disabled={status === 'sending'} onClick={() => void discard()}><Trash2 size={15} /> Discard</button>
           <MailSendOptionsControl provider={accounts.find((account) => account.id === accountId)?.provider} value={sendOptions} disabled={status === 'sending'} onChange={setSendOptions} />
+          {window.aerio.mail.merge && !replyTo && <button className="button ghost small" title="Send a personalized copy to each recipient" disabled={status === 'sending'} onClick={() => setMergeOpen(true)}><Users size={15} /> Mail merge</button>}
           <span className="spacer" />
           <ReplyWatchControl value={replyWatch} onChange={setReplyWatch} />
           <label className="mail-schedule-field" title="Schedule delivery"><CalendarClock size={15} /><input aria-label="Scheduled delivery time" type="datetime-local" min={localDateTimeValue(new Date(Date.now() + 60_000).toISOString())} value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} />{scheduledFor && <button type="button" aria-label="Clear scheduled delivery" onClick={() => setScheduledFor('')}><X size={13} /></button>}</label>
           <button className="button primary" disabled={status === 'sending' || status === 'closing'} onClick={() => void send()}><Send size={16} /> {status === 'sending' ? scheduledFor ? 'Scheduling…' : 'Queuing…' : scheduledFor ? 'Schedule' : 'Send'}</button>
         </footer>
+        {mergeOpen && <MailMergeModal accounts={accounts} message={{ accountId, fromIdentityId: input.fromIdentityId, replyTo: input.replyTo, subject, text, html: input.html, attachmentPaths: input.attachmentPaths, sendOptions }} initialList={to} ignoredCopies={input.cc.length + input.bcc.length} onToast={onToast} onClose={() => setMergeOpen(false)} />}
     </ModalShell>
   )
 }

@@ -801,6 +801,7 @@ export interface MailDesktopApi {
     run(id: string): Promise<MailRuleRunResult>
   }
   serverRules?: import('./mail-server-rule-types').MailServerRulesApi
+  merge?: import('./mail-merge-types').MailMergeApi
   savedSearches: {
     list(): Promise<MailSavedSearch[]>
     save(input: MailSavedSearchInput): Promise<MailSavedSearch>
@@ -832,4 +833,5 @@ export type MailWorkerEvent =
   | { type: 'connectivity'; payload: { online: boolean } }
   | { type: 'new-mail'; payload: { accountId: string; count: number; threadId?: string; subject?: string; sender?: string } }
   | { type: 'draft-delivery'; payload: MailDraftResult }
+  | { type: 'mail-merge'; payload: import('./mail-merge-types').MailMergeJobSummary }
   | { type: 'reply-watch'; payload: { watch: MailReplyWatch; reason: 'replied' | 'expired' } }

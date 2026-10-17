@@ -36,6 +36,7 @@ import type {
   SyncProgress
 } from '../src/mail-types'
 import type { MailSenderIdentity, MailSenderIdentityInput, MailSignature, MailSignatureInput } from '../src/mail-identity-types'
+import type { MailMergeJob, MailMergeJobInput, MailMergeJobSummary, MailMergeResolution } from '../src/mail-merge-types'
 
 export type MailWorkerCommand =
   | { type: 'initialize'; payload: { databasePath: string; contentPath: string } }
@@ -85,6 +86,14 @@ export type MailWorkerCommand =
   | { type: 'signatures:list' }
   | { type: 'signatures:save'; payload: MailSignatureInput }
   | { type: 'signatures:delete'; payload: { id: string } }
+  | { type: 'merge:list' }
+  | { type: 'merge:get'; payload: { id: string } }
+  | { type: 'merge:create'; payload: MailMergeJobInput }
+  | { type: 'merge:pause'; payload: { id: string } }
+  | { type: 'merge:resume'; payload: { id: string } }
+  | { type: 'merge:cancel'; payload: { id: string } }
+  | { type: 'merge:resolve'; payload: { id: string; positions: number[]; resolution: MailMergeResolution } }
+  | { type: 'merge:delete'; payload: { id: string } }
   | { type: 'saved-searches:list' }
   | { type: 'saved-searches:save'; payload: MailSavedSearchInput }
   | { type: 'saved-searches:delete'; payload: { id: string } }
@@ -120,6 +129,9 @@ export type MailWorkerResult =
   | MailSenderIdentity[]
   | MailSignature
   | MailSignature[]
+  | MailMergeJob
+  | MailMergeJobSummary
+  | MailMergeJobSummary[]
   | MailQuickAction
   | MailQuickAction[]
   | MailQuickActionRunResult
