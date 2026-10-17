@@ -34,7 +34,7 @@ export function ContactFieldList({ label, itemLabel, fields, types, inputType = 
         </div>
       ))}
       <button type="button" className="button ghost small" disabled={fields.length >= CONTACT_FIELD_LIMIT} onClick={() => onChange([...fields, { value: '', type: types[0] }])}>
-        <Plus size={14} /> Add {itemLabel}
+        <Plus size={14} /> Add {itemLabel.toLowerCase()}
       </button>
     </fieldset>
   )

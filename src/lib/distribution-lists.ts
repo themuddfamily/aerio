@@ -38,7 +38,13 @@ function memberOf(contact: Contact): RecipientListMember | undefined {
 }
 
 function dedupe(members: RecipientListMember[]) {
-  return Array.from(new Map(members.map((member) => [normalizedContactEmail(member.email), member])).values())
+  const seen = new Set<string>()
+  return members.filter((member) => {
+    const key = normalizedContactEmail(member.email)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 export function buildRecipientLists(input: { contacts: Contact[]; lists?: ContactList[]; groups?: SyncedContactGroup[] }): RecipientList[] {
@@ -49,7 +55,7 @@ export function buildRecipientLists(input: { contacts: Contact[]; lists?: Contac
     const members = list.members.map((member) => {
       const contact = member.contactId ? byId.get(member.contactId) : undefined
       const current = contact ? memberOf(contact) : undefined
-      return current ?? { email: member.email, name: member.name, ...(member.contactId ? { contactId: member.contactId } : {}) }
+      return current ?? { email: member.email, ...(member.name ? { name: member.name } : {}), ...(member.contactId ? { contactId: member.contactId } : {}) }
     })
     result.push({ id: list.id, name: list.name, kind: 'list', source: 'local', readOnly: false, manageable: true, members: dedupe(members), unreachable: 0 })
   }

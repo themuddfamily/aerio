@@ -135,7 +135,7 @@ export function microsoftRichContactBody(contact: Contact, current?: SyncedConta
     businessAddress: graphAddress(addressFor('work')),
     otherAddress: graphAddress(addressFor('other')),
     // Graph cannot store a year-less birthday; leave an existing value untouched in that case.
-    ...(birthday ? { birthday } : contact.birthday ? {} : { birthday: null }),
+    ...(birthday ? { birthday } : contact.birthday ? {} : { birthday: null }) as { birthday?: string | null },
     businessHomePage: contact.urls?.[0]?.value ?? '',
     companyName: contact.company ?? '',
     jobTitle: contact.title ?? '',

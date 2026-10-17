@@ -70,7 +70,7 @@ export function withContactFields(contact: Contact, fields: { emails: ContactFie
   const emails = cleanFields(fields.emails, normalizedContactEmail)
   const phones = cleanFields(fields.phones, normalizedContactPhone)
   const addresses = cleanFields(fields.addresses, (value) => value.toLowerCase().replace(/\s+/g, ' '))
-  const groups = Array.from(new Map(fields.groups.map((group) => group.trim().slice(0, 300)).filter(Boolean).map((group) => [group.toLowerCase(), group])).values()).slice(0, CONTACT_GROUP_LIMIT)
+  const groups = fields.groups.map((group) => group.trim().slice(0, 300)).filter((group, index, all) => group && all.findIndex((item) => item.toLowerCase() === group.toLowerCase()) === index).slice(0, CONTACT_GROUP_LIMIT)
   const next: Contact = { ...contact, email: primaryOf(emails) ?? '', phone: primaryOf(phones), group: groups[0] ?? fallbackGroup }
   for (const [key, value] of [['emails', emails], ['phones', phones], ['addresses', addresses], ['groups', groups]] as const) {
     if (value.length) Object.assign(next, { [key]: value })
