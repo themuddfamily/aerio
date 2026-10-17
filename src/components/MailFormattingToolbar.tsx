@@ -8,6 +8,8 @@ interface MailFormattingToolbarProps {
   editorRef: RefObject<HTMLDivElement | null>
   onEditorChange(): void
   onToast(message: string): void
+  /** Accessible toolbar name; the Notes editor reuses this toolbar. */
+  label?: string
   /** Composer-specific controls (signature, templates, AI) shown after the formatting buttons. */
   children?: ReactNode
 }
@@ -62,7 +64,7 @@ export async function insertImageFiles(editor: HTMLElement, files: File[], onCha
  * Paste and drop handling for the rich editor: images are embedded, HTML is
  * sanitized, and Ctrl+Shift+V pastes plain text only.
  */
-export function useRichEditorInput({ editorRef, onEditorChange, onToast }: Omit<MailFormattingToolbarProps, 'children'>) {
+export function useRichEditorInput({ editorRef, onEditorChange, onToast }: Omit<MailFormattingToolbarProps, 'children' | 'label'>) {
   const plainNextPaste = useRef(false)
   return {
     onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -99,7 +101,7 @@ export function useRichEditorInput({ editorRef, onEditorChange, onToast }: Omit<
   }
 }
 
-export default function MailFormattingToolbar({ editorRef, onEditorChange, onToast, children }: MailFormattingToolbarProps) {
+export default function MailFormattingToolbar({ editorRef, onEditorChange, onToast, label = 'Message formatting', children }: MailFormattingToolbarProps) {
   const savedRange = useRef<Range | undefined>(undefined)
   const imageInput = useRef<HTMLInputElement>(null)
   const keepSelection = { onMouseDown: (event: { preventDefault(): void }) => event.preventDefault() }
@@ -149,7 +151,7 @@ export default function MailFormattingToolbar({ editorRef, onEditorChange, onToa
   }
 
   return (
-    <div className="compose-formatting" role="toolbar" aria-label="Message formatting">
+    <div className="compose-formatting" role="toolbar" aria-label={label}>
       <select className="compose-format-select" aria-label="Font" defaultValue="" onMouseDown={rememberSelection} onFocus={rememberSelection} onChange={(event) => { if (event.target.value) format('fontName', event.target.value, true); event.target.value = '' }}>
         <option value="" disabled>Font</option>
         {FONTS.map((font) => <option key={font.value} value={font.value}>{font.label}</option>)}

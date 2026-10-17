@@ -3936,6 +3936,26 @@ kbd {
   line-height: 1.8;
 }
 
+/* Rich Notes body (docs/rich-notes.md); whitespace shows as typed so plain notes render unchanged. */
+.note-rich-editor { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.note-rich-editor .compose-formatting { padding: 3px 0; border-bottom: 1px solid var(--line); background: transparent; }
+.note-rich-body { overflow-y: auto; overflow-wrap: anywhere; white-space: pre-wrap; cursor: text; }
+.note-rich-body:empty::before { color: var(--muted); content: attr(data-placeholder); pointer-events: none; }
+.note-rich-body h1, .note-rich-body h2, .note-rich-body h3 { margin: 0.4em 0 0.2em; color: var(--text); line-height: 1.3; }
+.note-rich-body h1 { font-size: 1.7em; }
+.note-rich-body h2 { font-size: 1.4em; }
+.note-rich-body h3 { font-size: 1.15em; }
+.note-rich-body p { margin: 0 0 0.6em; }
+.note-rich-body ul, .note-rich-body ol { margin: 0.2em 0; padding-left: 1.6em; white-space: normal; }
+.note-rich-body li { white-space: pre-wrap; }
+.note-rich-body blockquote { margin: 0.4em 0; padding-left: 12px; border-left: 3px solid var(--line-strong); color: var(--muted); }
+.note-rich-body pre { margin: 0.4em 0; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); font-family: "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; }
+.note-rich-body a { color: var(--accent); }
+.note-rich-body table { border-collapse: collapse; white-space: normal; }
+.note-rich-body td, .note-rich-body th { min-width: 2em; vertical-align: top; white-space: pre-wrap; }
+.note-rich-body img { max-width: 100%; height: auto; border-radius: 6px; }
+.note-rich-body img:not([src]) { display: inline-block; min-width: 120px; min-height: 60px; border: 1px dashed var(--line-strong); }
+
 .note-paper footer {
   display: flex;
   justify-content: space-between;

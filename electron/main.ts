@@ -93,6 +93,7 @@ import { registerDavAccounts } from './productivity/dav-ipc'
 import { carryPendingConferences } from './productivity/online-meetings'
 import { validEventConference } from '../src/lib/online-meetings'
 import { registerMailImport } from './mail/mail-import-ipc'
+import { NOTE_ATTACHMENT_LIMIT, normalizeRichNotes, noteImageAttachment, noteImageDataUrl, parseNoteImageUpload, validNoteRichFields } from './productivity/note-rich-body'
 import { validContactInterchangeFields, validContactLists, validEventInterchangeFields } from '../src/lib/interchange-validation'
 import { contactEditConflict } from '../src/lib/contact-fields'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
@@ -378,7 +379,8 @@ function validLocalModules(value: unknown): value is LocalModuleSnapshot {
     input.notes.every((note) => note && text(note.id, 300, true) && text(note.folder, 300, true) && text(note.title, 10_000, true) && text(note.content, 10_000_000) &&
       Array.isArray(note.tags) && note.tags.length <= 1_000 && note.tags.every((tag) => text(tag, 300, true)) && typeof note.pinned === 'boolean' && typeof note.archived === 'boolean' &&
       text(note.updatedAt, 100) && Number.isFinite(Date.parse(note.updatedAt)) && (note.color === undefined || text(note.color, 100)) &&
-      (note.attachments === undefined || (Array.isArray(note.attachments) && note.attachments.length <= 50 && uniqueIds(note.attachments) && note.attachments.every((attachment) =>
+      validNoteRichFields(note) &&
+      (note.attachments === undefined || (Array.isArray(note.attachments) && note.attachments.length <= NOTE_ATTACHMENT_LIMIT && uniqueIds(note.attachments) && note.attachments.every((attachment) =>
         attachment && text(attachment.id, 300, true) && text(attachment.name, 1_000, true) && Number.isSafeInteger(attachment.size) && attachment.size >= 0 && attachment.size <= NOTE_ATTACHMENT_MAX_BYTES &&
         text(attachment.path, 32_767, true) && (attachment.mime === undefined || text(attachment.mime, 300)))))) &&
     (input.contacts ?? []).every((contact) => contact && text(contact.id, 300, true) && text(contact.name, 10_000, true) && text(contact.email, 10_000) &&
@@ -458,7 +460,7 @@ function createLocalDataBackup(snapshot: LocalModuleSnapshot): LocalDataBackup {
 }
 
 function materializeLocalDataBackup(backup: LocalDataBackup): { snapshot: LocalModuleSnapshot; createdPaths: string[] } {
-  if (backup.schemaVersion === 1) return { snapshot: backup.data, createdPaths: [] }
+  if (backup.schemaVersion === 1) return { snapshot: normalizeRichNotes(backup.data), createdPaths: [] }
   const archived = new Map((backup.attachments ?? []).map((attachment) => [attachment.id, attachment]))
   const paths = new Map<string, string>()
   const createdPaths: string[] = []
@@ -484,10 +486,10 @@ function materializeLocalDataBackup(backup: LocalDataBackup): { snapshot: LocalM
           writeFileSync(path, bytes, { mode: 0o600 })
           paths.set(attachment.id, path)
         }
-        return { id: stored.id, name: stored.name, size: stored.size, mime: stored.mime, path }
+        return { id: stored.id, name: stored.name, size: stored.size, mime: stored.mime, path, ...(attachment.inline ? { inline: true } : {}) }
       })
     }))
-    return { snapshot: { ...backup.data, notes }, createdPaths }
+    return { snapshot: normalizeRichNotes({ ...backup.data, notes }), createdPaths }
   } catch (error) {
     for (const path of createdPaths) {
       try { if (existsSync(path)) unlinkSync(path) } catch { /* Do not mask the restore validation error. */ }
@@ -1568,8 +1570,25 @@ function registerIpc() {
     if (!validLocalModules(snapshot)) throw new Error('Local Tasks or Notes data is invalid')
     const store = requireProductivityStore()
     const previous = store.localSnapshot()
-    store.saveLocal(snapshot)
-    cleanupRemovedNoteAttachments(previous, snapshot)
+    const next = normalizeRichNotes(snapshot)
+    store.saveLocal(next)
+    cleanupRemovedNoteAttachments(previous, next)
+  })
+  // Rich Notes pictures (docs/rich-notes.md): stored beside note attachments, read back for display only.
+  ipcMain.handle('productivity:note-image-save', (_event, input: unknown): Attachment => {
+    if (applicationLocked) throw new Error('Unlock Aerio to add pictures to notes')
+    const upload = parseNoteImageUpload(input)
+    mkdirSync(noteAttachmentsDirectory(), { recursive: true })
+    const path = join(noteAttachmentsDirectory(), `${crypto.randomUUID()}.${upload.extension}`)
+    writeFileSync(path, upload.bytes, { mode: 0o600 })
+    return noteImageAttachment(crypto.randomUUID(), upload, path)
+  })
+  ipcMain.handle('productivity:note-image-read', (_event, path: unknown) => {
+    if (applicationLocked) throw new Error('Unlock Aerio to view note pictures')
+    if (typeof path !== 'string' || !path || path.length > 32_767 || !isManagedNoteAttachmentPath(path) || !existsSync(path)) throw new Error('That note picture is no longer available')
+    const file = statSync(path)
+    if (!file.isFile() || file.size > NOTE_ATTACHMENT_MAX_BYTES) throw new Error('That note picture is no longer available')
+    return noteImageDataUrl(readFileSync(path))
   })
   ipcMain.handle('productivity:note-attachments-choose', async (event): Promise<Attachment[]> => {
     const owner = BrowserWindow.fromWebContents(event.sender)

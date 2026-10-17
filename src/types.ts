@@ -23,6 +23,8 @@ export interface Attachment {
   size: number
   path?: string
   mime?: string
+  /** Notes only: a picture shown inside the rich body rather than listed as a file (docs/rich-notes.md). */
+  inline?: boolean
 }
 
 export interface CalendarEvent {
@@ -170,7 +172,10 @@ export interface Note {
   id: string
   folder: string
   title: string
+  /** Plain text; for rich notes, the projection of `html` used by search and older readers. */
   content: string
+  /** Sanitized rich body (docs/rich-notes.md). Absent for plain-text notes. */
+  html?: string
   tags: string[]
   pinned: boolean
   archived: boolean

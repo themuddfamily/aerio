@@ -10,6 +10,14 @@ const droppedTags = new Set(['script', 'style', 'noscript', 'template', 'iframe'
 export interface PasteSanitizeOptions {
   /** Keep Aerio's signature/quote markers (only for HTML Aerio produced itself). */
   keepMarkers?: boolean
+  /**
+   * Replaces the data-URL image rule, for editors that reference managed
+   * pictures instead (Notes): `attributes` are kept on `<img>` in addition to
+   * the allowlist, and `keep` decides whether a cleaned image stays.
+   */
+  images?: { attributes: readonly string[]; keep(element: Element): boolean }
+  /** Keep leading and trailing whitespace (Notes render it with `pre-wrap`). */
+  preserveEdgeWhitespace?: boolean
 }
 
 /**
@@ -28,7 +36,7 @@ export function sanitizePastedHtml(html: string, document: Document, options: Pa
   cleanChildren(template.content, options)
   const container = document.createElement('div')
   container.append(template.content)
-  return container.innerHTML.trim()
+  return options.preserveEdgeWhitespace ? container.innerHTML : container.innerHTML.trim()
 }
 
 function cleanChildren(parent: ParentNode, options: PasteSanitizeOptions) {
@@ -51,12 +59,12 @@ function cleanChildren(parent: ParentNode, options: PasteSanitizeOptions) {
       continue
     }
     cleanAttributes(element, tag, options)
-    if (tag === 'img' && !element.hasAttribute('src')) element.remove()
+    if (tag === 'img' && (options.images ? !options.images.keep(element) : !element.hasAttribute('src'))) element.remove()
   }
 }
 
 function cleanAttributes(element: Element, tag: string, options: PasteSanitizeOptions) {
-  const allowed = new Set([...(RICH_TEXT_ATTRIBUTES[tag] ?? []), 'style', 'dir', ...(options.keepMarkers ? COMPOSER_MARKER_ATTRIBUTES : [])])
+  const allowed = new Set([...(RICH_TEXT_ATTRIBUTES[tag] ?? []), 'style', 'dir', ...(options.keepMarkers ? COMPOSER_MARKER_ATTRIBUTES : []), ...(tag === 'img' ? options.images?.attributes ?? [] : [])])
   for (const { name } of Array.from(element.attributes)) {
     if (!allowed.has(name.toLowerCase())) element.removeAttribute(name)
   }
@@ -70,7 +78,7 @@ function cleanAttributes(element: Element, tag: string, options: PasteSanitizeOp
     const href = element.getAttribute('href')
     if (href !== null && !isAllowedLink(href)) element.removeAttribute('href')
   }
-  if (tag === 'img') {
+  if (tag === 'img' && !options.images) {
     const image = parseDataImage(element.getAttribute('src') ?? '')
     if (!image || image.bytes > INLINE_IMAGE_MAX_BYTES) element.removeAttribute('src')
     else if (!options.keepMarkers || !element.getAttribute(INLINE_IMAGE_ATTRIBUTE)) element.setAttribute(INLINE_IMAGE_ATTRIBUTE, newContentId())
