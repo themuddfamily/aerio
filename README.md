@@ -19,7 +19,7 @@ Remaining release work and optional future features are tracked in [ROADMAP.md](
 - Editable provider drafts with idle autosave, rich-text composition, recipient suggestions, signatures, forwarding attachments, scheduled delivery, ten-second Undo Send, SMTP delivery, and an offline Outbox
 - QuickText snippets and whole-message templates (subject, sanitized HTML, and managed attachments) with search, editing, caret-preserving insertion, and backup/restore
 - Sender identities with provider-authorized aliases (Gmail send-as, Microsoft aliases, manual IMAP/shared-mailbox addresses), Reply-To, multiple sanitized HTML signatures, and per-identity defaults for new messages and replies ([details](docs/sender-identities.md))
-- Persistent snooze/remind-later with automatic Inbox restoration, plus account-specific rules for sender, recipient, subject, and body filtering
+- Persistent snooze/remind-later with automatic Inbox restoration, plus account-specific rules with Cc, header, attachment, size, age, importance, and folder conditions, “except if” exceptions, outgoing (Sent mail) rules, and optional Gmail filter / Outlook inbox rule upload ([mail rules](docs/mail-rules.md))
 - User-defined Quick Actions that run a saved sequence of mail actions from the toolbar, context menu, command palette, or Ctrl+Shift+1–9, with run-time destination checks and step-by-step Undo ([Quick Actions](docs/mail-quick-actions.md))
 - Per-account identity, synchronization, notification, OAuth, IMAP/SMTP, connection-test, and local-rebuild settings
 - Provider-side Gmail and Microsoft automatic replies (out of office) with schedules, audiences, read-back of the server state, and a reconnect path for missing permissions ([automatic replies](docs/automatic-replies.md))
