@@ -4154,3 +4154,6 @@ kbd {
   from { opacity: 0; transform: translateY(-3px) scale(.985); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
+
+.reply-watch-control { display: flex; align-items: center; gap: 6px; }
+.reply-watch-control > .icon-button.active { color: var(--accent); background: var(--accent-soft); }

@@ -23,6 +23,8 @@ import type {
   MailRuleInput,
   MailRuleRunResult,
   MailSnooze,
+  MailReplyWatch,
+  MailReplyWatchInput,
   MailMessageSource,
   MailThreadDetail,
   ImapAccountInput,
@@ -631,6 +633,23 @@ function showNewMailNotification(payload: Extract<import('../src/mail-types').Ma
   notification.show()
 }
 
+function showReplyWatchNotification(payload: Extract<import('../src/mail-types').MailWorkerEvent, { type: 'reply-watch' }>['payload']) {
+  if (hideTestWindows || !Notification.isSupported() || !loadPreferences().settings.notifications) return
+  const { watch, reason } = payload
+  const subject = watch.subject || '(No subject)'
+  const notification = new Notification({
+    title: reason === 'replied' ? `Reply from ${watch.replyFrom || 'a recipient'}` : 'No reply yet',
+    body: reason === 'replied' ? subject : `${subject} — the reply deadline has passed`,
+    icon: iconPath()
+  })
+  notification.on('click', () => {
+    openMainWindow()
+    const threadId = watch.replyThreadId ?? watch.threadId
+    if (threadId && !appLockStatus().locked) createMessageWindow({ source: 'connected', accountId: watch.accountId, threadId, title: subject })
+  })
+  notification.show()
+}
+
 function updateMailPolling(immediate = false) {
   if (!mailWorker || !mainWindow) return
   const intervalMs = mailPollingIntervalForWindow({
@@ -658,6 +677,7 @@ async function initializeMail() {
         details: event.payload as unknown as Record<string, unknown>
       })
       if (event.type === 'new-mail') showNewMailNotification(event.payload)
+      if (event.type === 'reply-watch') showReplyWatchNotification(event.payload)
       mainWindow?.webContents.send('mail:event', event)
       for (const window of messageWindows.values()) if (!window.isDestroyed()) window.webContents.send('mail:event', event)
     }
@@ -1597,6 +1617,21 @@ function registerIpc() {
   ipcMain.handle('mail:unsnooze', (_event, accountId: string, threadIds: string[]) => {
     if (typeof accountId !== 'string' || !accountId || !Array.isArray(threadIds) || !threadIds.length || threadIds.some((id) => typeof id !== 'string' || !id)) throw new Error('Choose valid conversations to restore')
     return requireMailWorker().request<boolean>({ type: 'mail:unsnooze', payload: { accountId, threadIds } })
+  })
+  ipcMain.handle('mail:reply-watches:list', (_event, accountIds?: string[]) =>
+    requireMailWorker().request<MailReplyWatch[]>({ type: 'reply-watches:list', payload: { accountIds: Array.isArray(accountIds) ? accountIds.filter((id) => typeof id === 'string').slice(0, 100) : undefined } }))
+  ipcMain.handle('mail:reply-watches:create', (_event, input: MailReplyWatchInput) => {
+    const valid = (value: unknown) => typeof value === 'string' && value.length > 0 && value.length <= 500
+    if (!input || !valid(input.accountId) || (valid(input.draftId) === valid(input.messageId))) throw new Error('Choose a sent or outgoing message to watch')
+    return requireMailWorker().request<MailReplyWatch>({ type: 'reply-watches:create', payload: {
+      accountId: input.accountId,
+      ...(input.draftId ? { draftId: input.draftId } : { messageId: input.messageId }),
+      deadlineAt: input.deadlineAt ? validateFutureDate(input.deadlineAt, 'Reply deadline') : undefined
+    } })
+  })
+  ipcMain.handle('mail:reply-watches:cancel', (_event, id: string) => {
+    if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid reply watch')
+    return requireMailWorker().request<boolean>({ type: 'reply-watches:cancel', payload: { id } })
   })
   ipcMain.handle('mail:drafts:save', (_event, input: MailDraftInput) =>
     requireMailWorker().request({ type: 'drafts:save', payload: validateDraft(input) }))

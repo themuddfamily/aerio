@@ -282,6 +282,34 @@ export interface MailSnooze {
   snoozedUntil: string
 }
 
+export type MailReplyWatchStatus = 'pending' | 'watching' | 'replied' | 'expired' | 'cancelled'
+
+export interface MailReplyWatch {
+  id: string
+  accountId: string
+  draftId?: string
+  messageIdHeader?: string
+  threadId?: string
+  subject: string
+  recipients: string[]
+  deadlineAt?: string
+  status: MailReplyWatchStatus
+  createdAt: string
+  sentAt?: string
+  resolvedAt?: string
+  replyMessageId?: string
+  replyThreadId?: string
+  replyFrom?: string
+}
+
+/** Watches an outgoing draft (activated when delivered) or an already sent message. */
+export interface MailReplyWatchInput {
+  accountId: string
+  draftId?: string
+  messageId?: string
+  deadlineAt?: string
+}
+
 export type MailRuleConditionField = 'from' | 'to' | 'subject' | 'body'
 export type MailRuleConditionOperator = 'contains' | 'equals' | 'starts-with' | 'ends-with'
 
@@ -413,6 +441,11 @@ export interface MailDesktopApi {
     delete(id: string): Promise<void>
     run(id: string): Promise<MailRuleRunResult>
   }
+  replyWatches: {
+    list(accountIds?: string[]): Promise<MailReplyWatch[]>
+    create(input: MailReplyWatchInput): Promise<MailReplyWatch>
+    cancel(id: string): Promise<boolean>
+  }
   onEvent(callback: (event: MailWorkerEvent) => void): () => void
 }
 
@@ -424,3 +457,4 @@ export type MailWorkerEvent =
   | { type: 'connectivity'; payload: { online: boolean } }
   | { type: 'new-mail'; payload: { accountId: string; count: number; threadId?: string; subject?: string; sender?: string } }
   | { type: 'draft-delivery'; payload: MailDraftResult }
+  | { type: 'reply-watch'; payload: { watch: MailReplyWatch; reason: 'replied' | 'expired' } }

@@ -1073,6 +1073,39 @@ describe.sequential('Electron main process', () => {
     }
   })
 
+  it('validates reply watch requests and notifies replies and expired deadlines while hidden in the tray', async () => {
+    const future = new Date(Date.now() + 60 * 60_000).toISOString()
+    expect(() => invoke('mail:reply-watches:create', { accountId: 'a1b2' })).toThrow(/sent or outgoing message/)
+    expect(() => invoke('mail:reply-watches:create', { accountId: 'a1b2', draftId: 'd', messageId: 'm' })).toThrow(/sent or outgoing message/)
+    expect(() => invoke('mail:reply-watches:create', { accountId: 'a1b2', draftId: 'd', deadlineAt: '2020-01-01T00:00:00Z' })).toThrow(/Reply deadline must be in the future/)
+    expect(() => invoke('mail:reply-watches:cancel', '')).toThrow(/reply watch/)
+    await invoke('mail:reply-watches:create', { accountId: 'a1b2', draftId: 'draft', deadlineAt: future })
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'reply-watches:create', payload: { accountId: 'a1b2', draftId: 'draft', deadlineAt: future } })
+    await invoke('mail:reply-watches:create', { accountId: 'a1b2', messageId: 'sent' })
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'reply-watches:create', payload: { accountId: 'a1b2', messageId: 'sent', deadlineAt: undefined } })
+    await invoke('mail:reply-watches:list', ['a1b2', 7])
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'reply-watches:list', payload: { accountIds: ['a1b2'] } })
+    await invoke('mail:reply-watches:cancel', 'watch')
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'reply-watches:cancel', payload: { id: 'watch' } })
+
+    const main = mocks.windows.filter((window) => window.options.title === 'Aerio').at(-1)
+    const visible = main.visible
+    main.visible = false
+    try {
+      const watch = { id: 'w', accountId: 'a1b2', subject: 'Proposal', recipients: ['ada@example.test'], status: 'replied', createdAt: future, threadId: 'sent-thread', replyThreadId: 'reply-thread', replyFrom: 'Ada <ada@example.test>' }
+      mocks.emitWorker({ type: 'reply-watch', payload: { watch, reason: 'replied' } })
+      const replied = mocks.notifications.at(-1)
+      expect(replied.options).toMatchObject({ title: 'Reply from Ada <ada@example.test>', body: 'Proposal' })
+      expect(replied.show).toHaveBeenCalledOnce()
+      replied.handlers.get('click')()
+      expect(mocks.windows.at(-1).loadFile).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ query: expect.objectContaining({ accountId: 'a1b2', threadId: 'reply-thread' }) }))
+      mocks.emitWorker({ type: 'reply-watch', payload: { watch: { ...watch, status: 'expired', subject: '', replyThreadId: undefined, replyFrom: undefined }, reason: 'expired' } })
+      expect(mocks.notifications.at(-1).options).toMatchObject({ title: 'No reply yet', body: '(No subject) — the reply deadline has passed' })
+    } finally {
+      main.visible = visible
+    }
+  })
+
   it('opens and composes from the tray without bypassing the app lock', () => {
     const main = mocks.windows.filter((window) => window.options.title === 'Aerio').at(-1)
     const tray = mocks.trays[0]
