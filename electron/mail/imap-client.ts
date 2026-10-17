@@ -4,6 +4,7 @@ import nodemailer from 'nodemailer'
 import PostalMime from 'postal-mime'
 import type { ImapAccountInput, MailActionKind, MailSendOptions } from '../../src/mail-types'
 import { FolderConflictError, FolderNotEmptyError } from './folder-errors'
+import { decodeImapBody, imapStructureParts } from './offline-parts'
 
 export interface ImapFolder {
   path: string
@@ -169,20 +170,73 @@ export class ImapSmtpClient {
     })
   }
 
-  async inventoryFolder(client: ImapFlow, folder: ImapFolder) {
+  /**
+   * Lists every UID (so deletions are seen everywhere) and, with `since`,
+   * which of them fall inside the sync window via SEARCH SINCE (E36).
+   */
+  async inventoryFolder(client: ImapFlow, folder: ImapFolder, since?: Date) {
     const lock = await client.getMailboxLock(folder.path)
     try {
       if (!client.mailbox) throw new Error(`Could not open ${folder.path}`)
       const uidValidity = client.mailbox.uidValidity.toString()
       const uids = await client.search({ all: true }, { uid: true }) || []
+      const windowUids = since ? new Set(uids.length ? await client.search({ since }, { uid: true }) || [] : []) : undefined
       const refs: ImapMessageRef[] = []
-      if (!uids.length) return { refs, uidValidity, highestModseq: client.mailbox.highestModseq?.toString(), uidNext: client.mailbox.uidNext }
+      if (!uids.length) return { refs, uidValidity, highestModseq: client.mailbox.highestModseq?.toString(), uidNext: client.mailbox.uidNext, windowUids }
       for await (const message of client.fetch(uids, { uid: true, envelope: true, threadId: true, flags: true }, { uid: true })) {
         const headerThread = message.envelope?.inReplyTo ?? message.envelope?.messageId
         const threadId = message.threadId ?? createHash('sha256').update(headerThread || `${folder.path}:${message.uid}`).digest('base64url').slice(0, 32)
         refs.push({ id: localId(folder.path, uidValidity, message.uid), threadId, folder: folder.path, uid: message.uid, uidValidity, labels: imapMessageLabels(folder, message.flags ?? new Set()) })
       }
-      return { refs, uidValidity, highestModseq: client.mailbox.highestModseq?.toString(), uidNext: client.mailbox.uidNext }
+      return { refs, uidValidity, highestModseq: client.mailbox.highestModseq?.toString(), uidNext: client.mailbox.uidNext, windowUids }
+    } finally {
+      lock.release()
+    }
+  }
+
+  /**
+   * Headers (and, with `withBody`, only the text/HTML parts) of one message:
+   * FETCH BODYSTRUCTURE and header fields instead of BODY[] (E36).
+   */
+  async fetchPartial(client: ImapFlow, folder: ImapFolder, uid: number, withBody: boolean) {
+    const lock = await client.getMailboxLock(folder.path)
+    try {
+      const message = await client.fetchOne(String(uid), { uid: true, flags: true, internalDate: true, size: true, bodyStructure: true, headers: true }, { uid: true })
+      if (!message) throw new Error(`Message UID ${uid} is no longer available in ${folder.path}`)
+      const structure = imapStructureParts(message.bodyStructure)
+      let text = ''
+      let html = ''
+      if (withBody && structure.bodies.length) {
+        const fetched = await client.fetchOne(String(uid), { uid: true, bodyParts: structure.bodies.map((item) => item.part) }, { uid: true })
+        for (const body of structure.bodies) {
+          const content = fetched ? fetched.bodyParts?.get(body.part) ?? fetched.bodyParts?.get(body.part.toLowerCase()) : undefined
+          if (!content) continue
+          if (body.type === 'text/plain') text = decodeImapBody(content, body)
+          else html = decodeImapBody(content, body)
+        }
+      }
+      return {
+        headers: (message.headers ?? Buffer.alloc(0)).toString('utf8'),
+        text,
+        html,
+        attachments: structure.attachments,
+        internalDate: new Date(message.internalDate ?? Date.now()).toISOString(),
+        labels: imapMessageLabels(folder, message.flags ?? new Set()),
+        size: message.size ?? 0
+      }
+    } finally {
+      lock.release()
+    }
+  }
+
+  /** SEARCH TEXT on the server; finds mail that was never downloaded. */
+  async searchText(client: ImapFlow, folder: ImapFolder, query: string) {
+    const lock = await client.getMailboxLock(folder.path)
+    try {
+      if (!client.mailbox) throw new Error(`Could not open ${folder.path}`)
+      const uidValidity = client.mailbox.uidValidity.toString()
+      const uids = await client.search({ text: query }, { uid: true }) || []
+      return uids.map((uid) => ({ uid, id: localId(folder.path, uidValidity, uid), uidValidity }))
     } finally {
       lock.release()
     }

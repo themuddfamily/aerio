@@ -68,6 +68,7 @@ import { visibleMailLabels } from '../lib/mail-labels'
 import { isLocalOnlyMailAction, mailListGroupStart, pendingOperationsMessage, pinActionFor, threadIdsByAccount } from '../lib/mail-pins'
 import { isMailboxRefreshing, shouldShowDetailedSync } from '../lib/mail-sync'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
+import { MailFolderOfflineModal, MailOfflineContentNotice, MailOfflineListFooter, MailSearchCoverageNotice, mailboxOfflineTarget, offlineFolderMenuItems, type OfflineFolderTarget } from '../components/MailOfflineSync'
 
 interface ConnectedMailViewProps {
   onToast(message: string): void
@@ -109,6 +110,9 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [labelId, setLabelId] = useState<string>()
   const folderPrefs = useMailFolderPreferences(onToast)
   const [folderDisplay, setFolderDisplay] = useState<{ label: MailLabel; focusAlias?: boolean }>()
+  // Offline scope (E36): folder override dialog and the active server search.
+  const [offlineFolder, setOfflineFolder] = useState<OfflineFolderTarget>()
+  const [serverSearch, setServerSearch] = useState<{ id: string; matched: number }>()
   const [accountId, setAccountId] = useState<string>('all')
   // Inbox category tabs (E33) only split the Inbox; pinned conversations still list first within a tab.
   const inboxCategories = useInboxCategories(onToast, accountId)
@@ -236,7 +240,14 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     }
   }, [accountId, accounts.length, onToast])
 
-  const requestMailPage = useCallback((cursor?: string) => window.aerio.mail.mail.list({
+  const requestMailPage = useCallback((cursor?: string) => window.aerio.mail.mail.list(serverSearch ? {
+    // Server matches span the whole mailbox and may be header rows the local index cannot match.
+    folder: 'all',
+    accountIds: accountId === 'all' ? undefined : [accountId],
+    serverSearchId: serverSearch.id,
+    cursor,
+    pageSize: 50
+  } : {
     folder,
     accountIds: accountId === 'all' ? undefined : [accountId],
     labelId,
@@ -245,7 +256,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     category: inboxTabsShown ? activeInboxTab : undefined,
     cursor,
     pageSize: 50
-  }), [accountId, folder, labelId, search, searchFilters, activeSearchFilterCount, inboxTabsShown, activeInboxTab])
+  }), [accountId, folder, labelId, search, searchFilters, activeSearchFilterCount, inboxTabsShown, activeInboxTab, serverSearch])
 
   const loadPage = useCallback(async () => {
     const request = ++pageRequest.current
@@ -368,6 +379,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   }, [pendingSend])
 
   useEffect(() => setCheckedKeys(new Set()), [accountId, folder, labelId, search, searchFilters, activeInboxTab])
+  useEffect(() => setServerSearch(undefined), [accountId, folder, labelId, search, searchFilters, activeInboxTab])
 
   useEffect(() => {
     if (!searchFiltersOpen) return
@@ -1006,7 +1018,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const showFolderMenu = (event: React.MouseEvent, value: typeof folder) => showContextMenu(event, [
     { label: `Open ${folderNames[value]}`, icon: Mail, action: () => { setLabelId(undefined); setFolder(value) } },
     { label: 'New message', icon: Plus, separatorBefore: true, disabled: !sendableAccounts.length, action: () => setCompose({}) },
-    { label: 'Check for mail', icon: RefreshCw, disabled: syncUnavailable, action: () => startSync(accountId === 'all' ? undefined : accountId) }
+    { label: 'Check for mail', icon: RefreshCw, disabled: syncUnavailable, action: () => startSync(accountId === 'all' ? undefined : accountId) },
+    ...offlineFolderMenuItems(accounts.find((account) => account.id === accountId), mailboxOfflineTarget(value, folderNames[value]), setOfflineFolder)
   ], folderNames[value])
   const folderButton = (value: typeof folder, icon: React.ReactNode) => {
     const unread = folderUnreadCounts[value]
@@ -1053,6 +1066,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
             { label: 'New message', icon: Plus, separatorBefore: true, disabled: !sendableAccounts.some((account) => account.id === label.accountId), action: () => setCompose({}) },
             { label: 'Check account for mail', icon: RefreshCw, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => startSync(label.accountId) },
             ...folderPreferenceMenuItems(folderPrefs, label, () => setFolderDisplay({ label })),
+            ...offlineFolderMenuItems(accounts.find((account) => account.id === label.accountId), { labelId: label.id, name: label.name }, setOfflineFolder),
             { label: 'Manage folders and labels…', icon: FolderInput, separatorBefore: true, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => setFoldersOpen(label.accountId) }
           ], label.name) }} />
         {localAccount && <LocalFoldersSidebar account={localAccount} labels={labels} selectedAccountId={accountId} selectedLabelId={labelId} onOpen={toggleLabel} onManage={() => setFoldersOpen(localAccount.id)} onImport={() => setImportOpen(true)} appearance={folderPrefs.appearance} showHidden={folderPrefs.showHidden} onToggleHidden={folderPrefs.toggleShowHidden} onContextMenu={(event, label) => showContextMenu(event, [
@@ -1092,6 +1106,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
             <button className={`mail-search-filter-button ${activeSearchFilterCount ? 'active' : ''}`} aria-expanded={searchFiltersOpen} aria-haspopup="dialog" title="Advanced search filters" onClick={() => setSearchFiltersOpen((open) => !open)}><Filter size={14} /><span>{activeSearchFilterCount || 'Filters'}</span></button>
           </div>
           {searchError && <p className="mail-search-error" role="alert">{searchError}</p>}
+          <MailSearchCoverageNotice accounts={accounts.filter((account) => accountId === 'all' || account.id === accountId)} query={search} active={Boolean(search.trim()) && !searchError} serverResults={serverSearch} online={navigator.onLine} onServerSearch={(id, matched) => setServerSearch({ id, matched })} onLocalResults={() => setServerSearch(undefined)} onToast={onToast} />
           {searchFiltersOpen && <MailSearchFiltersPanel value={searchFilters} onApply={(next) => { setSearchFilters(next); setSearchFiltersOpen(false) }} onClose={() => setSearchFiltersOpen(false)} />}
         </div>
         {inboxTabsShown && <InboxCategoryTabs tabs={inboxCategories.tabs} selected={activeInboxTab} counts={inboxCategories.counts} onSelect={setInboxTab} />}
@@ -1179,6 +1194,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           {!loading && !page.items.length && !visibleLocalDrafts.length && <div className="empty-state"><Search size={28} /><h3>No conversations here</h3><p>Try another mailbox or search.</p></div>}
           {loading && <div className="empty-state"><LoaderCircle className="spin" size={28} /><p>Loading local mail…</p></div>}
           {page.nextCursor && <div className="mail-scroll-sentinel" ref={loadMoreSentinelRef} aria-live="polite">{loadingMore ? <><LoaderCircle className="spin" size={17} /><span>Loading more…</span></> : loadMoreError ? <button className="text-button" onClick={() => void loadMore()}>Couldn’t load more · Retry</button> : null}</div>}
+          {!page.nextCursor && !loading && !serverSearch && <MailOfflineListFooter accounts={accounts.filter((account) => accountId === 'all' || account.id === accountId)} folder={folder} labelId={labelId} refreshKey={`${page.total}:${page.items[0]?.id ?? ''}`} onExtended={() => void loadPage()} onToast={onToast} />}
         </div>
       </section>
 
@@ -1214,6 +1230,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
               onMoreActions={(event) => showProviderMessageMenu(event, message)}
               onContextMenu={(event) => showProviderMessageMenu(event, message)}
             >
+              <MailOfflineContentNotice message={message} />
               {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} title={attachmentSearchStatus(attachment.textIndex)?.label} onContextMenu={(event) => showAttachmentMenu(event, message, attachment)}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{[formatFileSize(attachment.size), attachmentSearchStatus(attachment.textIndex)?.notice].filter(Boolean).join(' · ')}</small></span><button className="icon-button" title="Open" onClick={() => void openAttachment(message, attachment)}><Download size={16} /></button><button className="button ghost small" onClick={() => void saveAttachment(message, attachment)}>Save as</button></div>)}</div>}
             </ThreadMessageAccordion>)}
             {!selectedAccount?.archived && !isLocalFoldersAccount(selectedAccount) && <div className="quick-actions"><button className="button ghost" onClick={() => setCompose({ reply: thread })}><Reply size={16} /> Reply</button><button className="button ghost" onClick={() => setCompose({ reply: thread, replyAll: true })}><ReplyAll size={16} /> Reply all</button></div>}
@@ -1236,6 +1253,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       {attachmentsOpen && <MailAttachmentsModal accounts={accounts} onToast={onToast} onClose={() => setAttachmentsOpen(false)} />}
       {quickActionsOpen && <MailQuickActionsModal accounts={accounts} labels={labels} quickActions={quickActions.quickActions} onSave={async (input) => { const saved = await quickActions.save(input); onToast(`Saved “${saved.name}”`) }} onDelete={quickActions.remove} onClose={() => setQuickActionsOpen(false)} />}
       {rulesOpen && <MailRulesModal accounts={accounts} labels={labels} onToast={onToast} onClose={() => setRulesOpen(false)} />}
+      {offlineFolder && <MailFolderOfflineModal target={offlineFolder} onClose={() => setOfflineFolder(undefined)} onToast={onToast} />}
       {folderDisplay && <MailFolderDisplayModal label={folderDisplay.label} account={accounts.find((account) => account.id === folderDisplay.label.accountId)} labels={labels} appearance={folderPrefs.appearance.get(folderKey(folderDisplay.label.accountId, folderDisplay.label.id))} favorite={folderPrefs.favorites.get(folderKey(folderDisplay.label.accountId, folderDisplay.label.id))} focusAlias={folderDisplay.focusAlias} onClose={() => setFolderDisplay(undefined)} onSave={async ({ alias, appearance }) => (alias === undefined || await folderPrefs.setAlias(appearance.accountId, appearance.labelId, alias)) && await folderPrefs.setAppearance(appearance)} />}
       {foldersOpen && <MailFolderManagerModal accounts={accounts} labels={labels} initialAccountId={foldersOpen === true ? undefined : foldersOpen} onToast={onToast} isFavorite={folderPrefs.available ? folderPrefs.isFavorite : undefined} onToggleFavorite={(label) => void (folderPrefs.isFavorite(label.accountId, label.id) ? folderPrefs.removeFavorite(label.accountId, label.id) : folderPrefs.addFavorite(label.accountId, label.id))} onClose={() => setFoldersOpen(undefined)} onChanged={(changedAccount, result) => {
         setLabels((items) => [...items.filter((label) => label.accountId !== changedAccount), ...result.labels])

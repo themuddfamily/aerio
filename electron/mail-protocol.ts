@@ -112,6 +112,13 @@ export type MailWorkerCommand =
   | { type: 'sync:rebuild'; payload: { accountId: string } }
   | { type: 'sync:progress' }
   | { type: 'storage:stats' }
+  | { type: 'offline:settings' | 'offline:reclaim'; payload: { accountId: string } }
+  | { type: 'offline:set-account-policy'; payload: { accountId: string; policy: import('../src/offline-sync-types').MailOfflinePolicy } }
+  | { type: 'offline:set-folder-override'; payload: { accountId: string; labelId: string; override: { downloadMode?: import('../src/offline-sync-types').MailDownloadMode; window?: import('../src/offline-sync-types').MailSyncWindow } | null } }
+  | { type: 'offline:extend'; payload: import('../src/offline-sync-types').MailOfflineExtendInput }
+  | { type: 'offline:availability'; payload: { accountId: string; labelId?: string } }
+  | { type: 'offline:search-coverage'; payload: { accountIds?: string[] } }
+  | { type: 'offline:server-search'; payload: import('../src/offline-sync-types').MailServerSearchInput }
   | { type: 'diagnostics:health' }
   | { type: 'attachments:list'; payload: MailAttachmentQuery }
   | { type: 'contacts:history'; payload: MailContactHistoryQuery }
@@ -171,6 +178,12 @@ export type MailWorkerResult =
   | PendingOperation
   | SyncProgress[]
   | MailStorageStats
+  | import('../src/offline-sync-types').MailOfflineSettings
+  | import('../src/offline-sync-types').MailOfflineSettings[]
+  | import('../src/offline-sync-types').MailOfflineAvailability
+  | import('../src/offline-sync-types').MailSearchCoverage[]
+  | import('../src/offline-sync-types').MailServerSearchResult
+  | import('../src/offline-sync-types').MailOfflineReclaimResult
   | MailDiagnosticHealth
   | import('../src/mail-types').MailDraftResult
   | MailDraftRecord

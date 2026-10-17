@@ -11,6 +11,7 @@ import { attachmentSearchStatus } from '../lib/mail-attachment-text'
 import { useThreadExpansion } from '../lib/use-thread-expansion'
 import { copyText, useContextMenu } from '../components/ContextMenu'
 import { formatFileSize } from '../lib/domain'
+import { MailOfflineContentNotice } from '../components/MailOfflineSync'
 import type { MailAccountSummary, MailAttachment, MailDraftResult, MailLabel, MailMessageDetail, MailThreadDetail, MailThreadSummary, MailActionKind, PendingOperation } from '../mail-types'
 
 type MessageWindowSource = { accountId: string; threadId: string; messageId?: string }
@@ -270,6 +271,7 @@ export default function MessageWindow() {
           <article className="message-reader mail-thread message-window-reader">
             <header><div className="message-window-heading"><h2>{thread.subject}</h2></div></header>
             {thread.messages.map((message) => <ThreadMessageAccordion key={message.id} message={message} expanded={expansion.isExpanded(message.id)} onLoadRemoteImages={remoteImages ? undefined : () => void loadRemoteImages()} onToggle={() => expansion.toggle(message.id)} onReply={mailReadOnly ? undefined : () => { const reply = replyThreadFor(message); if (reply) setMailCompose({ reply }) }} onMoreActions={(event) => showMessageMenu(event, message)}>
+              <MailOfflineContentNotice message={message} />
               {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} title={attachmentSearchStatus(attachment.textIndex)?.label} onContextMenu={(event) => showContextMenu(event, [
                 { label: 'Open attachment', icon: Download, action: () => openAttachment(message, attachment) },
                 { label: 'Save as…', icon: Download, action: () => saveAttachment(message, attachment) },

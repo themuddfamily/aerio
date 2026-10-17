@@ -107,6 +107,7 @@ import { ewsClientFor } from './exchange/exchange-config'
 import { carryPendingConferences } from './productivity/online-meetings'
 import { validEventConference } from '../src/lib/online-meetings'
 import { registerMailImport } from './mail/mail-import-ipc'
+import { registerOfflineSync } from './mail/offline-sync-ipc'
 import { registerMailArchiving } from './mail/mail-archive-ipc'
 import { NOTE_ATTACHMENT_LIMIT, normalizeRichNotes, noteImageAttachment, noteImageDataUrl, parseNoteImageUpload, validNoteRichFields } from './productivity/note-rich-body'
 import { registerMailInboxCategories } from './mail/inbox-categories-ipc'
@@ -2346,6 +2347,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     isLocked: () => appLockStatus().locked
   })
   registerMailImport({ ipcMain, worker: requireMailWorker, localAccount: (account) => accountProviders.set(account.id, account.provider) })
+  registerOfflineSync({ ipcMain, worker: requireMailWorker, isLocked: () => appLockStatus().locked })
   // External automation (E48): the local MCP channel listens only while enabled in Settings.
   mcpAutomation = registerMcpAutomation({
     ipcMain,

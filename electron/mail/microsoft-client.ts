@@ -33,6 +33,32 @@ export interface GraphMessage {
   '@removed'?: { reason?: string }
 }
 
+export const GRAPH_HEADER_FIELDS = 'id,conversationId,parentFolderId,subject,from,toRecipients,ccRecipients,internetMessageId,internetMessageHeaders,receivedDateTime,sentDateTime,bodyPreview,hasAttachments,isRead,importance,flag,isDraft,categories,inferenceClassification'
+
+export interface GraphRecipient {
+  emailAddress?: { name?: string; address?: string }
+}
+
+export interface GraphMessageFields extends GraphMessage {
+  subject?: string
+  from?: GraphRecipient
+  toRecipients?: GraphRecipient[]
+  ccRecipients?: GraphRecipient[]
+  internetMessageId?: string
+  internetMessageHeaders?: { name: string; value: string }[]
+  bodyPreview?: string
+  hasAttachments?: boolean
+  body?: { contentType?: 'text' | 'html'; content?: string }
+}
+
+export interface GraphAttachmentInfo {
+  id: string
+  name?: string
+  contentType?: string
+  size?: number
+  isInline?: boolean
+}
+
 export function microsoftMessageLabels(folder: GraphFolder, message: GraphMessage) {
   const value = folder.displayName.toLowerCase()
   const special = folder.specialUse
@@ -145,9 +171,11 @@ export class MicrosoftGraphClient {
     return all
   }
 
-  async delta(folderId: string, deltaLink?: string) {
+  /** `since` limits a new delta to the sync window (E36); an existing delta link keeps the filter it was created with. */
+  async delta(folderId: string, deltaLink?: string, since?: Date) {
     const messages: GraphMessage[] = []
-    let next: string | undefined = deltaLink ?? `/me/mailFolders/${encodeURIComponent(folderId)}/messages/delta?$select=id,conversationId,parentFolderId,receivedDateTime,sentDateTime,isRead,importance,flag,isDraft,categories,inferenceClassification&$top=100`
+    const filter = since ? `&$filter=${encodeURIComponent(`receivedDateTime ge ${since.toISOString()}`)}` : ''
+    let next: string | undefined = deltaLink ?? `/me/mailFolders/${encodeURIComponent(folderId)}/messages/delta?$select=id,conversationId,parentFolderId,receivedDateTime,sentDateTime,isRead,importance,flag,isDraft,categories,inferenceClassification${filter}&$top=100`
     let checkpoint: string | undefined
     while (next) {
       const page: GraphPage<GraphMessage> = await this.request(next)
@@ -156,6 +184,35 @@ export class MicrosoftGraphClient {
       checkpoint = page['@odata.deltaLink'] ?? checkpoint
     }
     return { messages, deltaLink: checkpoint }
+  }
+
+  /** Header fields only, or headers plus the text/HTML body; never the MIME original or attachment bytes (E36). */
+  messageFields(id: string, withBody: boolean) {
+    return this.request<GraphMessageFields>(`/me/messages/${encodeURIComponent(id)}?$select=${GRAPH_HEADER_FIELDS}${withBody ? ',body' : ''}`)
+  }
+
+  /** Attachment names and sizes without their content. */
+  async attachmentList(id: string) {
+    const all: GraphAttachmentInfo[] = []
+    let next: string | undefined = `/me/messages/${encodeURIComponent(id)}/attachments?$select=id,name,contentType,size,isInline`
+    while (next) {
+      const page: GraphPage<GraphAttachmentInfo> = await this.request(next)
+      all.push(...page.value)
+      next = page['@odata.nextLink']
+    }
+    return all
+  }
+
+  /** Server-side search across the whole mailbox; returns at most `limit` matches. */
+  async search(query: string, limit = 250) {
+    const results: GraphMessage[] = []
+    let next: string | undefined = `/me/messages?$search=${encodeURIComponent(`"${query.replaceAll('"', '')}"`)}&$select=id,conversationId,parentFolderId,receivedDateTime,sentDateTime,isRead,importance,flag,isDraft,categories,inferenceClassification&$top=50`
+    while (next && results.length < limit) {
+      const page: GraphPage<GraphMessage> = await this.request(next)
+      results.push(...page.value)
+      next = page['@odata.nextLink']
+    }
+    return results.slice(0, limit)
   }
 
   async rawMessage(id: string) {

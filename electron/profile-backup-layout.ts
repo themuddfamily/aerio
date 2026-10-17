@@ -90,7 +90,9 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
         { label: 'POP3 download checkpoints', count: countRows(db, 'pop3_uidls') },
         { label: 'Automatic archive policies', count: countRows(db, 'mail_archive_policies', 'enabled=1') },
         { label: 'Inbox classification rules', count: countRows(db, 'mail_category_rules') },
-        { label: 'Conversations moved between inbox tabs', count: countRows(db, 'mail_category_overrides') }
+        { label: 'Conversations moved between inbox tabs', count: countRows(db, 'mail_category_overrides') },
+        // Offline download scope (E36): account defaults and folder overrides.
+        { label: 'Offline download policies', count: countRows(db, 'mail_offline_policies') }
       ]
     },
     {

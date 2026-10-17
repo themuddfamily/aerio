@@ -55,6 +55,8 @@ import { MailArchiveStore } from './mail-archive-store'
 import { MailInboxCategoryStore } from './inbox-categories'
 import { visibleInboxTab } from '../../src/lib/mail-categories'
 import type { MailBuiltInCategory } from '../../src/mail-category-types'
+import { MailOfflineStore, SERVER_SEARCH_CLAUSE } from './offline-store'
+import type { MailOfflineContentState } from '../../src/offline-sync-types'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -80,6 +82,8 @@ export interface ParsedMailMessage {
   attachments: MailAttachment[]
   /** Header-based inbox category heuristic, computed when the raw message was parsed. */
   categoryHint?: MailBuiltInCategory
+  /** What is stored locally (E36); omitted means the full original was stored. */
+  contentState?: MailOfflineContentState
 }
 
 interface DatabaseRow {
@@ -127,6 +131,7 @@ export class MailDatabase {
   readonly archive: MailArchiveStore
   readonly inboxCategories: MailInboxCategoryStore
   readonly duplicates: MailDuplicateStore
+  readonly offline: MailOfflineStore
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -152,6 +157,7 @@ export class MailDatabase {
     this.inboxCategories = new MailInboxCategoryStore(this.db)
     this.transaction(() => this.inboxCategories.backfill((accountId, threadId) => this.refreshCategorySignals(accountId, threadId)))
     this.duplicates = new MailDuplicateStore(this.db, this)
+    this.offline = new MailOfflineStore(this.db, (callback) => this.transaction(callback))
   }
 
   close() {
@@ -773,6 +779,7 @@ export class MailDatabase {
       for (const attachment of message.attachments) {
         insertAttachment.run(message.accountId, message.id, attachment.id, attachment.filename, attachment.mimeType, attachment.size, attachment.contentId ?? null)
       }
+      this.offline.recordContent(message.accountId, message.id, message.contentState ?? 'full')
       // Keep extracted text for attachments that are unchanged, so a re-download doesn't re-extract them.
       this.attachmentText.prune(message.accountId, message.id)
       this.stmt('DELETE FROM gmail_fts WHERE account_id=? AND message_id=?').run(message.accountId, message.id)
@@ -1042,6 +1049,10 @@ export class MailDatabase {
     if (search?.exclude) {
       where.push(`(t.account_id||':'||t.id) NOT IN (SELECT account_id||':'||thread_id FROM gmail_fts WHERE gmail_fts MATCH ?)`)
       params.push(search.exclude)
+    }
+    if (query.serverSearchId) {
+      where.push(SERVER_SEARCH_CLAUSE)
+      params.push(query.serverSearchId)
     }
     if (query.cursor) {
       where.push(MAIL_THREAD_CURSOR_CLAUSE)
@@ -1689,7 +1700,9 @@ export class MailDatabase {
   }
 
   storageStats(freeBytes: number): MailStorageStats {
-    const accounts = this.stmt('SELECT account_id,COUNT(*) messages,SUM(size_estimate) bytes FROM gmail_messages GROUP BY account_id').all() as DatabaseRow[]
+    // Evicted originals (E36) no longer take space; their stored bodies still do.
+    const accounts = this.stmt(`SELECT m.account_id,COUNT(*) messages,SUM(CASE COALESCE(c.state,'full') WHEN 'full' THEN m.size_estimate WHEN 'body' THEN length(m.body_text)+length(m.body_html) ELSE 0 END) bytes
+      FROM gmail_messages m LEFT JOIN mail_message_content c ON c.account_id=m.account_id AND c.message_id=m.id GROUP BY m.account_id`).all() as DatabaseRow[]
     return {
       totalBytes: accounts.reduce((sum, row) => sum + Number(row.bytes ?? 0), 0),
       freeBytes,
