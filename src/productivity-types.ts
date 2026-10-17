@@ -1,4 +1,4 @@
-import type { Attachment, CalendarEvent, Contact, Note, RecurrenceEditScope, Task } from './types'
+import type { Attachment, CalendarEvent, Contact, ContactList, Note, RecurrenceEditScope, Task } from './types'
 
 export type ProductivityProvider = 'gmail' | 'microsoft'
 export type ProductivityModule = 'calendar' | 'contacts'
@@ -30,6 +30,26 @@ export interface SyncedContact extends Contact {
   revision?: string
   sourceId?: string
   folderId?: string
+  // Provider group resource ids (Google contactGroups/...) behind `groups`.
+  groupIds?: string[]
+  // Raw provider values for the fields Aerio writes, merged back on update so per-entry
+  // details Aerio does not model (labels, canonical forms, structured parts) are not discarded.
+  providerData?: Record<string, unknown>
+}
+
+// A provider-managed contact group: Google People contactGroups. Microsoft Graph has no
+// distribution-list API for personal contacts, so Outlook categories are derived from contacts instead.
+export interface SyncedContactGroup {
+  id: string
+  remoteId: string
+  accountId: string
+  provider: ProductivityProvider
+  name: string
+  // System groups (Friends, Family, Coworkers) accept members but cannot be renamed or deleted.
+  system: boolean
+  readOnly: boolean
+  revision?: string
+  memberCount?: number
 }
 
 export interface ProductivitySyncState {
@@ -44,6 +64,7 @@ export interface ProductivitySnapshot {
   calendars: SyncedCalendar[]
   events: SyncedCalendarEvent[]
   contacts: SyncedContact[]
+  contactGroups?: SyncedContactGroup[]
   sync: ProductivitySyncState[]
 }
 
@@ -51,6 +72,7 @@ export interface ProviderProductivityData {
   calendars: SyncedCalendar[]
   events: SyncedCalendarEvent[]
   contacts: SyncedContact[]
+  contactGroups?: SyncedContactGroup[]
 }
 
 export interface ProviderProductivitySyncResult extends ProviderProductivityData {
@@ -61,6 +83,7 @@ export interface LocalModuleSnapshot {
   tasks: Task[]
   notes: Note[]
   contacts?: Contact[]
+  contactLists?: ContactList[]
 }
 
 export interface LocalDataBackupResult {
@@ -82,6 +105,10 @@ export interface ProductivityDesktopApi {
   createContact(accountId: string, contact: Contact): Promise<ProductivityContactWriteResult>
   updateContact(contact: Contact): Promise<ProductivityContactWriteResult>
   deleteContact(contactId: string): Promise<ProductivitySnapshot>
+  createContactGroup?(accountId: string, name: string): Promise<ProductivitySnapshot>
+  renameContactGroup?(groupId: string, name: string): Promise<ProductivitySnapshot>
+  deleteContactGroup?(groupId: string): Promise<ProductivitySnapshot>
+  updateContactGroupMembers?(groupId: string, addContactIds: string[], removeContactIds: string[]): Promise<ProductivitySnapshot>
   chooseNoteAttachments(): Promise<Attachment[]>
   openNoteAttachment(path: string): Promise<{ error?: string }>
   localSnapshot(): Promise<LocalModuleSnapshot>

@@ -13,6 +13,12 @@ describe('Microsoft Graph mail client', () => {
     await new MicrosoftGraphClient(async () => 'token').copyMessage('message/id', 'work')
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/me/messages/message%2Fid/copy'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ destinationId: 'work' }) }))
   })
+  it('reads the mailbox proxy addresses for alias discovery', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ mail: 'me@example.com', proxyAddresses: ['smtp:alias@example.com'] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(new MicrosoftGraphClient(async () => 'token').senderAddresses()).resolves.toEqual({ mail: 'me@example.com', proxyAddresses: ['smtp:alias@example.com'] })
+    expect((fetchMock.mock.calls[0] as unknown[])[0]).toBe('https://graph.microsoft.com/v1.0/me?$select=mail,proxyAddresses')
+  })
   it('follows message delta pagination and retains the opaque delta link', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ value: [{ id: 'one' }], '@odata.nextLink': 'https://graph.microsoft.com/next' }), { status: 200 }))

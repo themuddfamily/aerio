@@ -102,6 +102,30 @@ export interface MailThreadSummary {
   snoozedUntil?: string
 }
 
+/**
+ * Outcome of local attachment-content extraction. `pending` means the
+ * attachment has not been processed yet; every other state is final until the
+ * extractor version changes or the attachment itself changes.
+ */
+export type MailAttachmentTextStatus =
+  | 'pending'
+  | 'indexed'
+  | 'empty'
+  | 'unsupported'
+  | 'encrypted'
+  | 'too-large'
+  | 'timeout'
+  | 'memory-limit'
+  | 'failed'
+
+export interface MailAttachmentTextIndex {
+  status: MailAttachmentTextStatus
+  /** The extracted text hit the per-attachment limit, so only the start is searchable. */
+  truncated?: boolean
+  detail?: string
+  indexedAt?: string
+}
+
 export interface MailAttachment {
   id: string
   messageId: string
@@ -109,6 +133,7 @@ export interface MailAttachment {
   mimeType: string
   size: number
   contentId?: string
+  textIndex?: MailAttachmentTextIndex
 }
 
 export type MailAttachmentFileType = 'pdf' | 'calendar' | 'spreadsheet' | 'presentation' | 'document' | 'archive' | 'image' | 'audio' | 'video' | 'other'
@@ -459,6 +484,9 @@ export interface MailDraftInput {
   text: string
   html?: string
   attachmentPaths: string[]
+  /** Sender identity (alias) id; omitted means the account's primary address. */
+  fromIdentityId?: string
+  replyTo?: string[]
   sendOptions?: MailSendOptions
 }
 
@@ -572,14 +600,24 @@ export interface MailReplyWatchInput {
   deadlineAt?: string
 }
 
-export type MailRuleConditionField = 'from' | 'to' | 'subject' | 'body'
-export type MailRuleConditionOperator = 'contains' | 'equals' | 'starts-with' | 'ends-with'
+// Text fields compare with contains/equals/starts-with/ends-with; the others
+// use 'is' (has-attachment yes|no, importance high|normal|low, label <labelId>)
+// or greater-than/less-than (size in KB, age in days).
+export type MailRuleConditionField = 'from' | 'to' | 'cc' | 'subject' | 'body' | 'header' | 'has-attachment' | 'size' | 'age' | 'importance' | 'label'
+export type MailRuleConditionOperator = 'contains' | 'equals' | 'starts-with' | 'ends-with' | 'is' | 'greater-than' | 'less-than'
 
 export interface MailRuleCondition {
   field: MailRuleConditionField
   operator: MailRuleConditionOperator
   value: string
+  /** Header name for field 'header', e.g. List-Id. */
+  headerName?: string
 }
+
+/** incoming: newly received mail; outgoing: newly synced Sent mail. */
+export type MailRuleTrigger = 'incoming' | 'outgoing'
+/** local: Aerio applies the rule; server: the provider runs its copy and Aerio skips it. */
+export type MailRuleExecution = 'local' | 'server'
 
 export interface MailRuleAction {
   action: Extract<MailActionKind, 'archive' | 'read' | 'star' | 'important' | 'trash' | 'label' | 'move'>
@@ -594,6 +632,12 @@ export interface MailRuleInput {
   match: 'all' | 'any'
   conditions: MailRuleCondition[]
   actions: MailRuleAction[]
+  /** "Except if" clauses: the rule is skipped when any exception matches. */
+  exceptions?: MailRuleCondition[]
+  trigger?: MailRuleTrigger
+  execution?: MailRuleExecution
+  /** Provider filter/rule id once the rule is uploaded to the server. */
+  serverRuleId?: string
 }
 
 export interface MailRule extends Omit<MailRuleInput, 'id'> {
@@ -607,6 +651,49 @@ export interface MailRule extends Omit<MailRuleInput, 'id'> {
 export interface MailRuleRunResult {
   matched: number
   operations: number
+}
+
+/** One step of a user-defined Quick Action; label, unlabel, and move steps need an account-specific destination. */
+export interface MailQuickActionStep {
+  action: MailActionKind
+  labelId?: string
+}
+
+/** A named, ordered sequence of mail actions. Destinations require the action to be scoped to one account. */
+export interface MailQuickActionInput {
+  id?: string
+  name: string
+  accountId?: string
+  steps: MailQuickActionStep[]
+  /** Keyboard slot 1-9, bound to Ctrl/Cmd+Shift+number. */
+  shortcut?: number
+  showInToolbar: boolean
+}
+
+export interface MailQuickAction extends MailQuickActionInput {
+  id: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface MailQuickActionTarget {
+  accountId: string
+  threadIds: string[]
+}
+
+export interface MailQuickActionRunFailure {
+  accountId: string
+  threadCount: number
+  /** Zero-based step that failed; absent when the whole account group was rejected before any step ran. */
+  step?: number
+  appliedSteps: number
+  error: string
+}
+
+export interface MailQuickActionRunResult {
+  operations: PendingOperation[]
+  updatedThreads: number
+  failures: MailQuickActionRunFailure[]
 }
 
 export interface MailStorageStats {
@@ -700,6 +787,7 @@ export interface MailDesktopApi {
     export(): Promise<{ savedPath?: string }>
   }
   templates: import('./mail-template-types').MailTemplatesApi
+  identities: import('./mail-identity-types').MailIdentitiesApi
   folders: {
     create(input: CreateMailFolderInput): Promise<MailFolderMutationResult>
     update(input: UpdateMailFolderInput): Promise<MailFolderMutationResult>
@@ -712,6 +800,7 @@ export interface MailDesktopApi {
     delete(id: string): Promise<void>
     run(id: string): Promise<MailRuleRunResult>
   }
+  serverRules?: import('./mail-server-rule-types').MailServerRulesApi
   savedSearches: {
     list(): Promise<MailSavedSearch[]>
     save(input: MailSavedSearchInput): Promise<MailSavedSearch>
@@ -725,6 +814,12 @@ export interface MailDesktopApi {
     list(accountIds?: string[]): Promise<MailReplyWatch[]>
     create(input: MailReplyWatchInput): Promise<MailReplyWatch>
     cancel(id: string): Promise<boolean>
+  }
+  quickActions: {
+    list(): Promise<MailQuickAction[]>
+    save(input: MailQuickActionInput): Promise<MailQuickAction>
+    delete(id: string): Promise<void>
+    run(id: string, targets: MailQuickActionTarget[]): Promise<MailQuickActionRunResult>
   }
   onEvent(callback: (event: MailWorkerEvent) => void): () => void
 }

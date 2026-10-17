@@ -1,6 +1,6 @@
 import {
   CalendarDays, CheckCircle2, ChevronRight, Command, ContactRound, HelpCircle, LockKeyhole, Mail,
-  Moon, NotebookPen, Plus, Search, Settings, Sparkles, Sun, UserRound, X
+  Moon, NotebookPen, Plus, Search, Settings, Sparkles, Sun, UserRound, X, Zap
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TitleBar from './components/TitleBar'
@@ -16,8 +16,9 @@ import ConnectedMailView from './views/ConnectedMailView'
 import CalendarInterchangePanel from './components/CalendarInterchangePanel'
 import ContactInterchangePanel from './components/ContactInterchangePanel'
 import type { InterchangeSnapshot } from './interchange-types'
-import type { Account, AppLockStatus, AppPreferences, AppState, CalendarEvent, Contact, ModuleId, RecurrenceEditScope } from './types'
-import type { MailAccountSummary } from './mail-types'
+import type { Account, AppLockStatus, AppPreferences, AppState, CalendarEvent, Contact, ContactList, ModuleId, RecurrenceEditScope } from './types'
+import type { MailAccountSummary, MailQuickAction } from './mail-types'
+import { quickActionShortcutLabel } from './lib/mail-quick-actions'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from './productivity-types'
 import { uid, unreadCount } from './lib/domain'
 import { planLocalRecurrenceDelete, planLocalRecurrenceSave, storedEvent, type LocalRecurrencePlan } from './lib/recurrence-edit'
@@ -56,6 +57,8 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved')
   const [composeRequest, setComposeRequest] = useState<ComposeRequest>({ id: 0 })
   const [mailSearchRequest, setMailSearchRequest] = useState({ id: 0, query: '' })
+  const [mailQuickActions, setMailQuickActions] = useState<MailQuickAction[]>([])
+  const [mailQuickActionRequest, setMailQuickActionRequest] = useState({ id: 0, quickActionId: '' })
   const [connectedAccounts, setConnectedAccounts] = useState<MailAccountSummary[]>([])
   const [productivity, setProductivity] = useState<ProductivitySnapshot>(emptyProductivity)
   const [localModules, setLocalModules] = useState<LocalModuleSnapshot>(emptyLocalModules)
@@ -262,6 +265,25 @@ export default function App() {
     setProductivity(await window.aerio.productivity.deleteContact(contactId))
   }, [])
 
+  // Distribution lists: local lists persist with the local modules; Google groups go through IPC.
+  const contactListActions = useMemo(() => {
+    const api = window.aerio.productivity
+    const applying = <T extends unknown[]>(call: ((...args: T) => Promise<ProductivitySnapshot>) | undefined) => call && (async (...args: T) => {
+      const snapshot = await call(...args)
+      setProductivity(snapshot)
+      return snapshot
+    })
+    return {
+      localLists: localModules.contactLists ?? [],
+      groups: productivity.contactGroups ?? [],
+      onLocalListsChange: (contactLists: ContactList[]) => setLocalModules((current) => ({ ...current, contactLists })),
+      createGroup: applying(api.createContactGroup),
+      renameGroup: applying(api.renameContactGroup),
+      deleteGroup: applying(api.deleteContactGroup),
+      updateGroupMembers: applying(api.updateContactGroupMembers)
+    }
+  }, [localModules.contactLists, productivity.contactGroups])
+
   useEffect(() => {
     if (!preferences || !hydrated.current) return
     setSaveStatus('saving')
@@ -323,19 +345,34 @@ export default function App() {
     }
   }, [appLock?.enabled, startCompose])
 
+  // Saved mail Quick Actions are listed in the palette while Mail is open, so they run on the visible selection.
+  useEffect(() => {
+    if (!commandsOpen || activeModule !== 'mail') return
+    let cancelled = false
+    void Promise.resolve().then(() => window.aerio.mail.quickActions.list())
+      .then((items) => { if (!cancelled) setMailQuickActions(items) })
+      .catch(() => { if (!cancelled) setMailQuickActions([]) })
+    return () => { cancelled = true }
+  }, [activeModule, commandsOpen])
+
   const commandItems = useMemo(() => {
+    const mailQuick = activeModule === 'mail' ? mailQuickActions.map((item) => ({
+      label: `Run quick action: ${item.name}`, detail: item.shortcut ? quickActionShortcutLabel(item.shortcut).replaceAll('+', ' ') : '', icon: Zap,
+      action: () => setMailQuickActionRequest((current) => ({ id: current.id + 1, quickActionId: item.id })), preserveQuery: false
+    })) : []
     const quick = [
       { label: 'Compose a new message', detail: 'Ctrl N', icon: Plus, action: () => startCompose(), preserveQuery: false },
       ...modules.map((item) => ({ label: `Open ${item.label}`, detail: `Ctrl ${item.shortcut}`, icon: item.icon, action: () => setActiveModule(item.id), preserveQuery: false })),
       ...(appLock?.enabled ? [{ label: 'Lock Aerio', detail: 'Ctrl L', icon: LockKeyhole, action: () => { void window.aerio.appLock.lock() }, preserveQuery: false }] : []),
-      { label: 'Open settings', detail: '', icon: Settings, action: () => setSettingsOpen(true), preserveQuery: false }
+      { label: 'Open settings', detail: '', icon: Settings, action: () => setSettingsOpen(true), preserveQuery: false },
+      ...mailQuick
     ].filter((item) => !query || item.label.toLowerCase().includes(query.toLowerCase()))
     return query.trim()
       ? [{ label: `Search ${modules.find((item) => item.id === activeModule)?.label ?? 'Aerio'} for “${query.trim()}”`, detail: 'Enter', icon: Search, action: () => {
         if (activeModule === 'mail') setMailSearchRequest((current) => ({ id: current.id + 1, query: query.trim() }))
       }, preserveQuery: true }, ...quick]
       : quick
-  }, [activeModule, appLock?.enabled, query, startCompose])
+  }, [activeModule, appLock?.enabled, mailQuickActions, query, startCompose])
 
   useEffect(() => setCommandIndex(0), [commandsOpen, query])
 
@@ -454,7 +491,7 @@ export default function App() {
             </button>
           </header>
           <div className="module-content">
-            {activeModule === 'mail' && <ConnectedMailView onToast={showToast} composeRequest={composeRequest} searchRequest={mailSearchRequest} />}
+            {activeModule === 'mail' && <ConnectedMailView onToast={showToast} composeRequest={composeRequest} searchRequest={mailSearchRequest} quickActionRequest={mailQuickActionRequest} />}
             {activeModule === 'calendar' && <CalendarView
               state={connectedState}
               query={query}
@@ -492,6 +529,7 @@ export default function App() {
               providerAccounts={providerContactAccounts}
               syncing={productivitySyncing}
               sourceMessage={productivityMessage}
+              listActions={contactListActions}
               interchangePanel={window.aerio.interchange && <ContactInterchangePanel
                 api={window.aerio.interchange}
                 contacts={connectedState.contacts}

@@ -1,5 +1,7 @@
 // Bounds checks for interchange data crossing the IPC boundary into the main process.
-import type { CalendarEvent, Contact, ContactField } from '../types'
+import type { CalendarEvent, Contact, ContactField, ContactList } from '../types'
+import { CONTACT_GROUP_LIMIT, isContactPhoto } from './contact-fields'
+import { isCompleteMailAddress } from './mail-address'
 
 const text = (value: unknown, max: number, required = false): value is string =>
   typeof value === 'string' && value.length <= max && (!required || Boolean(value.trim()))
@@ -18,7 +20,25 @@ const validFields = (fields: unknown) => fields === undefined || (Array.isArray(
 export function validContactInterchangeFields(contact: Partial<Contact>) {
   return validFields(contact.emails) && validFields(contact.phones) && validFields(contact.addresses) && validFields(contact.urls) &&
     (contact.nameParts === undefined || (Array.isArray(contact.nameParts) && contact.nameParts.length <= 5 && contact.nameParts.every((part) => text(part, 1_000)))) &&
-    optionalText(contact.nickname, 500) && optionalText(contact.birthday, 50) && optionalText(contact.sourceUid, 1_000)
+    optionalText(contact.nickname, 500) && optionalText(contact.birthday, 50) && optionalText(contact.sourceUid, 1_000) &&
+    (contact.groups === undefined || (Array.isArray(contact.groups) && contact.groups.length <= CONTACT_GROUP_LIMIT && contact.groups.every((group) => text(group, 300, true)))) &&
+    (contact.photo === undefined || isContactPhoto(contact.photo))
+}
+
+export const CONTACT_LIST_LIMIT = 10_000
+export const CONTACT_LIST_MEMBER_LIMIT = 5_000
+
+export function validContactList(value: unknown): value is ContactList {
+  if (!value || typeof value !== 'object') return false
+  const list = value as Partial<ContactList>
+  if (!text(list.id, 300, true) || !text(list.name, 300, true) || list.source !== 'local' || !optionalText(list.notes, 100_000)) return false
+  if (!Array.isArray(list.members) || list.members.length > CONTACT_LIST_MEMBER_LIMIT) return false
+  return list.members.every((member) => member && typeof member === 'object' && text(member.email, 500, true) && isCompleteMailAddress(member.email) &&
+    optionalText(member.contactId, 500) && optionalText(member.name, 500))
+}
+
+export function validContactLists(value: unknown): value is ContactList[] {
+  return Array.isArray(value) && value.length <= CONTACT_LIST_LIMIT && value.every(validContactList) && new Set(value.map((list) => list.id)).size === value.length
 }
 
 export function validEventInterchangeFields(event: Partial<CalendarEvent>) {

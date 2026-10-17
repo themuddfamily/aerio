@@ -3,7 +3,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { MailAccountSummary, MailDraftRecord, MailPage, MailSavedSearch, MailThreadDetail, SyncProgress } from '../mail-types'
+import type { MailAccountSummary, MailDraftRecord, MailPage, MailQuickAction, MailQuickActionRunResult, MailSavedSearch, MailThreadDetail, SyncProgress } from '../mail-types'
 import { ContextMenuProvider } from '../components/ContextMenu'
 import ConnectedMailView from './ConnectedMailView'
 import { formatMailDateHeading } from '../lib/mail-date'
@@ -76,6 +76,12 @@ const api = {
       save: vi.fn(async (input: any): Promise<MailSavedSearch> => ({ ...input, id: input.id ?? 'saved-new', createdAt: '2026-08-08T10:00:00Z', updatedAt: '2026-08-08T10:00:00Z' })),
       delete: vi.fn(async () => undefined)
     },
+    quickActions: {
+      list: vi.fn(async (): Promise<MailQuickAction[]> => []),
+      save: vi.fn(async (input: any): Promise<MailQuickAction> => ({ ...input, id: input.id ?? 'quick-new', createdAt: '2026-08-08T10:00:00Z', updatedAt: '2026-08-08T10:00:00Z' })),
+      delete: vi.fn(async () => undefined),
+      run: vi.fn(async (): Promise<MailQuickActionRunResult> => ({ operations: [], updatedThreads: 0, failures: [] }))
+    },
     onEvent: vi.fn((callback: (event: any) => void) => { emitMail = callback; return vi.fn() })
   },
   window: { openMessage: vi.fn(async () => undefined) }
@@ -128,6 +134,7 @@ beforeEach(() => {
   api.window.openMessage.mockResolvedValue(undefined)
   api.mail.savedSearches.list.mockResolvedValue([])
   api.mail.savedSearches.delete.mockResolvedValue(undefined)
+  api.mail.quickActions.list.mockResolvedValue([])
 })
 
 describe('ConnectedMailView', () => {
@@ -767,5 +774,61 @@ describe('ConnectedMailView', () => {
     api.mail.mail.unsnooze.mockRejectedValueOnce('restore unavailable')
     await user.click(within(document.querySelector('.bulk-mail-toolbar')!).getByRole('button', { name: 'Return now' }))
     await waitFor(() => expect(onToast).toHaveBeenCalledWith('The conversations could not be restored'))
+  })
+
+  it('runs saved quick actions from the toolbar, context menu, shortcut, and palette, and undoes newest step first', async () => {
+    const user = userEvent.setup()
+    const quick: MailQuickAction = { id: 'quick-1', name: 'File it', accountId: 'account', steps: [{ action: 'read' }, { action: 'archive' }], shortcut: 3, showInToolbar: true, createdAt: '2026-08-08T10:00:00Z', updatedAt: '2026-08-08T10:00:00Z' }
+    const operation = (id: string, kind: 'read' | 'archive') => ({ id, accountId: 'account', kind, status: 'queued' as const, undoUntil: new Date(Date.now() + 60_000).toISOString() })
+    api.mail.quickActions.list.mockResolvedValue([quick])
+    api.mail.quickActions.run.mockResolvedValue({ operations: [operation('step-1', 'read'), operation('step-2', 'archive')], updatedThreads: 1, failures: [] })
+    const onToast = vi.fn()
+    const view = (request = { id: 0, quickActionId: '' }) => <ContextMenuProvider><ConnectedMailView onToast={onToast} quickActionRequest={request} /></ContextMenuProvider>
+    const { rerender } = render(view({ id: 4, quickActionId: 'quick-1' }))
+    await screen.findByText('Launch & plans')
+
+    await user.click(await screen.findByTitle('Run quick action “File it” (Ctrl+Shift+3)'))
+    expect(api.mail.quickActions.run).toHaveBeenCalledTimes(1)
+    expect(api.mail.quickActions.run).toHaveBeenCalledWith('quick-1', [{ accountId: 'account', threadIds: ['thread-1'] }])
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith('“File it” applied to 1 conversation'))
+    await user.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(api.mail.mail.undo.mock.calls.map((call) => (call as unknown[])[0])).toEqual(['step-2', 'step-1']))
+
+    const first = document.querySelector('.message-row')!
+    const second = screen.getByText('Second conversation').closest('.message-row')!
+    fireEvent.click(first, { ctrlKey: true }); fireEvent.click(second, { ctrlKey: true })
+    api.mail.quickActions.run.mockResolvedValueOnce({ operations: [operation('step-3', 'read')], updatedThreads: 0, failures: [{ accountId: 'account', threadCount: 2, step: 1, appliedSteps: 1, error: 'Destination missing' }] })
+    fireEvent.contextMenu(second)
+    await user.click(await screen.findByRole('menuitem', { name: /Quick action: File it/ }))
+    await waitFor(() => expect(api.mail.quickActions.run).toHaveBeenLastCalledWith('quick-1', [{ accountId: 'account', threadIds: ['thread-1', 'thread-2'] }]))
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith('2 conversations in me@example.test partly updated, step 2 failed after 1 step (Undo reverts them): Destination missing'))
+    await waitFor(() => expect(document.querySelector('.bulk-mail-toolbar')).toBeNull())
+
+    fireEvent.keyDown(window, { key: '#', code: 'Digit3', ctrlKey: true, shiftKey: true })
+    await waitFor(() => expect(api.mail.quickActions.run).toHaveBeenCalledTimes(3))
+    fireEvent.keyDown(screen.getByLabelText('Search mail'), { key: '#', code: 'Digit3', ctrlKey: true, shiftKey: true })
+    rerender(view({ id: 5, quickActionId: 'quick-1' }))
+    await waitFor(() => expect(api.mail.quickActions.run).toHaveBeenCalledTimes(4))
+    rerender(view({ id: 6, quickActionId: 'deleted' }))
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith('That quick action no longer exists'))
+    expect(api.mail.quickActions.run).toHaveBeenCalledTimes(4)
+  })
+
+  it('creates a quick action with ordered, account-specific steps from the sidebar manager', async () => {
+    const user = userEvent.setup()
+    renderMail(); await screen.findByText('Launch & plans')
+    await user.click(within(document.querySelector('.context-sidebar')!).getByRole('button', { name: 'Quick actions' }))
+    const dialog = await screen.findByRole('dialog', { name: /Quick actions/ })
+    await user.click(within(dialog).getByRole('button', { name: 'New quick action' }))
+    await user.type(within(dialog).getByLabelText('Name'), 'Project done')
+    await user.selectOptions(within(dialog).getByLabelText('Account'), 'account')
+    await user.click(within(dialog).getByRole('button', { name: 'Add step' }))
+    await user.selectOptions(within(dialog).getByLabelText('Step 2'), 'label')
+    await user.selectOptions(within(dialog).getByLabelText('Step 2 destination'), 'project')
+    await user.click(within(dialog).getByRole('button', { name: 'Move step 2 up' }))
+    await user.selectOptions(within(dialog).getByLabelText('Keyboard shortcut'), '2')
+    await user.click(within(dialog).getByRole('button', { name: 'Save quick action' }))
+    await waitFor(() => expect(api.mail.quickActions.save).toHaveBeenCalledWith({ name: 'Project done', accountId: 'account', steps: [{ action: 'label', labelId: 'project' }, { action: 'read' }], shortcut: 2, showInToolbar: true }))
+    expect(await within(dialog).findByText('Apply label: Project → Mark as read')).toBeInTheDocument()
   })
 })

@@ -51,6 +51,25 @@ beforeEach(() => {
 })
 
 describe('MailComposeModal', () => {
+  it('prefills a chosen AI reply above the signature as escaped text without sending, and offers AI drafting only when enabled', async () => {
+    const reply: MailThreadDetail = { accountId: 'account', id: 'thread', subject: 'Plan', messages: [{ accountId: 'account', threadId: 'thread', id: 'm1', subject: 'Plan', fromName: 'Ada', fromEmail: 'ada@example.test', to: ['me@example.test'], cc: [], date: '2026-08-08T09:00:00Z', text: 'Hello', html: '', sanitizedHtml: '', labelIds: [], attachments: [] }] }
+    renderCompose({ replyTo: reply, initialBody: 'Sounds <b>good</b>' })
+    expect(editor().querySelector('b')).toBeNull()
+    expect(editor().textContent).toMatch(/^Sounds <b>good<\/b>.*Aerio User/)
+    expect(api.mail.drafts.send).not.toHaveBeenCalled()
+    expect(screen.queryByTitle('Draft or rephrase with AI')).toBeNull()
+  })
+
+  it('opens the AI drafting panel from the toolbar when the feature is on', async () => {
+    const ai = { status: vi.fn(async () => ({ enabled: true, provider: 'anthropic', model: 'claude-sonnet-5-5', baseUrl: '', hasApiKey: true, features: { summarize: true, compose: true, replies: true, search: true }, includeSenderDetails: false, secureStorage: true })), cancel: vi.fn() }
+    Object.defineProperty(window, 'aerio', { configurable: true, value: { ...api, ai } })
+    const user = userEvent.setup()
+    renderCompose()
+    await user.click(await screen.findByTitle('Draft or rephrase with AI'))
+    expect(screen.getByRole('region', { name: 'AI writing assistant' })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /Include the email/ })).toBeNull()
+  })
+
   it('saves an unfinished recipient as a draft without surfacing a remote validation prefix', async () => {
     const user = userEvent.setup(), callbacks = renderCompose()
     await user.type(rowInput('To'), 'unfinished recipient')
@@ -140,8 +159,31 @@ describe('MailComposeModal', () => {
     window.prompt = vi.fn(() => 'javascript:alert(1)')
     await user.click(screen.getByTitle('Add link'))
     expect(callbacks.onToast).toHaveBeenCalledWith('Use an https://, http://, or mailto: link')
-    fireEvent.paste(body, { clipboardData: { getData: () => 'Plain paste' } })
+    fireEvent.paste(body, { clipboardData: { getData: (type: string) => type === 'text/plain' ? 'Plain paste' : '' } })
     expect(document.execCommand).toHaveBeenCalledWith('insertText', false, 'Plain paste')
+    expect(screen.getByTitle('Insert table')).toBeInTheDocument()
+    expect(screen.getByTitle('Insert image')).toBeInTheDocument()
+  })
+
+  it('autosaves an image-only message with its embedded image and reopens it unchanged', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      renderCompose()
+      const body = editor()
+      const image = '<img src="data:image/png;base64,iVBORw==" alt="chart" data-aerio-cid="chart@aerio.local" style="max-width: 100%">'
+      Object.defineProperty(body, 'innerText', { configurable: true, writable: true, value: '' })
+      body.innerHTML = `<div>${image}</div>`
+      fireEvent.input(body)
+      await vi.advanceTimersByTimeAsync(1_500)
+      await waitFor(() => expect(api.mail.drafts.save).toHaveBeenCalledWith(expect.objectContaining({ html: expect.stringContaining('data-aerio-cid="chart@aerio.local"') })))
+      const saved = (api.mail.drafts.save.mock.calls.at(-1) as unknown as [MailDraftRecord])[0]
+      document.body.innerHTML = ''
+      renderCompose({ draft: { ...saved, status: 'synced', updatedAt: '2026-08-08T10:00:00Z' } })
+      expect(editor().querySelector('img')?.getAttribute('data-aerio-cid')).toBe('chart@aerio.local')
+      expect(editor().querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,iVBORw==')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('initializes reply-all recipients and forward content while excluding the sender account', async () => {

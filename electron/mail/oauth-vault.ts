@@ -12,6 +12,7 @@ import {
 } from './oauth-config'
 import { sendOAuthCallbackPage } from './oauth-callback-page'
 import { assertSecureCredentialStorage } from './secure-storage'
+import { mailSettingsScopeStatus, type MailSettingsFeature } from './mail-settings-scopes'
 
 interface StoredOAuthData {
   googleConfig?: DesktopOAuthConfig
@@ -31,8 +32,9 @@ interface MicrosoftTokenSet {
 
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
-  // Automatic replies (users.settings.vacation). Existing grants keep working
-  // without it; the automatic-replies screen detects its absence and offers a reconnect.
+  // Automatic replies (users.settings.vacation) and server rules
+  // (users.settings.filters). Existing grants keep working without it; both
+  // screens detect its absence and offer a reconnect.
   'https://www.googleapis.com/auth/gmail.settings.basic',
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
   'https://www.googleapis.com/auth/calendar.events',
@@ -419,6 +421,12 @@ export class OAuthVault {
     if (!scope?.trim()) return undefined
     const values = scope.split(/\s+/).filter(Boolean)
     return provider === 'microsoft' ? values.map((value) => value.replace(/^https:\/\/graph\.microsoft\.com\//i, '')) : values
+  }
+
+  /** Whether the account may use mailbox-settings features (server rules, automatic replies). */
+  mailSettingsAccess(accountId: string, provider: MailProviderId, feature: MailSettingsFeature) {
+    const scopes = provider === 'gmail' || provider === 'microsoft' ? this.grantedScopes(accountId, provider) : undefined
+    return mailSettingsScopeStatus(provider, scopes?.join(' '), feature)
   }
 
   storeImap(accountId: string, input: ImapAccountInput) {
