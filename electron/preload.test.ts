@@ -354,6 +354,43 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.removeListener).toHaveBeenCalledWith('mail:cloud:progress', expect.any(Function))
   })
 
+  it('exposes Matrix chat commands with exact IPC channels and a removable event listener', async () => {
+    const chat = api().chat
+    const calls: [() => Promise<unknown>, string, unknown[]][] = [
+      [() => chat.snapshot(), 'chat:snapshot', []],
+      [() => chat.discover('example.org'), 'chat:discover', ['example.org']],
+      [() => chat.login({ homeserver: 'https://example.org', user: 'a', password: 'p' }), 'chat:login', [{ homeserver: 'https://example.org', user: 'a', password: 'p' }]],
+      [() => chat.removeAccount('a'), 'chat:account:remove', ['a']],
+      [() => chat.clearHistory('a'), 'chat:account:clear-history', ['a']],
+      [() => chat.updatePreferences('a', { readReceipts: true }), 'chat:account:preferences', ['a', { readReceipts: true }]],
+      [() => chat.timeline('a', 'r'), 'chat:timeline', ['a', 'r']],
+      [() => chat.loadOlder('a', 'r'), 'chat:timeline:older', ['a', 'r']],
+      [() => chat.search('a', 'q'), 'chat:search', ['a', 'q']],
+      [() => chat.send('a', 'r', 'hi', '$e'), 'chat:send', ['a', 'r', 'hi', '$e']],
+      [() => chat.edit('a', 'r', '$e', 'hi'), 'chat:edit', ['a', 'r', '$e', 'hi']],
+      [() => chat.redact('a', 'r', '$e'), 'chat:redact', ['a', 'r', '$e']],
+      [() => chat.react('a', 'r', '$e', '+'), 'chat:react', ['a', 'r', '$e', '+']],
+      [() => chat.cancelOutgoing('o'), 'chat:outbox:cancel', ['o']],
+      [() => chat.retryOutgoing('o'), 'chat:outbox:retry', ['o']],
+      [() => chat.attach('a', 'r'), 'chat:attach', ['a', 'r']],
+      [() => chat.saveMedia('a', 'm'), 'chat:media:save', ['a', 'm']],
+      [() => chat.markRead('a', 'r'), 'chat:read', ['a', 'r']],
+      [() => chat.roomAction('a', 'r', 'mute'), 'chat:room', ['a', 'r', 'mute']],
+      [() => chat.devices('a'), 'chat:devices', ['a']],
+      [() => chat.verifyOwnDevice('a'), 'chat:verify-own', ['a']],
+      [() => chat.verificationAction('a', 'q', 'confirm'), 'chat:verification', ['a', 'q', 'confirm']],
+      [() => chat.restoreFromRecoveryKey('a', 'k'), 'chat:recovery:restore', ['a', 'k']],
+      [() => chat.setupRecovery('a'), 'chat:recovery:setup', ['a']]
+    ]
+    for (const [call, channel, args] of calls) expect(await call()).toEqual({ channel, args })
+    const received: unknown[] = []
+    const unsubscribe = chat.onEvent((event: unknown) => received.push(event))
+    mocks.listeners.get('chat:event')!.forEach((listener) => listener({}, { type: 'timeline', accountId: 'a', roomId: 'r' }))
+    unsubscribe()
+    expect(received).toEqual([{ type: 'timeline', accountId: 'a', roomId: 'r' }])
+    expect(mocks.listeners.get('chat:event')).toEqual([])
+  })
+
   it('reports initial and changing network connectivity', async () => {
     window.dispatchEvent(new Event('offline'))
     window.dispatchEvent(new Event('online'))
