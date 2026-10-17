@@ -470,6 +470,7 @@ export interface MailDesktopApi {
     health(): Promise<MailDiagnosticHealth>
     export(): Promise<{ savedPath?: string }>
   }
+  templates: import('./mail-template-types').MailTemplatesApi
   rules: {
     list(accountIds?: string[]): Promise<MailRule[]>
     save(input: MailRuleInput): Promise<MailRule>

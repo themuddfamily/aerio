@@ -128,7 +128,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
   }
 
   const importLocalData = async () => {
-    if (!window.confirm('Restore Contacts, Tasks, and Notes from a backup? This replaces the current local Contacts, Tasks, Notes, and note attachments.')) return
+    if (!window.confirm('Restore Contacts, Tasks, Notes, and mail templates from a backup? This replaces the current local Contacts, Tasks, Notes, note attachments, and any mail templates included in the backup.')) return
     onLocalDataRestoreStart?.()
     setLocalDataStatus('importing')
     setLocalDataMessage('')

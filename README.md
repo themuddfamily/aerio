@@ -16,6 +16,7 @@ Remaining release work and optional future features are tracked in [ROADMAP.md](
 - Single and multi-select Archive, read/unread, star, importance, move, label, and Trash actions
 - Optimistic local changes with exact-state Undo, retry/backoff, and a durable provider operation queue
 - Editable provider drafts with idle autosave, rich-text composition, recipient suggestions, signatures, forwarding attachments, scheduled delivery, ten-second Undo Send, SMTP delivery, and an offline Outbox
+- QuickText snippets and whole-message templates (subject, sanitized HTML, and managed attachments) with search, editing, caret-preserving insertion, and backup/restore
 - Persistent snooze/remind-later with automatic Inbox restoration, plus account-specific rules for sender, recipient, subject, and body filtering
 - Per-account identity, synchronization, notification, OAuth, IMAP/SMTP, connection-test, and local-rebuild settings
 - Privacy-redacted diagnostics, storage-integrity checks, and native new-mail notifications that open the relevant conversation
@@ -85,6 +86,7 @@ Proton Mail connects through the local [Proton Mail Bridge](https://proton.me/su
 - Settings can enable a scrypt-verified local app-lock passphrase. The privacy screen blocks workspace loading at launch, closes message windows when locked, and rate-limits failed attempts; it does not encrypt Aerio’s files.
 - Notes can copy attachments up to 25 MB each into Aerio-managed storage, search them by filename, open or remove them, and clean up unreferenced copies.
 - Settings can export and restore local Contacts, Tasks, Notes, and managed note attachments as a validated JSON backup (up to 100 MB of attachment data). Provider mail and cached provider data are intentionally excluded because they can be synchronized again.
+- Mail snippets and templates live in `mail-templates.sqlite`; their bodies are re-sanitized on every save and restore, and template attachments (up to 10 files and 20 MB per template) are copied into Aerio-managed `template-attachments` storage. Using a template authorizes only those managed files for the draft, which then stages its own copy, so editing or deleting a template never changes existing drafts. The composer’s template panel can export and restore templates by themselves (restore merges and renames name collisions), and the local-data backup also embeds them; restoring a local-data backup that contains templates replaces the local templates.
 - Restore rejects duplicate record identities and inconsistent attachment metadata. Failed attachment writes or database restores retain the existing records and files and remove newly staged attachments.
 
 Application preferences live in `aerio-state.sqlite`. On first launch after this change, Aerio imports only appearance, customized profile, notification, startup, and tray preferences from the former workspace database when available; sample content and the old sample persona are neither loaded nor copied. The legacy database is left untouched.
