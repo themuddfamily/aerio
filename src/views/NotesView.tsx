@@ -6,6 +6,8 @@ import { useMemo, useState } from 'react'
 import { uid } from '../lib/domain'
 import type { AppState, Note } from '../types'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
+import NoteRichEditor from '../components/NoteRichEditor'
+import { NOTE_FILE_ATTACHMENT_LIMIT } from '../lib/note-rich-text'
 
 interface NotesViewProps {
   state: AppState
@@ -24,10 +26,12 @@ export default function NotesView({ state, query, onChange, onToast }: NotesView
   const notes = useMemo(() => state.notes
     .filter((note) => folder === 'All notes' ? !note.archived : folder === 'Pinned' ? note.pinned && !note.archived : folder === 'Archive' ? note.archived : note.folder === folder && !note.archived)
     .filter((note) => !tagFilter || note.tags.includes(tagFilter))
-    .filter((note) => !query || `${note.title} ${note.content} ${note.tags.join(' ')} ${(note.attachments ?? []).map((attachment) => attachment.name).join(' ')}`.toLowerCase().includes(query.toLowerCase()))
+    .filter((note) => !query || `${note.title} ${note.content} ${note.tags.join(' ')} ${(note.attachments ?? []).filter((attachment) => !attachment.inline).map((attachment) => attachment.name).join(' ')}`.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt.localeCompare(a.updatedAt)),
   [folder, query, state.notes, tagFilter])
   const selected = notes.find((note) => note.id === selectedId) ?? notes[0]
+  // Inline pictures are part of the rich body; only file attachments are listed.
+  const files = (selected?.attachments ?? []).filter((attachment) => !attachment.inline)
 
   const update = (updates: Partial<Note>) => {
     if (!selected) return
@@ -71,7 +75,7 @@ export default function NotesView({ state, query, onChange, onToast }: NotesView
     try {
       const attachments = await window.aerio.productivity.chooseNoteAttachments()
       if (!attachments.length) return
-      if ((selected.attachments?.length ?? 0) + attachments.length > 50) throw new Error('A note can contain up to 50 attachments')
+      if (files.length + attachments.length > NOTE_FILE_ATTACHMENT_LIMIT) throw new Error(`A note can contain up to ${NOTE_FILE_ATTACHMENT_LIMIT} attachments`)
       update({ attachments: [...(selected.attachments ?? []), ...attachments] })
       onToast(`${attachments.length} attachment${attachments.length === 1 ? '' : 's'} added`)
     } catch (error) {
@@ -170,10 +174,10 @@ export default function NotesView({ state, query, onChange, onToast }: NotesView
               <div className="tag-editor">
                 <Tag size={14} /><input value={selected.tags.join(', ')} onChange={(event) => update({ tags: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })} placeholder="Add tags, separated by commas" />
               </div>
-              <textarea className="note-content-input" value={selected.content} onChange={(event) => update({ content: event.target.value })} placeholder="Start writing…" />
-              {(selected.attachments?.length ?? 0) > 0 && <section className="note-attachments" aria-label="Note attachments">
-                <header><Paperclip size={14} /><strong>Attachments</strong><span>{selected.attachments!.length}</span></header>
-                {selected.attachments!.map((attachment) => <div className="note-attachment" key={attachment.id} onContextMenu={(event) => showContextMenu(event, [
+              <NoteRichEditor key={selected.id} note={selected} onChange={update} onToast={onToast} />
+              {files.length > 0 && <section className="note-attachments" aria-label="Note attachments">
+                <header><Paperclip size={14} /><strong>Attachments</strong><span>{files.length}</span></header>
+                {files.map((attachment) => <div className="note-attachment" key={attachment.id} onContextMenu={(event) => showContextMenu(event, [
                   { label: 'Open attachment', icon: ExternalLink, action: () => void openAttachment(attachment.path) },
                   { label: 'Remove from note', icon: Trash2, danger: true, separatorBefore: true, action: () => update({ attachments: selected.attachments?.filter((item) => item.id !== attachment.id) }) }
                 ], attachment.name)}>

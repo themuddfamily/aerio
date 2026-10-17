@@ -132,6 +132,10 @@ export interface ProductivityDesktopApi {
   updateContactGroupMembers?(groupId: string, addContactIds: string[], removeContactIds: string[]): Promise<ProductivitySnapshot>
   chooseNoteAttachments(): Promise<Attachment[]>
   openNoteAttachment(path: string): Promise<{ error?: string }>
+  /** Stores a picture for a rich note body as a managed inline attachment (docs/rich-notes.md). */
+  saveNoteImage(input: { name: string; dataUrl: string }): Promise<Attachment>
+  /** Reads a managed inline note picture as a data URL for display; it is never persisted in the note. */
+  readNoteImage(path: string): Promise<string>
   localSnapshot(): Promise<LocalModuleSnapshot>
   saveLocal(snapshot: LocalModuleSnapshot): Promise<void>
   exportLocalData(): Promise<LocalDataBackupResult>

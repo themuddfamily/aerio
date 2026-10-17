@@ -804,6 +804,76 @@ describe.sequential('Electron main process', () => {
     mocks.setOpenResult({ canceled: true, filePaths: [] })
   })
 
+  it('stores rich-note pictures as managed inline attachments, sanitizes saved bodies, and carries pictures through portable backups', async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13])
+    const pngUrl = `data:image/png;base64,${png.toString('base64')}`
+    mocks.fs.writeFileSync.mockClear()
+    const picture = invoke('productivity:note-image-save', { name: 'Diagram', dataUrl: pngUrl })
+    expect(picture).toMatchObject({ name: 'Diagram.png', size: 12, mime: 'image/png', inline: true })
+    expect(dirname(picture.path)).toBe(resolve(mocks.app.getPath(), 'note-attachments'))
+    expect(basename(picture.path)).toMatch(/^.+\.png$/)
+    expect(mocks.fs.writeFileSync).toHaveBeenCalledWith(picture.path, png, { mode: 0o600 })
+    expect(() => invoke('productivity:note-image-save', { name: 'Remote', dataUrl: 'https://remote.test/x.png' })).toThrow(/PNG, JPEG/)
+
+    mocks.setExistsResult(true)
+    mocks.setStatResult({ size: 12, isFile: () => true })
+    mocks.setReadResult(png)
+    expect(invoke('productivity:note-image-read', picture.path)).toBe(pngUrl)
+    expect(() => invoke('productivity:note-image-read', 'C:/outside/picture.png')).toThrow(/no longer available/)
+
+    // Saving re-sanitizes the body and recomputes the searchable plain text.
+    const rich = {
+      id: 'rich', folder: 'Ideas', title: 'Rich', content: 'stale', tags: ['plan'], pinned: true, archived: false, color: '#fff0aa', updatedAt: '2026-10-01T09:00:00Z',
+      html: `<h1 onclick="steal()">Plan</h1><p>See <a href="javascript:steal()">this</a></p><img data-aerio-note-image="${picture.id}" src="https://tracker.test/x.png" onerror="steal()"><script>steal()</script>`,
+      attachments: [picture]
+    }
+    const plain = { id: 'plain', folder: 'Personal', title: 'Plain', content: 'Old\n  text', tags: [], pinned: false, archived: true, updatedAt: '2026-09-01T09:00:00Z' }
+    mocks.store.saveLocal.mockClear()
+    invoke('productivity:local-save', { tasks: [], notes: [rich, plain] })
+    const savedRich = { ...rich, content: 'Plan\nSee this', html: `<h1>Plan</h1><p>See <a>this</a></p><img data-aerio-note-image="${picture.id}" />` }
+    const saved = { tasks: [], notes: [savedRich, plain] }
+    expect(mocks.store.saveLocal).toHaveBeenCalledWith(saved)
+
+    // Portable export embeds the picture bytes; restore writes a new managed file under the same id.
+    mocks.store.localSnapshot.mockReturnValueOnce(saved as any)
+    mocks.setSaveResult({ canceled: false, filePath: 'C:/rich-backup.json' })
+    await invoke('productivity:local-export')
+    const exported = JSON.parse(mocks.fs.writeFileSync.mock.calls.find(([path]) => path === 'C:/rich-backup.json')![1])
+    expect(exported).toMatchObject({ schemaVersion: 2, attachments: [{ id: picture.id, name: 'Diagram.png', mime: 'image/png', size: 12, dataBase64: png.toString('base64') }] })
+    expect(exported.data.notes[0].html).toBe(savedRich.html)
+
+    mocks.fs.writeFileSync.mockClear()
+    mocks.setOpenResult({ canceled: false, filePaths: ['C:/rich-backup.json'] })
+    mocks.setStatResult({ size: 4096, isFile: () => true })
+    mocks.setReadResult(JSON.stringify(exported))
+    const restored = await invoke('productivity:local-import')
+    expect(restored.notes[0]).toMatchObject({ id: 'rich', folder: 'Ideas', tags: ['plan'], pinned: true, color: '#fff0aa', html: savedRich.html, content: 'Plan\nSee this' })
+    expect(restored.notes[0].attachments[0]).toMatchObject({ id: picture.id, inline: true, mime: 'image/png' })
+    expect(restored.notes[0].attachments[0].path).not.toBe(picture.path)
+    expect(mocks.fs.writeFileSync).toHaveBeenCalledWith(restored.notes[0].attachments[0].path, png, { mode: 0o600 })
+    expect(restored.notes[1]).toEqual(plain)
+
+    // Backups from before rich notes (plain content only) restore unchanged.
+    const legacy = { format: 'aerio-local-data', schemaVersion: 1, exportedAt: '2026-01-01T09:00:00Z', data: { tasks: [], notes: [plain] } }
+    mocks.setReadResult(JSON.stringify(legacy))
+    await expect(invoke('productivity:local-import')).resolves.toEqual({ tasks: [], notes: [plain] })
+
+    // A backup whose body references a picture it does not carry loses only that picture.
+    const missing = { ...exported, attachments: [], data: { ...exported.data, notes: [{ ...exported.data.notes[0], attachments: [] }] } }
+    mocks.setReadResult(JSON.stringify(missing))
+    expect((await invoke('productivity:local-import')).notes[0]).toMatchObject({ html: '<h1>Plan</h1><p>See <a>this</a></p>', content: 'Plan\nSee this' })
+
+    // Pictures are unavailable while the app is locked.
+    invoke('app-lock:enable', 'notes lock fixture passphrase')
+    invoke('app-lock:lock')
+    expect(() => invoke('productivity:note-image-read', picture.path)).toThrow(/Unlock Aerio/)
+    expect(() => invoke('productivity:note-image-save', { name: 'Diagram', dataUrl: pngUrl })).toThrow(/Unlock Aerio/)
+    invoke('app-lock:unlock', 'notes lock fixture passphrase')
+    invoke('app-lock:disable', 'notes lock fixture passphrase')
+    mocks.setExistsResult(false)
+    mocks.setOpenResult({ canceled: true, filePaths: [] })
+  })
+
   it('creates and reuses message windows and enforces navigation rules', () => {
     const request = { source: 'connected', accountId: 'a1b2', threadId: 'thread', title: 'A message' }
     invoke('window:open-message', request)

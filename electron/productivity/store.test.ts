@@ -85,6 +85,18 @@ describe('ProductivityStore', () => {
     store.close()
   })
 
+  it('persists rich note bodies and inline picture references alongside plain notes', () => {
+    const store = new ProductivityStore(':memory:')
+    const picture = { id: 'pic', name: 'Diagram.png', size: 12, mime: 'image/png', path: 'C:/aerio/note-attachments/pic.png', inline: true }
+    const notes = [
+      { id: 'rich', folder: 'Ideas', title: 'Rich', content: 'Plan', html: '<h1>Plan</h1><img data-aerio-note-image="pic" />', tags: ['a'], pinned: true, archived: false, color: '#fff0aa', updatedAt: '2026-10-01T09:00:00Z', attachments: [picture] },
+      { id: 'plain', folder: 'Personal', title: 'Plain', content: 'Plain text', tags: [], pinned: false, archived: true, updatedAt: '2026-10-01T09:00:00Z' }
+    ]
+    store.saveLocal({ tasks: [], notes })
+    expect(store.localSnapshot().notes).toEqual(notes)
+    store.close()
+  })
+
   it('persists provider contact groups and local distribution lists', () => {
     const store = new ProductivityStore(':memory:')
     const group = { id: 'account:group', remoteId: 'contactGroups/abc', accountId: 'account', provider: 'gmail' as const, name: 'Team', system: false, readOnly: false }
