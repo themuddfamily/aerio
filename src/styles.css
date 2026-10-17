@@ -4441,3 +4441,20 @@ kbd {
 .csv-mapping-row > span,
 .csv-mapping-row > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .csv-mapping-row > small { color: var(--muted); }
+/* Mail import and Local Folders */
+.mail-import { gap: 10px; }
+.mail-import-local { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 8px; background: var(--surface-2); color: var(--text-soft); font-size: 10.5px; }
+.mail-import-local p { margin: 0; line-height: 1.45; }
+.mail-import-choose { display: flex; flex-wrap: wrap; gap: 6px; }
+.mail-import-hint { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.mail-import-chosen { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.mail-import-chosen li { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 6px; border-radius: 6px; background: var(--surface-2); font-size: 10.5px; }
+.mail-import-chosen li span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-import-unsupported { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--danger); font-size: 10px; line-height: 1.45; }
+.mail-import-jobs > article { align-items: flex-start; }
+.mail-import-job .rule-copy { flex: 1; gap: 2px; }
+.mail-import-job progress { width: 100%; height: 6px; margin-top: 4px; }
+.mail-import-job-actions { display: flex; align-items: center; gap: 4px; }
+.mail-import-review > article.imported, .mail-import-review > article.discarded { opacity: .62; }
+.mail-import-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.local-folders-sidebar .sidebar-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

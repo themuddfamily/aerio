@@ -93,6 +93,13 @@ export type MailWorkerCommand =
   | { type: 'diagnostics:health' }
   | { type: 'attachments:list'; payload: MailAttachmentQuery }
   | { type: 'attachment:extract'; payload: { accountId: string; messageId: string; attachmentId: string; targetPath: string } }
+  | { type: 'local:ensure' }
+  | { type: 'local:transfer'; payload: import('../src/mail-types').MailLocalTransferInput }
+  | { type: 'import:start'; payload: import('../src/mail-types').MailImportStartInput }
+  | { type: 'import:list' }
+  | { type: 'import:pause' | 'import:resume' | 'import:cancel' | 'import:dismiss'; payload: { id: string } }
+  | { type: 'import:items'; payload: { jobId: string } }
+  | { type: 'import:resolve'; payload: { jobId: string; keys: string[]; decision: 'import' | 'discard' } }
   | { type: 'network'; payload: { online: boolean } }
   | { type: 'polling'; payload: { intervalMs: number; immediate?: boolean } }
   | { type: 'shutdown' }
@@ -132,6 +139,10 @@ export type MailWorkerResult =
   | import('../src/mail-types').MailReceiptInfo
   | import('../src/mail-types').MailFolderMutationResult
   | import('../src/mail-types').MailFolderDeletePreview
+  | import('../src/mail-types').MailImportJob
+  | import('../src/mail-types').MailImportJob[]
+  | import('../src/mail-types').MailImportItem[]
+  | import('../src/mail-types').MailLocalTransferResult
 
 export interface WorkerRequest {
   kind: 'request'

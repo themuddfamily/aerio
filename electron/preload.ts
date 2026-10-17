@@ -210,6 +210,19 @@ const api: AerioDesktopApi = {
       delete: (id) => ipcRenderer.invoke('mail:quick-actions:delete', id),
       run: (id, targets) => ipcRenderer.invoke('mail:quick-actions:run', id, targets)
     },
+    imports: {
+      ensureLocalFolders: () => ipcRenderer.invoke('mail:local:ensure'),
+      choose: (kind) => ipcRenderer.invoke('mail:import:choose', kind),
+      start: (input) => ipcRenderer.invoke('mail:import:start', input),
+      list: () => ipcRenderer.invoke('mail:import:list'),
+      pause: (id) => ipcRenderer.invoke('mail:import:pause', id),
+      resume: (id) => ipcRenderer.invoke('mail:import:resume', id),
+      cancel: (id) => ipcRenderer.invoke('mail:import:cancel', id),
+      dismiss: (id) => ipcRenderer.invoke('mail:import:dismiss', id),
+      items: (jobId) => ipcRenderer.invoke('mail:import:items', jobId),
+      resolve: (jobId, keys, decision) => ipcRenderer.invoke('mail:import:resolve', jobId, keys, decision),
+      transfer: (input) => ipcRenderer.invoke('mail:local:transfer', input)
+    },
     sync: {
       start: (accountId) => ipcRenderer.invoke('mail:sync:start', accountId),
       pause: (accountId) => ipcRenderer.invoke('mail:sync:pause', accountId),

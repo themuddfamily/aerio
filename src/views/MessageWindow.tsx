@@ -112,6 +112,8 @@ export default function MessageWindow() {
   const mailLabels = new Set(thread?.messages.flatMap((message) => message.labelIds) ?? [])
   const mailAccount = source ? accounts.find((account) => account.id === source.accountId) : undefined
   const mailReadOnly = Boolean(mailAccount?.archived)
+  // Local Folders cannot send mail, so replies need a server account.
+  const mailCannotReply = mailReadOnly || mailAccount?.provider === 'local'
   const mailUnread = mailLabels.has('UNREAD')
   const mailStarred = mailLabels.has('STARRED')
   const mailInInbox = mailLabels.has('INBOX')
@@ -219,9 +221,9 @@ export default function MessageWindow() {
     const disabled = mailReadOnly || Boolean(actionBusy)
     const important = mailLabels.has('IMPORTANT')
     showContextMenu(event, [
-      { label: 'Reply', icon: Reply, disabled: mailReadOnly || !reply, action: () => { if (reply) setMailCompose({ reply }) } },
-      { label: 'Reply all', icon: ReplyAll, disabled: mailReadOnly || !reply, action: () => { if (reply) setMailCompose({ reply, replyAll: true }) } },
-      { label: 'Forward', icon: Forward, disabled: mailReadOnly || !reply, action: () => { if (reply) setMailCompose({ reply, forward: true }) } },
+      { label: 'Reply', icon: Reply, disabled: mailCannotReply || !reply, action: () => { if (reply) setMailCompose({ reply }) } },
+      { label: 'Reply all', icon: ReplyAll, disabled: mailCannotReply || !reply, action: () => { if (reply) setMailCompose({ reply, replyAll: true }) } },
+      { label: 'Forward', icon: Forward, disabled: mailCannotReply || !reply, action: () => { if (reply) setMailCompose({ reply, forward: true }) } },
       { label: mailUnread ? 'Mark as read' : 'Mark as unread', icon: mailUnread ? MailOpen : Mail, separatorBefore: true, disabled, action: () => applyMailAction(mailUnread ? 'read' : 'unread') },
       { label: mailStarred ? 'Remove star' : 'Add star', icon: Star, checked: mailStarred, disabled, action: () => applyMailAction(mailStarred ? 'unstar' : 'star') },
       { label: important ? 'Mark as not important' : 'Mark as important', icon: Tag, checked: important, disabled, action: () => applyMailAction(important ? 'unimportant' : 'important') },
@@ -250,9 +252,9 @@ export default function MessageWindow() {
     <div className="message-window-shell">
       <TitleBar title={title} />
       {!loading && thread && <div className="message-window-toolbar" role="toolbar" aria-label="Conversation actions">
-        <button className="button ghost small" disabled={mailReadOnly} onClick={() => setMailCompose({ reply: thread })}><Reply size={15} /> Reply</button>
-        <button className="button ghost small" disabled={mailReadOnly} onClick={() => setMailCompose({ reply: thread, replyAll: true })}><ReplyAll size={15} /> Reply all</button>
-        <button className="button ghost small" disabled={mailReadOnly} onClick={() => setMailCompose({ reply: thread, forward: true })}><Forward size={15} /> Forward</button>
+        <button className="button ghost small" disabled={mailCannotReply} onClick={() => setMailCompose({ reply: thread })}><Reply size={15} /> Reply</button>
+        <button className="button ghost small" disabled={mailCannotReply} onClick={() => setMailCompose({ reply: thread, replyAll: true })}><ReplyAll size={15} /> Reply all</button>
+        <button className="button ghost small" disabled={mailCannotReply} onClick={() => setMailCompose({ reply: thread, forward: true })}><Forward size={15} /> Forward</button>
         <span className="toolbar-divider" />
         <button className="icon-button" disabled={mailReadOnly || Boolean(actionBusy)} aria-label={mailUnread ? 'Mark as read' : 'Mark as unread'} title={mailUnread ? 'Mark as read' : 'Mark as unread'} onClick={() => void applyMailAction(mailUnread ? 'read' : 'unread')}>{mailUnread ? <MailOpen size={17} /> : <Mail size={17} />}</button>
         <button className={`icon-button ${mailStarred ? 'active' : ''}`} disabled={mailReadOnly || Boolean(actionBusy)} aria-label={mailStarred ? 'Remove star' : 'Add star'} title={mailStarred ? 'Remove star' : 'Add star'} onClick={() => void applyMailAction(mailStarred ? 'unstar' : 'star')}><Star size={17} fill={mailStarred ? 'currentColor' : 'none'} /></button>
@@ -278,7 +280,7 @@ export default function MessageWindow() {
       </main>
       {pendingOperation && <div className="undo-toast"><span>Mail change queued</span><button onClick={() => void undoMailAction()}><Undo2 size={15} /> Undo</button><button onClick={() => setPendingOperation(undefined)}>Dismiss</button></div>}
       {pendingSend && <div className="undo-toast send-undo-toast"><span>Message will send shortly</span><button onClick={() => void undoSend()}><Undo2 size={15} /> Undo Send</button><button onClick={() => setPendingSend(undefined)}>Dismiss</button></div>}
-      {mailCompose && <MailComposeModal accounts={accounts.filter((account) => !account.archived)} replyTo={mailCompose.reply} replyAll={mailCompose.replyAll} forward={mailCompose.forward} onClose={() => setMailCompose(undefined)} onSent={(result) => { if (result.status === 'send-pending') setPendingSend(result); void reloadMailThread() }} onToast={showToast} />}
+      {mailCompose && <MailComposeModal accounts={accounts.filter((account) => !account.archived && account.provider !== 'local')} replyTo={mailCompose.reply} replyAll={mailCompose.replyAll} forward={mailCompose.forward} onClose={() => setMailCompose(undefined)} onSent={(result) => { if (result.status === 'send-pending') setPendingSend(result); void reloadMailThread() }} onToast={showToast} />}
       {organizeMode && <MailOrganizeModal mode={organizeMode} items={organizeItems} accounts={accounts} labels={labels} onApply={async (requests) => { for (const request of requests) await applyMailAction(request.action, request.labelId) }} onClose={() => setOrganizeMode(undefined)} />}
       {snoozeOpen && source && <MailSnoozeModal count={1} onApply={async (until) => {
         try {

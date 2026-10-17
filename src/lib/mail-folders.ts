@@ -94,9 +94,10 @@ export function mailFolderNameError(name: string, provider: MailProviderId | und
   if (value.length > 225) return 'Use a name of 225 characters or fewer'
   if (/[\u0000-\u001f\u007f]/.test(value)) return 'The name cannot contain control characters'
   if (provider === 'gmail' && value.includes('/')) return 'Use the parent setting instead of “/” to nest labels'
-  if (provider !== 'gmail' && provider !== 'microsoft' && delimiter && value.includes(delimiter)) return `The name cannot contain the folder separator “${delimiter}”`
-  if (provider !== 'gmail' && provider !== 'microsoft' && /[*%]/.test(value)) return 'IMAP folder names cannot contain * or %'
-  if (value.toUpperCase() === 'INBOX') return 'Inbox is reserved by the provider'
+  if (provider === 'local' && value.includes('/')) return 'Use the parent setting instead of “/” to nest folders'
+  if (provider !== 'gmail' && provider !== 'microsoft' && provider !== 'local' && delimiter && value.includes(delimiter)) return `The name cannot contain the folder separator “${delimiter}”`
+  if (provider !== 'gmail' && provider !== 'microsoft' && provider !== 'local' && /[*%]/.test(value)) return 'IMAP folder names cannot contain * or %'
+  if (provider !== 'local' && value.toUpperCase() === 'INBOX') return 'Inbox is reserved by the provider'
   return undefined
 }
 
