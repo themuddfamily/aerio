@@ -4347,3 +4347,21 @@ kbd {
 .mail-folder-colors legend { margin-bottom: 6px; color: var(--muted); font-size: 10px; }
 .mail-folder-colors button { width: 22px; height: 22px; border: 2px solid transparent; border-radius: 50%; }
 .mail-folder-colors button[aria-pressed='true'] { border-color: var(--text); box-shadow: 0 0 0 2px var(--surface) inset; }
+
+/* Optional AI assistance */
+.ai-disclosure { display: flex; gap: 6px; align-items: flex-start; color: var(--muted); font-size: 12px; margin: 0; }
+.ai-disclosure svg { flex: none; margin-top: 2px; color: var(--accent); }
+.ai-output { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-hover); border: 1px solid var(--line); border-radius: 8px; padding: 12px; max-height: 320px; overflow: auto; }
+.ai-replies { display: grid; gap: 12px; }
+.ai-reply { display: grid; gap: 4px; }
+.ai-settings-features { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 10px 0; display: grid; gap: 4px; }
+.ai-settings-features legend { color: var(--text-soft); font-size: 12px; padding: 0 4px; }
+.ai-compose-assist { display: grid; gap: 8px; margin: 0 16px 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.ai-compose-assist header { display: flex; justify-content: space-between; align-items: center; }
+.ai-compose-assist header strong { display: inline-flex; gap: 6px; align-items: center; }
+.ai-compose-assist h4 { margin: 4px 0; font-size: 12px; color: var(--muted); font-weight: 600; }
+.ai-quick-instructions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-quick-instructions .chip { border: 1px solid var(--line); border-radius: 12px; padding: 3px 9px; background: transparent; color: var(--text-soft); font-size: 12px; cursor: pointer; }
+.ai-quick-instructions .chip:hover { background: var(--accent-soft); color: var(--accent-text); }
+.ai-compose-assist .checkbox-row { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+.ai-search-query { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }

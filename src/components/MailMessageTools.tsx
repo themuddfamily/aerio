@@ -1,4 +1,4 @@
-import { CalendarPlus, CheckSquare, ChevronsDownUp, ChevronsUpDown, Copy, Download, Eye, FileText, Filter, Info, Languages, MailX, NotebookPen, Printer, Tags, Type } from 'lucide-react'
+import { CalendarPlus, CheckSquare, ChevronsDownUp, ChevronsUpDown, Copy, Download, Eye, FileText, Filter, Info, Languages, MailX, NotebookPen, Printer, Sparkles, Tags, Type } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import type { ContextMenuItem } from './ContextMenu'
 import type { MailAccountSummary, MailLabel, MailMessageDetail, MailMessageRef, MailMessageLocalData } from '../mail-types'
@@ -8,17 +8,22 @@ import MailRulesModal from './MailRulesModal'
 import MailUnsubscribeDialog from './MailUnsubscribeDialog'
 import Modal from './Modal'
 import { MailReplyWatchesModal, canWatchMessage } from './MailReplyWatches'
+import MailAiAssistDialog from './MailAiAssistDialog'
+import { aiFeatureAvailable, useAiAssistantStatus } from '../lib/use-ai-assistant'
 
-type Tool = 'categories' | 'copy' | 'meeting' | 'task' | 'rule' | 'note' | 'translate' | 'format' | 'properties' | 'unsubscribe' | 'watch'
+type Tool = 'categories' | 'copy' | 'meeting' | 'task' | 'rule' | 'note' | 'translate' | 'format' | 'properties' | 'unsubscribe' | 'watch' | 'ai-summary' | 'ai-replies'
 export const messageRef = (message: MailMessageDetail): MailMessageRef => ({ accountId: message.accountId, threadId: message.threadId, messageId: message.id })
 const localTime = (date: Date) => new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
 const defaultLocal: MailMessageLocalData = { categories: [], format: 'auto', fontSize: 14, noteIds: [], taskIds: [] }
 
-export function useMailMessageTools({ accounts, onToast, collapseAll, expandAll, onUpdated }: {
+export function useMailMessageTools({ accounts, onToast, collapseAll, expandAll, onUpdated, onReplyWithText }: {
   accounts: MailAccountSummary[]; onToast(message: string): void; collapseAll(): void; expandAll(): void
   onUpdated(message: MailMessageDetail, local: MailMessageLocalData): void
+  /** Opens an editable reply prefilled with text; it must never send on its own. */
+  onReplyWithText?(message: MailMessageDetail, text: string): void
 }) {
   const [dialog, setDialog] = useState<{ tool: Tool; message: MailMessageDetail }>()
+  const ai = useAiAssistantStatus()
   const run = async (action: () => Promise<void>) => {
     try { await action() } catch (error) { onToast(error instanceof Error ? error.message : 'The message action failed') }
   }
@@ -41,11 +46,18 @@ export function useMailMessageTools({ accounts, onToast, collapseAll, expandAll,
       { label: 'Unsubscribe from list…', icon: MailX, action: open('unsubscribe') },
       { label: 'Watch for replies…', icon: Eye, disabled: !canWatchMessage(message, accounts), action: open('watch') },
       { label: 'Translate…', icon: Languages, separatorBefore: true, disabled: !message.text.trim(), action: open('translate') },
+      ...(aiFeatureAvailable(ai, 'summarize') ? [{ label: 'Summarize with AI…', icon: Sparkles, disabled: !message.text.trim(), action: open('ai-summary') }] : []),
+      ...(aiFeatureAvailable(ai, 'replies') ? [{ label: 'Suggest replies with AI…', icon: Sparkles, disabled: !message.text.trim(), action: open('ai-replies') }] : []),
       { label: 'Message format…', icon: Type, action: open('format') },
       { label: 'Message properties', icon: Info, action: open('properties') }
     ]
   }
   if (dialog?.tool === 'unsubscribe') return { items, dialog: <MailUnsubscribeDialog key={`unsubscribe:${dialog.message.accountId}:${dialog.message.id}`} message={dialog.message} messageRef={messageRef(dialog.message)} readOnly={Boolean(accounts.find((account) => account.id === dialog.message.accountId)?.archived)} onToast={onToast} onClose={() => setDialog(undefined)} /> }
+  if ((dialog?.tool === 'ai-summary' || dialog?.tool === 'ai-replies') && ai) {
+    const target = dialog.message
+    const readOnly = Boolean(accounts.find((account) => account.id === target.accountId)?.archived)
+    return { items, dialog: <MailAiAssistDialog key={`${dialog.tool}:${target.accountId}:${target.id}`} mode={dialog.tool === 'ai-summary' ? 'summarize' : 'replies'} message={target} messageRef={messageRef(target)} status={ai} onToast={onToast} onClose={() => setDialog(undefined)} onReplyWithText={onReplyWithText && !readOnly ? (text) => onReplyWithText(target, text) : undefined} /> }
+  }
   return { items, dialog: dialog && <MessageToolDialog key={`${dialog.tool}:${dialog.message.accountId}:${dialog.message.id}`} {...dialog} accounts={accounts} onToast={onToast} onUpdated={onUpdated} onClose={() => setDialog(undefined)} /> }
 }
 
@@ -120,7 +132,7 @@ function MessageToolDialog({ tool, message, accounts, onToast, onUpdated, onClos
   }
   const copyTargets = labels.filter((label) => account?.provider === 'gmail' ? label.type === 'user' || label.id === 'INBOX' : label.id.startsWith('folder:') && !/draft|sent|outbox/i.test(label.name))
   if (tool === 'watch') return <MailReplyWatchesModal accounts={accounts} message={message} onToast={onToast} onClose={onClose} />
-  const titles: Record<Tool, string> = { categories: 'Edit categories', copy: 'Copy to folder', meeting: 'Create meeting from email', task: 'Create task from email', rule: 'Create rule from email', note: 'Add note', translate: 'Translate email', format: 'Message format', properties: 'Message properties', unsubscribe: 'Unsubscribe from mailing list', watch: 'Watch for replies' }
+  const titles: Record<Tool, string> = { categories: 'Edit categories', copy: 'Copy to folder', meeting: 'Create meeting from email', task: 'Create task from email', rule: 'Create rule from email', note: 'Add note', translate: 'Translate email', format: 'Message format', properties: 'Message properties', unsubscribe: 'Unsubscribe from mailing list', watch: 'Watch for replies', 'ai-summary': 'Summarize with AI', 'ai-replies': 'Suggested replies' }
 
   if (tool === 'rule' && !loading && !error) return <MailRulesModal accounts={accounts} labels={labels} onToast={onToast} onClose={onClose} initialRule={{ accountId: message.accountId, name: `Mail from ${message.fromName || message.fromEmail}`, enabled: true, match: 'all', conditions: [{ field: 'from', operator: 'equals', value: message.fromEmail }], actions: [{ action: 'archive' }] }} />
 

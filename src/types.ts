@@ -160,4 +160,5 @@ export interface AerioDesktopApi {
   onWindowState(callback: (maximized: boolean) => void): () => void
   onComposeCommand(callback: () => void): () => void
   mail: import('./mail-types').MailDesktopApi
+  ai: import('./ai-assistant-types').AiAssistantApi
 }

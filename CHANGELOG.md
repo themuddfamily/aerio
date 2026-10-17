@@ -4,6 +4,7 @@
 
 ### Added
 
+- Optional AI assistance, off by default: summarize an email or get suggested replies from its menu, draft or rephrase from the composer, and ask for a search in plain language. Works with the Anthropic Messages API or an OpenAI-compatible endpoint (including local Ollama). The API key is encrypted with OS secure storage and never reaches the renderer; Settings › AI assistance lists exactly what each feature sends and lets you turn features and sender details on or off. Email content is passed as delimited untrusted data, the model has no tools, output is shown as plain-text previews, and inserting text, opening a reply, or running a proposed search (validated by the search parser) always needs a click. Requests can be cancelled and time out after 60 seconds. Translation and manual meeting/task creation are unchanged.
 - QuickText snippets and whole-message mail templates with subject, sanitized HTML, and managed attachments; search, edit, and insert them from the composer without losing the editor selection, and back them up with local data or as a standalone template file.
 - Watch for replies: turn it on in the composer or from a sent message’s menu, with an optional deadline. Aerio matches replies by Message-ID references and the provider thread for the sending account, notifies from the background or tray when a recipient answers or the deadline passes without a reply, and lists active and past watches under Mail › Reply watches, where they can be cancelled.
 

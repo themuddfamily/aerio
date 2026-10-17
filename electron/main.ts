@@ -65,6 +65,7 @@ import type { ProviderTaskInput, TaskFieldPatch, TaskLocalMetadata, TaskResoluti
 import { parseTaskBackup } from './productivity/task-backup'
 import { MessageLocalStore } from './mail/message-local-store'
 import { registerMessageTools } from './mail/message-tools'
+import { AiAssistantStore, registerAiAssistant } from './mail/ai-assistant'
 import { MailTemplateStore, parseMailTemplateBackup, type MailTemplateBackup } from './mail/template-store'
 import { registerMailTemplates } from './mail/template-tools'
 import { GoogleProductivityConnector } from './productivity/google-connector'
@@ -1270,6 +1271,7 @@ function registerIpc() {
   registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
   } })
+  registerAiAssistant({ worker: requireMailWorker, store: new AiAssistantStore(join(app.getPath('userData'), 'ai-assistant.json'), join(app.getPath('userData'), 'ai-assistant-key.dat')) })
   ipcMain.handle('preferences:load', () => loadPreferences())
   ipcMain.handle('preferences:save', (_event, preferences: AppPreferences) => savePreferences(preferences))
   ipcMain.handle('app-lock:status', () => appLockStatus())
