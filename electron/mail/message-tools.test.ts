@@ -6,10 +6,11 @@ import type { MailMessageDetail } from '../../src/mail-types'
 import { MessageLocalStore } from './message-local-store'
 import { ProductivityStore } from '../productivity/store'
 
-const mocks = vi.hoisted(() => ({ handlers: new Map<string, (...args: any[]) => any>(), save: vi.fn(), open: vi.fn(), print: vi.fn(), destroy: vi.fn(), send: vi.fn(), load: vi.fn() }))
+const mocks = vi.hoisted(() => ({ handlers: new Map<string, (...args: any[]) => any>(), save: vi.fn(), open: vi.fn(), print: vi.fn(), destroy: vi.fn(), send: vi.fn(), load: vi.fn(), openExternal: vi.fn() }))
 vi.mock('electron', () => ({
   ipcMain: { handle: (name: string, callback: (...args: any[]) => any) => mocks.handlers.set(name, callback) },
   dialog: { showSaveDialog: mocks.save, showOpenDialog: mocks.open },
+  shell: { openExternal: mocks.openExternal },
   BrowserWindow: class {
     static fromWebContents() { return undefined }
     static getAllWindows() { return [{ webContents: { send: mocks.send } }] }
@@ -116,5 +117,30 @@ describe('message tools backend', () => {
     await expect(translateMessageText('text', { ...input, endpoint: 'http://external.test' })).rejects.toThrow(/HTTPS/)
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Invalid API key' }), { status: 403 }))
     await expect(translateMessageText('text', input)).rejects.toThrow('Invalid API key')
+  })
+  it('reads unsubscribe metadata from stored headers without contacting the list, and acts only on request', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const headers = ['Subject: Test', 'List-Unsubscribe: <https://list.example.test/u?id=1>, <mailto:leave@list.example.test>', 'List-Unsubscribe-Post: List-Unsubscribe=One-Click'].join(String.fromCharCode(13, 10))
+    request.mockImplementation(async (command: any) => {
+      if (command.type === 'mail:thread') return { ...ref, id: 'thread', subject: message.subject, messages: [message] }
+      if (command.type === 'mail:source') return { headers, source: `${headers}\r\n\r\nbody` }
+      if (command.type === 'accounts:list') return [{ id: 'account', archived: false }]
+      return { id: 'queued' }
+    })
+    registerMessageTools({ worker: () => ({ request } as any), productivity: () => productivity, local, changed: vi.fn(), unsubscribe: { resolve: async () => ['93.184.216.34'] } })
+    const info = await invoke('mail:message:unsubscribe-info', ref)
+    expect(info.options.map((option: any) => [option.kind, option.destination, option.oneClick])).toEqual([['https', 'list.example.test', true], ['mailto', 'leave@list.example.test', false]])
+    expect(request).toHaveBeenCalledWith({ type: 'mail:source', payload: { accountId: 'account', messageId: 'one' } })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(request).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'drafts:send' }))
+    await expect(invoke('mail:message:unsubscribe-info', { ...ref, messageId: 'missing' })).rejects.toThrow(/not found/)
+    await expect(invoke('mail:message:unsubscribe', ref, { url: 'https://other.test/u', method: 'one-click' })).rejects.toThrow(/not listed/)
+    expect(await invoke('mail:message:unsubscribe', ref, { url: 'https://list.example.test/u?id=1', method: 'one-click' })).toEqual({ method: 'one-click', destination: 'list.example.test', status: 'unsubscribed' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(await invoke('mail:message:unsubscribe', ref, { url: 'https://list.example.test/u?id=1', method: 'browser' })).toMatchObject({ status: 'opened' })
+    expect(mocks.openExternal).toHaveBeenCalledWith('https://list.example.test/u?id=1')
+    expect(await invoke('mail:message:unsubscribe', ref, { url: 'mailto:leave@list.example.test', method: 'mailto' })).toMatchObject({ status: 'queued' })
+    expect(request).toHaveBeenCalledWith({ type: 'drafts:send', payload: expect.objectContaining({ accountId: 'account', to: ['leave@list.example.test'], subject: 'unsubscribe' }) })
   })
 })

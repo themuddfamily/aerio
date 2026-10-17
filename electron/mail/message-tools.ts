@@ -1,12 +1,13 @@
-import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import type { MailMessageDetail, MailMessageLocalData, MailMessageRef, MailThreadDetail, MessageToolsApi } from '../../src/mail-types'
+import type { MailAccountSummary, MailMessageDetail, MailMessageLocalData, MailMessageRef, MailMessageSource, MailThreadDetail, MessageToolsApi } from '../../src/mail-types'
 import type { LocalModuleSnapshot } from '../../src/productivity-types'
 import type { MailWorkerClient } from './worker-client'
 import type { ProductivityStore } from '../productivity/store'
 import { MessageLocalStore } from './message-local-store'
 import { sanitizeMessageHtml } from './message-security'
+import { defaultResolve, parseListUnsubscribe, performUnsubscribe, type UnsubscribeDependencies } from './list-unsubscribe'
 
 export function safeMessageFilename(value: string) {
   const name = value.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/g, '').slice(0, 120) || 'message'
@@ -41,7 +42,7 @@ export async function translateMessageText(text: string, input: Parameters<Messa
   return result.translatedText
 }
 
-export function registerMessageTools(options: { worker(): MailWorkerClient; productivity(): ProductivityStore; local: MessageLocalStore; changed(snapshot: LocalModuleSnapshot): void }) {
+export function registerMessageTools(options: { worker(): MailWorkerClient; productivity(): ProductivityStore; local: MessageLocalStore; changed(snapshot: LocalModuleSnapshot): void; unsubscribe?: Partial<UnsubscribeDependencies> }) {
   const { local } = options
   const messageFor = async (ref: MailMessageRef) => {
     if (!ref || ![ref.accountId, ref.threadId, ref.messageId].every((id) => typeof id === 'string' && id.length > 0 && id.length < 1024)) throw new Error('Invalid message reference')
@@ -132,6 +133,24 @@ export function registerMessageTools(options: { worker(): MailWorkerClient; prod
     await messageFor(ref)
     const ids = local.get(ref).noteIds
     return options.productivity().localSnapshot().notes.filter((note) => ids.includes(note.id))
+  })
+  // Unsubscribe metadata is read from the stored original headers on demand, so viewing never contacts the list.
+  const unsubscribeInfo = async (ref: MailMessageRef) => {
+    await messageFor(ref)
+    const source = await options.worker().request<MailMessageSource>({ type: 'mail:source', payload: { accountId: ref.accountId, messageId: ref.messageId } })
+    return parseListUnsubscribe(source.headers)
+  }
+  ipcMain.handle('mail:message:unsubscribe-info', (_event, ref: MailMessageRef) => unsubscribeInfo(ref))
+  ipcMain.handle('mail:message:unsubscribe', async (_event, ref: MailMessageRef, request: Parameters<MessageToolsApi['unsubscribe']>[1]) => {
+    const info = await unsubscribeInfo(ref)
+    const accounts = await options.worker().request<MailAccountSummary[]>({ type: 'accounts:list' })
+    return performUnsubscribe({ info, url: request?.url, method: request?.method, accountId: ref.accountId, readOnly: Boolean(accounts.find((account) => account.id === ref.accountId)?.archived) }, {
+      fetch: (...args) => fetch(...args),
+      resolve: defaultResolve,
+      openExternal: (url) => shell.openExternal(url),
+      sendMail: (input) => options.worker().request({ type: 'drafts:send', payload: input }),
+      ...options.unsubscribe
+    })
   })
   ipcMain.handle('mail:message:translate', async (_event, ref: MailMessageRef, input: Parameters<MessageToolsApi['translate']>[1]) => translateMessageText((await messageFor(ref)).text, input))
 }
