@@ -29,7 +29,7 @@ Remaining release work and optional future features are tracked in [ROADMAP.md](
 - Dedicated message windows for provider mail; double-click a conversation to open or focus its window
 - Read-only local archive or complete local deletion when disconnecting an account
 - Google and Microsoft Calendar synchronization with event creation, editing, deletion, recurrence, and configurable reminders
-- Writable Google and Microsoft provider Contacts plus editable local Contacts, with portable backup and restore for local Contacts, Tasks, Notes, and managed note attachments
+- Writable Google and Microsoft provider Contacts plus editable local Contacts with multiple typed emails, phones, and addresses, birthdays, photos, and groups; distribution lists (local lists, Google contact groups, Outlook categories) that expand in To/Cc/Bcc (see [docs/rich-contacts.md](docs/rich-contacts.md)); portable backup and restore for local Contacts, lists, Tasks, Notes, and managed note attachments
 - Google Tasks and Microsoft To Do lists/tasks with durable offline changes, conflict review, undo, native/local recurrence mapping, and separate connected-task backup/restore; see [provider task integration](docs/task-provider-integration.md)
 - Optional local passphrase privacy lock at launch, when Aerio is sent to the tray, or on demand
 - Opt-in AI assistance (off by default) for email summaries, drafting and rephrasing, suggested replies, and natural-language search, using Anthropic or any OpenAI-compatible server such as a local Ollama. API keys stay in OS secure storage, Settings shows exactly what each feature sends, and every result is a preview that you apply yourself ([AI assistance](docs/ai-assistance.md))

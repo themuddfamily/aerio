@@ -77,7 +77,8 @@ import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import { InterchangeStore } from './productivity/interchange-store'
 import { registerCalendarContactInterchange } from './productivity/interchange-ipc'
-import { validContactInterchangeFields } from '../src/lib/interchange-validation'
+import { validContactInterchangeFields, validContactLists } from '../src/lib/interchange-validation'
+import { contactEditConflict } from '../src/lib/contact-fields'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
 import { senderDomainFromEmail } from '../src/lib/sender-avatar'
 import { isCompleteMailAddress } from '../src/lib/mail-address'
@@ -334,7 +335,8 @@ function validLocalModules(value: unknown): value is LocalModuleSnapshot {
     (input.contacts ?? []).every((contact) => contact && text(contact.id, 300, true) && text(contact.name, 10_000, true) && text(contact.email, 10_000) &&
       text(contact.group, 300, true) && text(contact.color, 100, true) && typeof contact.favorite === 'boolean' && contact.source === 'local' &&
       [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || text(field, 1_000_000)) &&
-      validContactInterchangeFields(contact))
+      validContactInterchangeFields(contact)) &&
+    (input.contactLists === undefined || validContactLists(input.contactLists))
 }
 
 interface ArchivedNoteAttachment {
@@ -589,7 +591,72 @@ async function deleteProductivityEvent(eventId: string) {
 }
 
 function writableContactsConnector(accountId: string, provider: 'gmail' | 'microsoft') {
-  return provider === 'gmail' ? googleContactsConnector(accountId) : microsoftContactsConnector(accountId)
+  if (provider !== 'gmail') return microsoftContactsConnector(accountId)
+  const connector = googleContactsConnector(accountId)
+  connector.useContactGroups(requireProductivityStore().accountData(accountId).contactGroups ?? [])
+  return connector
+}
+
+// Google contactGroups management. Microsoft Graph has no contact-group API for personal contacts;
+// Outlook categories are edited through ordinary contact updates instead.
+function writableContactGroup(groupId: string) {
+  const store = requireProductivityStore()
+  const group = (store.snapshot().contactGroups ?? []).find((item) => item.id === groupId)
+  if (!group) throw new Error('That contact group is no longer available')
+  if (group.provider !== 'gmail') throw new Error('This provider does not support contact group management')
+  return { store, group, connector: writableContactsConnector(group.accountId, 'gmail') as GoogleProductivityConnector }
+}
+
+const validGroupName = (name: unknown): name is string => typeof name === 'string' && Boolean(name.trim()) && name.trim().length <= 300
+
+async function createProductivityContactGroup(accountId: string, name: string) {
+  if (accountProviders.get(accountId) !== 'gmail') throw new Error('Contact groups can be created for connected Google accounts')
+  const store = requireProductivityStore()
+  const group = await (writableContactsConnector(accountId, 'gmail') as GoogleProductivityConnector).createContactGroup(name)
+  store.upsertContactGroup(group)
+  diagnostic({ level: 'info', component: 'provider', event: 'contact-group-created', accountId, details: { provider: 'gmail' } })
+  return store.snapshot()
+}
+
+async function renameProductivityContactGroup(groupId: string, name: string) {
+  const { store, group, connector } = writableContactGroup(groupId)
+  const renamed = await connector.renameContactGroup(group, name)
+  store.upsertContactGroup(renamed)
+  // Member contacts carry the group's display name.
+  const data = store.accountData(group.accountId)
+  const names = new Map((data.contactGroups ?? []).map((item) => [item.remoteId, item.name]))
+  for (const contact of data.contacts.filter((item) => item.groupIds?.includes(group.remoteId))) {
+    const groups = (contact.groupIds ?? []).flatMap((id) => names.get(id) ?? [])
+    store.upsertContact({ ...contact, groups, group: groups[0] ?? 'Google' })
+  }
+  return store.snapshot()
+}
+
+async function deleteProductivityContactGroup(groupId: string) {
+  const { store, group, connector } = writableContactGroup(groupId)
+  await connector.deleteContactGroup(group)
+  store.deleteContactGroup(group.id)
+  for (const contact of store.accountData(group.accountId).contacts.filter((item) => item.groupIds?.includes(group.remoteId))) {
+    const groupIds = (contact.groupIds ?? []).filter((id) => id !== group.remoteId)
+    const groups = (contact.groups ?? []).filter((name) => name !== group.name)
+    store.upsertContact({ ...contact, groupIds, groups, group: groups[0] ?? 'Google' })
+  }
+  diagnostic({ level: 'info', component: 'provider', event: 'contact-group-deleted', accountId: group.accountId, details: { provider: 'gmail' } })
+  return store.snapshot()
+}
+
+async function updateProductivityContactGroupMembers(groupId: string, addIds: string[], removeIds: string[]) {
+  const { store, group, connector } = writableContactGroup(groupId)
+  const contacts = store.accountData(group.accountId).contacts
+  const pick = (ids: string[]) => ids.map((id) => {
+    const contact = contacts.find((item) => item.id === id)
+    if (!contact) throw new Error('A selected contact is no longer available; synchronize Contacts and try again')
+    return contact
+  })
+  const result = await connector.modifyContactGroupMembers(group, pick(addIds), pick(removeIds))
+  for (const contact of result.contacts) store.upsertContact(contact)
+  diagnostic({ level: 'info', component: 'provider', event: 'contact-group-members-updated', accountId: group.accountId, details: { provider: 'gmail', added: addIds.length, removed: removeIds.length, skipped: result.skipped } })
+  return store.snapshot()
 }
 
 async function createProductivityContact(accountId: string, input: Contact) {
@@ -607,6 +674,8 @@ async function updateProductivityContact(input: Contact) {
   const current = store.snapshot().contacts.find((contact) => contact.id === input.id)
   if (!current) throw new Error('That contact is no longer available')
   if (current.readOnly) throw new Error('Reconnect this account once to enable Contacts editing')
+  const conflict = contactEditConflict(current, input as Contact & { revision?: unknown })
+  if (conflict) throw new Error(conflict)
   const saved = await writableContactsConnector(current.accountId, current.provider).updateContact(current, input)
   store.upsertContact(saved)
   diagnostic({ level: 'info', component: 'provider', event: 'contact-updated', accountId: current.accountId, details: { provider: current.provider } })
@@ -1444,6 +1513,24 @@ function registerIpc() {
   ipcMain.handle('productivity:contact-delete', (_event, contactId: unknown) => {
     if (typeof contactId !== 'string' || !contactId || contactId.length > 500) throw new Error('Choose a valid contact')
     return deleteProductivityContact(contactId)
+  })
+  const validId = (value: unknown): value is string => typeof value === 'string' && Boolean(value) && value.length <= 500
+  ipcMain.handle('productivity:contact-group-create', (_event, accountId: unknown, name: unknown) => {
+    if (!validId(accountId) || !validGroupName(name)) throw new Error('Enter a group name of up to 300 characters')
+    return createProductivityContactGroup(accountId, name)
+  })
+  ipcMain.handle('productivity:contact-group-rename', (_event, groupId: unknown, name: unknown) => {
+    if (!validId(groupId) || !validGroupName(name)) throw new Error('Enter a group name of up to 300 characters')
+    return renameProductivityContactGroup(groupId, name)
+  })
+  ipcMain.handle('productivity:contact-group-delete', (_event, groupId: unknown) => {
+    if (!validId(groupId)) throw new Error('Choose a valid contact group')
+    return deleteProductivityContactGroup(groupId)
+  })
+  ipcMain.handle('productivity:contact-group-members', (_event, groupId: unknown, add: unknown, remove: unknown) => {
+    const ids = (value: unknown): value is string[] => Array.isArray(value) && value.length <= 1_000 && value.every(validId)
+    if (!validId(groupId) || !ids(add) || !ids(remove) || add.length + remove.length === 0) throw new Error('Choose contacts to add or remove')
+    return updateProductivityContactGroupMembers(groupId, add, remove)
   })
   ipcMain.handle('app:update:status', () => updates?.status() ?? ({
     phase: 'unsupported',

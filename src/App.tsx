@@ -16,7 +16,7 @@ import ConnectedMailView from './views/ConnectedMailView'
 import CalendarInterchangePanel from './components/CalendarInterchangePanel'
 import ContactInterchangePanel from './components/ContactInterchangePanel'
 import type { InterchangeSnapshot } from './interchange-types'
-import type { Account, AppLockStatus, AppPreferences, AppState, CalendarEvent, Contact, ModuleId } from './types'
+import type { Account, AppLockStatus, AppPreferences, AppState, CalendarEvent, Contact, ContactList, ModuleId } from './types'
 import type { MailAccountSummary, MailQuickAction } from './mail-types'
 import { quickActionShortcutLabel } from './lib/mail-quick-actions'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from './productivity-types'
@@ -252,6 +252,25 @@ export default function App() {
   const deleteProviderContact = useCallback(async (contactId: string) => {
     setProductivity(await window.aerio.productivity.deleteContact(contactId))
   }, [])
+
+  // Distribution lists: local lists persist with the local modules; Google groups go through IPC.
+  const contactListActions = useMemo(() => {
+    const api = window.aerio.productivity
+    const applying = <T extends unknown[]>(call: ((...args: T) => Promise<ProductivitySnapshot>) | undefined) => call && (async (...args: T) => {
+      const snapshot = await call(...args)
+      setProductivity(snapshot)
+      return snapshot
+    })
+    return {
+      localLists: localModules.contactLists ?? [],
+      groups: productivity.contactGroups ?? [],
+      onLocalListsChange: (contactLists: ContactList[]) => setLocalModules((current) => ({ ...current, contactLists })),
+      createGroup: applying(api.createContactGroup),
+      renameGroup: applying(api.renameContactGroup),
+      deleteGroup: applying(api.deleteContactGroup),
+      updateGroupMembers: applying(api.updateContactGroupMembers)
+    }
+  }, [localModules.contactLists, productivity.contactGroups])
 
   useEffect(() => {
     if (!preferences || !hydrated.current) return
@@ -498,6 +517,7 @@ export default function App() {
               providerAccounts={providerContactAccounts}
               syncing={productivitySyncing}
               sourceMessage={productivityMessage}
+              listActions={contactListActions}
               interchangePanel={window.aerio.interchange && <ContactInterchangePanel
                 api={window.aerio.interchange}
                 contacts={connectedState.contacts}
