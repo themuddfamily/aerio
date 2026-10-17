@@ -9,7 +9,10 @@ import { conferenceCapabilities } from '../lib/online-meetings'
 const googleCapabilities = conferenceCapabilities({ provider: 'gmail', canWrite: true, conferences: { allowed: ['hangoutsMeet'], creatable: ['googleMeet'], canRemove: true } })
 const meet = { provider: 'googleMeet' as const, status: 'ready' as const, joinUrl: 'https://meet.google.com/abc-defg-hij', phone: '+1 555-0100', pin: '123' }
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  delete (window as { aerio?: unknown }).aerio
+})
 
 describe('EventConferenceField', () => {
   it('requests a provider meeting with a stable request id', async () => {
@@ -48,14 +51,14 @@ describe('EventConferenceField', () => {
   it('asks before opening links on other hosts and refuses insecure links', async () => {
     const user = userEvent.setup()
     const open = vi.spyOn(window, 'open').mockReturnValue(null)
-    const zoom = { provider: 'zoom' as const, status: 'ready' as const, joinUrl: 'https://example.zoom.us/j/1' }
-    const { rerender } = render(<EventConferenceField value={zoom} original={zoom} capabilities={googleCapabilities} canRemove={false} onChange={vi.fn()} />)
+    const addOn = { provider: 'other' as const, status: 'ready' as const, joinUrl: 'https://meet.example.org/room' }
+    const { rerender } = render(<EventConferenceField value={addOn} original={addOn} capabilities={googleCapabilities} canRemove={false} onChange={vi.fn()} />)
     await user.click(screen.getByRole('button', { name: 'Join' }))
     expect(open).not.toHaveBeenCalled()
-    expect(screen.getByRole('alertdialog')).toHaveTextContent('example.zoom.us')
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('meet.example.org')
     await user.click(screen.getByRole('button', { name: 'Open anyway' }))
-    expect(open).toHaveBeenCalledWith('https://example.zoom.us/j/1', '_blank', 'noopener')
-    const insecure = { ...zoom, joinUrl: 'http://example.com/meet' }
+    expect(open).toHaveBeenCalledWith('https://meet.example.org/room', '_blank', 'noopener')
+    const insecure = { ...addOn, joinUrl: 'http://example.com/meet' }
     rerender(<EventConferenceField value={insecure} original={insecure} capabilities={googleCapabilities} canRemove={false} onChange={vi.fn()} />)
     expect(screen.getByRole('button', { name: 'Join' })).toBeDisabled()
   })
@@ -75,5 +78,39 @@ describe('EventConferenceField', () => {
     rerender(<EventConferenceField value={teams} original={teams} capabilities={[]} canRemove disabled onChange={onChange} />)
     expect(screen.getByRole('button', { name: 'Join' })).toBeEnabled()
     expect(screen.queryByRole('button', { name: /Remove/ })).not.toBeInTheDocument()
+  })
+
+  it('lets a Zoom meeting created by Aerio be kept or cancelled when its event is deleted', async () => {
+    const user = userEvent.setup()
+    const meetingHosts = {
+      meetingOptions: vi.fn(async () => ({ provider: 'zoom', cancelOnDelete: true, meetingId: '1' })),
+      setCancelOnDelete: vi.fn(async (_id: string, cancel: boolean) => ({ provider: 'zoom', cancelOnDelete: cancel, meetingId: '1' }))
+    }
+    ;(window as { aerio?: unknown }).aerio = { meetingHosts }
+    const zoom = { provider: 'zoom' as const, status: 'ready' as const, requestId: '0123456789abcdef0123456789abcdef', joinUrl: 'https://us02web.zoom.us/j/1', phone: '+1 646 558 8656', pin: '123456' }
+    const onChange = vi.fn()
+    render(<EventConferenceField value={zoom} original={zoom} capabilities={googleCapabilities} canRemove onChange={onChange} />)
+    const option = await screen.findByRole('checkbox', { name: 'Cancel the Zoom meeting if this event is deleted' })
+    expect(option).toBeChecked()
+    await user.click(option)
+    expect(meetingHosts.setCancelOnDelete).toHaveBeenCalledWith(zoom.requestId, false)
+    expect(option).not.toBeChecked()
+    // zoom.us is a known meeting host: Join opens without a prompt.
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    await user.click(screen.getByRole('button', { name: 'Join' }))
+    expect(open).toHaveBeenCalledWith('https://us02web.zoom.us/j/1', '_blank', 'noopener')
+    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    expect(onChange).toHaveBeenCalledWith({ ...zoom, status: 'removed' })
+  })
+
+  it('offers a connected Zoom account next to the calendar’s own meetings', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    const capabilities = conferenceCapabilities({ provider: 'gmail', canWrite: true, conferences: { allowed: ['hangoutsMeet'], creatable: ['googleMeet'], canRemove: true } },
+      [{ provider: 'zoom', configured: true, connected: true, redirectUri: '', scopes: [] }])
+    render(<EventConferenceField capabilities={capabilities} canRemove onChange={onChange} />)
+    expect(screen.queryByRole('button', { name: 'Add Webex' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Add Zoom' }))
+    expect(onChange).toHaveBeenCalledWith({ provider: 'zoom', status: 'pending', requestId: expect.stringMatching(/^[0-9a-f]{32}$/) })
   })
 })

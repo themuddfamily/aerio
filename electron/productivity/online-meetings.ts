@@ -2,11 +2,11 @@ import type { CalendarEvent, ConferenceProvider, EventConference } from '../../s
 import type { CalendarConferenceSupport, SyncedCalendar } from '../../src/productivity-types'
 import { CONFERENCE_LABELS, conferenceCapabilities, type ConferenceCapability } from '../../src/lib/online-meetings'
 
-// Online meeting connector boundary (E25). Google Meet and Microsoft Teams are created by the calendar
+// Online meeting connector boundary (E25, E47). Google Meet and Microsoft Teams are created by the calendar
 // connectors themselves as part of the event write (Google conferenceData, Graph isOnlineMeeting), so the
 // helpers below translate between those payloads and EventConference. Providers with their own meeting API
-// (Zoom, Webex) implement OnlineMeetingConnector: create the meeting first, then the calendar connector writes
-// the returned join link onto the event. They need their own OAuth consent and are not implemented yet.
+// (Zoom, Webex) implement OnlineMeetingConnector: HostedMeetingCoordinator (meeting-coordinator.ts) creates the
+// meeting first, then the calendar connector writes the returned join details onto the event.
 
 export interface OnlineMeetingRequest {
   requestId: string
@@ -16,14 +16,33 @@ export interface OnlineMeetingRequest {
   timeZone?: string
 }
 
+// A meeting created through a provider's own API. Never holds the host start link (it carries a host token).
+export interface HostedMeeting {
+  provider: 'zoom' | 'webex'
+  meetingId: string
+  joinUrl: string
+  // Number participants type into the client or phone ("123 4567 8901").
+  meetingNumber?: string
+  passcode?: string
+  // Numeric passcode for phone and video-system participants, when the provider issues a separate one.
+  phonePasscode?: string
+  sipAddress?: string
+  dialIn?: { number: string; label?: string }[]
+}
+
 export interface OnlineMeetingConnector {
   readonly provider: ConferenceProvider
   // OAuth scopes the provider needs in addition to calendar write access.
   readonly requiredScopes: readonly string[]
   capability(calendar: SyncedCalendar): ConferenceCapability
-  // Must be idempotent per requestId: a retried request returns the meeting created by the first attempt.
-  createMeeting(request: OnlineMeetingRequest): Promise<EventConference>
-  deleteMeeting(conference: EventConference): Promise<void>
+  // One creation attempt. The coordinator makes retries idempotent per requestId: it records the attempt
+  // first and, after an uncertain outcome, calls findMeeting before creating again.
+  createMeeting(request: OnlineMeetingRequest): Promise<HostedMeeting>
+  // The host's meeting carrying this request's marker, if an earlier attempt created one.
+  findMeeting(request: OnlineMeetingRequest): Promise<HostedMeeting | undefined>
+  updateMeeting(meeting: HostedMeeting, request: OnlineMeetingRequest): Promise<HostedMeeting>
+  // Cancels the meeting; a meeting the provider no longer has counts as cancelled.
+  deleteMeeting(meeting: HostedMeeting): Promise<void>
 }
 
 export class UnavailableMeetingConnector implements OnlineMeetingConnector {
@@ -35,18 +54,26 @@ export class UnavailableMeetingConnector implements OnlineMeetingConnector {
     return { provider: this.provider, label: CONFERENCE_LABELS[this.provider], available: false, reason: `${CONFERENCE_LABELS[this.provider]} is not connected to Aerio yet` }
   }
 
-  async createMeeting(): Promise<EventConference> {
+  private unsupported(): never {
     throw new Error(`${CONFERENCE_LABELS[this.provider]} meetings are not supported yet`)
   }
 
-  async deleteMeeting(): Promise<void> {
-    throw new Error(`${CONFERENCE_LABELS[this.provider]} meetings are not supported yet`)
-  }
+  async createMeeting(): Promise<HostedMeeting> { return this.unsupported() }
+  async findMeeting(): Promise<HostedMeeting | undefined> { return this.unsupported() }
+  async updateMeeting(): Promise<HostedMeeting> { return this.unsupported() }
+  async deleteMeeting(): Promise<void> { this.unsupported() }
 }
 
-export const externalMeetingConnectors: Readonly<Partial<Record<ConferenceProvider, OnlineMeetingConnector>>> = {
+const connectorRegistry: Partial<Record<ConferenceProvider, OnlineMeetingConnector>> = {
   zoom: new UnavailableMeetingConnector('zoom'),
   webex: new UnavailableMeetingConnector('webex')
+}
+
+// Zoom and Webex start unavailable; the main process registers the real connectors once their vault is open.
+export const externalMeetingConnectors: Readonly<Partial<Record<ConferenceProvider, OnlineMeetingConnector>>> = connectorRegistry
+
+export function registerExternalMeetingConnector(connector: OnlineMeetingConnector) {
+  connectorRegistry[connector.provider] = connector
 }
 
 // Throws a user-facing reason when a requested meeting cannot be created on this calendar.

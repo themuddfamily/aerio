@@ -121,6 +121,19 @@ const api: AerioDesktopApi = {
     refresh: (calendarId) => ipcRenderer.invoke('interchange:refresh', calendarId),
     removeCalendar: (calendarId) => ipcRenderer.invoke('interchange:calendar-remove', calendarId)
   },
+  meetingHosts: {
+    status: () => ipcRenderer.invoke('meeting-hosts:status'),
+    configure: (provider, clientId, clientSecret) => ipcRenderer.invoke('meeting-hosts:configure', provider, clientId, clientSecret),
+    connect: (provider) => ipcRenderer.invoke('meeting-hosts:connect', provider),
+    disconnect: (provider) => ipcRenderer.invoke('meeting-hosts:disconnect', provider),
+    meetingOptions: (requestId) => ipcRenderer.invoke('meeting-hosts:meeting-options', requestId),
+    setCancelOnDelete: (requestId, cancel) => ipcRenderer.invoke('meeting-hosts:set-cancel-on-delete', requestId, cancel),
+    onChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, snapshot: import('../src/meeting-host-types').MeetingHostSnapshot) => callback(snapshot)
+      ipcRenderer.on('meeting-hosts:changed', listener)
+      return () => ipcRenderer.removeListener('meeting-hosts:changed', listener)
+    }
+  },
   dav: {
     snapshot: () => ipcRenderer.invoke('dav:snapshot'),
     onChanged: (callback) => {

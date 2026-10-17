@@ -10,6 +10,7 @@ import OpenPgpKeyManager from './OpenPgpKeyManager'
 import SmimeCertificateManager from './SmimeCertificateManager'
 import ProfileBackupSection from './ProfileBackupSection'
 import DavAccountsSection from './DavAccountsSection'
+import MeetingHostsSection from './MeetingHostsSection'
 
 const readReceiptChoices: [MailReadReceiptPolicy, string][] = [['never', 'Never send'], ['ask', 'Ask me'], ['always', 'Always send']]
 
@@ -234,6 +235,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
         </section>
         <ProfileBackupSection />
         <DavAccountsSection />
+        <MeetingHostsSection />
         <section className="settings-section">
           <div className="settings-icon"><RefreshCw size={18} /></div>
           <div className="settings-content">

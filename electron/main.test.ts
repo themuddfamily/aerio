@@ -264,6 +264,16 @@ const davMocks = vi.hoisted(() => ({
 vi.mock('./productivity/dav-store', () => ({ DavStore: vi.fn(function () { return davMocks.store }) }))
 vi.mock('./productivity/dav-service', () => ({ DavService: vi.fn(function () { return davMocks.service }) }))
 vi.mock('./productivity/dav-ipc', () => ({ registerDavAccounts: vi.fn(() => davMocks.ipc) }))
+const meetingMocks = vi.hoisted(() => ({
+  coordinator: {
+    prepare: vi.fn(async (_calendar: unknown, event: unknown) => ({ event })),
+    finish: vi.fn((_prepared: unknown, saved: unknown) => saved),
+    settle: vi.fn(async () => undefined),
+    decorate: vi.fn((events: unknown[]) => events),
+    eventDeleted: vi.fn(async () => undefined)
+  }
+}))
+vi.mock('./productivity/meeting-host-ipc', () => ({ initializeMeetingHosts: vi.fn(() => ({ coordinator: meetingMocks.coordinator, vault: {}, close: vi.fn() })) }))
 const chatMocks = vi.hoisted(() => {
   const gate = { enabled: false, preview: false, checks: [], sdkVersion: 'matrix-js-sdk 43.0.0', message: 'Chat stays unavailable until these checks pass: two-device interoperability.' }
   const service = { timeline: vi.fn(() => ({ items: [] })), snapshot: vi.fn(() => ({ gate: { ...gate, enabled: true }, accounts: [], rooms: [], verifications: [] })) }
@@ -957,6 +967,11 @@ describe.sequential('Electron main process', () => {
     await expect(invoke('productivity:event-update', { ...input, title: 'Updated' })).resolves.toBeDefined()
     await expect(invoke('productivity:event-delete', 'event')).resolves.toBeDefined()
     expect(mocks.google.deleteEvent).toHaveBeenCalled()
+    // Zoom and Webex coordination wraps every single-event write (meeting-coordinator.ts).
+    expect(meetingMocks.coordinator.prepare).toHaveBeenCalledWith(calendar, expect.objectContaining({ title: 'Planning' }))
+    expect(meetingMocks.coordinator.prepare).toHaveBeenCalledWith(calendar, expect.objectContaining({ title: 'Updated' }), current)
+    expect(meetingMocks.coordinator.settle).toHaveBeenCalled()
+    expect(meetingMocks.coordinator.eventDeleted).toHaveBeenCalledWith(current)
     expect(() => invoke('productivity:event-delete', '')).toThrow(/valid event/)
   })
 
