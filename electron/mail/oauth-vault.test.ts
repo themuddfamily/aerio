@@ -432,6 +432,22 @@ describe('OAuthVault access tokens', () => {
     expect(vault.grantedScopes('blank', 'microsoft')).toBeUndefined()
   })
 
+  it('reports mailbox-settings scopes for server rules and never refreshes them into legacy grants', async () => {
+    const vault = new OAuthVault(vaultPath, { microsoftClientId })
+    privateData(vault).googleTokens = { granted: { scope: 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.settings.basic' }, legacy: { scope: 'https://www.googleapis.com/auth/gmail.modify' } }
+    privateData(vault).microsoftTokens = { granted: { accessToken: 'a', refreshToken: 'r', expiresAt: 0, scope: 'Mail.ReadWrite MailboxSettings.ReadWrite' }, legacy: { accessToken: 'a', refreshToken: 'r', expiresAt: 0 } }
+    expect(vault.mailSettingsAccess('granted', 'gmail', 'server-rules')).toMatchObject({ granted: true, missing: [] })
+    expect(vault.mailSettingsAccess('legacy', 'gmail', 'server-rules')).toMatchObject({ granted: false, missing: ['https://www.googleapis.com/auth/gmail.settings.basic'], message: expect.stringContaining('Reconnect') })
+    expect(vault.mailSettingsAccess('granted', 'microsoft', 'automatic-replies')).toMatchObject({ granted: true })
+    // An untracked legacy grant is tried; a provider 403 then asks for a reconnect.
+    expect(vault.mailSettingsAccess('legacy', 'microsoft', 'server-rules')).toMatchObject({ granted: true, known: false })
+    expect(vault.mailSettingsAccess('imap-1', 'imap', 'server-rules')).toMatchObject({ supported: false })
+    const fetch = vi.fn().mockResolvedValue(jsonResponse({ access_token: 'renewed', expires_in: 120 }))
+    vi.stubGlobal('fetch', fetch)
+    await vault.microsoftAccessToken('legacy')
+    expect(((fetch.mock.calls[0][1] as RequestInit).body as URLSearchParams).get('scope')).not.toContain('MailboxSettings')
+  })
+
   it('returns a sufficiently fresh Microsoft token from memory', async () => {
     const vault = new OAuthVault(vaultPath, { microsoftClientId })
     privateCache(vault).set('microsoft-1', { token: 'cached', expiresAt: Date.now() + 120_000 })

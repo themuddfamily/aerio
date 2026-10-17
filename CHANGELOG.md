@@ -12,6 +12,14 @@
 - Full-profile backup and restore in Settings: daily, 3-day, or weekly snapshots (or on demand) of the mail cache, drafts, queued changes, rules, templates, local Tasks/Notes/Contacts, connected-task cache, and preferences, using SQLite's online backup API with per-file SHA-256 checksums and keep-N retention. Restore verifies and previews the backup, migrates and stages it, then swaps it in on restart with automatic rollback if the swap fails or is interrupted. Credentials are never included, restored outgoing and scheduled sends are held in Drafts for review, connected task writes wait for review, and accounts reauthorize.
 - User-defined mail Quick Actions: save ordered sequences of mail actions (read, star, label, move, archive, Trash, and more) and run them on the selection from the toolbars, the conversation context menu, the command palette, or Ctrl+Shift+1–9. Steps use the queued operation pipeline with Undo; account-specific destinations are checked at run time and skipped or partly updated accounts are reported. Undo of several queued changes now reverts them newest first, and queued operations created in the same millisecond reach the provider in insertion order.
 
+- Attachment-content search: text from PDF, Word, Excel, PowerPoint, and plain-text or HTML attachments is extracted on the device in an isolated worker with memory, time, and size limits and indexed with the message, so `attachment:` and ordinary searches find words inside attachments as well as their filenames. The reader notes attachments that can't be searched because they are password-protected, too large, or unreadable; indexing resumes incrementally and an account's extracted text is removed when the account is deleted.
+- Advanced mail rules: Cc, header, attachment, size, age, importance, and folder/label conditions; “except if” exceptions; and outgoing rules that run on new Sent mail. A per-message ledger keyed by Message-ID makes sure a message is never processed twice, including after resyncs and IMAP folder moves. Existing rules keep their stored format and behavior.
+- Server rules: upload a rule as a Gmail filter (`users.settings.filters`) or an Outlook inbox rule (Graph `messageRules`), list, update, turn off (Outlook), or remove provider rules, and see which conditions or actions can't map to the server. An uploaded rule runs only on the server. Accounts without the new `gmail.settings.basic` or `MailboxSettings.ReadWrite` permission are asked to reconnect.
+
+### Changed
+
+- Incoming rules no longer run on new drafts or Sent-only copies; use an outgoing rule for sent mail. “Equals” on To or Cc now also matches a single recipient’s address or name.
+
 ## 0.5.0 — 2026-08-08
 
 ### Added

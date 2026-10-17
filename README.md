@@ -12,7 +12,7 @@ Remaining release work and optional future features are tracked in [ROADMAP.md](
 - Complete mailbox inventory, including Spam and Trash, followed by newest-first offline download
 - Raw RFC 2822 messages, MIME bodies, and attachments stored locally
 - Resumable sync checkpoints, Gmail History, Microsoft delta links, IMAP folder reconciliation, 15-second active/one-minute background polling, and manual pause/resume
-- SQLite-backed folder views, infinite scrolling, and full-text offline search
+- SQLite-backed folder views, infinite scrolling, and full-text offline search, including text extracted from PDF, Office, and text attachments
 - An all-attachments workspace that filters attachments across accounts by name, sender, recipient, date, file type, and size, with open, save, and jump-to-message actions ([attachments workspace](docs/attachments-workspace.md))
 - Single and multi-select Archive, read/unread, star, importance, move, label, and Trash actions
 - Optimistic local changes with exact-state Undo, retry/backoff, and a durable provider operation queue
@@ -20,7 +20,7 @@ Remaining release work and optional future features are tracked in [ROADMAP.md](
 - QuickText snippets and whole-message templates (subject, sanitized HTML, and managed attachments) with search, editing, caret-preserving insertion, and backup/restore
 - Rich composition with fonts, colors, alignment, tables, inline images sent as Content-ID parts, and sanitized HTML paste ([details](docs/rich-composition.md))
 - Sender identities with provider-authorized aliases (Gmail send-as, Microsoft aliases, manual IMAP/shared-mailbox addresses), Reply-To, multiple sanitized HTML signatures, and per-identity defaults for new messages and replies ([details](docs/sender-identities.md))
-- Persistent snooze/remind-later with automatic Inbox restoration, plus account-specific rules for sender, recipient, subject, and body filtering
+- Persistent snooze/remind-later with automatic Inbox restoration, plus account-specific rules with Cc, header, attachment, size, age, importance, and folder conditions, “except if” exceptions, outgoing (Sent mail) rules, and optional Gmail filter / Outlook inbox rule upload ([mail rules](docs/mail-rules.md))
 - User-defined Quick Actions that run a saved sequence of mail actions from the toolbar, context menu, command palette, or Ctrl+Shift+1–9, with run-time destination checks and step-by-step Undo ([Quick Actions](docs/mail-quick-actions.md))
 - Per-account identity, synchronization, notification, OAuth, IMAP/SMTP, connection-test, and local-rebuild settings
 - Provider-side Gmail and Microsoft automatic replies (out of office) with schedules, audiences, read-back of the server state, and a reconnect path for missing permissions ([automatic replies](docs/automatic-replies.md))
@@ -154,7 +154,7 @@ The app uses Electron 43, React 19, TypeScript, Vite, and local SQLite databases
 
 - The renderer is sandboxed and has no Node.js access.
 - The main process owns OAuth, OS dialogs, safe storage, external navigation, and a typed IPC boundary.
-- A dedicated Node worker owns the normalized mail database, Gmail/Graph/IMAP synchronization, SMTP delivery, MIME parsing, full-text search, queued mutations, and drafts.
+- A dedicated Node worker owns the normalized mail database, Gmail/Graph/IMAP synchronization, SMTP delivery, MIME parsing, full-text search, queued mutations, and drafts. Attachment text extraction runs in its own nested worker thread with a heap cap and per-file timeout.
 - Main-process Google and Microsoft productivity connectors normalize Calendar and Contacts into an isolated SQLite cache. Failed refreshes retain the last good snapshot; disconnecting removes that account’s cached productivity data.
 - Application preferences use their own small SQLite database; provider data and local Contacts/Tasks/Notes retain their existing dedicated stores.
 

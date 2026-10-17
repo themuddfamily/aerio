@@ -32,12 +32,15 @@ import { MailFolderManager } from './mail/folder-management'
 import { sanitizeMessageHtmlWithReport } from './mail/message-security'
 import { buildNewMailNotification } from './mail/new-mail'
 import { messageIdFromMime } from './mail/reply-watches'
+import { mailRuleTriggersForLabels } from '../src/lib/mail-rules'
 import { parseMessageSource } from './mail/message-source'
 import { runMailQuickAction } from './mail/quick-actions'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createMime, createMimeBuffer } from './mail/mime-builder'
 import { describeSenderRejection, parseGmailSendAs, parseMicrosoftProxyAddresses, resolveDraftSender } from './mail/sender-identity'
 import { createReceiptService } from './mail/receipts'
+import { AttachmentContentIndexer } from './mail/attachment-text-indexer'
+import { AttachmentExtractRunner } from './mail/attachment-extract-runner'
 import { supportedSendOptions } from '../src/lib/mail-send-options'
 import {
   BACKGROUND_MAIL_POLL_INTERVAL_MS,
@@ -49,6 +52,8 @@ const port = parentPort!
 if (!port) throw new Error('The Aerio mail worker must run in a worker thread')
 
 let database: MailDatabase | undefined
+let attachmentIndexer: AttachmentContentIndexer | undefined
+let attachmentExtractor: AttachmentExtractRunner | undefined
 let contentPath = ''
 let online = true
 let operationTimer: NodeJS.Timeout | undefined
@@ -224,6 +229,7 @@ async function parseRawAndStore(accountId: string, message: {
     remoteUid: message.remoteUid
   }
   database.upsertMessage(record)
+  if (record.attachments.length) attachmentIndexer?.schedule()
   return { record, isNew }
 }
 
@@ -1005,6 +1011,40 @@ async function extractAttachment(accountId: string, messageId: string, attachmen
   writeFileSync(targetPath, content)
 }
 
+/** Every attachment's bytes for one stored message, keyed like the database rows. */
+async function messageAttachmentContents(accountId: string, messageId: string) {
+  const rawPath = database?.getMessageRaw(accountId, messageId)
+  if (!rawPath || !existsSync(rawPath)) return undefined
+  const parsed = await PostalMime.parse(readFileSync(rawPath))
+  return new Map(parsed.attachments.map((attachment, index) => [attachmentId(attachment, index), typeof attachment.content === 'string'
+    ? Buffer.from(attachment.content, attachment.encoding === 'base64' ? 'base64' : 'utf8')
+    : Buffer.from(attachment.content instanceof ArrayBuffer ? new Uint8Array(attachment.content) : attachment.content)]))
+}
+
+// Attachment text is extracted in a separate worker thread with its own heap
+// limit and timeout (see mail/attachment-extract-runner.ts), then indexed for search.
+function startAttachmentIndexing(store: MailDatabase['attachmentText']) {
+  const workerPath = join(import.meta.dirname, 'attachment-extract-worker.js')
+  if (!existsSync(workerPath)) return
+  const extractor = new AttachmentExtractRunner({ workerPath })
+  attachmentExtractor = extractor
+  attachmentIndexer = new AttachmentContentIndexer({
+    store,
+    readAttachments: messageAttachmentContents,
+    extract: (input, signal) => extractor.extract(input, signal)
+  })
+  attachmentIndexer.schedule()
+}
+
+async function stopAttachmentIndexing() {
+  const indexer = attachmentIndexer
+  const extractor = attachmentExtractor
+  attachmentIndexer = undefined
+  attachmentExtractor = undefined
+  await indexer?.stop()
+  await extractor?.close()
+}
+
 async function stageMessageAttachments(draftId: string, accountId: string, messageId: string) {
   if (!database) throw new Error('Database is not initialized')
   const rawPath = database.getMessageRaw(accountId, messageId)
@@ -1042,16 +1082,26 @@ function applyRuleActions(rule: MailRule, threadIds: string[]) {
   return operations
 }
 
-function applyRulesToIncoming(records: ParsedMailMessage[]) {
+// Automatic rules for newly synced mail: incoming rules for received mail,
+// outgoing rules for new Sent copies. The ledger claims each message per
+// trigger before any action runs, so a resync, a folder move that gives an
+// IMAP copy a new id, or an overlapping history pass never processes it twice.
+// Rule actions only change labels/folders and never create messages, so a
+// rule can't trigger itself or another rule.
+function applyRulesToNewMail(records: ParsedMailMessage[]) {
   if (!database) return new Set<string>()
   const silenced = new Set<string>()
   const matches = new Map<string, { rule: MailRule; threadIds: Set<string> }>()
   for (const record of records) {
-    for (const rule of database.matchingRulesForMessage(record)) {
-      const entry = matches.get(rule.id) ?? { rule, threadIds: new Set<string>() }
-      entry.threadIds.add(record.threadId)
-      matches.set(rule.id, entry)
-      if (rule.actions.some((action) => ['archive', 'move', 'trash'].includes(action.action))) silenced.add(record.id)
+    for (const trigger of mailRuleTriggersForLabels(record.labelIds)) {
+      if (!database.hasLocalRules(record.accountId, trigger)) continue
+      if (!database.ruleLedger.claim(record.accountId, record, trigger)) continue
+      for (const rule of database.matchingRulesForMessage(record, trigger)) {
+        const entry = matches.get(rule.id) ?? { rule, threadIds: new Set<string>() }
+        entry.threadIds.add(record.threadId)
+        matches.set(rule.id, entry)
+        if (trigger === 'incoming' && rule.actions.some((action) => ['archive', 'move', 'trash'].includes(action.action))) silenced.add(record.id)
+      }
     }
   }
   for (const { rule, threadIds } of matches.values()) {
@@ -1063,7 +1113,7 @@ function applyRulesToIncoming(records: ParsedMailMessage[]) {
 }
 
 function emitNewMail(accountId: string, records: ParsedMailMessage[]) {
-  const silenced = applyRulesToIncoming(records)
+  const silenced = applyRulesToNewMail(records)
   if (records.length) processReplyWatches(true)
   if (!database?.getAccount(accountId)?.notifications) return
   const payload = buildNewMailNotification(accountId, records.filter((record) => !silenced.has(record.id)))
@@ -1073,7 +1123,9 @@ function emitNewMail(accountId: string, records: ParsedMailMessage[]) {
 async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'initialize') {
     contentPath = command.payload.contentPath
+    await stopAttachmentIndexing()
     database = new MailDatabase(command.payload.databasePath, contentPath)
+    startAttachmentIndexing(database.attachmentText)
     folderManagerInstance = undefined
     // Re-read provider folders for any folder change cut off by a restart.
     for (const accountId of database.recoverInterruptedFolderOperations()) void folderManager().refresh(accountId).catch(() => undefined)
@@ -1087,6 +1139,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'accounts:list') return database.listAccounts()
   if (command.type === 'accounts:upsert') {
     database.upsertAccount(command.payload)
+    attachmentIndexer?.resumeAccount(command.payload.id)
     emit({ type: 'accounts-changed', payload: database.listAccounts() })
     return command.payload
   }
@@ -1100,6 +1153,8 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   }
   if (command.type === 'accounts:disconnect') {
     paused.add(command.payload.accountId)
+    // Stop any extraction in flight for this account; its results could no longer be saved anyway.
+    if (command.payload.mode === 'delete') attachmentIndexer?.cancelAccount(command.payload.accountId)
     database.disconnectAccount(command.payload.accountId, command.payload.mode)
     emit({ type: 'accounts-changed', payload: database.listAccounts() })
     return
@@ -1351,6 +1406,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'shutdown') {
     clearInterval(operationTimer)
     clearInterval(pollTimer)
+    await stopAttachmentIndexing()
     database.close()
     database = undefined
     folderManagerInstance = undefined

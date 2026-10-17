@@ -14,6 +14,7 @@ import MailRulesModal from '../components/MailRulesModal'
 import MailFolderManagerModal from '../components/MailFolderManagerModal'
 import MailSearchFiltersPanel from '../components/MailSearchFiltersPanel'
 import { MailSavedSearchList, MailSaveSearchModal, savedSearchFromView, useMailSavedSearches, type MailSearchView } from '../components/MailSavedSearches'
+import { attachmentSearchStatus } from '../lib/mail-attachment-text'
 import { savedSearchMatchesView } from '../lib/mail-saved-search'
 import { mailSearchQueryError } from '../lib/mail-search-query'
 import { Bookmark, Sparkles, Zap } from 'lucide-react'
@@ -1095,7 +1096,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
               onMoreActions={(event) => showProviderMessageMenu(event, message)}
               onContextMenu={(event) => showProviderMessageMenu(event, message)}
             >
-              {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} onContextMenu={(event) => showAttachmentMenu(event, message, attachment)}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{formatFileSize(attachment.size)}</small></span><button className="icon-button" title="Open" onClick={() => void openAttachment(message, attachment)}><Download size={16} /></button><button className="button ghost small" onClick={() => void saveAttachment(message, attachment)}>Save as</button></div>)}</div>}
+              {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} title={attachmentSearchStatus(attachment.textIndex)?.label} onContextMenu={(event) => showAttachmentMenu(event, message, attachment)}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{[formatFileSize(attachment.size), attachmentSearchStatus(attachment.textIndex)?.notice].filter(Boolean).join(' · ')}</small></span><button className="icon-button" title="Open" onClick={() => void openAttachment(message, attachment)}><Download size={16} /></button><button className="button ghost small" onClick={() => void saveAttachment(message, attachment)}>Save as</button></div>)}</div>}
             </ThreadMessageAccordion>)}
             {!selectedAccount?.archived && <div className="quick-actions"><button className="button ghost" onClick={() => setCompose({ reply: thread })}><Reply size={16} /> Reply</button><button className="button ghost" onClick={() => setCompose({ reply: thread, replyAll: true })}><ReplyAll size={16} /> Reply all</button></div>}
           </article>

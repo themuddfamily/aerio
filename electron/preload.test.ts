@@ -172,6 +172,14 @@ describe('preload bridge', () => {
     await mail.rules.save({ name: 'Rule' })
     await mail.rules.delete('rule-1')
     await mail.rules.run('rule-1')
+    await mail.serverRules!.capabilities('account-1')
+    await mail.serverRules!.list('account-1')
+    await mail.serverRules!.upload('rule-1')
+    await mail.serverRules!.delete('account-1', 'filter-1')
+    await mail.serverRules!.setEnabled('account-1', 'filter-1', false)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:server-rules:upload', 'rule-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:server-rules:delete', 'account-1', 'filter-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:server-rules:set-enabled', 'account-1', 'filter-1', false)
     await mail.savedSearches.list()
     await mail.savedSearches.save({ name: 'Invoices', query: 'invoice', folder: 'all', filters: {} })
     await mail.savedSearches.delete('search-1')
@@ -215,7 +223,7 @@ describe('preload bridge', () => {
     for (const expected of [
       'gmail:credentials:status', 'mail:credentials:microsoft-configure', 'mail:providers:presets',
       'mail:accounts:connect-imap', 'mail:accounts:imap-update', 'mail:threads:list', 'mail:folders:unread-counts', 'mail:accounts:unread-counts', 'mail:message:source',
-      'mail:drafts:schedule', 'mail:rules:run', 'mail:sync:rebuild', 'mail:attachment:save', 'mail:diagnostics:export',
+      'mail:drafts:schedule', 'mail:rules:run', 'mail:server-rules:capabilities', 'mail:server-rules:list', 'mail:sync:rebuild', 'mail:attachment:save', 'mail:diagnostics:export',
       'mail:templates:list', 'mail:templates:save', 'mail:templates:delete', 'mail:templates:use', 'mail:templates:export', 'mail:templates:import',
       'mail:identities:list', 'mail:identities:save', 'mail:identities:delete', 'mail:identities:refresh', 'mail:signatures:list', 'mail:signatures:save', 'mail:signatures:delete'
     ]) expect(channels).toContain(expected)
