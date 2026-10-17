@@ -243,6 +243,17 @@ const api: AerioDesktopApi = {
     decrypt: (ref, passphrase) => ipcRenderer.invoke('smime:decrypt', ref, passphrase),
     saveAttachment: (ref, index) => ipcRenderer.invoke('smime:save-attachment', ref, index)
   },
+  mcp: {
+    status: () => ipcRenderer.invoke('mcp:status'),
+    save: (settings) => ipcRenderer.invoke('mcp:save', settings),
+    createClient: (name) => ipcRenderer.invoke('mcp:client:create', name),
+    revokeClient: (id) => ipcRenderer.invoke('mcp:client:revoke', id),
+    onChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, status: import('../src/mcp-types').McpStatus) => callback(status)
+      ipcRenderer.on('mcp:changed', listener)
+      return () => ipcRenderer.removeListener('mcp:changed', listener)
+    }
+  },
   mail: {
     messageTools: {
       updateLocal: (ref, updates) => ipcRenderer.invoke('mail:message:local', ref, updates),

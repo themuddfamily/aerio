@@ -429,6 +429,21 @@ describe('preload bridge', () => {
     expect(mocks.listeners.get('chat:event')).toEqual([])
   })
 
+  it('exposes external automation (MCP) settings with exact IPC channels and a removable status listener', async () => {
+    const mcp = api().mcp
+    const settings = { enabled: true, capabilities: { write: false, send: false, delete: false }, accountScope: 'all' }
+    expect(await mcp.status()).toEqual({ channel: 'mcp:status', args: [] })
+    expect(await mcp.save(settings)).toEqual({ channel: 'mcp:save', args: [settings] })
+    expect(await mcp.createClient('Claude Desktop')).toEqual({ channel: 'mcp:client:create', args: ['Claude Desktop'] })
+    expect(await mcp.revokeClient('mcp-1')).toEqual({ channel: 'mcp:client:revoke', args: ['mcp-1'] })
+    const received: unknown[] = []
+    const unsubscribe = mcp.onChanged((status: unknown) => received.push(status))
+    mocks.listeners.get('mcp:changed')!.forEach((listener) => listener({}, { listening: true }))
+    unsubscribe()
+    expect(received).toEqual([{ listening: true }])
+    expect(mocks.listeners.get('mcp:changed')).toEqual([])
+  })
+
   it('reports initial and changing network connectivity', async () => {
     window.dispatchEvent(new Event('offline'))
     window.dispatchEvent(new Event('online'))

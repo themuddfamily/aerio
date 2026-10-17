@@ -287,6 +287,11 @@ const chatMocks = vi.hoisted(() => {
   return { gate, service, runtime, initializeChat: vi.fn((_options: any) => runtime) }
 })
 vi.mock('./chat/chat-main', () => ({ initializeChat: chatMocks.initializeChat }))
+const mcpMocks = vi.hoisted(() => {
+  const runtime = { lockChanged: vi.fn(), stop: vi.fn(async () => {}) }
+  return { runtime, register: vi.fn((_options: any) => runtime) }
+})
+vi.mock('./mcp/automation-ipc', () => ({ registerMcpAutomation: mcpMocks.register }))
 const templateMocks = vi.hoisted(() => {
   const prepared = { count: 1, commit: vi.fn(), rollback: vi.fn() }
   const backup = { format: 'aerio-mail-templates', schemaVersion: 1, exportedAt: '2026-10-01T00:00:00Z', templates: [], attachments: [] }
@@ -410,6 +415,42 @@ describe.sequential('Electron main process', () => {
     await invoke('mail:network', true)
     expect(chatMocks.runtime.networkChanged).toHaveBeenCalledTimes(2)
     chatMocks.runtime.current = undefined
+  })
+
+  it('wires external automation (MCP) to the app lock, draft validation, and the protected send path', async () => {
+    expect(mocks.app.requestSingleInstanceLock).toHaveBeenCalledOnce()
+    const options = mcpMocks.register.mock.calls[0][0]
+    expect(options.userData).toBe(mocks.app.getPath())
+    expect(options.launch).toEqual({ command: 'node', args: [expect.stringMatching(/dist-electron[\\/]mcp[\\/]bridge\.js$/)] })
+    expect(options.isLocked()).toBe(false)
+    invoke('app-lock:enable', 'mcp lock fixture passphrase')
+    invoke('app-lock:lock')
+    expect(options.isLocked()).toBe(true)
+    expect(mcpMocks.runtime.lockChanged).toHaveBeenCalled()
+    expect(() => options.openMessage({ source: 'connected', accountId: 'a1b2', threadId: 'thread', title: 'Locked' })).toThrow(/Unlock Aerio/)
+    invoke('app-lock:unlock', 'mcp lock fixture passphrase')
+    invoke('app-lock:disable', 'mcp lock fixture passphrase')
+    const draft = { id: 'mcp-draft', accountId: 'a1b2', to: ['reader@example.test'], cc: [], bcc: [], subject: 'Hello', text: 'Body', attachmentPaths: [] as string[] }
+    expect(() => options.validateDraft({ ...draft, attachmentPaths: ['C:\\mcp-unapproved.txt'] })).toThrow(/not selected through Aerio/)
+    options.approveAttachmentPaths(['C:\\mcp-approved.txt'])
+    expect(options.validateDraft({ ...draft, attachmentPaths: ['C:\\mcp-approved.txt'] })).toMatchObject({ attachmentPaths: ['C:\\mcp-approved.txt'] })
+    expect(() => options.sendDraft({ ...draft, to: ['unfinished'] })).toThrow(/Finish or correct/)
+    mocks.assertOpenPgpSendable.mockClear()
+    mocks.assertSmimeSendable.mockClear()
+    mocks.worker.request.mockClear()
+    await options.sendDraft(draft)
+    expect(mocks.assertOpenPgpSendable).toHaveBeenCalledWith(mocks.openPgp, mocks.worker, expect.objectContaining({ id: 'mcp-draft' }))
+    expect(mocks.assertSmimeSendable).toHaveBeenCalledWith(mocks.smime, mocks.worker, expect.objectContaining({ id: 'mcp-draft' }))
+    expect(mocks.worker.request).toHaveBeenCalledWith(expect.objectContaining({ type: 'drafts:send', payload: expect.objectContaining({ id: 'mcp-draft' }) }))
+    // A protection failure keeps the draft out of the Outbox, exactly like the renderer's send.
+    mocks.assertSmimeSendable.mockRejectedValueOnce(new Error('No S/MIME certificate for: reader@example.test.'))
+    mocks.worker.request.mockClear()
+    await expect(options.sendDraft({ ...draft, smime: { sign: true } })).rejects.toThrow(/No S\/MIME certificate/)
+    expect(mocks.worker.request).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'drafts:send' }))
+    options.changed({ listening: true })
+    expect(mocks.windows[0].webContents.send).toHaveBeenCalledWith('mcp:changed', { listening: true })
+    options.diagnostic('info', 'mcp-tool-call', { tool: 'list_accounts' })
+    expect(mocks.diagnosticLogger.log).toHaveBeenCalledWith(expect.objectContaining({ level: 'info', component: 'app', event: 'mcp-tool-call', details: { tool: 'list_accounts' } }))
   })
 
   it('validates and saves preferences and local productivity data', async () => {
@@ -1626,6 +1667,8 @@ describe.sequential('Electron main process', () => {
     mocks.appHandlers.get('before-quit')?.()
     mocks.appHandlers.get('will-quit')?.()
     expect(mocks.updateManager.stop).toHaveBeenCalled()
+    // The automation channel closes so bridges report that Aerio is not running.
+    expect(mcpMocks.runtime.stop).toHaveBeenCalled()
     expect(mocks.store.close).toHaveBeenCalled()
     expect(mocks.worker.close).toHaveBeenCalled()
   })

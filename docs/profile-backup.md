@@ -17,6 +17,7 @@ The layout is an allowlist. Only these profile entries are copied:
 | `productivity.sqlite` | Local Tasks, Notes, and Contacts, local calendars and internet-calendar subscriptions, plus the provider calendar/contact cache |
 | `provider-tasks.sqlite` | The connected-task cache, durable task/list operations, and resolution history |
 | `dav.sqlite` | CalDAV/CardDAV accounts (no passwords), discovered collections with sync tokens and ctags, the resource cache with ETags, and pending writes |
+| `mcp-automation.sqlite` | [External automation (MCP)](mcp-automation.md) capability and account-scope choices (client token hashes and the send idempotency ledger are removed) |
 | `mail/` | Downloaded `.eml` files and staged draft attachments |
 | `note-attachments/`, `template-attachments/` | Managed attachment copies |
 
@@ -53,6 +54,7 @@ Retention only deletes folders whose manifest is valid. Unrelated or corrupt fol
    - **Accounts need reauthorization.** Every active account is set to `needs-auth` with an explanatory error. At the next launch, Aerio's normal recovery verifies each one with this device's vault. Accounts whose credentials are still present resume on their own; the others show *Reconnect*.
    - Queued mailbox-state operations (read/star/label/move/archive/trash) are restored as queued. They're idempotent label changes and represent intent the user already expressed.
    - The current device's `app_lock` row is copied into the staged preferences database.
+   - External automation restarts **off** with no issued MCP clients, so a restore never re-opens external access by itself.
    - A journal (`restore.json`, state `staged`) is written atomically, and Aerio relaunches with `app.relaunch()` and `app.quit()`, so every store and the mail worker close normally.
 3. **Swap** runs at the very start of the next launch, before any profile database opens. The journal moves to `swapping` and records which entries didn't exist. Then each entry is renamed aside into `rollback/`, along with its `-wal`/`-shm`/`-journal` sidecars, so a stale write-ahead log can never be replayed onto a different database, and the staged copy is renamed into place. Windows sharing violations (`EBUSY`/`EPERM`/`EACCES`) are retried for about 5 seconds.
    - If anything fails, every original is put back, and the journal records `rolled-back` with the reason.

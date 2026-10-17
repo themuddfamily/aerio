@@ -13,6 +13,7 @@ import DavAccountsSection from './DavAccountsSection'
 import KeyboardShortcutsSection from './KeyboardShortcutsSection'
 import CloudStorageAccountsSection from './CloudStorageAccountsSection'
 import MeetingHostsSection from './MeetingHostsSection'
+import McpAutomationSection from './McpAutomationSection'
 
 const readReceiptChoices: [MailReadReceiptPolicy, string][] = [['never', 'Never send'], ['ask', 'Ask me'], ['always', 'Always send']]
 
@@ -239,6 +240,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
         <DavAccountsSection />
         <CloudStorageAccountsSection />
         <MeetingHostsSection />
+        <McpAutomationSection />
         <section className="settings-section">
           <div className="settings-icon"><RefreshCw size={18} /></div>
           <div className="settings-content">
