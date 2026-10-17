@@ -70,9 +70,10 @@ address.
 
 - 200 identities per account, 10 Reply-To addresses, 500 signatures, 1 MB of
   signature HTML.
-- The outgoing MIME sanitizer still drops images, tables, and font markup (see
-  E03), so rich signature formatting beyond basic text styles and links is
-  simplified when sent.
+- Signatures keep tables, fonts, colors, and allowlisted inline styles when
+  sent (see [rich composition](rich-composition.md)). Embedded `data:` images
+  are sent as inline Content-ID parts; HTTPS images in a signature are removed
+  from outgoing mail because a sent message only references images it carries.
 - Microsoft shared-mailbox permissions and Gmail alias verification have unit
   coverage against recorded API shapes only; they have not been exercised
   against live tenants.

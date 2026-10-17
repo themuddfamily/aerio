@@ -82,6 +82,7 @@ import { senderDomainFromEmail } from '../src/lib/sender-avatar'
 import { isCompleteMailAddress } from '../src/lib/mail-address'
 import { validateMailSavedSearch } from '../src/lib/mail-saved-search'
 import { validateMailQuickAction, validateMailQuickActionTargets } from '../src/lib/mail-quick-actions'
+import { inlineImageBytes } from '../src/lib/mail-rich-text'
 import { mailPollingIntervalForWindow } from './mail/polling-policy'
 import { faviconDomainCandidates } from './mail/favicon-domains'
 import { fetchRemoteImage } from './mail/remote-image-fetch'
@@ -255,7 +256,8 @@ function validateDraft(input: MailDraftInput, forSend = false) {
   if (input.attachmentPaths.some((path) => typeof path !== 'string' || !approvedAttachmentPaths.has(path))) {
     throw new Error('A draft referenced a file that was not selected through Aerio')
   }
-  let attachmentBytes = 0
+  // Embedded images become MIME parts too, so they share the attachment budget.
+  let attachmentBytes = inlineImageBytes(input.html)
   for (const path of input.attachmentPaths) {
     try {
       const details = statSync(path)
@@ -265,7 +267,7 @@ function validateDraft(input: MailDraftInput, forSend = false) {
       throw new Error(`An attachment is no longer available: ${basename(path)}`)
     }
   }
-  if (attachmentBytes > 20 * 1024 * 1024) throw new Error('Attachments exceed Aerio’s 20 MB sending limit')
+  if (attachmentBytes > 20 * 1024 * 1024) throw new Error('Attachments and inline images exceed Aerio’s 20 MB sending limit')
   return input
 }
 

@@ -1,4 +1,4 @@
-import { Bold, CalendarClock, Copy, Italic, Link, List, Paperclip, Save, Send, Sparkles, Trash2, Underline, X } from 'lucide-react'
+import { CalendarClock, Copy, Paperclip, Save, Send, Sparkles, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MailAccountSummary, MailDraftInput, MailDraftRecord, MailThreadDetail, MailRecipientSuggestion, MailSendOptions } from '../mail-types'
 import { formatFileSize } from '../lib/domain'
@@ -9,6 +9,7 @@ import MailTemplatePicker from './MailTemplatePicker'
 import { primaryIdentityId, type MailSenderIdentity, type MailSignature } from '../mail-identity-types'
 import { defaultIdentityId, identityLabel, LEGACY_SIGNATURE_ID, replaceSignatureBlock, replyIdentityId, signatureBlockHtml, signatureBlockUnchanged, signatureForIdentity, QUOTE_ATTRIBUTE, type ComposerSignature } from '../lib/mail-signature'
 import MailSendOptionsControl from './MailSendOptionsControl'
+import MailFormattingToolbar, { useRichEditorInput } from './MailFormattingToolbar'
 import { ReplyWatchControl, armReplyWatch, replyWatchDeadline, type ReplyWatchSetting } from './MailReplyWatches'
 import { MailAiComposeAssist } from './MailAiComposeAssist'
 import { aiFeatureAvailable, useAiAssistantStatus } from '../lib/use-ai-assistant'
@@ -145,7 +146,7 @@ ${signature}` : ''}${forwardedText}`
     rebaseline.current = false
   }
   latestFingerprint.current = fingerprint
-  const hasContent = Boolean(to || cc || bcc || subject || text.trim() || attachments.length)
+  const hasContent = Boolean(to || cc || bcc || subject || text.trim() || attachments.length || /<(?:img|table)\b/i.test(html))
   const hasChanges = fingerprint !== initialFingerprint.current
 
   useEffect(() => {
@@ -325,22 +326,7 @@ ${signature}` : ''}${forwardedText}`
   })
   const currentAccount = accounts.find((account) => account.id === accountId)
 
-  const format = (command: string, value?: string) => {
-    const editor = editorRef.current
-    editor?.focus()
-    editor?.ownerDocument.execCommand(command, false, value)
-    updateEditor()
-  }
-
-  const addLink = () => {
-    const value = editorRef.current?.ownerDocument.defaultView?.prompt('Link address (https:// or mailto:)')?.trim()
-    if (!value) return
-    if (!/^(https?:|mailto:)/i.test(value)) {
-      onToast('Use an https://, http://, or mailto: link')
-      return
-    }
-    format('createLink', value)
-  }
+  const editorInput = useRichEditorInput({ editorRef, onEditorChange: updateEditor, onToast })
 
   const discard = async () => {
     if (!window.confirm('Discard this draft? It will also be removed from the mail provider.')) return
@@ -430,12 +416,7 @@ ${signature}` : ''}${forwardedText}`
           {(replyToVisible || replyToField) && <div className="compose-row"><label>Reply-To</label><input value={replyToField} onFocus={() => setRecipientField(undefined)} onChange={(event) => setReplyToField(event.target.value)} placeholder="replies@example.com" /></div>}
           {recipientField && recipientSuggestions.length > 0 && <div className="recipient-suggestions">{recipientSuggestions.map((suggestion) => <button key={`${suggestion.accountId}:${suggestion.email}`} onMouseDown={(event) => event.preventDefault()} onClick={() => chooseRecipient(suggestion)}><span className="avatar">{(suggestion.name || suggestion.email).slice(0, 2).toUpperCase()}</span><span><strong>{suggestion.name || suggestion.email}</strong><small>{suggestion.email}</small></span></button>)}</div>}
           <div className="compose-row"><label>Subject</label><input value={subject} onFocus={() => setRecipientField(undefined)} onChange={(event) => setSubject(event.target.value)} /></div>
-          <div className="compose-formatting" role="toolbar" aria-label="Message formatting">
-            <button className="icon-button" title="Bold" onMouseDown={(event) => event.preventDefault()} onClick={() => format('bold')}><Bold size={15} /></button>
-            <button className="icon-button" title="Italic" onMouseDown={(event) => event.preventDefault()} onClick={() => format('italic')}><Italic size={15} /></button>
-            <button className="icon-button" title="Underline" onMouseDown={(event) => event.preventDefault()} onClick={() => format('underline')}><Underline size={15} /></button>
-            <button className="icon-button" title="Bulleted list" onMouseDown={(event) => event.preventDefault()} onClick={() => format('insertUnorderedList')}><List size={15} /></button>
-            <button className="icon-button" title="Add link" onMouseDown={(event) => event.preventDefault()} onClick={addLink}><Link size={15} /></button>
+          <MailFormattingToolbar editorRef={editorRef} onEditorChange={updateEditor} onToast={onToast}>
             {(signatures.length > 0 || Boolean(currentAccount?.signature.trim())) && <select className="compose-signature-select" aria-label="Signature" value={signatureChoice} onChange={(event) => {
               const stored = signatures.find((item) => item.id === event.target.value)
               applySignature(stored ? { id: stored.id, html: stored.html } : event.target.value === LEGACY_SIGNATURE_ID ? signatureForIdentity(undefined, currentAccount, [], signatureContext) : undefined)
@@ -449,7 +430,7 @@ ${signature}` : ''}${forwardedText}`
               setAttachments((current) => [...current, ...changes.attachments.filter((item) => !current.some((existing) => existing.path.toLowerCase() === item.path.toLowerCase()))])
             }} />
             {aiFeatureAvailable(ai, 'compose') && <button className={`icon-button ${aiOpen ? 'active' : ''}`} title="Draft or rephrase with AI" aria-pressed={aiOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setAiOpen((open) => !open)}><Sparkles size={15} /></button>}
-          </div>
+          </MailFormattingToolbar>
           {aiOpen && ai && <MailAiComposeAssist status={ai} editorRef={editorRef} text={text} replyTo={!forward && replyMessage ? { accountId: replyMessage.accountId, threadId: replyMessage.threadId, messageId: replyMessage.id } : undefined} onEditorChange={updateEditor} onClose={() => setAiOpen(false)} />}
           <div
             ref={bindEditor}
@@ -461,11 +442,7 @@ ${signature}` : ''}${forwardedText}`
             data-placeholder="Write your message…"
             onInput={updateEditor}
             onFocus={() => setRecipientField(undefined)}
-            onPaste={(event) => {
-              event.preventDefault()
-              event.currentTarget.ownerDocument.execCommand('insertText', false, event.clipboardData.getData('text/plain'))
-              updateEditor()
-            }}
+            {...editorInput}
           />
           {attachments.length > 0 && <div className="mail-compose-files">{attachments.map((file, index) => <span key={`${file.path}-${index}`} onContextMenu={(event) => showContextMenu(event, [
             { label: 'Copy filename', icon: Copy, action: () => copyText(file.name) },
