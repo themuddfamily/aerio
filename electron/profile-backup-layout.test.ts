@@ -257,7 +257,20 @@ describe('full profile layout', () => {
     const dav = new DavStore(join(profile, 'dav.sqlite'))
     dav.saveAccount({ id: 'dav-1', preset: 'fastmail', name: 'Fastmail', username: 'ada@example.com', serverUrl: 'https://caldav.fastmail.com/', calendarRoots: [], contactsRoots: [], status: 'ready' })
     dav.saveOperation({ id: 'op-1', accountId: 'dav-1', collectionId: 'c', href: 'https://caldav.fastmail.com/x.ics', kind: 'event', action: 'create', data: 'BEGIN:VCALENDAR', status: 'queued', attempts: 0, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' })
+    // CalDAV tasks (E45): the VTODO cache lives in dav.sqlite and the task queue in provider-tasks.sqlite.
+    const todo = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'BEGIN:VTODO', 'UID:t', 'SUMMARY:Cached todo', 'X-KEEP:1', 'END:VTODO', 'END:VCALENDAR', ''].join('\r\n')
+    const taskCalendar = { id: 'dav-1:tasks', accountId: 'dav-1', url: 'https://caldav.fastmail.com/tasks/', kind: 'calendar' as const, name: 'Tasks', color: '#000000', components: ['VTODO'], readOnly: false, shared: false, enabled: true, supportsSyncCollection: true, syncMode: 'sync-collection' as const, syncToken: 'token-1' }
+    dav.saveCollection(taskCalendar)
+    dav.applyChanges(taskCalendar, [{ href: 'https://caldav.fastmail.com/tasks/t.ics', etag: '"e1"', data: todo }], [])
     dav.close()
+    const tasks = new TaskStore(join(profile, 'provider-tasks.sqlite'))
+    tasks.replaceProviderSnapshot('dav-1', 'dav', {
+      lists: [{ id: taskCalendar.id, accountId: 'dav-1', provider: 'dav', remoteId: taskCalendar.url, title: 'Tasks', revision: 'token-1', readOnly: false }],
+      tasks: [{ id: 'dav-1:tasks:todo:1', accountId: 'dav-1', provider: 'dav', remoteId: 'https://caldav.fastmail.com/tasks/t.ics', listId: taskCalendar.id, remoteListId: taskCalendar.url, title: 'Cached todo', completed: false, revision: '"e1"', readOnly: false, native: { priority: 'normal', status: 'notStarted', categories: [], caldav: { uid: 't', preserved: ['X-KEEP'] } } }],
+      checkpoints: {}
+    })
+    tasks.update(tasks.entities('dav-1', 'dav')[0].id, { title: 'Offline CalDAV edit', native: { percentComplete: 30 } })
+    tasks.close()
     writeFileSync(join(profile, 'dav-credentials.dat'), 'sealed-app-password')
     const { path } = await backupOf(profile)
     expect(existsSync(join(path, 'data', 'dav-credentials.dat'))).toBe(false)
@@ -270,7 +283,12 @@ describe('full profile layout', () => {
     try {
       expect(restored.account('dav-1')).toMatchObject({ status: 'needs-auth', error: RESTORED_DAV_MESSAGE })
       expect(restored.operations().map((operation) => [operation.status, operation.error])).toEqual([['held', RESTORED_DAV_WRITE_MESSAGE]])
+      expect(restored.resources('dav-1:tasks')[0].data).toContain('X-KEEP:1')
     } finally { restored.close() }
+    const restoredTasks = new TaskStore(join(profile, 'provider-tasks.sqlite'))
+    try {
+      expect(restoredTasks.operations().filter((operation) => operation.provider === 'dav').map((operation) => [operation.status, operation.error, operation.patch.title])).toEqual([['review', 'restored-write', 'Offline CalDAV edit']])
+    } finally { restoredTasks.close() }
     expect(readFileSync(join(profile, 'dav-credentials.dat'), 'utf8')).toBe('sealed-app-password')
   })
 

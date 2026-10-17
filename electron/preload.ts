@@ -77,6 +77,12 @@ const api: AerioDesktopApi = {
       uploadNative: (taskId) => ipcRenderer.invoke('tasks:attachments:upload-native', taskId),
       removeNative: (taskId, attachmentId) => ipcRenderer.invoke('tasks:attachments:remove-native', taskId, attachmentId),
       openNative: (taskId, attachmentId) => ipcRenderer.invoke('tasks:attachments:open-native', taskId, attachmentId)
+    },
+    ics: {
+      choose: () => ipcRenderer.invoke('tasks:ics:choose'),
+      duplicates: (listId, uids) => ipcRenderer.invoke('tasks:ics:duplicates', listId, uids),
+      importConnected: (listId, sources, mode) => ipcRenderer.invoke('tasks:ics:import-connected', listId, sources, mode),
+      exportList: (target) => ipcRenderer.invoke('tasks:ics:export', target)
     }
   },
   productivity: {

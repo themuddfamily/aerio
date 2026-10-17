@@ -10,6 +10,7 @@ import { localTaskExtendedFields, validTaskExtendedFields } from '../../src/lib/
 import { MICROSOFT_TASK_ATTACHMENT_MAX_BYTES } from './microsoft-tasks-connector'
 import { relinkAttachments, TaskAttachmentFiles } from './task-attachments'
 import type { TaskBackup } from './task-backup'
+import { CALDAV_SOURCE_LIMIT } from '../../src/caldav-task-types'
 import { TaskReminderService, type TaskReminderCandidate } from './task-reminders'
 import type { TaskService } from './task-service'
 
@@ -39,7 +40,14 @@ const id = (value: unknown, label = 'task') => {
  * managed storage, as with Notes, so restored backups may carry their original paths until relinked.
  */
 export function validLocalTaskExtras(task: Task) {
-  return validTaskExtendedFields(localTaskExtendedFields(task))
+  return validTaskExtendedFields(localTaskExtendedFields(task)) && validTaskICalendar(task.icalendar)
+}
+
+/** The retained .ics identity of an imported local task (E45). */
+export function validTaskICalendar(value: Task['icalendar']) {
+  return value === undefined || (Boolean(value) && typeof value === 'object' && Object.keys(value).every((key) => key === 'uid' || key === 'source') &&
+    typeof value.uid === 'string' && Boolean(value.uid.trim()) && value.uid.length <= 1_000 &&
+    (value.source === undefined || (typeof value.source === 'string' && value.source.length <= CALDAV_SOURCE_LIMIT)))
 }
 
 /**

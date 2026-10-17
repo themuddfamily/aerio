@@ -8,7 +8,7 @@ import { discoverAccount, listCollections, type DiscoveredCollection } from './d
 import { pullCollection } from './dav-sync'
 import {
   contactFromResource, eventsFromResource, mergeContactResource, mergeEventResource, newContactResource, newEventResource,
-  removeEventInstance, resourceTitle, type DavCollectionRef
+  removeEventInstance, resourceTitle, withoutEvents, type DavCollectionRef
 } from './dav-payload'
 import type { DavAccountRecord, DavCollectionRecord, DavOperationRecord, DavStore } from './dav-store'
 import type { DavCredentialVault } from './dav-credentials'
@@ -29,6 +29,9 @@ export interface DavServiceOptions {
   now?(): Date
   changed?(): void
   diagnostic?(record: { level: 'info' | 'warn' | 'error'; event: string; accountId?: string; message?: string; details?: Record<string, unknown> }): void
+  /** CalDAV tasks (E45): an account was added, re-authorized, or had a task calendar toggled. */
+  tasksChanged?(accountId: string): void
+  accountRemoved?(accountId: string): void
 }
 
 export class DavWriteBlockedError extends Error {
@@ -41,10 +44,13 @@ export class DavWriteBlockedError extends Error {
 const collectionId = (accountId: string, url: string) => `${accountId}:${createHash('sha256').update(url.replace(/\/+$/, '')).digest('hex').slice(0, 16)}`
 const message = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback).slice(0, 500)
 const isEventCalendar = (collection: DavCollectionRecord) => collection.kind === 'calendar' && collection.components.includes('VEVENT')
-const syncable = (collection: DavCollectionRecord) => collection.enabled && (collection.kind === 'addressbook' || isEventCalendar(collection))
+/** Calendars holding VTODOs, task-only or mixed (E45). Their todos go to Tasks, their events to Calendar. */
+export const isTaskCalendar = (collection: Pick<DavCollectionRecord, 'kind' | 'components'>) => collection.kind === 'calendar' && collection.components.includes('VTODO')
+const syncable = (collection: DavCollectionRecord) => collection.enabled && (collection.kind === 'addressbook' || isEventCalendar(collection) || isTaskCalendar(collection))
 const memberUrl = (collection: DavCollectionRecord, name: string) => new URL(encodeURIComponent(name), collection.url.endsWith('/') ? collection.url : `${collection.url}/`).toString()
 const ref = (collection: DavCollectionRecord): DavCollectionRef => ({ id: collection.id, accountId: collection.accountId, name: collection.name, color: collection.color, readOnly: collection.readOnly })
 const host = (url: string | undefined) => { try { return url ? new URL(url).host : undefined } catch { return undefined } }
+const sameUrl = (a: string, b: string) => a.replace(/\/+$/, '') === b.replace(/\/+$/, '')
 
 export class DavService {
   private readonly locks = new Map<string, Promise<unknown>>()
@@ -147,6 +153,7 @@ export class DavService {
     this.options.diagnostic?.({ level: 'info', event: 'dav-account-added', accountId: id, details: { preset: preset.id, host: host(serverUrl), collections: discovery.collections.length } })
     this.changed()
     await this.sync(id).catch(() => undefined)
+    this.options.tasksChanged?.(id)
     return this.store.account(id)!
   }
 
@@ -165,12 +172,14 @@ export class DavService {
     this.store.saveAccount({ ...account, status: 'ready', error: undefined })
     // Writes held after a profile restore stay held until the user sends them from review.
     await this.sync(accountId).catch(() => undefined)
+    this.options.tasksChanged?.(accountId)
   }
 
   removeAccount(accountId: string) {
     this.store.removeAccount(accountId)
     this.options.credentials.remove(accountId)
     this.options.productivity().removeAccount(accountId)
+    this.options.accountRemoved?.(accountId)
     this.options.diagnostic?.({ level: 'info', event: 'dav-account-removed', accountId })
     this.changed()
   }
@@ -181,6 +190,7 @@ export class DavService {
     this.store.saveCollection({ ...collection, enabled })
     this.project(collection.accountId)
     this.changed()
+    if (isTaskCalendar(collection)) this.options.tasksChanged?.(collection.accountId)
   }
 
   private mergeCollections(account: DavAccountRecord, discovered: DiscoveredCollection[]) {
@@ -190,17 +200,7 @@ export class DavService {
     discovered.forEach((found, index) => {
       const key = found.url.replace(/\/+$/, '')
       seen.add(key)
-      const previous = byUrl.get(key)
-      this.store.saveCollection({
-        id: previous?.id ?? collectionId(account.id, found.url), accountId: account.id, url: found.url, kind: found.kind, name: found.name,
-        color: found.color ?? previous?.color ?? COLORS[(existing.length + index) % COLORS.length],
-        ...(found.description ? { description: found.description } : {}),
-        components: found.components, readOnly: found.readOnly, shared: found.shared, enabled: previous?.enabled ?? true,
-        // Revision markers come from the last successful pull, never from the listing.
-        ...(previous?.ctag ? { ctag: previous.ctag } : {}), ...(previous?.syncToken ? { syncToken: previous.syncToken } : {}),
-        supportsSyncCollection: found.supportsSyncCollection, syncMode: previous?.syncMode ?? (found.supportsSyncCollection ? 'sync-collection' : 'ctag'),
-        ...(previous?.lastSyncedAt ? { lastSyncedAt: previous.lastSyncedAt } : {}), ...(previous?.error ? { error: previous.error } : {})
-      })
+      this.saveDiscovered(account.id, found, byUrl.get(key), existing.length + index)
     })
     for (const collection of existing) {
       if (seen.has(collection.url.replace(/\/+$/, ''))) continue
@@ -210,6 +210,86 @@ export class DavService {
       }
       this.store.removeCollection(collection.id)
     }
+  }
+
+  private saveDiscovered(accountId: string, found: DiscoveredCollection, previous: DavCollectionRecord | undefined, colorIndex: number) {
+    const record: DavCollectionRecord = {
+      id: previous?.id ?? collectionId(accountId, found.url), accountId, url: found.url, kind: found.kind, name: found.name,
+      color: found.color ?? previous?.color ?? COLORS[colorIndex % COLORS.length],
+      ...(found.description ? { description: found.description } : {}),
+      components: found.components, readOnly: found.readOnly, shared: found.shared, enabled: previous?.enabled ?? true,
+      // Revision markers come from the last successful pull, never from the listing.
+      ...(previous?.ctag ? { ctag: previous.ctag } : {}), ...(previous?.syncToken ? { syncToken: previous.syncToken } : {}),
+      supportsSyncCollection: found.supportsSyncCollection, syncMode: previous?.syncMode ?? (found.supportsSyncCollection ? 'sync-collection' : 'ctag'),
+      ...(previous?.lastSyncedAt ? { lastSyncedAt: previous.lastSyncedAt } : {}), ...(previous?.error ? { error: previous.error } : {})
+    }
+    this.store.saveCollection(record)
+    return record
+  }
+
+  // --- CalDAV tasks (E45) ----------------------------------------------------------------------
+
+  /** Accounts with a CalDAV home, which can hold task lists. */
+  taskAccounts() {
+    return this.store.accounts().filter((account) => Boolean(account.calendarHomeUrl))
+  }
+
+  /**
+   * Runs `work` with the account's authenticated client while no other synchronization or write for
+   * the account runs. A 401 marks the account as needing its password again.
+   */
+  withAccount<T>(accountId: string, work: (account: DavAccountRecord, client: DavClient) => Promise<T>): Promise<T> {
+    return this.exclusive(accountId, async () => {
+      const account = this.store.account(accountId)
+      if (!account) throw new Error('That account is no longer connected')
+      if (this.options.online && !this.options.online()) throw new DavNetworkError('Aerio is offline; changes will be sent when the connection returns')
+      try { return await work(account, this.client(account)) }
+      catch (error) {
+        if (error instanceof DavHttpError && error.status === 401) {
+          const latest = this.store.account(accountId)
+          if (latest) this.store.saveAccount({ ...latest, status: 'needs-auth', error: 'The server rejected the app password. Enter it again.' })
+          this.changed()
+        }
+        throw error
+      }
+    })
+  }
+
+  /** Records a collection Aerio created (MKCALENDAR) or re-read, keeping its local settings. */
+  saveDiscoveredCollection(accountId: string, found: DiscoveredCollection) {
+    const existing = this.store.collections(accountId)
+    return this.saveDiscovered(accountId, found, existing.find((item) => sameUrl(item.url, found.url)), existing.length)
+  }
+
+  /**
+   * Pulls every enabled calendar that holds VTODOs with the shared sync engine. A full pull first
+   * refreshes the collection listing. Mixed calendars are projected again so their events stay current.
+   */
+  pullTaskCollections(accountId: string, full: boolean) {
+    return this.withAccount(accountId, async (account, client) => {
+      if (full) await this.refreshCollections(account, client)
+      let calendarsChanged = false
+      for (const collection of this.store.collections(accountId).filter((item) => item.enabled && isTaskCalendar(item))) {
+        try {
+          const changes = await pullCollection(client, collection, this.store.etags(collection.id))
+          this.store.applyChanges({
+            ...collection,
+            ...(changes.ctag !== undefined ? { ctag: changes.ctag } : {}),
+            ...(changes.syncToken !== undefined ? { syncToken: changes.syncToken } : {}),
+            syncMode: changes.mode, lastSyncedAt: this.now().toISOString(), error: undefined
+          }, changes.changed, changes.removed)
+          if (isEventCalendar(collection) && (changes.changed.length || changes.removed.length)) calendarsChanged = true
+        } catch (error) {
+          // One failing task list keeps its cached tasks; the others still synchronize.
+          if (error instanceof DavNetworkError || (error instanceof DavHttpError && error.status === 401)) throw error
+          this.store.saveCollection({ ...collection, error: message(error, 'This task list could not be synchronized') })
+        }
+      }
+      if (calendarsChanged || full) {
+        this.project(accountId)
+        this.changed()
+      }
+    })
   }
 
   // --- Synchronization ------------------------------------------------------------------------
@@ -315,6 +395,8 @@ export class DavService {
         else if (operation.data) resources.set(operation.href, { collectionId: collection.id, href: operation.href, data: operation.data, etag: resources.get(operation.href)?.etag })
       }
       if (collection.kind === 'calendar') {
+        // Task-only calendars belong to Tasks; mixed calendars contribute only their VEVENTs here.
+        if (!isEventCalendar(collection)) continue
         data.calendars.push({
           id: collection.id, remoteId: collection.url, accountId, provider: 'dav', name: collection.name, color: collection.color,
           primary: primary && !collection.readOnly, canWrite: !collection.readOnly
@@ -496,7 +578,8 @@ export class DavService {
       const collection = this.writableCollection(current.calendarId, 'calendar')
       const { data } = this.baseData(collection, current.remoteId)
       // Deleting one occurrence of a recurring series rewrites the series instead of deleting it.
-      const rewritten = current.recurrenceId ? removeEventInstance(data, current.recurrenceId) : undefined
+      // A calendar object that also holds VTODOs keeps them: only its VEVENTs are removed.
+      const rewritten = current.recurrenceId ? removeEventInstance(data, current.recurrenceId) : withoutEvents(data)
       this.enqueue(collection, 'event', current.remoteId, rewritten ? 'update' : 'delete', rewritten)
       await this.commit(collection.accountId)
     })

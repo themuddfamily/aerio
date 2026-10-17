@@ -160,7 +160,19 @@ export function removeEventInstance(original: string, recurrenceId: string) {
   return emit(roots)
 }
 
-const CONTACT_MANAGED = new Set(['UID', 'FN', 'N', 'NICKNAME', 'EMAIL', 'TEL', 'ADR', 'URL', 'ORG', 'TITLE', 'BDAY', 'CATEGORIES', 'NOTE', 'VERSION', 'PRODID'])
+/**
+ * A calendar object that also holds VTODOs (E45) with its VEVENTs removed, so deleting the event
+ * never deletes tasks. Returns undefined when there is nothing else to keep, and the resource is deleted.
+ */
+export function withoutEvents(original: string) {
+  const roots = parseRoots(original)
+  const calendar = roots.find((root) => root.name === 'VCALENDAR')
+  if (!calendar || !calendar.children.some((child) => child.name === 'VTODO')) return undefined
+  calendar.children = calendar.children.filter((child) => child.name !== 'VEVENT')
+  return emit(roots)
+}
+
+const CONTACT_MANAGED =new Set(['UID', 'FN', 'N', 'NICKNAME', 'EMAIL', 'TEL', 'ADR', 'URL', 'ORG', 'TITLE', 'BDAY', 'CATEGORIES', 'NOTE', 'VERSION', 'PRODID'])
 
 /** Serializes a vCard for `contact`. `defaultGroup` (the address book name) is not written as a category. */
 export function newContactResource(contact: Contact, uid: string, defaultGroup: string, version: '3.0' | '4.0' = '3.0') {

@@ -58,6 +58,16 @@ Duplicate handling (`src/lib/interchange-plan.ts`):
 - **Events** match on `UID` + `RECURRENCE-ID`. Events that have no UID match on identical title, start, and end. Choose *update*, *skip*, or *import as copies*. Repeated records within one file are imported once.
 - **Contacts** match on source UID, then any shared email address, then the same name with a shared phone number. Choose *merge*, *skip*, or *import as separate contacts*. *Merge* keeps the existing record's identity, values, and favourite state, fills empty fields, and adds new emails, phones, addresses, and websites. Repeated rows within one file are folded into a single new contact.
 
+## Task files
+
+Tasks import and export `.ics` files that contain VTODOs, using the VTODO mapping in [CalDAV tasks and iCalendar task files](caldav-tasks.md#vtodo-mapping). The rules for importing them are:
+
+- They are previewed before import, grouped by UID.
+- They can be imported into a local list or a writable Google Tasks, Microsoft To Do, or CalDAV list.
+- Duplicates are matched by UID: **Skip**, **Replace**, or **Import as a copy** with a new UID.
+
+Local tasks keep the original VTODO, and CalDAV lists receive the whole object, so properties Aerio does not edit (`X-` properties, extra alarms, overrides, inline attachments) survive a round trip. Google Tasks and Microsoft To Do receive only the fields they can store, and the import lists what was left out. The same 20 MB file limit and parser limits apply. Events in a task file are ignored, and tasks in a calendar import are ignored.
+
 ## Internet calendar subscriptions
 
 Subscriptions are created from `https://`, `webcal://`, or `webcals://` addresses (`webcal` is mapped to `https`). Plain HTTP and addresses with embedded credentials are refused. Feeds are fetched in the main process only (`electron/productivity/calendar-subscriptions.ts`):

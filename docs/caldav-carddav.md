@@ -31,13 +31,14 @@ Calendars and contacts can live on different hosts (iCloud, Fastmail), and each 
 
 | Signal | Effect |
 | --- | --- |
-| `supported-calendar-component-set` without `VEVENT` | Listed in Settings as **Tasks only** and kept out of Calendar. VTODO is not synchronized. |
+| `supported-calendar-component-set` without `VEVENT` | Listed in Settings as **Tasks only (shown in Tasks)**. It is kept out of Calendar and its VTODOs sync into Tasks ([CalDAV tasks](caldav-tasks.md)). |
+| `supported-calendar-component-set` with `VEVENT` and `VTODO` | **Events and tasks**: its VEVENTs go to Calendar and its VTODOs to Tasks, from one shared pull |
 | `current-user-privilege-set` without `all`, `write`, or `write-content` | Read-only: Aerio blocks edits before sending anything |
 | CalendarServer `subscribed` resource type | Read-only |
 | CalendarServer `shared` / `shared-owner` resource type | Marked **Shared**; still writable if the privileges allow it |
 | No privilege set reported | Treated as writable. A server `403` puts the change in review instead of losing it. |
 
-Each calendar and address book can be hidden in Settings without removing the account.
+Each calendar and address book can be hidden in Settings without removing the account. Deleting an event from a calendar object that also holds VTODOs removes only the VEVENT, so tasks are never deleted from Calendar.
 
 ## Synchronization
 
@@ -49,7 +50,7 @@ Each calendar and address book can be hidden in Settings without removing the ac
 
 Reads retry `429`/`503` up to three times and honor `Retry-After`. Responses are limited to 32 MB and 60 seconds. A failing collection records its error and the others continue. A `401` marks the account **Password needed** and keeps the last good cache. Accounts sync about 25 seconds after launch, every 15 minutes, on **Sync now** in Calendar or Contacts, and from Settings.
 
-`dav.sqlite` stores the server copy and ETag of every resource. Calendar objects are parsed with the E26 ICS parser (`src/lib/ics.ts`), including VTIMEZONE and Windows/IANA zone handling, recurrence rules, `EXDATE`, and `RECURRENCE-ID` overrides, which appear as separate instances. vCards use `src/lib/vcard.ts`. Contact-group cards (`KIND:group`, `X-ADDRESSBOOKSERVER-KIND:group`) are skipped.
+`dav.sqlite` stores the server copy and ETag of every resource, including the VTODO objects of task calendars. Tasks reads them from there. Calendar objects are parsed with the E26 ICS parser (`src/lib/ics.ts`), including VTIMEZONE and Windows/IANA zone handling, recurrence rules, `EXDATE`, and `RECURRENCE-ID` overrides, which appear as separate instances. vCards use `src/lib/vcard.ts`. Contact-group cards (`KIND:group`, `X-ADDRESSBOOKSERVER-KIND:group`) are skipped.
 
 ## Writes, the offline queue, and conflicts
 
@@ -89,7 +90,7 @@ Every create, edit, or delete is first saved in `dav_operations` and shown immed
 ## Known limits
 
 - The behavior of the real iCloud, Fastmail, and Nextcloud servers has not been verified against live accounts. The presets, the separate iCloud hosts, and the quirks above follow published documentation and are covered only by the controlled fixture.
-- CalDAV scheduling (RFC 6638 inbox/outbox and iTIP invitations), free/busy, VTODO, VJOURNAL, and creating or sharing collections are not implemented.
+- CalDAV scheduling (RFC 6638 inbox/outbox and iTIP invitations), free/busy, VJOURNAL, and creating or sharing calendars are not implemented. VTODO task lists are synchronized into Tasks and can be created there. See [CalDAV tasks and iCalendar task files](caldav-tasks.md).
 - Editing a single occurrence that has no override yet edits the whole series (recurrence editing is E24).
 - When two clients edit the same item, Aerio doesn't merge field by field. You choose one version in review.
 - New contacts go to the first writable, visible address book of the account.

@@ -128,6 +128,26 @@ export class DavFixtureServer {
     try {
       if (method === 'PROPFIND') return this.propfind(path, request.headers.depth === '1' ? 1 : 0, body, send)
       if (method === 'REPORT') return this.report(path, body, send)
+      // Collection management (RFC 4791 MKCALENDAR, RFC 4918 PROPPATCH/DELETE) for task lists.
+      const collectionPath = path.endsWith('/') ? path : `${path}/`
+      if (method === 'MKCALENDAR') {
+        if (this.collections.has(collectionPath) || !collectionPath.startsWith(this.calendarHome)) return send(405)
+        const root = parseXml(body)
+        const props = childElement(childElement(root, DAV_NS, 'set'), DAV_NS, 'prop')
+        const components = childElements(childElement(props, CALDAV_NS, 'supported-calendar-component-set'), CALDAV_NS, 'comp').map((comp) => comp.attributes.name)
+        const created: FixtureCollection = { path: collectionPath, kind: 'calendar', name: elementText(childElement(props, DAV_NS, 'displayname')) ?? 'Untitled', components: components.length ? components : undefined, resources: new Map(), revision: ++this.revision, changes: [] }
+        this.collections.set(collectionPath, created)
+        return send(201)
+      }
+      if (method === 'PROPPATCH' || (method === 'DELETE' && path.endsWith('/'))) {
+        const target = this.collections.get(collectionPath)
+        if (!target) return send(404)
+        if (target.readOnly) return send(403)
+        if (method === 'DELETE') { this.collections.delete(collectionPath); return send(204) }
+        const name = elementText(childElement(childElement(childElement(parseXml(body), DAV_NS, 'set'), DAV_NS, 'prop'), DAV_NS, 'displayname'))
+        if (name) { target.name = name; target.revision = ++this.revision }
+        return send(207, this.multistatus([`<d:response><d:href>${escapeXml(collectionPath)}</d:href><d:propstat><d:prop><d:displayname/></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`]))
+      }
       const [collection, name] = this.locate(path)
       if (!collection || !name) return send(method === 'GET' ? 404 : 405)
       const existing = collection.resources.get(name)
@@ -283,6 +303,12 @@ export class DavFixtureServer {
 export const ICS = (uid: string, summary: string, extra = '') => [
   'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Fixture//EN', 'BEGIN:VEVENT', `UID:${uid}`, 'DTSTAMP:20260101T000000Z',
   'DTSTART:20261020T090000Z', 'DTEND:20261020T100000Z', `SUMMARY:${summary}`, ...(extra ? extra.split('\n') : []), 'END:VEVENT', 'END:VCALENDAR', ''
+].join('\r\n')
+
+/** A calendar object with one VTODO; `extra` lines go inside the VTODO, `after` after it (overrides). */
+export const VTODO = (uid: string, summary: string, extra = '', after = '') => [
+  'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Fixture//EN', 'BEGIN:VTODO', `UID:${uid}`, 'DTSTAMP:20260101T000000Z',
+  `SUMMARY:${summary}`, ...(extra ? extra.split('\n') : []), 'END:VTODO', ...(after ? after.split('\n') : []), 'END:VCALENDAR', ''
 ].join('\r\n')
 
 export const VCF = (uid: string, name: string, extra = '') => [

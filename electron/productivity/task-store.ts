@@ -12,7 +12,7 @@ import { localOverlayFields } from '../../src/task-fields-types'
 const defaults = (): TaskLocalMetadata => ({ priority: 'normal', recurrence: 'none' })
 const active = new Set<TaskOperationStatus>(['queued', 'running', 'failed', 'conflict', 'review'])
 // Extended Microsoft fields whose absence is represented as an explicit clear (E44).
-const nativeClears: Record<string, unknown> = { recurrence: null, start: null, reminder: null, categories: [] }
+const nativeClears: Record<string, unknown> = { recurrence: null, start: null, reminder: null, categories: [], percentComplete: null }
 const nativeValue = (native: ProviderTask['native'], field: string) => native?.[field as keyof NonNullable<ProviderTask['native']>] ?? nativeClears[field]
 interface EntityRow { id: string; account_id: string; provider: TaskProvider; list_id: string; parent_id: string | null; initial_json: string; local_json: string; remote_json: string | null; present: number }
 interface OperationRow { sequence: number; payload_json: string; status: TaskOperationStatus; attempts: number; retry_at: number; error: string | null }
@@ -51,6 +51,10 @@ export class TaskStore {
       CREATE TABLE IF NOT EXISTS task_resolution_history (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
         operation_id TEXT NOT NULL REFERENCES task_operations(id), payload_json TEXT NOT NULL
+      );
+      -- iCalendar UIDs of tasks imported into providers that cannot store one (E45), for duplicate detection.
+      CREATE TABLE IF NOT EXISTS task_ical_uids (
+        entity_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, uid TEXT NOT NULL
       );
     `)
     // A write may have reached the provider before the process disappeared.
@@ -91,6 +95,16 @@ export class TaskStore {
   /** Whether a task has unsent, running, or unresolved changes. */
   hasPendingChanges(id: string) {
     return this.operations(id).some((item) => active.has(item.status))
+  }
+
+  /** Records the iCalendar UID a task was imported with (E45). */
+  linkImportedUid(entityId: string, accountId: string, uid: string) {
+    this.db.prepare('INSERT INTO task_ical_uids VALUES(?,?,?) ON CONFLICT(entity_id) DO UPDATE SET uid=excluded.uid').run(entityId, accountId, uid)
+  }
+
+  /** Imported iCalendar UIDs by entity id for one account. */
+  importedUids(accountId: string): Map<string, string> {
+    return new Map(this.db.prepare('SELECT entity_id,uid FROM task_ical_uids WHERE account_id=?').all(accountId).map((row) => [String(row.entity_id), String(row.uid)]))
   }
 
   cachedAccounts(): { accountId: string; provider: TaskProvider }[] {
@@ -134,6 +148,7 @@ export class TaskStore {
       this.db.prepare('DELETE FROM task_operations WHERE account_id=?').run(id)
       this.db.prepare('DELETE FROM task_entities WHERE account_id=?').run(id)
       this.db.prepare('DELETE FROM task_provider_snapshots WHERE account_id=?').run(id)
+      this.db.prepare('DELETE FROM task_ical_uids WHERE account_id=?').run(id)
     })
   }
 
@@ -201,10 +216,18 @@ export class TaskStore {
   }
 
   private validateProviderFields(entity: TaskEntity, patch: TaskFieldPatch, parentId = entity.parentId) {
-    if (entity.provider !== 'microsoft') {
+    if (entity.provider === 'gmail') {
       if (patch.native !== undefined) throw new Error('This provider does not support native task fields')
       return
     }
+    if (entity.provider === 'dav') {
+      // CalDAV VTODO fields (E45). Repeat rules, rich bodies and attachments are preserved, not edited.
+      const native = patch.native ?? {}
+      if (['recurrence', 'body', 'attachments'].some((key) => (native as Record<string, unknown>)[key] !== undefined) || native.status === 'waitingOnOthers' || native.status === 'deferred') throw new Error('CalDAV tasks do not support that field')
+      if (patch.notes !== undefined && entity.remote?.native?.caldav?.notesTruncated) throw new Error('These notes are too long to edit in Aerio')
+      return
+    }
+    if (patch.native?.percentComplete !== undefined || patch.native?.caldav !== undefined || patch.native?.status === 'cancelled') throw new Error('Microsoft To Do does not support that field')
     if (parentId || entity.remote?.kind === 'checklist') {
       if (patch.notes || patch.due || (patch.native && Object.values(patch.native).some((value) => value !== undefined))) throw new Error('Microsoft checklist items support a name and completion only')
       const parent = parentId ? this.entity(parentId) : undefined
@@ -227,11 +250,13 @@ export class TaskStore {
 
   create(accountId: string, provider: TaskProvider, listId: string, input: ProviderTaskInput, parentId?: string, local = defaults()) {
     this.validatePatch(input)
+    // Only an import may hand a CalDAV create its source calendar object (E45).
+    if (input.native?.caldav !== undefined && (provider !== 'dav' || Object.keys(input.native.caldav).some((key) => key !== 'uid' && key !== 'source'))) throw new Error('Invalid new task')
     this.validateLocal(local, provider)
     if (typeof input.title !== 'string' || typeof input.completed !== 'boolean') throw new Error('Invalid new task')
     const entity: TaskEntity = { id: crypto.randomUUID(), accountId, provider, listId, parentId, fields: input, local }
     this.validateProviderFields(entity, input)
-    if (provider === 'microsoft' && (local.recurrence !== 'none' || local.timedDue !== undefined || local.priority !== 'normal')) throw new Error('Use Microsoft native task fields for recurrence, priority and due times')
+    if (provider !== 'gmail' && (local.recurrence !== 'none' || local.timedDue !== undefined || local.priority !== 'normal')) throw new Error(`Use ${provider === 'dav' ? 'CalDAV' : 'Microsoft'} native task fields for recurrence, priority and due times`)
     this.writable(entity)
     if (parentId) {
       const parent = this.entity(parentId)
@@ -293,6 +318,7 @@ export class TaskStore {
 
   update(id: string, patch: TaskFieldPatch, now = Date.now(), local?: TaskLocalMetadata) {
     this.validatePatch(patch)
+    if (patch.native?.caldav !== undefined) throw new Error('CalDAV task details are read-only')
     const entity = this.entity(id)
     if (!entity) throw new Error('Task not found')
     this.writable(entity)
@@ -301,7 +327,7 @@ export class TaskStore {
     return this.transaction(() => {
       if (local !== undefined) { this.setLocal(id, local); entity.local = local }
       const operation = this.insert('update', entity, patch)
-      if (entity.provider !== 'microsoft' && patch.completed === true && !entity.fields.completed && entity.local.recurrence !== 'none') this.generateOccurrence({ ...entity, fields: apply(entity.fields, patch) }, operation, now)
+      if (entity.provider === 'gmail' && patch.completed === true && !entity.fields.completed && entity.local.recurrence !== 'none') this.generateOccurrence({ ...entity, fields: apply(entity.fields, patch) }, operation, now)
       return operation
     })
   }
@@ -318,6 +344,7 @@ export class TaskStore {
     const entity = this.entity(id)
     if (!entity) throw new Error('Task not found')
     if (entity.provider === 'microsoft') throw new Error('Microsoft To Do does not support reparenting')
+    if (entity.provider === 'dav' && entity.remote?.native?.caldav?.recurrenceId) throw new Error('An occurrence of a repeating task cannot be moved; move the series instead')
     this.writable(entity)
     const visited = new Set([id])
     let ancestor = parentId
@@ -342,7 +369,7 @@ export class TaskStore {
     const row = this.row(id)
     if (!row) throw new Error('Task not found')
     this.validateLocal(local, row.provider)
-    if (row.provider === 'microsoft' && (local.recurrence !== 'none' || local.timedDue !== undefined || local.priority !== 'normal')) throw new Error('Use Microsoft native task fields for recurrence, priority and due times')
+    if (row.provider !== 'gmail' && (local.recurrence !== 'none' || local.timedDue !== undefined || local.priority !== 'normal')) throw new Error(`Use ${row.provider === 'dav' ? 'CalDAV' : 'Microsoft'} native task fields for recurrence, priority and due times`)
     this.db.prepare('UPDATE task_entities SET local_json=? WHERE id=?').run(JSON.stringify(local), id)
   }
 

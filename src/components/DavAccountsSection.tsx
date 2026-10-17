@@ -108,6 +108,7 @@ export default function DavAccountsSection() {
               {collections.length > 0 && <ul className="dav-collection-list" aria-label={`${account.name} calendars and address books`}>
                 {collections.map((collection) => {
                   const tasksOnly = collection.kind === 'calendar' && !collection.components.includes('VEVENT')
+                  const withTasks = collection.kind === 'calendar' && collection.components.includes('VTODO')
                   return <li key={collection.id}>
                     <label className="toggle-row">
                       <span>
@@ -115,11 +116,11 @@ export default function DavAccountsSection() {
                         <small>
                           {collection.kind === 'calendar' ? 'Calendar' : 'Address book'}
                           {collection.readOnly ? ' · Read-only' : ''}{collection.shared ? ' · Shared' : ''}
-                          {tasksOnly ? ' · Tasks only (not shown in Calendar)' : ''}
+                          {tasksOnly ? ' · Tasks only (shown in Tasks)' : withTasks ? ' · Events and tasks' : ''}
                           {collection.error ? ` · ${collection.error}` : ''}
                         </small>
                       </span>
-                      <input type="checkbox" aria-label={`Show ${collection.name}`} disabled={Boolean(busy) || tasksOnly} checked={collection.enabled && !tasksOnly} onChange={(event) => void run(`collection:${collection.id}`, () => api.setCollectionEnabled(collection.id, event.target.checked), '', 'The collection could not be updated')} />
+                      <input type="checkbox" aria-label={`Show ${collection.name}`} disabled={Boolean(busy)} checked={collection.enabled} onChange={(event) => void run(`collection:${collection.id}`, () => api.setCollectionEnabled(collection.id, event.target.checked), '', 'The collection could not be updated')} />
                     </label>
                   </li>
                 })}

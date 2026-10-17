@@ -18,6 +18,8 @@ When a provider stores a field, Aerio sends it to the provider. When the provide
 
 `TASK_FIELD_CAPABILITIES` in `src/task-fields-types.ts` is the code version of this table. The editors label each field from it, and the stores validate local overlays against it with `localOverlayFields(provider)`. Microsoft overlays may therefore contain only `percentComplete`. Google overlays may contain any extended field. Microsoft checklist items still support only a name and a completion state.
 
+CalDAV task lists (E45) store start, reminder, percent complete, and tags natively as `DTSTART`, `VALARM`, `PERCENT-COMPLETE`, and `CATEGORIES` (`TASK_FIELD_CAPABILITIES.dav`). Files added in Aerio stay a local overlay. The server's `ATTACH` links and embedded files are shown and kept. See [CalDAV tasks](caldav-tasks.md#vtodo-mapping).
+
 ### Where values live
 
 - **Local tasks**: the fields are on `Task` in [`src/types.ts`](../src/types.ts), stored in `productivity.sqlite` with the other local modules and validated by `validLocalTaskExtras` before each save.
