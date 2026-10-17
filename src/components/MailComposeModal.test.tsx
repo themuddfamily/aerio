@@ -159,8 +159,31 @@ describe('MailComposeModal', () => {
     window.prompt = vi.fn(() => 'javascript:alert(1)')
     await user.click(screen.getByTitle('Add link'))
     expect(callbacks.onToast).toHaveBeenCalledWith('Use an https://, http://, or mailto: link')
-    fireEvent.paste(body, { clipboardData: { getData: () => 'Plain paste' } })
+    fireEvent.paste(body, { clipboardData: { getData: (type: string) => type === 'text/plain' ? 'Plain paste' : '' } })
     expect(document.execCommand).toHaveBeenCalledWith('insertText', false, 'Plain paste')
+    expect(screen.getByTitle('Insert table')).toBeInTheDocument()
+    expect(screen.getByTitle('Insert image')).toBeInTheDocument()
+  })
+
+  it('autosaves an image-only message with its embedded image and reopens it unchanged', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      renderCompose()
+      const body = editor()
+      const image = '<img src="data:image/png;base64,iVBORw==" alt="chart" data-aerio-cid="chart@aerio.local" style="max-width: 100%">'
+      Object.defineProperty(body, 'innerText', { configurable: true, writable: true, value: '' })
+      body.innerHTML = `<div>${image}</div>`
+      fireEvent.input(body)
+      await vi.advanceTimersByTimeAsync(1_500)
+      await waitFor(() => expect(api.mail.drafts.save).toHaveBeenCalledWith(expect.objectContaining({ html: expect.stringContaining('data-aerio-cid="chart@aerio.local"') })))
+      const saved = (api.mail.drafts.save.mock.calls.at(-1) as unknown as [MailDraftRecord])[0]
+      document.body.innerHTML = ''
+      renderCompose({ draft: { ...saved, status: 'synced', updatedAt: '2026-08-08T10:00:00Z' } })
+      expect(editor().querySelector('img')?.getAttribute('data-aerio-cid')).toBe('chart@aerio.local')
+      expect(editor().querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,iVBORw==')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('initializes reply-all recipients and forward content while excluding the sender account', async () => {

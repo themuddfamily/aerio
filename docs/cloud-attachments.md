@@ -45,7 +45,7 @@ Aerio remembers the links it created (file id, permission ids and URL; the 500 m
 - the link or permission has an expiry in the past → "expired"
 - Aerio can no longer read the file (for example the storage grant was revoked) → "permission-denied"
 
-If any link fails, a confirmation lists the problems and asks whether to send anyway. Links Aerio did not create, and checks that fail because of the network, are not reported and never block sending. Scheduled messages are checked when they are scheduled, not again at delivery time.
+If any link fails, a confirmation lists the problems and asks whether to send anyway. Links Aerio did not create, and checks that fail because of the network, are not reported and never block sending. Scheduled messages are checked when they are scheduled, not again at delivery time. The check finds links by the composer marker, so a draft reopened from a copy the provider synced back (which went through the outgoing sanitizer) is not checked.
 
 ## Backups
 

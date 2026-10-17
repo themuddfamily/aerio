@@ -5,11 +5,12 @@ import {
   allProperties, escapeText, firstProperty, foldLine, formatParam, InterchangeFormatError, paramValue,
   parseComponents, splitEscaped, unescapeText, type Component, type ContentLimits, type ContentLine
 } from './content-lines'
+import { CONTACT_GROUP_LIMIT, isContactPhoto } from './contact-fields'
 
 export const VCARD_LIMITS: ContentLimits = {
   maxChars: 20 * 1024 * 1024,
   maxLines: 2_000_000,
-  // Embedded PHOTO data can be long; it is skipped rather than imported.
+  // Embedded PHOTO data can be long; photos over the contact photo bound are skipped.
   maxLineLength: 4 * 1024 * 1024,
   maxComponents: 50_000,
   maxPropertiesPerComponent: 1_000,
@@ -91,7 +92,9 @@ function contactFromCard(card: Component, options: VCardOptions): Contact | unde
   const organization = firstProperty(card, 'ORG')
   const company = organization ? splitEscaped(rawValue(organization), ';')[0]?.trim() : undefined
   const categories = firstProperty(card, 'CATEGORIES')
-  const group = categories ? splitEscaped(rawValue(categories), ',').map((value) => value.trim()).find(Boolean) : undefined
+  const groups = categories ? splitEscaped(rawValue(categories), ',').map((value) => unescapeText(value).trim().slice(0, 300)).filter(Boolean).slice(0, CONTACT_GROUP_LIMIT) : []
+  const group = groups[0]
+  const photo = photoFrom(firstProperty(card, 'PHOTO'))
   const composed = nameParts ? [nameParts[3], nameParts[1], nameParts[2], nameParts[0], nameParts[4]].filter(Boolean).join(' ') : ''
   const name = (formatted || composed || company || primary(emails) || '').slice(0, 500)
   if (!name) return undefined
@@ -118,8 +121,24 @@ function contactFromCard(card: Component, options: VCardOptions): Contact | unde
     ...(nameParts && nameParts.some(Boolean) ? { nameParts } : {}),
     ...(nickname ? { nickname: nickname.slice(0, 500) } : {}),
     ...(birthday ? { birthday } : {}),
-    ...(uid ? { sourceUid: uid } : {})
+    ...(uid ? { sourceUid: uid } : {}),
+    ...(groups.length > 1 ? { groups } : {}),
+    ...(photo ? { photo } : {})
   }
+}
+
+// Embedded PHOTO values: vCard 4.0 data: URIs and vCard 3.0/2.1 base64 with a TYPE. Linked
+// photos and images over the stored bound are skipped.
+function photoFrom(line: ContentLine | undefined) {
+  if (!line) return undefined
+  const value = line.value.replace(/\s+/g, '')
+  if (/^data:/i.test(value)) return isContactPhoto(value) ? value : undefined
+  const encoding = paramValue(line, 'ENCODING')?.toLowerCase()
+  if (encoding !== 'b' && encoding !== 'base64') return undefined
+  const type = (typesOf(line)[0] ?? '').replace(/^image\//, '')
+  const mime = type === 'jpg' || type === 'jpeg' ? 'jpeg' : ['png', 'gif', 'webp'].includes(type) ? type : undefined
+  const photo = mime ? `data:image/${mime};base64,${value}` : undefined
+  return isContactPhoto(photo) ? photo : undefined
 }
 
 export function parseVCards(input: string, options: VCardOptions, limits: ContentLimits = VCARD_LIMITS, maxContacts = VCARD_MAX_CONTACTS): VCardParseResult {
@@ -182,7 +201,12 @@ export function serializeVCards(contacts: Contact[], version: '3.0' | '4.0' = '3
     if (contact.company) lines.push(`ORG:${component(contact.company)}`)
     if (contact.title) lines.push(`TITLE:${escapeText(contact.title)}`)
     if (contact.birthday) lines.push(`BDAY:${contact.birthday.replace(/[\r\n;:,]/g, '')}`)
-    if (contact.group) lines.push(`CATEGORIES:${component(contact.group)}`)
+    const categories = contact.groups?.length ? contact.groups : contact.group ? [contact.group] : []
+    if (categories.length) lines.push(`CATEGORIES:${categories.map(component).join(',')}`)
+    if (contact.photo && isContactPhoto(contact.photo)) {
+      const [, mime, data] = /^data:image\/([a-z]+);base64,(.*)$/.exec(contact.photo)!
+      lines.push(version === '4.0' ? `PHOTO:${contact.photo}` : `PHOTO;ENCODING=b;TYPE=${mime.toUpperCase()}:${data}`)
+    }
     if (contact.notes) lines.push(`NOTE:${escapeText(contact.notes)}`)
     lines.push('END:VCARD')
   }

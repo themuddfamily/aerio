@@ -46,7 +46,8 @@ describe('productivity connector mapping', () => {
       attendees: ['team@example.com'], reminderMinutes: 15, recurrence: 'weekly'
     })).toEqual({
       summary: 'Planning', description: 'Weekly planning', location: 'Studio',
-      start: { dateTime: '2026-08-01T09:00:00.000Z' }, end: { dateTime: '2026-08-01T10:00:00.000Z' },
+      // Google requires a named zone on recurring timed events; zone-less events fall back to UTC.
+      start: { dateTime: '2026-08-01T09:00:00.000Z', timeZone: 'UTC' }, end: { dateTime: '2026-08-01T10:00:00.000Z', timeZone: 'UTC' },
       attendees: [{ email: 'team@example.com' }],
       reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 15 }] },
       recurrence: ['RRULE:FREQ=WEEKLY']

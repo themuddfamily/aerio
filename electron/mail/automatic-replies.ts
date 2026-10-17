@@ -10,19 +10,20 @@ import type {
 import { decodeHtmlEntities } from '../../src/lib/html-entities'
 import { GmailApiError, GmailClient, type GmailVacationSettings } from './gmail-client'
 import { MicrosoftGraphClient, MicrosoftGraphError, type GraphAutomaticRepliesSetting, type GraphDateTimeTimeZone } from './microsoft-client'
+import { GMAIL_SETTINGS_BASIC_SCOPE, MICROSOFT_MAILBOX_SETTINGS_SCOPE } from './mail-settings-scopes'
 
 // Automatic replies live entirely on the provider: Gmail and Exchange send
 // them, and they start and stop on schedule whether or not Aerio is running.
 // Aerio keeps no local copy; every read is a fresh provider request.
 
-export const GMAIL_SETTINGS_SCOPE = 'https://www.googleapis.com/auth/gmail.settings.basic'
+export const GMAIL_SETTINGS_SCOPE = GMAIL_SETTINGS_BASIC_SCOPE
 const GMAIL_VACATION_READ_SCOPES = [
   GMAIL_SETTINGS_SCOPE,
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://mail.google.com/'
 ]
-export const MICROSOFT_SETTINGS_SCOPE = 'MailboxSettings.ReadWrite'
+export const MICROSOFT_SETTINGS_SCOPE = MICROSOFT_MAILBOX_SETTINGS_SCOPE
 const MICROSOFT_SETTINGS_READ_SCOPES = [MICROSOFT_SETTINGS_SCOPE, 'MailboxSettings.Read']
 
 const MAX_MESSAGE_LENGTH = 100_000

@@ -71,11 +71,15 @@ const api: AerioDesktopApi = {
     snapshot: () => ipcRenderer.invoke('productivity:snapshot'),
     sync: (accountId) => ipcRenderer.invoke('productivity:sync', accountId),
     createEvent: (event) => ipcRenderer.invoke('productivity:event-create', event),
-    updateEvent: (event) => ipcRenderer.invoke('productivity:event-update', event),
-    deleteEvent: (eventId) => ipcRenderer.invoke('productivity:event-delete', eventId),
+    updateEvent: (event, scope) => scope ? ipcRenderer.invoke('productivity:event-update', event, scope) : ipcRenderer.invoke('productivity:event-update', event),
+    deleteEvent: (eventId, scope) => scope ? ipcRenderer.invoke('productivity:event-delete', eventId, scope) : ipcRenderer.invoke('productivity:event-delete', eventId),
     createContact: (accountId, contact) => ipcRenderer.invoke('productivity:contact-create', accountId, contact),
     updateContact: (contact) => ipcRenderer.invoke('productivity:contact-update', contact),
     deleteContact: (contactId) => ipcRenderer.invoke('productivity:contact-delete', contactId),
+    createContactGroup: (accountId, name) => ipcRenderer.invoke('productivity:contact-group-create', accountId, name),
+    renameContactGroup: (groupId, name) => ipcRenderer.invoke('productivity:contact-group-rename', groupId, name),
+    deleteContactGroup: (groupId) => ipcRenderer.invoke('productivity:contact-group-delete', groupId),
+    updateContactGroupMembers: (groupId, add, remove) => ipcRenderer.invoke('productivity:contact-group-members', groupId, add, remove),
     chooseNoteAttachments: () => ipcRenderer.invoke('productivity:note-attachments-choose'),
     openNoteAttachment: (path) => ipcRenderer.invoke('productivity:note-attachment-open', path),
     localSnapshot: () => ipcRenderer.invoke('productivity:local-snapshot'),
@@ -238,6 +242,13 @@ const api: AerioDesktopApi = {
       save: (input) => ipcRenderer.invoke('mail:rules:save', input),
       delete: (id) => ipcRenderer.invoke('mail:rules:delete', id),
       run: (id) => ipcRenderer.invoke('mail:rules:run', id)
+    },
+    serverRules: {
+      capabilities: (accountId) => ipcRenderer.invoke('mail:server-rules:capabilities', accountId),
+      list: (accountId) => ipcRenderer.invoke('mail:server-rules:list', accountId),
+      upload: (ruleId) => ipcRenderer.invoke('mail:server-rules:upload', ruleId),
+      delete: (accountId, serverRuleId) => ipcRenderer.invoke('mail:server-rules:delete', accountId, serverRuleId),
+      setEnabled: (accountId, serverRuleId, enabled) => ipcRenderer.invoke('mail:server-rules:set-enabled', accountId, serverRuleId, enabled)
     },
     savedSearches: {
       list: () => ipcRenderer.invoke('mail:saved-searches:list'),

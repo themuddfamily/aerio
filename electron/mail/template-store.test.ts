@@ -35,6 +35,9 @@ describe('template HTML', () => {
   it('strips scripts, handlers, and unsafe links while keeping composer formatting', () => {
     const html = sanitizeTemplateHtml('<p onclick="x()">Hi <b>there</b><script>alert(1)</script> <a href="javascript:alert(1)">bad</a> <a href="https://example.test">ok</a><img src="http://tracker.test/a.png"><img src="data:image/png;base64,AAAA"></p>')
     expect(html).toBe('<p>Hi <b>there</b> <a>bad</a> <a href="https://example.test">ok</a><img /><img src="data:image/png;base64,AAAA" /></p>')
+    // Rich signatures keep allowlisted styles; anything that could fetch is dropped.
+    expect(sanitizeTemplateHtml('<table style="border-collapse: collapse; position: absolute"><tr><td style="border: 1px solid #ccc; background: url(https://t.test)">Ada</td><td style="color: #123456; font-family: Georgia, serif">CEO</td></tr></table>'))
+      .toBe('<table style="border-collapse: collapse"><tr><td>Ada</td><td style="color: #123456; font-family: Georgia, serif">CEO</td></tr></table>')
     expect(templateTextFromHtml('<div>Line &amp; one</div><div>Two<br>Three</div>')).toBe('Line & one\nTwo\nThree')
   })
 })
