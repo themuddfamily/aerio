@@ -186,9 +186,12 @@ describe('App', () => {
     await act(() => new Promise((resolve) => setTimeout(resolve, 450)))
     expect(api.productivity.saveLocal).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: 'Tasks' }))
-    await user.click(screen.getByRole('button', { name: 'Change tasks' }))
-    await user.click(screen.getByRole('button', { name: 'Settings' }))
-    await user.click(screen.getByRole('button', { name: 'Restore fixture' }))
+    // Edit and start the restore synchronously so the edit is still pending (inside the save debounce) when the restore begins.
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Change tasks' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    })
+    act(() => { fireEvent.click(screen.getByRole('button', { name: 'Restore fixture' })) })
     await act(() => new Promise((resolve) => setTimeout(resolve, 450)))
     expect(api.productivity.saveLocal).not.toHaveBeenCalled()
     await act(async () => { finishRestore(outcome === 'restored' ? { tasks: [], notes: [], contacts: [] } : undefined) })
