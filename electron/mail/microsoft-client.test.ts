@@ -32,6 +32,7 @@ describe('Microsoft Graph mail client', () => {
     })
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock.mock.calls[0][0]).toContain('categories')
+    expect(fetchMock.mock.calls[0][0]).toContain('inferenceClassification')
     expect(fetchMock.mock.calls[0][1].headers).toMatchObject({ Authorization: 'Bearer token', Prefer: 'IdType="ImmutableId"' })
   })
 
@@ -40,6 +41,23 @@ describe('Microsoft Graph mail client', () => {
       { id: 'inbox-id', displayName: 'Inbox', specialUse: 'inbox' },
       { id: 'message-1', isRead: true, categories: ['Avast: Scanned', 'Customer'] }
     )).toEqual(expect.arrayContaining(['INBOX', 'category:Avast: Scanned', 'category:Customer']))
+  })
+
+  it('records Focused Inbox classification for Inbox messages and PATCHes it for reassignment', async () => {
+    const inbox = { id: 'inbox-id', displayName: 'Inbox', specialUse: 'inbox' }
+    expect(microsoftMessageLabels(inbox, { id: 'one', isRead: true, inferenceClassification: 'other' })).toEqual(['folder:inbox-id', 'INBOX', 'INFERENCE_OTHER'])
+    expect(microsoftMessageLabels(inbox, { id: 'two', isRead: true, inferenceClassification: 'focused' })).toContain('INFERENCE_FOCUSED')
+    expect(microsoftMessageLabels({ id: 'archive', displayName: 'Archive' }, { id: 'three', isRead: true, inferenceClassification: 'other' })).not.toContain('INFERENCE_OTHER')
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new MicrosoftGraphClient(async () => 'token')
+    await client.setInferenceClassification(['m1', 'm/2'], 'INFERENCE_OTHER')
+    await client.setInferenceClassification(['m3'], 'INFERENCE_FOCUSED')
+    expect(fetchMock.mock.calls.map((call) => [call[0], call[1].method, call[1].body])).toEqual([
+      ['https://graph.microsoft.com/v1.0/me/messages/m1', 'PATCH', JSON.stringify({ inferenceClassification: 'other' })],
+      ['https://graph.microsoft.com/v1.0/me/messages/m%2F2', 'PATCH', JSON.stringify({ inferenceClassification: 'other' })],
+      ['https://graph.microsoft.com/v1.0/me/messages/m3', 'PATCH', JSON.stringify({ inferenceClassification: 'focused' })]
+    ])
   })
 
   it('sends RFC 822 MIME as base64 through Graph', async () => {

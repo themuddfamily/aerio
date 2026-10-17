@@ -16,6 +16,7 @@ Open **Mail rules** from a message’s **Create rule from email…** command. Ev
 | Age (days) | older than / newer than | Mostly useful with **Run on existing mail**. New mail is usually a few minutes old. |
 | Importance | is high / normal / low | Taken from the `Importance`, `Priority`, or `X-Priority` header, otherwise from the provider's Important label. |
 | Folder or label | is | Exact folder or label id. |
+| Inbox category | is | The inbox tab the conversation is in when the rule runs (a turned-off tab counts as Primary). See [inbox categories](inbox-categories.md). |
 
 Conditions use **all** or **any**. The rule is skipped when **any** exception matches. When information is missing (for example, a header in a message whose raw file is gone), the condition does not match.
 
@@ -28,7 +29,7 @@ Rules saved before this release keep their stored format. They read as incoming,
 - **New mail I receive** (incoming): newly synced messages that aren't drafts and aren't Sent-only. A Gmail message you send to yourself carries both Inbox and Sent, so it is processed once as incoming and once as outgoing.
 - **Mail I send** (outgoing): newly synced Sent copies. This covers mail sent from Aerio, which picks up its Sent copy on the sync after delivery, and mail sent from other clients. "Run on existing mail" for an outgoing rule looks at Sent conversations instead of the Inbox.
 
-Rule actions only add or remove labels, or move, star, mark, or trash messages. They never send or forward mail, so a rule can't trigger itself or another rule.
+Rule actions only add or remove labels, set the inbox category (**Set inbox category**, local classification that never replaces a manual move and queues nothing for the provider), or move, star, mark, or trash messages. They never send or forward mail, so a rule can't trigger itself or another rule.
 
 ### Each message is processed once
 
@@ -49,8 +50,8 @@ Entries are pruned after 180 days. **Run on existing mail** is an explicit, manu
 | Update | Filters are immutable. Aerio creates the replacement first, then deletes the old filter, and removes the new one again if that delete fails. | In place with PATCH. A rule deleted in Outlook is recreated. |
 | Turn off | Not possible. Delete the filter instead. | `isEnabled`, mirrored onto the linked Aerio rule |
 | Outgoing rules | Not supported | Not supported |
-| Unsupported | Starts/ends with (except an ends-with-`@domain` sender), Subject/body equals, headers other than `List-Id`, age, folder/label conditions, low or normal importance, Microsoft folders as targets | Starts/ends with, "no attachments", age, folder conditions, flagging (star), more than one move, mixing condition kinds in an "any" rule, repeating a condition kind in an "all" rule, mixing exception kinds |
-| Approximate (uploaded with a caveat) | Word-based matching, body words that also match the subject, `is:important` | Display-name senders → `senderContains`, Cc → `recipientContains` (which also matches To), headers → `headerContains` (searches all headers) |
+| Unsupported | Starts/ends with (except an ends-with-`@domain` sender), Subject/body equals, headers other than `List-Id`, age, folder/label conditions, low or normal importance, Microsoft folders as targets, custom inbox tabs | Starts/ends with, "no attachments", age, folder conditions, inbox category conditions and actions, flagging (star), more than one move, mixing condition kinds in an "any" rule, repeating a condition kind in an "all" rule, mixing exception kinds |
+| Approximate (uploaded with a caveat) | Word-based matching, body words that also match the subject, `is:important`, inbox category → `category:` search and "Categorize as" | Display-name senders → `senderContains`, Cc → `recipientContains` (which also matches To), headers → `headerContains` (searches all headers) |
 
 The editor shows a **Server compatibility** panel for Gmail and Microsoft accounts. It lists every condition, exception, or action that can't map to a server rule (these block the upload) or that maps only approximately. The same check runs again in the main process before any request is sent.
 

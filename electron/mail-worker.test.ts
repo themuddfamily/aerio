@@ -728,6 +728,37 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.setCredential({ type: 'oauth', accessToken: 'token' })
   })
 
+  it('sends inbox tab reassignments to Outlook as Focused/Other and keeps rule-set categories local', async () => {
+    const microsoft = mocks.microsoft as any
+    microsoft.setInferenceClassification = vi.fn().mockResolvedValue(undefined)
+    microsoft.applyAction.mockClear()
+    mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'microsoft' })
+    mocks.db.remoteMessagesForThreads.mockReturnValue([{ id: 'inbox-message', labelIds: ['INBOX', 'INFERENCE_FOCUSED'] }, { id: 'sent-copy', labelIds: ['SENT'] }])
+    mocks.db.dueOperations.mockReturnValueOnce([
+      { id: 'tab-label', account_id: 'account-1', kind: 'label', thread_ids_json: '["thread-1"]', label_id: 'INFERENCE_OTHER' },
+      { id: 'tab-unlabel', account_id: 'account-1', kind: 'unlabel', thread_ids_json: '["thread-1"]', label_id: 'INFERENCE_FOCUSED' }
+    ]).mockReturnValue([])
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(mocks.db.updateOperation).toHaveBeenCalledWith('tab-unlabel', 'succeeded'))
+    expect(microsoft.setInferenceClassification).toHaveBeenCalledTimes(1)
+    expect(microsoft.setInferenceClassification).toHaveBeenCalledWith(['inbox-message'], 'INFERENCE_OTHER')
+    expect(microsoft.applyAction).not.toHaveBeenCalled()
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.remoteMessagesForThreads.mockReturnValue([])
+
+    const inboxCategories = { setOverride: vi.fn(() => 1), tabs: vi.fn(() => ({ tabs: [] })), counts: vi.fn(() => ({ primary: { unread: 1, total: 2 } })) }
+    mocks.db.inboxCategories = inboxCategories
+    mocks.db.getRule.mockReturnValueOnce({ id: 'rule-tab', accountId: 'account-1', actions: [{ action: 'set-category', category: 'social' }] })
+    mocks.db.matchingThreadIdsForRule.mockReturnValueOnce(['thread-1', 'thread-2'])
+    mocks.db.applyLocalAction.mockClear()
+    await expect(request({ type: 'rules:run', payload: { id: 'rule-tab' } })).resolves.toMatchObject({ result: { matched: 2, operations: 1 } })
+    expect(inboxCategories.setOverride).toHaveBeenCalledWith('account-1', ['thread-1', 'thread-2'], 'social', 'mail-rule')
+    expect(mocks.db.applyLocalAction).not.toHaveBeenCalled()
+    await expect(request({ type: 'categories:tabs' })).resolves.toMatchObject({ result: { tabs: [] } })
+    await expect(request({ type: 'categories:counts', payload: { accountIds: ['account-1'] } })).resolves.toMatchObject({ result: { primary: { unread: 1, total: 2 } } })
+    expect(inboxCategories.counts).toHaveBeenCalledWith(['account-1'])
+  })
+
   it('saves and delivers Microsoft and IMAP drafts and records provider failures', async () => {
     const input = { id: 'provider-draft', accountId: 'account-1', to: ['ada@example.test'], cc: [], bcc: [], subject: 'Provider draft', text: 'Body', references: [], attachmentPaths: [] }
     mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'microsoft' })

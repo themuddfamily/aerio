@@ -56,12 +56,20 @@ describe('mail rule IPC validation', () => {
     expect(validateMailRule(base)).toMatchObject({ trigger: 'incoming', exceptions: [] })
   })
 
+  it('accepts the inbox category condition and the set-category action', () => {
+    expect(validateMailRule({ ...base, conditions: [{ field: 'category', operator: 'is', value: 'promotions' }], actions: [{ action: 'set-category', category: 'custom:receipts' }] }))
+      .toMatchObject({ conditions: [{ field: 'category', operator: 'is', value: 'promotions' }], actions: [{ action: 'set-category', category: 'custom:receipts' }] })
+  })
+
   it.each([
     [{ trigger: 'sent' }, 'Choose when this rule runs'],
     [{ exceptions: 'bad' }, 'Add at most ten exceptions'],
     [{ exceptions: Array.from({ length: 11 }, () => base.conditions[0]) }, 'Add at most ten exceptions'],
     [{ exceptions: [{ field: 'age', operator: 'is', value: '1' }] }, 'Finish every rule condition'],
-    [{ conditions: [{ field: 'importance', operator: 'is', value: 'urgent' }] }, 'Choose an importance level']
+    [{ conditions: [{ field: 'importance', operator: 'is', value: 'urgent' }] }, 'Choose an importance level'],
+    [{ conditions: [{ field: 'category', operator: 'is', value: 'spam' }] }, 'Choose an inbox category'],
+    [{ actions: [{ action: 'set-category' }] }, 'Choose an inbox category for the rule'],
+    [{ actions: [{ action: 'set-category', category: 'junk' }] }, 'Choose an inbox category for the rule']
   ])('rejects %j', (change, message) => {
     expect(() => validateMailRule({ ...base, ...change } as MailRuleInput)).toThrow(message)
   })

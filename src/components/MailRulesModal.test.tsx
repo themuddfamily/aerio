@@ -106,6 +106,26 @@ describe('MailRulesModal', () => {
     expect(await screen.findByText('Project mail')).toBeInTheDocument()
   })
 
+  it('offers the inbox category condition and the set-category action with the configured tabs', async () => {
+    api.save.mockImplementation(async (input: any) => rule({ ...input, id: 'saved-rule' }))
+    const tabs = vi.fn().mockResolvedValue({ tabs: [{ id: 'primary', name: 'Primary', enabled: true, builtIn: true }, { id: 'custom:receipts', name: 'Receipts', enabled: true, builtIn: false }] })
+    Object.defineProperty(window, 'aerio', { configurable: true, value: { mail: { rules: api, categories: { tabs } } } })
+    render(<MailRulesModal accounts={[account()]} labels={labels} onToast={vi.fn()} onClose={vi.fn()} />)
+    await screen.findByText('No rules yet')
+    fireEvent.click(screen.getByRole('button', { name: /New rule/ }))
+    fireEvent.change(screen.getByPlaceholderText('e.g. Project updates'), { target: { value: 'Receipts' } })
+    fireEvent.change(screen.getByLabelText('Condition 1 field'), { target: { value: 'category' } })
+    await waitFor(() => expect(within(screen.getByLabelText('Condition 1 value')).getByRole('option', { name: 'Receipts' })).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Condition 1 value'), { target: { value: 'primary' } })
+    fireEvent.change(screen.getByLabelText('Action 1'), { target: { value: 'set-category' } })
+    fireEvent.change(screen.getByLabelText('Action 1 inbox category'), { target: { value: 'custom:receipts' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save rule/ }))
+    await waitFor(() => expect(api.save).toHaveBeenCalledWith(expect.objectContaining({
+      conditions: [{ field: 'category', operator: 'is', value: 'primary' }],
+      actions: [{ action: 'set-category', category: 'custom:receipts' }]
+    })))
+  })
+
   it('adds and removes editor rows, resets action destinations, and cancels editing', async () => {
     render(<MailRulesModal accounts={[account()]} labels={labels} onToast={vi.fn()} onClose={vi.fn()} />)
     await screen.findByText('No rules yet')

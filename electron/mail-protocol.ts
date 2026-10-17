@@ -125,6 +125,7 @@ export type MailWorkerCommand =
   | { type: 'network'; payload: { online: boolean } }
   | { type: 'polling'; payload: { intervalMs: number; immediate?: boolean } }
   | { type: 'shutdown' }
+  | import('./mail/inbox-category-worker').InboxCategoryCommand
 
 export type MailWorkerResult =
   | void
@@ -174,6 +175,7 @@ export type MailWorkerResult =
   | import('../src/mail-types').MailImportJob[]
   | import('../src/mail-types').MailImportItem[]
   | import('../src/mail-types').MailLocalTransferResult
+  | import('./mail/inbox-category-worker').InboxCategoryResult
 
 export interface WorkerRequest {
   kind: 'request'

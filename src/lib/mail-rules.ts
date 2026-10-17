@@ -1,3 +1,4 @@
+import { isMailCategoryId } from './mail-categories'
 import type { MailRuleCondition, MailRuleConditionField, MailRuleConditionOperator, MailRuleInput, MailRuleTrigger } from '../mail-types'
 
 export const MAIL_RULE_TEXT_OPERATORS: MailRuleConditionOperator[] = ['contains', 'equals', 'starts-with', 'ends-with']
@@ -7,7 +8,7 @@ export interface MailRuleFieldDefinition {
   field: MailRuleConditionField
   label: string
   operators: MailRuleConditionOperator[]
-  value: 'text' | 'yes-no' | 'importance' | 'label' | 'kilobytes' | 'days'
+  value: 'text' | 'yes-no' | 'importance' | 'label' | 'kilobytes' | 'days' | 'category'
 }
 
 export const MAIL_RULE_FIELDS: MailRuleFieldDefinition[] = [
@@ -21,7 +22,8 @@ export const MAIL_RULE_FIELDS: MailRuleFieldDefinition[] = [
   { field: 'size', label: 'Size (KB)', operators: MAIL_RULE_RANGE_OPERATORS, value: 'kilobytes' },
   { field: 'age', label: 'Age (days)', operators: MAIL_RULE_RANGE_OPERATORS, value: 'days' },
   { field: 'importance', label: 'Importance', operators: ['is'], value: 'importance' },
-  { field: 'label', label: 'Folder or label', operators: ['is'], value: 'label' }
+  { field: 'label', label: 'Folder or label', operators: ['is'], value: 'label' },
+  { field: 'category', label: 'Inbox category', operators: ['is'], value: 'category' }
 ]
 
 export const mailRuleField = (field: MailRuleConditionField) => MAIL_RULE_FIELDS.find((item) => item.field === field)
@@ -29,7 +31,7 @@ export const mailRuleField = (field: MailRuleConditionField) => MAIL_RULE_FIELDS
 /** A fresh condition of the given field with that field's first operator and a usable default value. */
 export function defaultMailRuleCondition(field: MailRuleConditionField = 'from'): MailRuleCondition {
   const definition = mailRuleField(field) ?? MAIL_RULE_FIELDS[0]
-  const value = definition.value === 'yes-no' ? 'yes' : definition.value === 'importance' ? 'high' : ''
+  const value = definition.value === 'yes-no' ? 'yes' : definition.value === 'importance' ? 'high' : definition.value === 'category' ? 'primary' : ''
   return { field: definition.field, operator: definition.operators[0], value, ...(field === 'header' ? { headerName: '' } : {}) }
 }
 
@@ -44,6 +46,7 @@ export function mailRuleConditionError(condition: MailRuleCondition | undefined)
   const value = condition.value.trim()
   if (definition.value === 'yes-no' && value !== 'yes' && value !== 'no') return 'Choose yes or no for the attachment condition'
   if (definition.value === 'importance' && !['high', 'normal', 'low'].includes(value)) return 'Choose an importance level'
+  if (definition.value === 'category' && !isMailCategoryId(value)) return 'Choose an inbox category'
   if ((definition.value === 'kilobytes' || definition.value === 'days') && (!/^\d{1,9}$/.test(value) || (definition.value === 'days' && Number(value) > 36_500))) {
     return definition.value === 'days' ? 'Enter the age as a whole number of days' : 'Enter the size as a whole number of kilobytes'
   }
@@ -66,6 +69,8 @@ export interface MailRuleMessage {
   attachments?: unknown[]
   /** Lower-case header name to every value of that header. */
   headers?: Record<string, string[]>
+  /** Inbox tab the conversation is in (E33). */
+  category?: string
 }
 
 const addressParts = (value: string) => {
@@ -135,6 +140,7 @@ export function mailRuleConditionMatches(condition: MailRuleCondition, message: 
     }
     case 'importance': return mailRuleImportance(message) === needle
     case 'label': return Boolean(message.labelIds?.includes(condition.value.trim()))
+    case 'category': return message.category !== undefined && message.category === condition.value.trim()
     default: return false
   }
 }
@@ -148,6 +154,10 @@ export function mailRuleMatches(rule: Pick<MailRuleInput, 'match' | 'conditions'
 /** True when the rule reads headers, so callers only parse raw headers when needed. */
 export const mailRuleNeedsHeaders = (rule: Pick<MailRuleInput, 'conditions' | 'exceptions'>) =>
   [...rule.conditions, ...(rule.exceptions ?? [])].some((condition) => condition.field === 'header' || condition.field === 'importance')
+
+/** True when the rule reads the inbox category, so callers only resolve it when needed. */
+export const mailRuleNeedsCategory = (rule: Pick<MailRuleInput, 'conditions' | 'exceptions'>) =>
+  [...rule.conditions, ...(rule.exceptions ?? [])].some((condition) => condition.field === 'category')
 
 export const mailRuleTrigger = (rule: Pick<MailRuleInput, 'trigger'>): MailRuleTrigger => rule.trigger === 'outgoing' ? 'outgoing' : 'incoming'
 

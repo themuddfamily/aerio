@@ -93,6 +93,7 @@ import { registerDavAccounts } from './productivity/dav-ipc'
 import { carryPendingConferences } from './productivity/online-meetings'
 import { validEventConference } from '../src/lib/online-meetings'
 import { registerMailImport } from './mail/mail-import-ipc'
+import { registerMailInboxCategories } from './mail/inbox-categories-ipc'
 import { validContactInterchangeFields, validContactLists, validEventInterchangeFields } from '../src/lib/interchange-validation'
 import { contactEditConflict } from '../src/lib/contact-fields'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
@@ -2143,6 +2144,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     isLocked: () => appLockStatus().locked
   })
   registerMailImport({ ipcMain, worker: requireMailWorker, localAccount: (account) => accountProviders.set(account.id, account.provider) })
+  registerMailInboxCategories({ ipcMain, worker: requireMailWorker })
   profileBackups = registerProfileBackup({
     userData: app.getPath('userData'),
     appVersion: app.getVersion(),

@@ -5,6 +5,7 @@ import {
   mailRuleConditionError,
   mailRuleImportance,
   mailRuleMatches,
+  mailRuleNeedsCategory,
   mailRuleNeedsHeaders,
   mailRuleTrigger,
   mailRuleTriggersForLabels,
@@ -76,6 +77,17 @@ describe('advanced mail rule conditions', () => {
   it('checks folder or label membership by exact id', () => {
     expect(matches({ field: 'label', operator: 'is', value: 'folder:projects' })).toBe(true)
     expect(matches({ field: 'label', operator: 'is', value: 'folder:Projects' })).toBe(false)
+  })
+
+  it('checks the inbox category the conversation is in, and never matches when it is unknown', () => {
+    expect(matches({ field: 'category', operator: 'is', value: 'promotions' }, message({ category: 'promotions' }))).toBe(true)
+    expect(matches({ field: 'category', operator: 'is', value: 'promotions' }, message({ category: 'primary' }))).toBe(false)
+    expect(matches({ field: 'category', operator: 'is', value: 'primary' })).toBe(false)
+    expect(mailRuleNeedsCategory(rule([{ field: 'subject', operator: 'contains', value: 'x' }], { exceptions: [{ field: 'category', operator: 'is', value: 'social' }] }))).toBe(true)
+    expect(mailRuleNeedsCategory(rule([{ field: 'subject', operator: 'contains', value: 'x' }]))).toBe(false)
+    expect(defaultMailRuleCondition('category')).toEqual({ field: 'category', operator: 'is', value: 'primary' })
+    expect(mailRuleConditionError({ field: 'category', operator: 'is', value: 'custom:receipts' })).toBeUndefined()
+    expect(mailRuleConditionError({ field: 'category', operator: 'is', value: 'spam' })).toBe('Choose an inbox category')
   })
 
   it('skips the rule when any exception matches', () => {

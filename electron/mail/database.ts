@@ -38,7 +38,7 @@ import { compileMailSearchQuery } from '../../src/lib/mail-search-query'
 import { normalizeSendOptions } from '../../src/lib/mail-send-options'
 import { ReplyWatchStore } from './reply-watches'
 import { RuleRunLedger, readRawHeaders } from './rule-ledger'
-import { mailRuleMatches as evaluateMailRule, mailRuleNeedsHeaders, mailRuleTrigger, type MailRuleMessage } from '../../src/lib/mail-rules'
+import { mailRuleMatches as evaluateMailRule, mailRuleNeedsCategory, mailRuleNeedsHeaders, mailRuleTrigger, type MailRuleMessage } from '../../src/lib/mail-rules'
 import { AttachmentTextStore } from './attachment-text-store'
 import { MailMergeStore } from './mail-merge-store'
 import { listAttachmentPage } from './attachment-index'
@@ -48,6 +48,9 @@ import { MailDraftSmimeStore } from './smime-draft-store'
 import { LocalMailStore } from './local-mail-store'
 import { MAIL_PIN_JOIN, MAIL_THREAD_CURSOR_CLAUSE, MAIL_THREAD_CURSOR_PARAMS, MAIL_THREAD_ORDER, MailPinStore, decodeMailThreadCursor, encodeMailThreadCursor, mailThreadCursorParams } from './mail-pins'
 import { isLocalOnlyMailAction } from '../../src/lib/mail-pins'
+import { MailInboxCategoryStore } from './inbox-categories'
+import { visibleInboxTab } from '../../src/lib/mail-categories'
+import type { MailBuiltInCategory } from '../../src/mail-category-types'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -71,6 +74,8 @@ export interface ParsedMailMessage {
   remoteFolderId?: string
   remoteUid?: string
   attachments: MailAttachment[]
+  /** Header-based inbox category heuristic, computed when the raw message was parsed. */
+  categoryHint?: MailBuiltInCategory
 }
 
 interface DatabaseRow {
@@ -113,6 +118,7 @@ export class MailDatabase {
   readonly attachmentText: AttachmentTextStore
   readonly mailMerge: MailMergeStore
   readonly pins: MailPinStore
+  readonly inboxCategories: MailInboxCategoryStore
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -132,6 +138,8 @@ export class MailDatabase {
     this.attachmentText = new AttachmentTextStore(this.db)
     this.mailMerge = new MailMergeStore(this.db)
     this.pins = new MailPinStore(this.db)
+    this.inboxCategories = new MailInboxCategoryStore(this.db)
+    this.transaction(() => this.inboxCategories.backfill((accountId, threadId) => this.refreshCategorySignals(accountId, threadId)))
   }
 
   close() {
@@ -752,6 +760,7 @@ export class MailDatabase {
       for (const recipient of recipients) {
         if (/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(recipient.email)) upsertRecipient.run(message.accountId, recipient.email, recipient.name ?? null, message.internalDate)
       }
+      this.inboxCategories.recordHint(message.accountId, message.id, message.threadId, message.categoryHint)
       this.markSyncItem(message.accountId, message.id, 'complete')
       if (inventoryCompletion) {
         this.stmt('UPDATE gmail_sync_state SET completed=completed+1,transferred_bytes=transferred_bytes+?,updated_at=? WHERE account_id=?')
@@ -820,9 +829,11 @@ export class MailDatabase {
     const rows = this.stmt('SELECT * FROM gmail_messages WHERE account_id=? AND thread_id=? ORDER BY internal_date').all(accountId, threadId) as DatabaseRow[]
     if (!rows.length) {
       this.stmt('DELETE FROM gmail_threads WHERE account_id=? AND id=?').run(accountId, threadId)
+      this.inboxCategories.forgetThread(accountId, threadId)
       return
     }
     const logical = this.logicalMessages(rows)
+    this.inboxCategories.refreshThread(accountId, threadId, logical)
     const newest = logical.at(-1)!.row
     const labelSets = logical.map((message) => message.labels)
     const participants = Array.from(new Set(logical.map(({ row }) => String(row.from_name || row.from_email)).filter(Boolean)))
@@ -838,6 +849,16 @@ export class MailDatabase {
       labelSets.some((set) => set.has('DRAFT')) ? 1 : 0, labelSets.some((set) => set.has('SENT')) ? 1 : 0,
       labelSets.some((set) => set.has('INBOX')) ? 1 : 0, attachments ? 1 : 0, logical.length, JSON.stringify(allLabels), accountId, threadId
     )
+  }
+
+  private inboxCategoryOf(accountId: string, threadId: string, sender: string) {
+    const resolved = this.inboxCategories.resolve(accountId, threadId, sender)
+    return { category: visibleInboxTab(resolved.category, this.inboxCategories.tabs()), categorySource: resolved.source }
+  }
+
+  private refreshCategorySignals(accountId: string, threadId: string) {
+    const rows = this.stmt('SELECT * FROM gmail_messages WHERE account_id=? AND thread_id=? ORDER BY internal_date').all(accountId, threadId) as DatabaseRow[]
+    if (rows.length) this.inboxCategories.refreshThread(accountId, threadId, this.logicalMessages(rows))
   }
 
   private logicalMessages(rows: DatabaseRow[]) {
@@ -937,6 +958,11 @@ export class MailDatabase {
     if (folder === 'all') where.push(`t.trashed=0 AND NOT EXISTS(SELECT 1 FROM json_each(t.label_ids_json) WHERE value='SPAM')`)
     if (folder === 'snoozed') params.push(nowIso())
     else where.push(`NOT EXISTS(SELECT 1 FROM mail_snoozes s WHERE s.account_id=t.account_id AND s.thread_id=t.id AND s.snoozed_until>?)`), params.push(nowIso())
+    const categoryFilter = folder === 'inbox' && query.category ? this.inboxCategories.filter(query.category) : undefined
+    if (categoryFilter) {
+      where.push(categoryFilter.clause)
+      params.push(...categoryFilter.params)
+    }
     if (query.labelId) {
       where.push(`EXISTS(SELECT 1 FROM json_each(t.label_ids_json) WHERE value=?)`)
       params.push(query.labelId)
@@ -1022,7 +1048,8 @@ export class MailDatabase {
       labelIds: json<string[]>(String(row.label_ids_json), []),
       snoozedUntil: row.snoozed_until ? String(row.snoozed_until) : undefined,
       pinned: Boolean(row.pinned_at),
-      pinnedAt: row.pinned_at ? String(row.pinned_at) : undefined
+      pinnedAt: row.pinned_at ? String(row.pinned_at) : undefined,
+      ...this.inboxCategoryOf(String(row.account_id), String(row.id), String(row.sender_email))
     }))
     const last = items.at(-1)
     return {
@@ -1530,9 +1557,10 @@ export class MailDatabase {
   }
 
   /** Enabled, locally executed rules for the trigger that match; server-executed rules run only on the provider. */
-  matchingRulesForMessage(message: MailRuleMessage & { rawPath?: string }, trigger: MailRuleTrigger = 'incoming') {
+  matchingRulesForMessage(message: MailRuleMessage & { rawPath?: string; threadId?: string }, trigger: MailRuleTrigger = 'incoming') {
     const rules = this.listRules([message.accountId]).filter((rule) => rule.enabled && rule.execution !== 'server' && mailRuleTrigger(rule) === trigger)
     if (!message.headers && message.rawPath && rules.some(mailRuleNeedsHeaders)) message = { ...message, headers: readRawHeaders(message.rawPath) }
+    if (message.category === undefined && message.threadId && rules.some(mailRuleNeedsCategory)) message = { ...message, category: this.inboxCategories.tabFor(message.accountId, message.threadId, message.fromEmail) }
     return rules.filter((rule) => mailRuleMatches(rule, message))
   }
 
@@ -1551,6 +1579,7 @@ export class MailDatabase {
       WHERE m.account_id=? AND EXISTS(SELECT 1 FROM gmail_messages inbox,json_each(inbox.label_ids_json)
         WHERE inbox.account_id=m.account_id AND inbox.thread_id=m.thread_id AND value=?)`).all(rule.accountId, rule.accountId, folder) as DatabaseRow[]
     const needsHeaders = mailRuleNeedsHeaders(rule)
+    const needsCategory = mailRuleNeedsCategory(rule)
     const now = Date.now()
     return [...new Set(rows.filter((row) => mailRuleMatches(rule, {
       accountId: rule.accountId,
@@ -1564,7 +1593,8 @@ export class MailDatabase {
       sizeEstimate: Number(row.size_estimate),
       internalDate: String(row.internal_date),
       attachmentCount: Number(row.attachment_count),
-      headers: needsHeaders ? readRawHeaders(String(row.raw_path)) : undefined
+      headers: needsHeaders ? readRawHeaders(String(row.raw_path)) : undefined,
+      category: needsCategory ? this.inboxCategories.tabFor(rule.accountId, String(row.thread_id), String(row.from_email)) : undefined
     }, now)).map((row) => String(row.thread_id)))]
   }
 

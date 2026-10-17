@@ -104,6 +104,9 @@ export interface MailThreadSummary {
   /** Local-only pin (never synced to the provider); pinned conversations list first. */
   pinned?: boolean
   pinnedAt?: string
+  /** Inbox tab this conversation appears in (E33), and why. */
+  category?: import('./mail-category-types').MailCategoryId
+  categorySource?: import('./mail-category-types').MailCategorySource
 }
 
 /**
@@ -407,6 +410,8 @@ export interface MailQuery {
   labelId?: string
   search?: string
   filters?: MailSearchFilters
+  /** Inbox tab (E33); only applies when folder is the Inbox. */
+  category?: string
   cursor?: string
   pageSize?: number
 }
@@ -645,9 +650,9 @@ export interface MailReplyWatchInput {
 }
 
 // Text fields compare with contains/equals/starts-with/ends-with; the others
-// use 'is' (has-attachment yes|no, importance high|normal|low, label <labelId>)
+// use 'is' (has-attachment yes|no, importance high|normal|low, label <labelId>, category <tab id>)
 // or greater-than/less-than (size in KB, age in days).
-export type MailRuleConditionField = 'from' | 'to' | 'cc' | 'subject' | 'body' | 'header' | 'has-attachment' | 'size' | 'age' | 'importance' | 'label'
+export type MailRuleConditionField = 'from' | 'to' | 'cc' | 'subject' | 'body' | 'header' | 'has-attachment' | 'size' | 'age' | 'importance' | 'label' | 'category'
 export type MailRuleConditionOperator = 'contains' | 'equals' | 'starts-with' | 'ends-with' | 'is' | 'greater-than' | 'less-than'
 
 export interface MailRuleCondition {
@@ -664,8 +669,11 @@ export type MailRuleTrigger = 'incoming' | 'outgoing'
 export type MailRuleExecution = 'local' | 'server'
 
 export interface MailRuleAction {
-  action: Extract<MailActionKind, 'archive' | 'read' | 'star' | 'important' | 'trash' | 'label' | 'move'>
+  /** 'set-category' moves the conversation to an inbox tab (local classification, E33). */
+  action: Extract<MailActionKind, 'archive' | 'read' | 'star' | 'important' | 'trash' | 'label' | 'move'> | 'set-category'
   labelId?: string
+  /** Inbox tab id for 'set-category'. */
+  category?: string
 }
 
 export interface MailRuleInput {
@@ -872,6 +880,8 @@ export interface MailDesktopApi {
   }
   /** Mail import and Local Folders; optional so test doubles of the API stay valid. */
   imports?: MailImportApi
+  /** Inbox category tabs and classification rules (E33); optional for test doubles. */
+  categories?: import('./mail-category-types').MailCategoriesApi
   onEvent(callback: (event: MailWorkerEvent) => void): () => void
 }
 

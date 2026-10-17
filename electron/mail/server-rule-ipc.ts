@@ -2,11 +2,12 @@ import type { IpcMain } from 'electron'
 import type { MailServerRule, MailServerRuleCapabilities, MailServerRuleUploadResult } from '../../src/mail-server-rule-types'
 import type { MailLabel, MailProviderId, MailRule, MailRuleCondition, MailRuleInput } from '../../src/mail-types'
 import { mailRuleConditionError } from '../../src/lib/mail-rules'
+import { isMailCategoryId } from '../../src/lib/mail-categories'
 import type { MailWorkerCommand } from '../mail-protocol'
 import type { MailSettingsScopeStatus } from './mail-settings-scopes'
 import { MailServerRuleService } from './server-rules'
 
-const RULE_ACTIONS = new Set(['archive', 'read', 'star', 'important', 'trash', 'label', 'move'])
+const RULE_ACTIONS = new Set(['archive', 'read', 'star', 'important', 'trash', 'label', 'move', 'set-category'])
 
 function validateConditions(value: unknown, label: string, minimum: number): MailRuleCondition[] {
   if (!Array.isArray(value) || value.length < minimum || value.length > 10) throw new Error(minimum ? 'Add between one and ten conditions' : `Add at most ten ${label}`)
@@ -36,6 +37,7 @@ export function validateMailRule(input: MailRuleInput): MailRuleInput {
   for (const action of input.actions) {
     if (!action || !RULE_ACTIONS.has(action.action)) throw new Error('Choose a valid rule action')
     if ((action.action === 'label' || action.action === 'move') && (typeof action.labelId !== 'string' || !action.labelId || action.labelId.length > 500)) throw new Error('Choose a label or folder for the rule')
+    if (action.action === 'set-category' && !isMailCategoryId(action.category)) throw new Error('Choose an inbox category for the rule')
   }
   const { execution: _execution, serverRuleId: _serverRuleId, ...rest } = input
   return { ...rest, name: input.name.trim(), conditions, exceptions, trigger: input.trigger ?? 'incoming' }

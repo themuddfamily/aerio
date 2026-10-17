@@ -6,6 +6,7 @@ import { normalizeReadReceiptPolicy } from '../lib/mail-send-options'
 import type { LocalModuleSnapshot } from '../productivity-types'
 import Modal from './Modal'
 import AiAssistantSettings from './AiAssistantSettings'
+import InboxCategorySettings from './InboxCategorySettings'
 import OpenPgpKeyManager from './OpenPgpKeyManager'
 import SmimeCertificateManager from './SmimeCertificateManager'
 import ProfileBackupSection from './ProfileBackupSection'
@@ -316,6 +317,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
           </div>
         </section>
         <AiAssistantSettings />
+        <InboxCategorySettings />
         <OpenPgpKeyManager />
         <SmimeCertificateManager />
         <section className="settings-section">

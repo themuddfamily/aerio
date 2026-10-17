@@ -47,7 +47,10 @@ import { AttachmentContentIndexer } from './mail/attachment-text-indexer'
 import { AttachmentExtractRunner } from './mail/attachment-extract-runner'
 import { supportedSendOptions } from '../src/lib/mail-send-options'
 import { isLocalOnlyMailAction } from '../src/lib/mail-pins'
+import { categoryHintFromHeaders, handleInboxCategoryCommand, isInboxCategoryCommand } from './mail/inbox-category-worker'
+import { isMicrosoftInferenceLabel } from '../src/lib/mail-categories'
 import type { MailMergeJobInput } from '../src/mail-merge-types'
+import type { MailCategoryId } from '../src/mail-category-types'
 import { clampMailMergeLimits, MAIL_MERGE_MAX_RECIPIENTS, normalizeMergeRecipients } from '../src/lib/mail-merge'
 import { MailMergeNotSubmittedError, MailMergeRunner } from './mail/mail-merge-runner'
 import { MAIL_MERGE_DAY_MS } from './mail/mail-merge-store'
@@ -290,7 +293,8 @@ async function parseRawAndStore(accountId: string, message: {
     rawPath: path,
     attachments,
     remoteFolderId: message.remoteFolderId,
-    remoteUid: message.remoteUid
+    remoteUid: message.remoteUid,
+    categoryHint: categoryHintFromHeaders(from.email, parsed.headers)
   }
   database.upsertMessage(record)
   if (record.attachments.length) attachmentIndexer?.schedule()
@@ -788,7 +792,10 @@ async function runOperations() {
         }
       } else {
         const messages = database.remoteMessagesForThreads(accountId, threadIds)
-        if (provider === 'microsoft') {
+        if (provider === 'microsoft' && labelId && isMicrosoftInferenceLabel(labelId)) {
+          // Inbox tab reassignment: Focused/Other is a message property, not a folder; removing the old value needs no call.
+          if (kind === 'label') await microsoftClientFor(accountId).setInferenceClassification(messages.filter((message) => message.labelIds.includes('INBOX')).map((message) => message.id), labelId)
+        } else if (provider === 'microsoft') {
           const state = database.getProviderState<MicrosoftProviderState>(accountId, { deltaLinks: {} })
           const special = kind === 'trash' ? 'deleteditems' : kind === 'archive' ? 'archive' : kind === 'untrash' || kind === 'unarchive' ? 'inbox' : undefined
           const destination = labelId?.startsWith('folder:') ? labelId.slice(7) : special ? state.specialFolders?.[special] : undefined
@@ -1236,6 +1243,11 @@ function applyRuleActions(rule: MailRule, threadIds: string[]) {
   if (!database || !threadIds.length) return 0
   let operations = 0
   for (const action of rule.actions) {
+    if (action.action === 'set-category') {
+      // Classification is local metadata: no provider operation is queued.
+      if (action.category && database.inboxCategories.setOverride(rule.accountId, threadIds, action.category as MailCategoryId, 'mail-rule')) operations += 1
+      continue
+    }
     for (let index = 0; index < threadIds.length; index += 20) {
       const batch = threadIds.slice(index, index + 20)
       try {
@@ -1524,6 +1536,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     if (provider !== 'gmail' && (command.type === 'folders:delete' || Object.keys(result.renamed).length) && !paused.has(accountId)) void syncAccount(accountId)
     return result
   }
+  if (isInboxCategoryCommand(command)) return handleInboxCategoryCommand(database, command, emit)
   if (command.type === 'rules:list') return database.listRules(command.payload.accountIds)
   if (command.type === 'rules:save') return database.saveRule(command.payload)
   if (command.type === 'rules:delete') return database.deleteRule(command.payload.id)
