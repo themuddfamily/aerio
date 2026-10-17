@@ -98,7 +98,7 @@ The contact pane lists cached messages sent by or to any of the contact's addres
 - **Excluded** are Trash, Spam, and duplicate provider copies of one message, the same as in the attachments workspace.
 - **Order and paging:** newest first, with keyset pagination on (date, account, message id), so ties do not repeat or skip messages. **Load more** fetches 20 at a time.
 - **Each row** shows whether the contact sent it or received it, the account, an *archived* label for archived accounts, and the attachment count. Clicking a row opens the message window.
-- **Accounts:** checkboxes choose which mail accounts are searched. Deleted accounts are gone from the list and their messages disappear by cascade. Archived accounts keep their offline mail.
+- **Accounts:** checkboxes choose which mail accounts are searched. Deleted accounts are gone from the list and their messages disappear by cascade. Archived accounts keep their offline mail. Imported Local Folders are stored as their own mail account, so their messages are included and can be deselected the same way.
 
 The **Attachments** tab reuses the E12 attachment index (`mail:attachments:list`) with a new `participants` filter that uses the same exact address matching. Attachments whose original message is not stored offline are labelled. Clicking an attachment opens its message.
 
