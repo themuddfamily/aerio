@@ -1,6 +1,58 @@
 # Aerio development roadmap
 
-Updated: 2026-10-03. Remaining tasks that can be assigned to Codex. Each task includes implementation, appropriate automated checks, and documentation updates.
+Updated: 2026-10-17. Remaining tasks that can be assigned to Codex. Each task includes implementation, appropriate automated checks, and documentation updates.
+
+## eM Client feature parity
+
+These additions come from REA inspection of the installed eM Client 11.0.1201 package, corroborated with official feature documentation and compared with Aerio's current source. [Evidence, implementation boundaries, and limitations](docs/em-client-parity.md) map each E-number below to its sources. The checkbox scope describes proposed Aerio behavior; it does not claim that every detail was observed in eM Client. Existing scheduled send, Undo Send, snooze, rules, translation, message tools, writable Calendar/Contacts, and connected Tasks remain implemented.
+
+### Composition and follow-up
+
+- [ ] **E01: QuickText and message templates.** Add reusable named snippets and whole-message templates with subject, sanitized HTML, and managed attachments; support insertion, editing, search, and backup/restore. Preserve editor selection and verify template reuse across draft autosave and restart.
+- [ ] **E02: Sender aliases and signature management.** Support provider-authorized From identities, Reply-To, multiple HTML signatures, and per-identity defaults for new messages and replies. Replace signatures without duplicating quoted content, preserve the selected identity in drafts, and verify provider permission failures.
+- [ ] **E03: Richer message composition.** Add inline images with CID MIME parts, tables, fonts/colors, alignment, and sanitized rich-text paste. Keep plain-text alternatives and verify formatting, image references, and attachments survive autosave, reopen, and Gmail/Graph/SMTP delivery.
+- [ ] **E04: Personalized mass mail.** Expand a contact selection into separate recipient deliveries with previewable variables and fallback values. Track progress and cancellation per recipient; verify address privacy, provider limits, restart recovery, and ambiguous-send review before enabling bulk sending.
+- [ ] **E05: Watch for replies.** Persist watches on outgoing messages, notify when a matching reply arrives or a deadline expires, and allow cancellation. Match using message references and account identity; verify unrelated messages, multiple recipients, offline sync, restart, and tray processing.
+- [ ] **E06: Receipts and outgoing importance.** Add read/delivery receipt requests, an incoming read-receipt policy, and outgoing priority controls. Preserve these choices in drafts and MIME/provider mappings; verify consent, unsupported provider behavior, and receipt correlation without treating receipts as guaranteed delivery or reading.
+
+### Message privacy and security
+
+- [ ] **E07: OpenPGP mail.** Implement signing, encryption, decryption, and signature verification, including key import/export, recipient key selection, trust details, and protected private-key storage. Verify interoperability, attachments, missing/expired/revoked keys, app-lock behavior, and refusal to silently send plaintext after encryption fails.
+- [ ] **E08: S/MIME mail.** Add certificate import/selection, signed and encrypted MIME handling, certificate-chain/status presentation, and protected private keys. Verify signed-only and encrypted round trips, incorrect recipients, expiration, untrusted chains, and backup/recovery boundaries with controlled certificate fixtures.
+- [ ] **E09: Tracking-pixel protection.** Detect and explain suspected tracking resources and retain their blocking when a user permits other remote images. Extend the existing isolated image-fetch pipeline; verify allow/block choices, redirect handling, and that classification does not fetch remote content.
+- [ ] **E10: Mailing-list unsubscribe.** Parse List-Unsubscribe and one-click unsubscribe metadata and present an explicit action with the destination visible. Support applicable HTTPS and mailto flows; verify malformed headers, redirects, failures, and that merely viewing a message never unsubscribes.
+
+### Search and mailbox organization
+
+- [ ] **E11: Saved search folders and richer queries.** Persist named searches with account/folder scope, filters, phrases, and explicit AND/OR/NOT semantics. Build on the current offline index and filter panel; verify query validation, live result updates, pagination, and persistence across restart.
+- [ ] **E12: All-attachments workspace.** Browse attachments across accounts with sender/recipient, date, file type, and size filters, plus open/save actions and navigation to the original message. Reuse managed attachment access and verify pagination, unavailable files, archived accounts, and account deletion.
+- [ ] **E13: Attachment-content search.** Add bounded local text extraction for supported PDF, Office, and text attachments and index extracted content alongside existing filename search. Isolate parsers, expose unsupported/encrypted files, and verify resource limits, incremental reindexing, cancellation, and index removal on account deletion.
+- [ ] **E14: Folder and label management.** Add create, rename, delete, nesting, and supported color changes for provider folders/labels. Apply provider capability and system-folder restrictions, preserve queued operations and selections, and verify conflicts, offline recovery, and failed deletions without losing messages.
+- [ ] **E15: Advanced and server-side rules.** Extend local rules with richer conditions/exceptions and outgoing processing, then add supported Gmail and Microsoft server-rule management with capability reporting. Keep local and server execution explicit; verify loop prevention, unsupported mappings, permissions, and that one message is not processed twice.
+- [ ] **E16: User-defined Quick Actions.** Let users save named sequences of existing mail actions and run them from the toolbar, context menu, or a shortcut. Reuse queued mutations and Undo; verify ordering, partial failure, read-only accounts, multi-selection, and persistence. The existing command palette and individual quick-action buttons do not supply saved macros.
+- [ ] **E17: Automatic replies.** Add provider-backed out-of-office replies with date ranges and supported internal/external audience settings. Read back the active server configuration, explain unsupported accounts, and verify permission errors, time-zone conversion, updates, and disabling independently of Aerio remaining open.
+
+### Mail portability and storage
+
+- [ ] **E18: Mail import and writable local folders.** Import EML/MBOX and Outlook PST into a provider-independent local mail store, retaining folder hierarchy, dates, flags, MIME, and attachments. Provide progress, cancellation, duplicate review, restart recovery, and controlled fixtures; existing single-message EML export and disconnected-account archives remain supported.
+- [ ] **E19: Scheduled full-profile backup and restore.** Extend local-module backups to cover mail, local folders, drafts, queued operations, rules, templates, and preferences with a consistent snapshot, retention, and restore preview. Define credential/key exclusions and account reauthorization; verify corruption, migration, interrupted restore, and prevention of unintended queued sends after recovery.
+- [ ] **E20: Cloud attachments.** Add optional cloud-storage connectors that select/upload files and insert sharing links, starting with Google Drive and OneDrive. Show sharing scope before insertion, preserve ordinary attachments as an option, and verify cancellation, upload recovery, expired links, and revoked permissions.
+
+### Calendar and contacts
+
+- [ ] **E21: CalDAV and CardDAV.** Add calendar/contact accounts for iCloud, Fastmail, Nextcloud, and generic DAV services, including discovery, capabilities, revisions, incremental sync, offline writes, and conflicts. Reuse the productivity contract and verify read-only/shared collections and server-specific behavior with controlled fixtures; current IMAP presets provide mail only.
+- [ ] **E22: Complete meeting invitation lifecycle.** Preserve organizer, attendee roles, resource attendees, and response status; handle incoming invitations, updates, and cancellations and offer accept/tentative/decline and supported proposed-time responses. Extend current event creation with attendees; verify iTIP/MIME and provider response flows, duplicate invitations, permissions, and stale updates.
+- [ ] **E23: Scheduling assistant.** Add provider-backed free/busy lookup and a timeline for required/optional attendees and resources. Distinguish unavailable data from free time, support working hours and time zones, and verify mixed accounts, permission denial, and provider failures.
+- [ ] **E24: Advanced event recurrence and time zones.** Preserve named zones, all-day dates, recurrence intervals/end conditions, exceptions, and series identities; offer edit/delete occurrence versus series and secondary calendar time-zone display. Verify DST transitions, travel between zones, provider round trips, and unsupported recurrence preservation.
+- [ ] **E25: Online meeting integration.** Create, update, and join provider-backed conference meetings from calendar events, starting with Google Meet and Microsoft Teams and leaving a connector boundary for Zoom/Webex. Verify required consent, capability reporting, duplicate creation after retries, and preservation of existing conference details during edits.
+- [ ] **E26: Calendar/contact interchange.** Import/export ICS and vCard, subscribe to read-only internet calendars, and add CSV contact mapping with preview and duplicate handling. Preserve time zones, recurrence, multiple contact fields, and source identity; verify malformed files, refresh failures, and round trips separately from existing JSON backups.
+- [ ] **E27: Rich contacts and distribution lists.** Preserve multiple typed emails/phones, postal addresses, birthdays, and photos; add explicit distribution-list membership and provider-supported group management. Extend current flat contact groups and single-address editors without discarding unmapped provider fields; verify recipient expansion, read-only sources, and edit conflicts.
+- [ ] **E28: Contact merge and communication history.** Add duplicate detection with merge preview and reversible local changes, plus a contact view of related messages and attachment history across selected accounts. Keep identities and provider ownership explicit; verify false-positive matches, field preservation, permissions, pagination, and account removal.
+
+### Optional assistants and chat
+
+- [ ] **E29: Optional AI mail assistance.** Add opt-in summarization, drafting/rephrasing, suggested replies, and natural-language search with clear provider configuration and data-sharing choices. Preview generated content and proposed actions; verify prompt-injection resistance, cancellation, provider errors, and that generated suggestions cannot send or mutate mail without the user's action. Existing translation and manual meeting/task creation remain available.
+- [ ] **E30: Implement the proposed Matrix chat connector.** Build the connector described in [the existing Chat proposal](docs/chat-implementation-proposal.md), including device verification, encrypted history/media, durable outgoing messages, notifications, and account lifecycle. Gate navigation on working SDK crypto persistence and two-device interoperability, and verify offline/restart, key recovery, retention, and lock behavior. The completed proposal below is design evidence; this is the separate implementation task.
 
 ## Reliability and release tooling
 
