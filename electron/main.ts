@@ -70,6 +70,9 @@ import { registerMailTemplates } from './mail/template-tools'
 import { AutomaticRepliesService, registerAutomaticReplies } from './mail/automatic-replies'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
+import { InterchangeStore } from './productivity/interchange-store'
+import { registerCalendarContactInterchange } from './productivity/interchange-ipc'
+import { validContactInterchangeFields } from '../src/lib/interchange-validation'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
 import { senderDomainFromEmail } from '../src/lib/sender-avatar'
 import { isCompleteMailAddress } from '../src/lib/mail-address'
@@ -116,6 +119,8 @@ let lastBoundsWrite: NodeJS.Timeout | undefined
 let diagnostics: DiagnosticLogger | null = null
 let updates: UpdateManager | null = null
 let productivityStore: ProductivityStore | null = null
+let interchangeStore: InterchangeStore | null = null
+let interchangeService: ReturnType<typeof registerCalendarContactInterchange> | null = null
 let taskService: TaskService | null = null
 let taskPolling: NodeJS.Timeout | undefined
 let taskNetworkOnline = true
@@ -340,7 +345,8 @@ function validLocalModules(value: unknown): value is LocalModuleSnapshot {
         text(attachment.path, 32_767, true) && (attachment.mime === undefined || text(attachment.mime, 300)))))) &&
     (input.contacts ?? []).every((contact) => contact && text(contact.id, 300, true) && text(contact.name, 10_000, true) && text(contact.email, 10_000) &&
       text(contact.group, 300, true) && text(contact.color, 100, true) && typeof contact.favorite === 'boolean' && contact.source === 'local' &&
-      [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || text(field, 1_000_000)))
+      [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || text(field, 1_000_000)) &&
+      validContactInterchangeFields(contact))
 }
 
 interface ArchivedNoteAttachment {
@@ -507,7 +513,8 @@ function validContact(value: unknown): value is Contact {
   const validText = (input: unknown, max: number, required = false) => typeof input === 'string' && input.length <= max && (!required || Boolean(input.trim()))
   return validText(contact.id, 500, true) && validText(contact.name, 10_000, true) && validText(contact.email, 10_000) &&
     validText(contact.group, 300, true) && validText(contact.color, 100, true) && typeof contact.favorite === 'boolean' &&
-    [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || validText(field, 100_000))
+    [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || validText(field, 100_000)) &&
+    validContactInterchangeFields(contact)
 }
 
 function googleCalendarConnector(accountId: string) {
@@ -1803,6 +1810,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   await initializePreferencesDatabase()
   await initializeMail()
   productivityStore = new ProductivityStore(join(app.getPath('userData'), 'productivity.sqlite'))
+  interchangeStore = new InterchangeStore(join(app.getPath('userData'), 'productivity.sqlite'))
   taskService = new TaskService(new TaskStore(join(app.getPath('userData'), 'provider-tasks.sqlite')), {
     accounts: () => requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' }),
     access: (id, provider) => provider === 'gmail'
@@ -1817,6 +1825,14 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   taskPolling = setInterval(() => { void taskService?.poll().catch(() => {}) }, 60_000)
   taskPolling.unref()
   registerIpc()
+  interchangeService = registerCalendarContactInterchange({
+    productivity: requireProductivityStore,
+    interchange: () => {
+      if (!interchangeStore) throw new Error('Calendar import and subscription storage is not ready')
+      return interchangeStore
+    },
+    diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
+  })
   registerRemoteImageProtocol()
   readyToOpenWindows = true
   createWindow()
@@ -1846,6 +1862,9 @@ app.on('before-quit', () => {
   if (taskPolling) clearInterval(taskPolling)
   void taskService?.close().catch(() => {})
   updates?.stop()
+  interchangeService?.dispose()
+  interchangeStore?.close()
+  interchangeStore = null
   productivityStore?.close()
   messageLocalStore?.close()
   mailTemplateStore?.close()
