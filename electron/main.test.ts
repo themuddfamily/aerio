@@ -846,7 +846,7 @@ describe.sequential('Electron main process', () => {
     mocks.setSaveResult({ canceled: false, filePath: 'C:/backup-with-files.json' })
     await invoke('productivity:local-export')
     const exported = JSON.parse(mocks.fs.writeFileSync.mock.calls.find(([path]) => path === 'C:/backup-with-files.json')![1])
-    expect(exported).toMatchObject({ schemaVersion: 2, attachments: [{ id: 'attachment-1', dataBase64: 'aGVsbG8=' }] })
+    expect(exported).toMatchObject({ schemaVersion: 3, taskAttachments: [], attachments: [{ id: 'attachment-1', dataBase64: 'aGVsbG8=' }] })
 
     mocks.fs.writeFileSync.mockClear()
     mocks.setOpenResult({ canceled: false, filePaths: ['C:/backup-with-files.json'] })
@@ -901,7 +901,7 @@ describe.sequential('Electron main process', () => {
     mocks.setSaveResult({ canceled: false, filePath: 'C:/rich-backup.json' })
     await invoke('productivity:local-export')
     const exported = JSON.parse(mocks.fs.writeFileSync.mock.calls.find(([path]) => path === 'C:/rich-backup.json')![1])
-    expect(exported).toMatchObject({ schemaVersion: 2, attachments: [{ id: picture.id, name: 'Diagram.png', mime: 'image/png', size: 12, dataBase64: png.toString('base64') }] })
+    expect(exported).toMatchObject({ schemaVersion: 3, attachments: [{ id: picture.id, name: 'Diagram.png', mime: 'image/png', size: 12, dataBase64: png.toString('base64') }] })
     expect(exported.data.notes[0].html).toBe(savedRich.html)
 
     mocks.fs.writeFileSync.mockClear()
@@ -932,6 +932,43 @@ describe.sequential('Electron main process', () => {
     expect(() => invoke('productivity:note-image-save', { name: 'Diagram', dataUrl: pngUrl })).toThrow(/Unlock Aerio/)
     invoke('app-lock:unlock', 'notes lock fixture passphrase')
     invoke('app-lock:disable', 'notes lock fixture passphrase')
+  })
+
+  it('embeds local task fields and attachments in schema 3 backups and migrates older backups', async () => {
+    const attachment = { id: 'task-file', name: 'invoice.txt', size: 5, mime: 'txt', path: join(mocks.app.getPath(), 'task-attachments', 'stored.txt') }
+    const task = { id: 'task', listId: 'Today', title: 'Pay invoice', priority: 'normal', completed: false, subtasks: [], start: '2026-10-20T09:00:00', startTimeZone: 'Europe/London', reminder: '2026-10-20T07:45:00.000Z', percentComplete: 25, categories: ['Bills'], attachments: [attachment] }
+    mocks.store.localSnapshot.mockReturnValueOnce({ tasks: [task], notes: [], contacts: [] } as any)
+    mocks.setExistsResult(true)
+    mocks.setReadResult(Buffer.from('hello'))
+    mocks.setSaveResult({ canceled: false, filePath: 'C:/tasks-backup.json' })
+    await invoke('productivity:local-export')
+    const exported = JSON.parse(mocks.fs.writeFileSync.mock.calls.find(([path]) => path === 'C:/tasks-backup.json')![1])
+    expect(exported).toMatchObject({ schemaVersion: 3, attachments: [], taskAttachments: [{ id: 'task-file', name: 'invoice.txt', dataBase64: 'aGVsbG8=' }], data: { tasks: [{ reminder: task.reminder, categories: ['Bills'] }] } })
+
+    mocks.fs.writeFileSync.mockClear(); mocks.store.saveLocal.mockClear()
+    mocks.setOpenResult({ canceled: false, filePaths: ['C:/tasks-backup.json'] })
+    mocks.setStatResult({ size: 2048, isFile: () => true })
+    mocks.setReadResult(JSON.stringify(exported))
+    const restored = await invoke('productivity:local-import')
+    expect(restored.tasks[0]).toMatchObject({ start: task.start, startTimeZone: 'Europe/London', percentComplete: 25 })
+    expect(dirname(restored.tasks[0].attachments[0].path)).toBe(resolve(mocks.app.getPath(), 'task-attachments'))
+    expect(mocks.fs.writeFileSync).toHaveBeenCalledWith(restored.tasks[0].attachments[0].path, Buffer.from('hello'), { mode: 0o600 })
+    expect(mocks.store.saveLocal).toHaveBeenCalledWith(restored)
+
+    // Older schemas have no task attachment archive: plain tasks restore, task attachments are rejected.
+    const legacyTask = { id: 'old', listId: 'Today', title: 'Old task', priority: 'high', completed: false, subtasks: [], recurrence: 'weekly' }
+    mocks.setReadResult(JSON.stringify({ format: 'aerio-local-data', schemaVersion: 2, exportedAt: '2026-09-01T00:00:00Z', data: { tasks: [legacyTask], notes: [], contacts: [] }, attachments: [] }))
+    await expect(invoke('productivity:local-import')).resolves.toMatchObject({ tasks: [legacyTask] })
+    for (const invalid of [
+      { ...exported, schemaVersion: 2, taskAttachments: undefined },
+      { ...exported, taskAttachments: [] },
+      { ...exported, data: { ...exported.data, tasks: [{ ...exported.data.tasks[0], percentComplete: 150 }] } },
+      { ...exported, data: { ...exported.data, tasks: [{ ...exported.data.tasks[0], reminder: 'tomorrow' }] } }
+    ]) {
+      mocks.setReadResult(JSON.stringify(invalid))
+      await expect(invoke('productivity:local-import')).rejects.toThrow(/invalid|unsupported/)
+    }
+    expect(() => invoke('productivity:local-save', { tasks: [{ ...legacyTask, categories: ['a', 'A'] }], notes: [] })).toThrow('invalid')
     mocks.setExistsResult(false)
     mocks.setOpenResult({ canceled: true, filePaths: [] })
   })

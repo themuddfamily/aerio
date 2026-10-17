@@ -60,6 +60,23 @@ const api: AerioDesktopApi = {
       const listener = (_event: Electron.IpcRendererEvent, snapshot: Parameters<typeof callback>[0]) => callback(snapshot)
       ipcRenderer.on('tasks:changed', listener)
       return () => ipcRenderer.removeListener('tasks:changed', listener)
+    },
+    reminders: {
+      list: () => ipcRenderer.invoke('tasks:reminders:list'),
+      dismiss: (key) => ipcRenderer.invoke('tasks:reminders:dismiss', key),
+      snooze: (key, until) => ipcRenderer.invoke('tasks:reminders:snooze', key, until),
+      onChanged: (callback) => {
+        const listener = (_event: Electron.IpcRendererEvent, reminders: Parameters<typeof callback>[0]) => callback(reminders)
+        ipcRenderer.on('tasks:reminders:changed', listener)
+        return () => ipcRenderer.removeListener('tasks:reminders:changed', listener)
+      }
+    },
+    attachments: {
+      choose: () => ipcRenderer.invoke('tasks:attachments:choose'),
+      open: (path) => ipcRenderer.invoke('tasks:attachments:open', path),
+      uploadNative: (taskId) => ipcRenderer.invoke('tasks:attachments:upload-native', taskId),
+      removeNative: (taskId, attachmentId) => ipcRenderer.invoke('tasks:attachments:remove-native', taskId, attachmentId),
+      openNative: (taskId, attachmentId) => ipcRenderer.invoke('tasks:attachments:open-native', taskId, attachmentId)
     }
   },
   productivity: {

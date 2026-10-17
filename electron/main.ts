@@ -70,7 +70,9 @@ import { TaskService } from './productivity/task-service'
 import { GoogleTasksConnector } from './productivity/google-tasks-connector'
 import { MicrosoftTasksConnector } from './productivity/microsoft-tasks-connector'
 import type { ProviderTaskInput, TaskFieldPatch, TaskLocalMetadata, TaskResolution } from '../src/task-provider-types'
-import { parseTaskBackup } from './productivity/task-backup'
+import { archivedAttachmentsMatch, parseTaskBackup, type ArchivedTaskAttachment } from './productivity/task-backup'
+import { registerTaskExtras, validLocalTaskExtras } from './productivity/task-extras-ipc'
+import { TaskAttachmentFiles } from './productivity/task-attachments'
 import { MessageLocalStore } from './mail/message-local-store'
 import { registerMessageTools } from './mail/message-tools'
 import { AiAssistantStore, registerAiAssistant } from './mail/ai-assistant'
@@ -190,6 +192,7 @@ let davService: DavService | null = null
 let davIpc: ReturnType<typeof registerDavAccounts> | null = null
 let taskService: TaskService | null = null
 let taskPolling: NodeJS.Timeout | undefined
+let taskExtras: ReturnType<typeof registerTaskExtras> | null = null
 let taskNetworkOnline = true
 let messageLocalStore: MessageLocalStore | null = null
 let mailTemplateStore: MailTemplateStore | null = null
@@ -398,7 +401,8 @@ function validLocalModules(value: unknown): value is LocalModuleSnapshot {
       (task.notes === undefined || text(task.notes, 1_000_000)) && (task.due === undefined || (text(task.due, 100) && Number.isFinite(Date.parse(task.due)))) &&
       ['low', 'normal', 'high'].includes(task.priority) && typeof task.completed === 'boolean' && Array.isArray(task.subtasks) && task.subtasks.length <= 10_000 &&
       uniqueIds(task.subtasks) && task.subtasks.every((subtask) => subtask && text(subtask.id, 300, true) && text(subtask.title, 10_000, true) && typeof subtask.completed === 'boolean') &&
-      (task.recurrence === undefined || ['none', 'daily', 'weekly', 'monthly'].includes(task.recurrence))) &&
+      (task.recurrence === undefined || ['none', 'daily', 'weekly', 'monthly'].includes(task.recurrence)) &&
+      validLocalTaskExtras(task)) &&
     input.notes.every((note) => note && text(note.id, 300, true) && text(note.folder, 300, true) && text(note.title, 10_000, true) && text(note.content, 10_000_000) &&
       Array.isArray(note.tags) && note.tags.length <= 1_000 && note.tags.every((tag) => text(tag, 300, true)) && typeof note.pinned === 'boolean' && typeof note.archived === 'boolean' &&
       text(note.updatedAt, 100) && Number.isFinite(Date.parse(note.updatedAt)) && (note.color === undefined || text(note.color, 100)) &&
@@ -423,10 +427,12 @@ interface ArchivedNoteAttachment {
 
 interface LocalDataBackup {
   format: 'aerio-local-data'
-  schemaVersion: 1 | 2
+  schemaVersion: 1 | 2 | 3
   exportedAt: string
   data: LocalModuleSnapshot
   attachments?: ArchivedNoteAttachment[]
+  /** Schema 3 (E44): local task attachment files. Earlier schemas restore tasks without attachments. */
+  taskAttachments?: ArchivedTaskAttachment[]
   /** Optional so older backups still restore; when present it replaces local mail templates. */
   mailTemplates?: MailTemplateBackup
 }
@@ -434,18 +440,20 @@ interface LocalDataBackup {
 function localDataBackupFromUnknown(value: unknown): LocalDataBackup | undefined {
   if (!value || typeof value !== 'object') return
   const backup = value as Partial<LocalDataBackup>
-  if (backup.format !== 'aerio-local-data' || (backup.schemaVersion !== 1 && backup.schemaVersion !== 2) || typeof backup.exportedAt !== 'string' || !Number.isFinite(Date.parse(backup.exportedAt)) || !validLocalModules(backup.data)) return
+  if (backup.format !== 'aerio-local-data' || (backup.schemaVersion !== 1 && backup.schemaVersion !== 2 && backup.schemaVersion !== 3) || typeof backup.exportedAt !== 'string' || !Number.isFinite(Date.parse(backup.exportedAt)) || !validLocalModules(backup.data)) return
   if (backup.schemaVersion === 1 && backup.data.notes.some((note) => (note.attachments?.length ?? 0) > 0)) return
+  const taskAttachments = backup.data.tasks.flatMap((task) => task.attachments ?? [])
+  if (backup.schemaVersion === 3 ? !archivedAttachmentsMatch(taskAttachments, backup.taskAttachments ?? []) : backup.taskAttachments !== undefined || taskAttachments.length > 0) return
   if (backup.mailTemplates !== undefined && !parseMailTemplateBackup(backup.mailTemplates)) return
-  if (backup.schemaVersion === 2 && (!Array.isArray(backup.attachments) || backup.attachments.length > 5_000 || !backup.attachments.every((attachment) =>
+  if (backup.schemaVersion !== 1 && (!Array.isArray(backup.attachments) || backup.attachments.length > 5_000 || !backup.attachments.every((attachment) =>
     attachment && typeof attachment.id === 'string' && Boolean(attachment.id.trim()) && attachment.id.length <= 300 &&
     typeof attachment.name === 'string' && Boolean(attachment.name.trim()) && attachment.name.length <= 1_000 &&
     Number.isSafeInteger(attachment.size) && attachment.size >= 0 && attachment.size <= NOTE_ATTACHMENT_MAX_BYTES &&
     (attachment.mime === undefined || (typeof attachment.mime === 'string' && attachment.mime.length <= 300)) &&
     typeof attachment.dataBase64 === 'string' && attachment.dataBase64.length <= Math.ceil(NOTE_ATTACHMENT_MAX_BYTES / 3) * 4 + 4 &&
     /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(attachment.dataBase64)))) return
-  if (backup.schemaVersion === 2 && new Set(backup.attachments!.map((attachment) => attachment.id)).size !== backup.attachments!.length) return
-  if (backup.schemaVersion === 2) {
+  if (backup.schemaVersion !== 1 && new Set(backup.attachments!.map((attachment) => attachment.id)).size !== backup.attachments!.length) return
+  if (backup.schemaVersion !== 1) {
     const archived = new Map(backup.attachments!.map((attachment) => [attachment.id, attachment]))
     const referenced = new Set<string>()
     for (const attachment of backup.data.notes.flatMap((note) => note.attachments ?? [])) {
@@ -476,8 +484,9 @@ function createLocalDataBackup(snapshot: LocalModuleSnapshot): LocalDataBackup {
     archived.set(attachment.id, { id: attachment.id, name: attachment.name, size: bytes.byteLength, mime: attachment.mime, dataBase64: bytes.toString('base64') })
     sources.set(attachment.id, resolve(attachment.path))
   }
+  const taskAttachments = new TaskAttachmentFiles(join(app.getPath('userData'), 'task-attachments')).archive(snapshot.tasks.flatMap((task) => task.attachments ?? []), NOTE_BACKUP_ATTACHMENT_MAX_BYTES - total)
   return {
-    format: 'aerio-local-data', schemaVersion: 2, exportedAt: new Date().toISOString(), data: snapshot, attachments: [...archived.values()],
+    format: 'aerio-local-data', schemaVersion: 3, exportedAt: new Date().toISOString(), data: snapshot, attachments: [...archived.values()], taskAttachments,
     ...(mailTemplateStore ? { mailTemplates: mailTemplateStore.exportBackup() } : {})
   }
 }
@@ -512,7 +521,10 @@ function materializeLocalDataBackup(backup: LocalDataBackup): { snapshot: LocalM
         return { id: stored.id, name: stored.name, size: stored.size, mime: stored.mime, path, ...(attachment.inline ? { inline: true } : {}) }
       })
     }))
-    return { snapshot: normalizeRichNotes({ ...backup.data, notes }), createdPaths }
+    if (!taskExtras) throw new Error('Task storage is not ready')
+    const tasks = taskExtras.materializeLocalTasks(backup.data.tasks, backup.taskAttachments ?? [])
+    createdPaths.push(...tasks.created)
+    return { snapshot: normalizeRichNotes({ ...backup.data, notes, tasks: tasks.tasks }), createdPaths }
   } catch (error) {
     for (const path of createdPaths) {
       try { if (existsSync(path)) unlinkSync(path) } catch { /* Do not mask the restore validation error. */ }
@@ -1480,7 +1492,8 @@ function registerIpc() {
     const options: Electron.SaveDialogOptions = { title: 'Back up connected tasks', defaultPath: `Aerio-connected-tasks-${new Date().toISOString().slice(0, 10)}.json`, filters: [{ name: 'Aerio connected tasks', extensions: ['json'] }] }
     const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return {}
-    const backup = await tasks().exportBackup()
+    const exported = await tasks().exportBackup()
+    const backup = taskExtras ? taskExtras.embedBackup(exported) : exported
     const contents = `${JSON.stringify(backup, null, 2)}\n`
     if (Buffer.byteLength(contents, 'utf8') > 150 * 1024 * 1024) throw new Error('Connected-task backups must be smaller than 150 MB')
     writeFileSync(result.filePath, contents, { encoding: 'utf8', mode: 0o600 })
@@ -1496,7 +1509,10 @@ function registerIpc() {
     if (!file.isFile() || file.size > 150 * 1024 * 1024) throw new Error('Choose a connected-task backup smaller than 150 MB')
     let parsed: unknown
     try { parsed = JSON.parse(readFileSync(path, 'utf8')) } catch { throw new Error('That file is not a readable connected-task backup') }
-    return tasks().restoreBackup(parseTaskBackup(parsed))
+    const validated = parseTaskBackup(parsed)
+    const materialized = taskExtras ? taskExtras.materializeBackup(validated) : { backup: validated, created: [] }
+    try { return await tasks().restoreBackup(materialized.backup) }
+    catch (error) { taskExtras?.removeFiles(materialized.created); throw error }
   })
   ipcMain.handle('tasks:sync', (_event, id: unknown) => tasks().sync(taskId(id)))
   ipcMain.handle('tasks:create', (_event, accountId: unknown, listId: unknown, input: ProviderTaskInput, parentId: unknown, local?: TaskLocalMetadata) => tasks().create(taskId(accountId), taskId(listId), input, parentId === undefined ? undefined : taskId(parentId), local))
@@ -1622,6 +1638,7 @@ function registerIpc() {
     const next = normalizeRichNotes(snapshot)
     store.saveLocal(next)
     cleanupRemovedNoteAttachments(previous, next)
+    taskExtras?.localChanged()
   })
   // Rich Notes pictures (docs/rich-notes.md): stored beside note attachments, read back for display only.
   ipcMain.handle('productivity:note-image-save', (_event, input: unknown): Attachment => {
@@ -1721,6 +1738,7 @@ function registerIpc() {
       throw error
     }
     cleanupRemovedNoteAttachments(previous, restored)
+    taskExtras?.localChanged()
     templates?.commit()
     return restored
   })
@@ -2197,7 +2215,30 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
       ? new GoogleTasksConnector(id, () => requireVault().accessToken(id), requireVault().hasGoogleTasksAccess(id, true))
       : new MicrosoftTasksConnector(id, () => requireVault().microsoftAccessToken(id), requireVault().hasMicrosoftTasksAccess(id, true)),
     online: () => taskNetworkOnline && net.isOnline(),
-    changed: (snapshot) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('tasks:changed', snapshot))
+    changed: (snapshot) => { BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('tasks:changed', snapshot)); taskExtras?.connectedChanged() }
+  })
+  taskExtras = registerTaskExtras({
+    ipcMain,
+    userData: app.getPath('userData'),
+    tempDirectory: app.getPath('temp'),
+    service: () => taskService ?? undefined,
+    localTasks: () => requireProductivityStore().localSnapshot().tasks,
+    isLocked: () => appLockStatus().locked,
+    notificationsEnabled: () => Boolean(loadPreferences().settings.notifications) && !hideTestWindows,
+    chooseFiles: async (event, title) => {
+      const owner = BrowserWindow.fromWebContents(event.sender)
+      const options: Electron.OpenDialogOptions = { title, properties: ['openFile', 'multiSelections'] }
+      const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
+      return result.canceled ? [] : result.filePaths
+    },
+    openPath: (path) => shell.openPath(path),
+    showNotification: (title, body) => {
+      if (!Notification.isSupported()) return
+      const notification = new Notification({ title: title.slice(0, 80), body: body.slice(0, 240), icon: iconPath() })
+      notification.on('click', () => openMainWindow())
+      notification.show()
+    },
+    broadcast: (channel, payload) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send(channel, payload))
   })
   taskPolling = setInterval(() => { void taskService?.poll().catch(() => {}) }, 60_000)
   taskPolling.unref()
@@ -2322,6 +2363,7 @@ app.on('before-quit', () => {
   quitting = true
   stopTrayMonitor()
   if (taskPolling) clearInterval(taskPolling)
+  taskExtras?.dispose()
   profileBackups?.stop()
   void chatRuntime?.dispose().catch(() => {})
   void mcpAutomation?.stop().catch(() => {})

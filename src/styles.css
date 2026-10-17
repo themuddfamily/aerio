@@ -4974,3 +4974,26 @@ button.mail-folder-twisty:hover { background: var(--surface-hover); color: var(-
 .pop3-actions { gap: 8px; }
 .pop3-settings { display: grid; gap: 10px; }
 .pop3-status { color: var(--text-soft); }
+
+/* Task start, reminder, progress, tags, attachments, and reminders (E44) */
+.task-fields { display: grid; gap: 8px; }
+.task-fields fieldset { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.task-fields legend { padding: 0 4px; color: var(--text-soft); font-size: 10px; font-weight: 600; }
+.task-field-heading { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.task-field-source { padding: 1px 6px; border-radius: 999px; font-size: 8.5px; font-weight: 600; }
+.task-field-source.native { color: var(--accent-text); background: var(--accent-soft); }
+.task-field-source.local { color: var(--text-soft); background: var(--surface-3); border: 1px dashed var(--line-strong); }
+.task-reminder-input { display: flex; align-items: center; gap: 6px; }
+.task-reminder-input input[type="datetime-local"] { flex: 1; min-width: 0; }
+.task-field-summary { margin: 0; color: var(--muted); font-size: 10px; }
+.task-attachments { max-height: 200px; padding: 8px 0 0; }
+.task-attachments > header .button { margin-left: 4px; }
+.task-meta em.task-category { color: var(--accent-text); background: var(--accent-soft); }
+.task-reminders-bar { display: grid; gap: 6px; margin: 0 20px 12px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--accent-soft); }
+.task-reminders-bar > header { display: flex; align-items: center; gap: 6px; color: var(--accent-text); font-size: 11px; }
+.task-reminder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 9px; background: var(--surface); }
+.task-reminder-title { min-width: 0; flex: 1; display: grid; gap: 2px; text-align: left; }
+.task-reminder-title strong { overflow: hidden; color: var(--text); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.task-reminder-title small { color: var(--muted); font-size: 9.5px; }
+.task-reminder-snooze { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
+.task-reminder-snooze select { padding: 3px 6px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--text); font-size: 10px; }

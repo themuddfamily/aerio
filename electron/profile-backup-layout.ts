@@ -11,6 +11,7 @@ import { InvitationStore } from './productivity/invitation-store'
 import { MeetingLinkStore } from './productivity/meeting-link-store'
 import { ProductivityStore } from './productivity/store'
 import { TaskStore } from './productivity/task-store'
+import { TASK_REMINDER_SCHEMA } from './productivity/task-reminders'
 import { countRows, PROFILE_PREVIEW_LABELS, profileTableExists, type ProfileBackupLayout } from './profile-backup'
 import { prepareRestoredMcpDatabase, scrubMcpBackup } from './mcp/store'
 
@@ -149,11 +150,19 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
       scrubBackup: scrubMcpBackup,
       prepareRestore: (path) => withDatabase(path, prepareRestoredMcpDatabase),
       summarize: (db) => [{ label: 'External automation settings', count: countRows(db, 'mcp_settings') }]
+    },
+    {
+      // Delivered, snoozed, and dismissed reminders, so a restored profile does not refire them (E44).
+      file: 'task-reminders.sqlite',
+      label: 'Task reminder delivery state',
+      prepareRestore: (path) => withDatabase(path, (db) => db.exec(TASK_REMINDER_SCHEMA)),
+      summarize: (db) => [{ label: 'Task reminders awaiting dismissal', count: countRows(db, 'task_reminder_state', `status IN ('fired','snoozed')`) }]
     }
   ],
   directories: [
     { name: 'mail', label: 'Downloaded messages and draft attachments' },
     { name: 'note-attachments', label: 'Note attachments' },
+    { name: 'task-attachments', label: 'Task attachments' },
     { name: 'template-attachments', label: 'Template attachments' }
   ]
 }
