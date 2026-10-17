@@ -191,6 +191,17 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:attachment:open', 'account-1', 'message-1', 'attachment-1', 'file.txt')
   })
 
+  it('exposes provider automatic replies with exact IPC channels', async () => {
+    const replies = api().mail.automaticReplies
+    const settings = { enabled: true, subject: 'Away', internalMessage: 'Back Monday', externalMessage: '', externalAudience: 'all' }
+    await replies.get('account-1')
+    await replies.update('account-1', settings)
+    await replies.disable('account-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:get', 'account-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:update', 'account-1', settings)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:disable', 'account-1')
+  })
+
   it('reports initial and changing network connectivity', async () => {
     window.dispatchEvent(new Event('offline'))
     window.dispatchEvent(new Event('online'))

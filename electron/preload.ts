@@ -105,6 +105,11 @@ const api: AerioDesktopApi = {
       unsubscribeInfo: (ref) => ipcRenderer.invoke('mail:message:unsubscribe-info', ref),
       unsubscribe: (ref, request) => ipcRenderer.invoke('mail:message:unsubscribe', ref, request)
     },
+    automaticReplies: {
+      get: (accountId) => ipcRenderer.invoke('mail:automatic-replies:get', accountId),
+      update: (accountId, settings) => ipcRenderer.invoke('mail:automatic-replies:update', accountId, settings),
+      disable: (accountId) => ipcRenderer.invoke('mail:automatic-replies:disable', accountId)
+    },
     credentials: {
       status: () => ipcRenderer.invoke('gmail:credentials:status'),
       import: () => ipcRenderer.invoke('gmail:credentials:import'),
