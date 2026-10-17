@@ -200,8 +200,37 @@ export class MicrosoftGraphClient {
   deleteDraft(id: string) {
     return this.request<void>(`/me/messages/${encodeURIComponent(id)}`, { method: 'DELETE' })
   }
+
+  folder(id: string) {
+    return this.request<GraphFolder & { totalItemCount?: number }>(`/me/mailFolders/${encodeURIComponent(id)}?$select=id,displayName,parentMailFolderId,childFolderCount,totalItemCount`)
+  }
+
+  createFolder(displayName: string, parentId?: string) {
+    const path = parentId ? `/me/mailFolders/${encodeURIComponent(parentId)}/childFolders` : '/me/mailFolders'
+    return this.request<GraphFolder>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ displayName, isHidden: false }) })
+  }
+
+  renameFolder(id: string, displayName: string) {
+    return this.request<GraphFolder>(`/me/mailFolders/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ displayName }) })
+  }
+
+  // Graph moves folders with an action; "msgfolderroot" is the top level.
+  moveFolder(id: string, parentId?: string) {
+    return this.request<GraphFolder>(`/me/mailFolders/${encodeURIComponent(id)}/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destinationId: parentId ?? 'msgfolderroot' }) })
+  }
+
+  deleteFolder(id: string) {
+    return this.request<void>(`/me/mailFolders/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
 }
 
 export function microsoftLabels(accountId: string, folders: GraphFolder[]): MailLabel[] {
-  return folders.map((folder) => ({ accountId, id: `folder:${folder.id}`, name: folder.displayName, type: folder.specialUse ? 'system' : 'user' }))
+  const ids = new Set(folders.map((folder) => folder.id))
+  return folders.map((folder) => ({
+    accountId,
+    id: `folder:${folder.id}`,
+    name: folder.displayName,
+    type: folder.specialUse ? 'system' : 'user',
+    ...(folder.parentMailFolderId && ids.has(folder.parentMailFolderId) ? { parentId: `folder:${folder.parentMailFolderId}` } : {})
+  }))
 }

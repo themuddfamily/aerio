@@ -97,6 +97,7 @@ const mocks = vi.hoisted(() => {
   method('operationAttempts', () => 0)
   method('rescheduleOperation')
   method('restoreOperationSnapshot')
+  method('recoverInterruptedFolderOperations', () => [])
 
   const gmail = {
     copyToLabel: vi.fn().mockResolvedValue(undefined),

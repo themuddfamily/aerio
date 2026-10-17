@@ -371,6 +371,24 @@ export class MailDatabase {
     const draftColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_drafts)').all() as { name: string }[]).map((column) => column.name))
     if (!draftColumns.has('delivery_at')) this.db.exec('ALTER TABLE gmail_drafts ADD COLUMN delivery_at TEXT')
     if (!draftColumns.has('remote_revision')) this.db.exec('ALTER TABLE gmail_drafts ADD COLUMN remote_revision TEXT')
+    const labelColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_labels)').all() as { name: string }[]).map((column) => column.name))
+    if (!labelColumns.has('parent_id')) this.db.exec('ALTER TABLE gmail_labels ADD COLUMN parent_id TEXT')
+    // Journal for provider folder/label changes so an interrupted request can
+    // be reconciled from the provider's folder list after a restart.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS mail_folder_operations (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES gmail_accounts(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        label_id TEXT,
+        input_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS mail_folder_operations_status ON mail_folder_operations(status, account_id);
+    `)
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(4, ?)').run(nowIso())
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(5, ?)').run(nowIso())
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(6, ?)').run(nowIso())
@@ -458,8 +476,8 @@ export class MailDatabase {
   replaceLabels(accountId: string, labels: MailLabel[]) {
     this.transaction(() => {
       this.stmt('DELETE FROM gmail_labels WHERE account_id=?').run(accountId)
-      const insert = this.stmt('INSERT INTO gmail_labels(account_id,id,name,type,color) VALUES(?,?,?,?,?)')
-      for (const label of labels) insert.run(accountId, label.id, label.name, label.type, label.color ?? null)
+      const insert = this.stmt('INSERT INTO gmail_labels(account_id,id,name,type,color,parent_id) VALUES(?,?,?,?,?,?)')
+      for (const label of labels) insert.run(accountId, label.id, label.name, label.type, label.color ?? null, label.parentId ?? null)
     })
   }
 
@@ -472,7 +490,8 @@ export class MailDatabase {
       id: String(row.id),
       name: String(row.name),
       type: String(row.type) as MailLabel['type'],
-      color: row.color ? String(row.color) : undefined
+      color: row.color ? String(row.color) : undefined,
+      ...(row.parent_id ? { parentId: String(row.parent_id) } : {})
     }))
   }
 
@@ -1388,5 +1407,103 @@ export class MailDatabase {
 
   rawExists(path: string) {
     try { return statSync(path).size > 0 } catch { return false }
+  }
+
+  private messagesInFolder(accountId: string, labelId: string) {
+    const remoteFolderId = labelId.startsWith('folder:') ? labelId.slice(7) : null
+    return this.stmt(`
+      SELECT id,thread_id,label_ids_json,remote_folder_id FROM gmail_messages
+      WHERE account_id=? AND (remote_folder_id=? OR EXISTS(SELECT 1 FROM json_each(label_ids_json) WHERE value=?))
+    `).all(accountId, remoteFolderId, labelId) as DatabaseRow[]
+  }
+
+  // Counts cached messages and queued work that still depend on a folder.
+  folderUsage(accountId: string, labelId: string) {
+    const rows = this.messagesInFolder(accountId, labelId)
+    return { messages: rows.length, threads: new Set(rows.map((row) => String(row.thread_id))).size, pendingOperations: this.pendingOperationsForLabel(accountId, labelId) }
+  }
+
+  pendingOperationsForLabel(accountId: string, labelId: string) {
+    const rows = this.stmt(`SELECT label_id,before_labels_json FROM gmail_operations WHERE account_id=? AND status IN ('queued','running')`).all(accountId) as DatabaseRow[]
+    return rows.filter((row) => row.label_id === labelId
+      || Object.values(json<Record<string, string[]>>(String(row.before_labels_json), {})).some((labels) => labels.includes(labelId))).length
+  }
+
+  // Rewrites cached references after a provider changed folder ids (IMAP ids
+  // follow the mailbox path) so messages, queued operations, undo snapshots
+  // and rules keep pointing at the renamed folder.
+  renameFolderReferences(accountId: string, renamed: Record<string, string>) {
+    const map = new Map(Object.entries(renamed).filter(([from, to]) => from !== to))
+    if (!map.size) return
+    const remote = new Map([...map].filter(([from, to]) => from.startsWith('folder:') && to.startsWith('folder:')).map(([from, to]) => [from.slice(7), to.slice(7)]))
+    const mapLabels = (labels: string[]) => [...new Set(labels.map((label) => map.get(label) ?? label))]
+    this.transaction(() => {
+      const rows = new Map<string, DatabaseRow>()
+      for (const from of map.keys()) for (const row of this.messagesInFolder(accountId, from)) rows.set(String(row.id), row)
+      const threads = new Set<string>()
+      for (const row of rows.values()) {
+        const folder = row.remote_folder_id ? String(row.remote_folder_id) : null
+        this.stmt('UPDATE gmail_messages SET label_ids_json=?,remote_folder_id=? WHERE account_id=? AND id=?')
+          .run(JSON.stringify(mapLabels(json<string[]>(String(row.label_ids_json), []))), folder ? remote.get(folder) ?? folder : null, accountId, String(row.id))
+        threads.add(String(row.thread_id))
+      }
+      for (const [from, to] of remote) this.stmt('UPDATE gmail_sync_items SET remote_folder_id=? WHERE account_id=? AND remote_folder_id=?').run(to, accountId, from)
+      const operations = this.stmt(`SELECT id,label_id,before_labels_json FROM gmail_operations WHERE account_id=? AND status IN ('queued','running')`).all(accountId) as DatabaseRow[]
+      for (const operation of operations) {
+        const snapshot = Object.fromEntries(Object.entries(json<Record<string, string[]>>(String(operation.before_labels_json), {})).map(([id, labels]) => [id, mapLabels(labels)]))
+        const labelId = operation.label_id ? String(operation.label_id) : null
+        this.stmt('UPDATE gmail_operations SET label_id=?,before_labels_json=?,updated_at=? WHERE id=?')
+          .run(labelId ? map.get(labelId) ?? labelId : null, JSON.stringify(snapshot), nowIso(), String(operation.id))
+      }
+      for (const rule of this.stmt('SELECT id,actions_json FROM mail_rules WHERE account_id=?').all(accountId) as DatabaseRow[]) {
+        const actions = json<MailRuleInput['actions']>(String(rule.actions_json), [])
+        if (!actions.some((action) => action.labelId && map.has(action.labelId))) continue
+        this.stmt('UPDATE mail_rules SET actions_json=?,updated_at=? WHERE id=?')
+          .run(JSON.stringify(actions.map((action) => action.labelId && map.has(action.labelId) ? { ...action, labelId: map.get(action.labelId) } : action)), nowIso(), String(rule.id))
+      }
+      for (const threadId of threads) this.rebuildThread(accountId, threadId)
+    })
+  }
+
+  // Gmail keeps messages when a label is deleted; drop only the label.
+  removeLabelReferences(accountId: string, labelId: string) {
+    this.transaction(() => {
+      const threads = new Set<string>()
+      for (const row of this.messagesInFolder(accountId, labelId)) {
+        this.stmt('UPDATE gmail_messages SET label_ids_json=? WHERE account_id=? AND id=?')
+          .run(JSON.stringify(json<string[]>(String(row.label_ids_json), []).filter((label) => label !== labelId)), accountId, String(row.id))
+        threads.add(String(row.thread_id))
+      }
+      for (const threadId of threads) this.rebuildThread(accountId, threadId)
+      this.stmt('DELETE FROM gmail_labels WHERE account_id=? AND id=?').run(accountId, labelId)
+    })
+  }
+
+  beginFolderOperation(accountId: string, kind: 'create' | 'update' | 'delete', labelId: string | undefined, input: unknown) {
+    const id = crypto.randomUUID()
+    const timestamp = nowIso()
+    this.stmt(`INSERT INTO mail_folder_operations(id,account_id,kind,label_id,input_json,status,created_at,updated_at) VALUES(?,?,?,?,?,'running',?,?)`)
+      .run(id, accountId, kind, labelId ?? null, JSON.stringify(input ?? {}), timestamp, timestamp)
+    return id
+  }
+
+  finishFolderOperation(id: string, status: 'succeeded' | 'failed', error?: string) {
+    this.stmt('UPDATE mail_folder_operations SET status=?,error=?,updated_at=? WHERE id=?').run(status, error ?? null, nowIso(), id)
+  }
+
+  listFolderOperations(accountId?: string) {
+    const rows = (accountId
+      ? this.stmt('SELECT * FROM mail_folder_operations WHERE account_id=? ORDER BY created_at').all(accountId)
+      : this.stmt('SELECT * FROM mail_folder_operations ORDER BY created_at').all()) as DatabaseRow[]
+    return rows.map((row) => ({ id: String(row.id), accountId: String(row.account_id), kind: String(row.kind), labelId: row.label_id ? String(row.label_id) : undefined, status: String(row.status), error: row.error ? String(row.error) : undefined }))
+  }
+
+  // Returns accounts whose folder change was cut off mid-request; the caller
+  // re-reads their provider folder list, which is the source of truth.
+  recoverInterruptedFolderOperations() {
+    const rows = this.stmt(`SELECT DISTINCT account_id FROM mail_folder_operations WHERE status='running'`).all() as DatabaseRow[]
+    const timestamp = nowIso()
+    this.stmt(`UPDATE mail_folder_operations SET status='interrupted',error='Aerio closed during the provider request; the folder list was refreshed from the provider',updated_at=? WHERE status='running'`).run(timestamp)
+    return rows.map((row) => String(row.account_id))
   }
 }

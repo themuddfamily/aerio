@@ -205,6 +205,60 @@ export interface MailLabel {
   name: string
   type: 'system' | 'user'
   color?: string
+  parentId?: string
+}
+
+export interface MailFolderCapabilities {
+  kind: 'label' | 'folder'
+  canCreate: boolean
+  canRename: boolean
+  canDelete: boolean
+  canNest: boolean
+  canColor: boolean
+  /** True when the provider keeps messages after the folder/label is removed. */
+  deleteKeepsMessages: boolean
+}
+
+export interface CreateMailFolderInput {
+  accountId: string
+  name: string
+  parentId?: string
+  color?: string
+}
+
+export interface UpdateMailFolderInput {
+  accountId: string
+  labelId: string
+  name?: string
+  /** null moves the folder to the top level. */
+  parentId?: string | null
+  color?: string
+}
+
+export interface DeleteMailFolderInput {
+  accountId: string
+  labelId: string
+  /** Required when the folder still contains messages. */
+  confirmNonEmpty?: boolean
+}
+
+export interface MailFolderDeletePreview {
+  labelId: string
+  messages: number
+  threads: number
+  childFolders: number
+  pendingOperations: number
+  deleteKeepsMessages: boolean
+  /** Where messages go when the provider would otherwise remove them. */
+  messagesMoveTo?: string
+}
+
+export interface MailFolderMutationResult {
+  label?: MailLabel
+  labels: MailLabel[]
+  /** Old label id to new label id, for providers whose ids follow the folder path. */
+  renamed: Record<string, string>
+  deletedId?: string
 }
 
 export interface ApplyMailActionInput {
@@ -406,6 +460,12 @@ export interface MailDesktopApi {
   diagnostics: {
     health(): Promise<MailDiagnosticHealth>
     export(): Promise<{ savedPath?: string }>
+  }
+  folders: {
+    create(input: CreateMailFolderInput): Promise<MailFolderMutationResult>
+    update(input: UpdateMailFolderInput): Promise<MailFolderMutationResult>
+    delete(input: DeleteMailFolderInput): Promise<MailFolderMutationResult>
+    deletePreview(accountId: string, labelId: string): Promise<MailFolderDeletePreview>
   }
   rules: {
     list(accountIds?: string[]): Promise<MailRule[]>

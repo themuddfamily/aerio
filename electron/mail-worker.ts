@@ -28,6 +28,7 @@ import { MailDatabase, type ParsedMailMessage } from './mail/database'
 import { GmailApiError, GmailClient, type GmailRawMessage } from './mail/gmail-client'
 import { ImapSmtpClient, labelsForImapFolders, type ImapFolder } from './mail/imap-client'
 import { MicrosoftGraphClient, MicrosoftGraphError, microsoftLabels, microsoftMessageLabels } from './mail/microsoft-client'
+import { MailFolderManager } from './mail/folder-management'
 import { sanitizeMessageHtml } from './mail/message-security'
 import { buildNewMailNotification } from './mail/new-mail'
 import { parseMessageSource } from './mail/message-source'
@@ -118,6 +119,16 @@ function microsoftClientFor(accountId: string) {
     if (credential.type !== 'oauth') throw new Error('The Microsoft account does not have OAuth credentials')
     return credential.accessToken
   })
+}
+
+let folderManagerInstance: MailFolderManager | undefined
+function folderManager() {
+  if (!database) throw new Error('Database is not initialized')
+  if (!folderManagerInstance) {
+    const db = database
+    folderManagerInstance = new MailFolderManager({ database: db, online: () => online, gmail: clientFor, microsoft: microsoftClientFor, imap: imapClientFor })
+  }
+  return folderManagerInstance
 }
 
 function addressList(value?: Address[]) {
@@ -983,6 +994,9 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'initialize') {
     contentPath = command.payload.contentPath
     database = new MailDatabase(command.payload.databasePath, contentPath)
+    folderManagerInstance = undefined
+    // Re-read provider folders for any folder change cut off by a restart.
+    for (const accountId of database.recoverInterruptedFolderOperations()) void folderManager().refresh(accountId).catch(() => undefined)
     clearInterval(operationTimer)
     clearInterval(pollTimer)
     operationTimer = setInterval(() => void processOperations(), 2_000)
@@ -1123,6 +1137,18 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     return online ? serializeDraft(command.payload.id, () => discardDraft(command.payload.id)) : queued
   }
   if (command.type === 'drafts:stage-message-attachments') return stageMessageAttachments(command.payload.draftId, command.payload.accountId, command.payload.messageId)
+  if (command.type === 'folders:delete-preview') return folderManager().preview(command.payload.accountId, command.payload.labelId)
+  if (command.type === 'folders:create' || command.type === 'folders:update' || command.type === 'folders:delete') {
+    const accountId = command.payload.accountId
+    const result = command.type === 'folders:create' ? await folderManager().create(command.payload)
+      : command.type === 'folders:update' ? await folderManager().update(command.payload)
+        : await folderManager().delete(command.payload)
+    emit({ type: 'mail-changed', payload: { accountId } })
+    // Renamed IMAP folders and deleted folders' messages are re-indexed.
+    const provider = database.getAccount(accountId)?.provider
+    if (provider !== 'gmail' && (command.type === 'folders:delete' || Object.keys(result.renamed).length) && !paused.has(accountId)) void syncAccount(accountId)
+    return result
+  }
   if (command.type === 'rules:list') return database.listRules(command.payload.accountIds)
   if (command.type === 'rules:save') return database.saveRule(command.payload)
   if (command.type === 'rules:delete') return database.deleteRule(command.payload.id)
@@ -1191,6 +1217,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     clearInterval(pollTimer)
     database.close()
     database = undefined
+    folderManagerInstance = undefined
     return
   }
 }
