@@ -61,7 +61,7 @@ The editor shows a **Server compatibility** panel for Gmail and Microsoft accoun
 
 ### Permissions
 
-New sign-ins and reconnects request `gmail.settings.basic` or `MailboxSettings.ReadWrite`. Accounts connected earlier keep working for mail. Token refresh never adds the new scope; only an interactive reconnect does. `electron/mail/mail-settings-scopes.ts` checks the granted scopes, and automatic replies use the same helper. Without the scope, capabilities report `permission: 'missing'` with an explanation, and the rules window offers **Reconnect account**. A provider 403 that isn't rate limiting is reported the same way.
+New sign-ins and reconnects request `gmail.settings.basic` or `MailboxSettings.ReadWrite`; automatic replies need the same scopes. Accounts connected earlier keep working for mail. Token refresh never adds the new scope; only an interactive reconnect does. `electron/mail/mail-settings-scopes.ts` holds the scope constants (automatic replies imports them too) and `mailSettingsScopeStatus`, which `OAuthVault.mailSettingsAccess` applies to the stored grant. Without the scope, capabilities report `permission: 'missing'` with an explanation, and the rules window offers **Reconnect account**. A legacy grant with no recorded scope list is tried anyway. In every case, a provider 403 that isn't rate limiting is reported the same way.
 
 IMAP providers report server rules as unsupported. ManageSieve is not implemented.
 
