@@ -66,6 +66,9 @@ const PHASES: Record<number, ChatVerificationPhase> = {
   [VerificationPhase.Started]: 'started', [VerificationPhase.Cancelled]: 'cancelled', [VerificationPhase.Done]: 'done'
 }
 
+/** The SDK delays its first backup upload by up to 10 s; allow for that plus the upload itself. */
+const BACKUP_UPLOAD_WAIT_MS = 20_000
+
 let quietLogger = false
 function quiet() {
   if (quietLogger) return
@@ -396,7 +399,14 @@ export class ChatServiceRuntime {
    */
   private async setupRecovery() {
     const crypto = this.requireCrypto()
+    const { client } = this.requireClient()
     let encoded: string | undefined
+    // The SDK uploads existing room keys after a random start delay. Wait (bounded) for that
+    // first upload so "recovery is set up" also means earlier history is in the backup.
+    let uploaded!: () => void
+    const backedUp = new Promise<void>((resolve) => { uploaded = resolve })
+    const onRemaining = (remaining: number) => { if (remaining === 0) uploaded() }
+    client.on(CryptoEvent.KeyBackupSessionsRemaining, onRemaining)
     try {
       await crypto.bootstrapCrossSigning({ authUploadDeviceSigningKeys: async (makeRequest) => { await makeRequest(null) } })
       await crypto.bootstrapSecretStorage({
@@ -409,11 +419,18 @@ export class ChatServiceRuntime {
         },
         setupNewKeyBackup: true
       })
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const complete = await Promise.race([
+        backedUp.then(() => true),
+        new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), BACKUP_UPLOAD_WAIT_MS) })
+      ])
+      clearTimeout(timer)
+      await this.reportSecurity()
+      return { recoveryKey: encoded, backupComplete: complete }
     } finally {
+      client.off(CryptoEvent.KeyBackupSessionsRemaining, onRemaining)
       this.recoveryKey = undefined
     }
-    await this.reportSecurity()
-    return { recoveryKey: encoded }
   }
 
   /** Gate probe: creates or reopens an encrypted crypto store and reports the device identity key. */
