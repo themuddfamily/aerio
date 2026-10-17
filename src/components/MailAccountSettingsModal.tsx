@@ -1,7 +1,9 @@
 import { RefreshCw, RotateCcw, Save, ShieldCheck } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { MailAccountSummary, ImapServerSettings } from '../mail-types'
+import MailAutomaticRepliesSection from './MailAutomaticRepliesSection'
 import Modal from './Modal'
+import MailSenderIdentities from './MailSenderIdentities'
 
 interface MailAccountSettingsModalProps {
   account: MailAccountSummary
@@ -117,10 +119,12 @@ export default function MailAccountSettingsModal({ account, onSaved, onClose, on
         <div className="account-color-field"><span>Account colour</span><div>{colors.map((value) => <button key={value} className={color === value ? 'selected' : ''} style={{ background: value }} aria-label={`Use ${value}`} onClick={() => setColor(value)} />)}<input type="color" value={color} onChange={(event) => setColor(event.target.value)} aria-label="Custom account colour" /></div></div>
       </section>
       <section>
-        <h3>Signature</h3>
-        <p>Inserted into new messages, replies and forwards sent from this account.</p>
+        <h3>Account signature</h3>
+        <p>Plain-text signature for the account address when no HTML signature is assigned below.</p>
         <textarea value={signature} onChange={(event) => setSignature(event.target.value)} placeholder="Your name and contact details" />
       </section>
+      {window.aerio.mail.identities && <MailSenderIdentities account={account} onToast={onToast} />}
+      <MailAutomaticRepliesSection account={account} onToast={onToast} />
       <section>
         <h3>Synchronization and alerts</h3>
         <label className="toggle-row"><span><strong>Synchronize this account</strong><small>Check for new mail in the background.</small></span><input type="checkbox" checked={syncEnabled} onChange={(event) => setSyncEnabled(event.target.checked)} /></label>

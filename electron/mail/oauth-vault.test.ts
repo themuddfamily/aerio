@@ -411,8 +411,25 @@ describe('OAuthVault access tokens', () => {
     await vault.microsoftAccessToken('account')
     const requested = (fetch.mock.calls[0][1] as RequestInit).body as URLSearchParams
     if (scope !== undefined) expect(requested.get('scope')).toBe(scope)
-    else expect(requested.get('scope')).not.toContain('Tasks.')
+    else {
+      expect(requested.get('scope')).not.toContain('Tasks.')
+      expect(requested.get('scope')).not.toContain('MailboxSettings.')
+    }
     expect(vault.hasMicrosoftTasksAccess('account', true)).toBe(scope?.includes('Tasks.ReadWrite') ?? false)
+  })
+
+  it('reports granted provider scopes for automatic replies, or undefined for untracked legacy grants', () => {
+    const vault = new OAuthVault(vaultPath)
+    privateData(vault).googleTokens = { tracked: { scope: 'https://www.googleapis.com/auth/gmail.modify  https://www.googleapis.com/auth/gmail.settings.basic' }, legacy: { refresh_token: 'r' } }
+    privateData(vault).microsoftTokens = {
+      tracked: { accessToken: 'a', refreshToken: 'r', expiresAt: 0, scope: 'https://graph.microsoft.com/MailboxSettings.ReadWrite Mail.ReadWrite' },
+      blank: { accessToken: 'a', refreshToken: 'r', expiresAt: 0, scope: ' ' }
+    }
+    expect(vault.grantedScopes('tracked', 'gmail')).toEqual(['https://www.googleapis.com/auth/gmail.modify', 'https://www.googleapis.com/auth/gmail.settings.basic'])
+    expect(vault.grantedScopes('legacy', 'gmail')).toBeUndefined()
+    expect(vault.grantedScopes('missing', 'gmail')).toBeUndefined()
+    expect(vault.grantedScopes('tracked', 'microsoft')).toEqual(['MailboxSettings.ReadWrite', 'Mail.ReadWrite'])
+    expect(vault.grantedScopes('blank', 'microsoft')).toBeUndefined()
   })
 
   it('reports mailbox-settings scopes for server rules and never refreshes them into legacy grants', async () => {
@@ -422,8 +439,9 @@ describe('OAuthVault access tokens', () => {
     expect(vault.mailSettingsAccess('granted', 'gmail', 'server-rules')).toMatchObject({ granted: true, missing: [] })
     expect(vault.mailSettingsAccess('legacy', 'gmail', 'server-rules')).toMatchObject({ granted: false, missing: ['https://www.googleapis.com/auth/gmail.settings.basic'], message: expect.stringContaining('Reconnect') })
     expect(vault.mailSettingsAccess('granted', 'microsoft', 'automatic-replies')).toMatchObject({ granted: true })
-    expect(vault.mailSettingsAccess('legacy', 'microsoft', 'server-rules')).toMatchObject({ granted: false, missing: ['MailboxSettings.ReadWrite'] })
-    expect(vault.grantedScopes('imap-1', 'imap')).toBeUndefined()
+    // An untracked legacy grant is tried; a provider 403 then asks for a reconnect.
+    expect(vault.mailSettingsAccess('legacy', 'microsoft', 'server-rules')).toMatchObject({ granted: true, known: false })
+    expect(vault.mailSettingsAccess('imap-1', 'imap', 'server-rules')).toMatchObject({ supported: false })
     const fetch = vi.fn().mockResolvedValue(jsonResponse({ access_token: 'renewed', expires_in: 120 }))
     vi.stubGlobal('fetch', fetch)
     await vault.microsoftAccessToken('legacy')
@@ -526,7 +544,7 @@ describe('OAuthVault interactive authorization', () => {
     expect(authorizationClient.generateAuthUrl).toHaveBeenCalledWith(expect.objectContaining({
       access_type: 'offline', prompt: 'consent', code_challenge: 'challenge',
       code_challenge_method: 'S256', redirect_uri: 'http://127.0.0.1:43123/oauth/callback',
-      scope: expect.arrayContaining(['https://www.googleapis.com/auth/contacts', 'https://www.googleapis.com/auth/tasks'])
+      scope: expect.arrayContaining(['https://www.googleapis.com/auth/contacts', 'https://www.googleapis.com/auth/tasks', 'https://www.googleapis.com/auth/gmail.settings.basic'])
     }))
     expect(mocks.oauthInstances[1].args).toEqual([googleConfig.clientId, googleConfig.clientSecret, 'http://127.0.0.1:43123/oauth/callback'])
     expect(exchangeClient.getToken).toHaveBeenCalledWith({ code: 'authorization-code', codeVerifier: 'verifier', redirect_uri: 'http://127.0.0.1:43123/oauth/callback' })
@@ -606,6 +624,7 @@ describe('OAuthVault interactive authorization', () => {
     expect(opened.searchParams.get('scope')).toContain('Mail.Send')
     expect(opened.searchParams.get('scope')).toContain('Contacts.ReadWrite')
     expect(opened.searchParams.get('scope')).toContain('Tasks.ReadWrite')
+    expect(opened.searchParams.get('scope')).toContain('MailboxSettings.ReadWrite')
     expect(privateData(vault).microsoftTokens[account.accountId]).toMatchObject({ accessToken: 'access', refreshToken: 'refresh' })
     expect(mocks.servers[0].close).toHaveBeenCalledOnce()
   })

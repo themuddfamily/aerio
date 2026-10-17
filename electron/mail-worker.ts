@@ -34,9 +34,13 @@ import { buildNewMailNotification } from './mail/new-mail'
 import { messageIdFromMime } from './mail/reply-watches'
 import { mailRuleTriggersForLabels } from '../src/lib/mail-rules'
 import { parseMessageSource } from './mail/message-source'
+import { runMailQuickAction } from './mail/quick-actions'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createMime, createMimeBuffer } from './mail/mime-builder'
+import { describeSenderRejection, parseGmailSendAs, parseMicrosoftProxyAddresses, resolveDraftSender } from './mail/sender-identity'
 import { createReceiptService } from './mail/receipts'
+import { AttachmentContentIndexer } from './mail/attachment-text-indexer'
+import { AttachmentExtractRunner } from './mail/attachment-extract-runner'
 import { supportedSendOptions } from '../src/lib/mail-send-options'
 import {
   BACKGROUND_MAIL_POLL_INTERVAL_MS,
@@ -48,6 +52,8 @@ const port = parentPort!
 if (!port) throw new Error('The Aerio mail worker must run in a worker thread')
 
 let database: MailDatabase | undefined
+let attachmentIndexer: AttachmentContentIndexer | undefined
+let attachmentExtractor: AttachmentExtractRunner | undefined
 let contentPath = ''
 let online = true
 let operationTimer: NodeJS.Timeout | undefined
@@ -223,6 +229,7 @@ async function parseRawAndStore(accountId: string, message: {
     remoteUid: message.remoteUid
   }
   database.upsertMessage(record)
+  if (record.attachments.length) attachmentIndexer?.schedule()
   return { record, isNew }
 }
 
@@ -786,8 +793,26 @@ function draftInputFromRow(row: Record<string, string | number | bigint | null>)
     text: String(row.body_text),
     html: row.body_html ? String(row.body_html) : undefined,
     attachmentPaths: JSON.parse(String(row.attachment_paths_json)),
-    ...(row.send_options_json ? { sendOptions: JSON.parse(String(row.send_options_json)) } : {})
+    ...(row.send_options_json ? { sendOptions: JSON.parse(String(row.send_options_json)) } : {}),
+    ...database!.identities.draftSender(String(row.id))
   }
+}
+
+/** Resolves the draft's From identity; strict mode (delivery) refuses unauthorized aliases. */
+function senderFor(input: MailDraftInput, strict: boolean) {
+  const account = database!.getAccount(input.accountId)
+  if (!account) return undefined
+  const identity = input.fromIdentityId ? database!.identities.get(input.fromIdentityId) : undefined
+  return resolveDraftSender(account, identity, input, strict)
+}
+
+async function refreshIdentities(accountId: string) {
+  const account = database!.getAccount(accountId)
+  if (!account) throw new Error('Account not found')
+  if (account.provider === 'gmail') return database!.identities.replaceProviderIdentities(account, 'gmail', parseGmailSendAs(await clientFor(accountId).listSendAs()))
+  if (account.provider === 'microsoft') return database!.identities.replaceProviderIdentities(account, 'microsoft', parseMicrosoftProxyAddresses(await microsoftClientFor(accountId).senderAddresses(), account.email))
+  database!.identities.markRefreshed(accountId)
+  return database!.identities.list([account])
 }
 
 function readRawPrefix(path: string, maxBytes: number) {
@@ -842,8 +867,7 @@ async function saveDraft(input: MailDraftInput) {
   try {
     const row = database.getDraft(result.id)
     const provider = database.getAccount(input.accountId)?.provider ?? 'gmail'
-    const account = database.getAccount(input.accountId)
-    const from = account ? `${account.displayName} <${account.email}>` : undefined
+    const from = senderFor(input, false)?.from
     let remoteId: string
     let remoteRevision: string | undefined
     if (provider === 'gmail') {
@@ -878,11 +902,12 @@ async function deliverDraft(input: MailDraftInput) {
   input = stageDraftAttachments(input)
   let result = database.saveDraft(input, { status: online ? 'syncing' : 'queued' })
   if (!online) return result
+  const provider = database.getAccount(input.accountId)?.provider ?? 'gmail'
+  let sender: ReturnType<typeof senderFor>
   try {
     const row = database.getDraft(result.id)
-    const provider = database.getAccount(input.accountId)?.provider ?? 'gmail'
-    const account = database.getAccount(input.accountId)
-    const from = account ? `${account.displayName} <${account.email}>` : undefined
+    sender = senderFor(input, true)
+    const from = sender?.from
     // The stored draft keeps the user's choice; only what the provider can honor is sent.
     input = { ...input, sendOptions: supportedSendOptions(input.sendOptions, provider) }
     if (row?.gmail_draft_id) await assertRemoteDraftUnchanged(input.accountId, provider, String(row.gmail_draft_id), row.remote_revision ? String(row.remote_revision) : undefined)
@@ -900,8 +925,10 @@ async function deliverDraft(input: MailDraftInput) {
       sent = { threadId: input.threadId }
     } else {
       const client = await imapClientFor(input.accountId)
+      const recipients = [...input.to, ...input.cc, ...input.bcc]
       const mime = createMimeBuffer({ ...input, id: result.id }, from, true)
-      await client.send(mime, [...input.to, ...input.cc, ...input.bcc], input.sendOptions)
+      // An alias also becomes the SMTP envelope sender; the server decides whether it is allowed.
+      await (sender?.identity ? client.send(mime, recipients, input.sendOptions, sender.identity.email) : client.send(mime, recipients, input.sendOptions))
       if (row?.gmail_draft_id) await client.deleteDraft(String(row.gmail_draft_id))
       sent = { messageIdHeader: messageIdFromMime(mime) }
     }
@@ -909,7 +936,8 @@ async function deliverDraft(input: MailDraftInput) {
     database.replyWatches.activateForDraft(result.id, { ...sent, sentAt: result.updatedAt })
     removeDraftFiles(result.id)
   } catch (error) {
-    result = { ...result, status: 'failed', error: error instanceof Error ? error.message : String(error), updatedAt: new Date().toISOString() }
+    const rejected = sender ? describeSenderRejection(error, provider, sender) : undefined
+    result = { ...result, status: 'failed', error: rejected?.message ?? (error instanceof Error ? error.message : String(error)), updatedAt: new Date().toISOString() }
   }
   database.updateDraftResult(result.id, result)
   emit({ type: 'draft-delivery', payload: result })
@@ -973,7 +1001,7 @@ async function processQueuedDrafts() {
 async function extractAttachment(accountId: string, messageId: string, attachmentIdValue: string, targetPath: string) {
   if (!database) throw new Error('Database is not initialized')
   const rawPath = database.getMessageRaw(accountId, messageId)
-  if (!rawPath) throw new Error('The original message is not available offline')
+  if (!rawPath || !database.rawExists(rawPath)) throw new Error('The original message is not available offline')
   const parsed = await PostalMime.parse(readFileSync(rawPath))
   const attachment = parsed.attachments.find((item, index) => attachmentId(item, index) === attachmentIdValue)
   if (!attachment) throw new Error('Attachment not found')
@@ -981,6 +1009,40 @@ async function extractAttachment(accountId: string, messageId: string, attachmen
     ? Buffer.from(attachment.content, attachment.encoding === 'base64' ? 'base64' : 'utf8')
     : Buffer.from(attachment.content instanceof ArrayBuffer ? new Uint8Array(attachment.content) : attachment.content)
   writeFileSync(targetPath, content)
+}
+
+/** Every attachment's bytes for one stored message, keyed like the database rows. */
+async function messageAttachmentContents(accountId: string, messageId: string) {
+  const rawPath = database?.getMessageRaw(accountId, messageId)
+  if (!rawPath || !existsSync(rawPath)) return undefined
+  const parsed = await PostalMime.parse(readFileSync(rawPath))
+  return new Map(parsed.attachments.map((attachment, index) => [attachmentId(attachment, index), typeof attachment.content === 'string'
+    ? Buffer.from(attachment.content, attachment.encoding === 'base64' ? 'base64' : 'utf8')
+    : Buffer.from(attachment.content instanceof ArrayBuffer ? new Uint8Array(attachment.content) : attachment.content)]))
+}
+
+// Attachment text is extracted in a separate worker thread with its own heap
+// limit and timeout (see mail/attachment-extract-runner.ts), then indexed for search.
+function startAttachmentIndexing(store: MailDatabase['attachmentText']) {
+  const workerPath = join(import.meta.dirname, 'attachment-extract-worker.js')
+  if (!existsSync(workerPath)) return
+  const extractor = new AttachmentExtractRunner({ workerPath })
+  attachmentExtractor = extractor
+  attachmentIndexer = new AttachmentContentIndexer({
+    store,
+    readAttachments: messageAttachmentContents,
+    extract: (input, signal) => extractor.extract(input, signal)
+  })
+  attachmentIndexer.schedule()
+}
+
+async function stopAttachmentIndexing() {
+  const indexer = attachmentIndexer
+  const extractor = attachmentExtractor
+  attachmentIndexer = undefined
+  attachmentExtractor = undefined
+  await indexer?.stop()
+  await extractor?.close()
 }
 
 async function stageMessageAttachments(draftId: string, accountId: string, messageId: string) {
@@ -1061,7 +1123,9 @@ function emitNewMail(accountId: string, records: ParsedMailMessage[]) {
 async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'initialize') {
     contentPath = command.payload.contentPath
+    await stopAttachmentIndexing()
     database = new MailDatabase(command.payload.databasePath, contentPath)
+    startAttachmentIndexing(database.attachmentText)
     folderManagerInstance = undefined
     // Re-read provider folders for any folder change cut off by a restart.
     for (const accountId of database.recoverInterruptedFolderOperations()) void folderManager().refresh(accountId).catch(() => undefined)
@@ -1075,6 +1139,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'accounts:list') return database.listAccounts()
   if (command.type === 'accounts:upsert') {
     database.upsertAccount(command.payload)
+    attachmentIndexer?.resumeAccount(command.payload.id)
     emit({ type: 'accounts-changed', payload: database.listAccounts() })
     return command.payload
   }
@@ -1088,6 +1153,8 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   }
   if (command.type === 'accounts:disconnect') {
     paused.add(command.payload.accountId)
+    // Stop any extraction in flight for this account; its results could no longer be saved anyway.
+    if (command.payload.mode === 'delete') attachmentIndexer?.cancelAccount(command.payload.accountId)
     database.disconnectAccount(command.payload.accountId, command.payload.mode)
     emit({ type: 'accounts-changed', payload: database.listAccounts() })
     return
@@ -1248,9 +1315,41 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     database.recordRuleMatch(rule.id, threadIds.length)
     return { matched: threadIds.length, operations }
   }
+  if (command.type === 'identities:list') {
+    const accounts = database.listAccounts()
+    const selected = command.payload.accountIds?.length ? accounts.filter((account) => command.payload.accountIds!.includes(account.id)) : accounts
+    // Provider aliases are discovered once automatically; later changes need an explicit refresh.
+    for (const account of selected) {
+      if (online && !account.archived && (account.provider === 'gmail' || account.provider === 'microsoft') && !database.identities.refreshedAt(account.id)) {
+        try { await refreshIdentities(account.id) } catch { /* Discovery is best effort; manual refresh reports the error. */ }
+      }
+    }
+    return database.identities.list(accounts, command.payload.accountIds)
+  }
+  if (command.type === 'identities:save') {
+    const account = database.getAccount(command.payload.accountId)
+    if (!account) throw new Error('Account not found')
+    return database.identities.save(account, command.payload)
+  }
+  if (command.type === 'identities:delete') return database.identities.delete(command.payload.id)
+  if (command.type === 'identities:refresh') return refreshIdentities(command.payload.accountId)
+  if (command.type === 'signatures:list') return database.identities.listSignatures()
+  if (command.type === 'signatures:save') return database.identities.saveSignature(command.payload)
+  if (command.type === 'signatures:delete') return database.identities.deleteSignature(command.payload.id)
   if (command.type === 'saved-searches:list') return database.listSavedSearches()
   if (command.type === 'saved-searches:save') return database.saveSavedSearch(command.payload)
   if (command.type === 'saved-searches:delete') return database.deleteSavedSearch(command.payload.id)
+  if (command.type === 'quick-actions:list') return database.listQuickActions()
+  if (command.type === 'quick-actions:save') return database.saveQuickAction(command.payload)
+  if (command.type === 'quick-actions:delete') return database.deleteQuickAction(command.payload.id)
+  if (command.type === 'quick-actions:run') {
+    const quickAction = database.getQuickAction(command.payload.id)
+    if (!quickAction) throw new Error('Quick action not found')
+    const { result, changed } = runMailQuickAction(database, quickAction, command.payload.targets)
+    for (const operation of result.operations) emit({ type: 'operation', payload: operation })
+    for (const target of changed) emit({ type: 'mail-changed', payload: target })
+    return result
+  }
   if (command.type === 'sync:start') {
     const accounts = command.payload.accountId
       ? database.listAccounts().filter((item) => item.id === command.payload.accountId)
@@ -1285,6 +1384,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     return
   }
   if (command.type === 'diagnostics:health') return database.diagnosticHealth()
+  if (command.type === 'attachments:list') return database.listAttachments(command.payload)
   if (command.type === 'attachment:extract') {
     await extractAttachment(command.payload.accountId, command.payload.messageId, command.payload.attachmentId, command.payload.targetPath)
     return
@@ -1306,6 +1406,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'shutdown') {
     clearInterval(operationTimer)
     clearInterval(pollTimer)
+    await stopAttachmentIndexing()
     database.close()
     database = undefined
     folderManagerInstance = undefined

@@ -1,4 +1,4 @@
-import { Bold, CalendarClock, Copy, Italic, Link, List, Paperclip, Save, Send, Trash2, Underline, X } from 'lucide-react'
+import { Bold, CalendarClock, Copy, Italic, Link, List, Paperclip, Save, Send, Sparkles, Trash2, Underline, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MailAccountSummary, MailDraftInput, MailDraftRecord, MailThreadDetail, MailRecipientSuggestion, MailSendOptions } from '../mail-types'
 import { formatFileSize } from '../lib/domain'
@@ -6,8 +6,12 @@ import { isCompleteMailAddress } from '../lib/mail-address'
 import { copyText, useContextMenu } from './ContextMenu'
 import { ModalShell } from './Modal'
 import MailTemplatePicker from './MailTemplatePicker'
+import { primaryIdentityId, type MailSenderIdentity, type MailSignature } from '../mail-identity-types'
+import { defaultIdentityId, identityLabel, LEGACY_SIGNATURE_ID, replaceSignatureBlock, replyIdentityId, signatureBlockHtml, signatureBlockUnchanged, signatureForIdentity, QUOTE_ATTRIBUTE, type ComposerSignature } from '../lib/mail-signature'
 import MailSendOptionsControl from './MailSendOptionsControl'
 import { ReplyWatchControl, armReplyWatch, replyWatchDeadline, type ReplyWatchSetting } from './MailReplyWatches'
+import { MailAiComposeAssist } from './MailAiComposeAssist'
+import { aiFeatureAvailable, useAiAssistantStatus } from '../lib/use-ai-assistant'
 
 interface MailComposeModalProps {
   accounts: MailAccountSummary[]
@@ -16,6 +20,8 @@ interface MailComposeModalProps {
   replyAll?: boolean
   forward?: boolean
   initialTo?: string
+  /** Plain text placed above the signature of a new message, e.g. an AI reply the user chose. */
+  initialBody?: string
   onClose(): void
   onSent(result: import('../mail-types').MailDraftResult): void
   onToast(message: string): void
@@ -52,7 +58,7 @@ const localDateTimeValue = (value?: string) => {
   return new Date(date.getTime() - offset).toISOString().slice(0, 16)
 }
 
-export default function MailComposeModal({ accounts, draft, replyTo, replyAll, forward, initialTo, onClose, onSent, onToast }: MailComposeModalProps) {
+export default function MailComposeModal({ accounts, draft, replyTo, replyAll, forward, initialTo, initialBody, onClose, onSent, onToast }: MailComposeModalProps) {
   const { showContextMenu } = useContextMenu()
   const replyMessage = replyTo?.messages.at(-1)
   const forwardedText = replyTo && forward && replyMessage ? `\n\n---------- Forwarded message ----------\nFrom: ${replyMessage.fromName || replyMessage.fromEmail} <${replyMessage.fromEmail}>\nDate: ${new Date(replyMessage.date).toLocaleString()}\nSubject: ${replyMessage.subject}\n\n${replyMessage.text}` : ''
@@ -67,10 +73,24 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
   const replyCc = replyAll && replyMessage
     ? uniqueRecipients(replyMessage.cc).filter((value) => !replyRecipients.some((recipient) => addressEmail(recipient) === addressEmail(value)))
     : []
+  const signatureContext = replyTo ? 'reply' : 'new'
+  const initialSignature = draft ? undefined : signatureForIdentity(undefined, accounts.find((account) => account.id === initialAccountId), [], signatureContext)
   const signature = draft ? '' : accounts.find((account) => account.id === initialAccountId)?.signature.trim() ?? ''
-  const initialText = draft?.text ?? `${signature ? `\n\n-- \n${signature}` : ''}${forwardedText}`
-  const initialHtml = draft?.html ?? `${signature ? `<div><br></div><div>-- <br>${escapeHtml(signature)}</div>` : ''}${forwardedText ? `<div>${escapeHtml(forwardedText)}</div>` : ''}`
+  const body = draft ? '' : initialBody?.trim() ?? ''
+  const initialText = draft?.text ?? `${body}${signature ? `
+
+-- 
+${signature}` : ''}${forwardedText}`
+  const initialHtml = draft?.html ?? `${body ? `<div>${escapeHtml(body)}</div>` : ''}${initialSignature ? `<div data-aerio-signature-spacer=""><br></div>${signatureBlockHtml(initialSignature)}` : ''}${forwardedText ? `<div ${QUOTE_ATTRIBUTE}="forward">${escapeHtml(forwardedText)}</div>` : ''}`
   const [accountId, setAccountId] = useState(initialAccountId)
+  const [identityId, setIdentityId] = useState(draft?.fromIdentityId ?? primaryIdentityId(initialAccountId))
+  const [identities, setIdentities] = useState<MailSenderIdentity[]>([])
+  const [signatures, setSignatures] = useState<MailSignature[]>([])
+  const [signatureChoice, setSignatureChoice] = useState(initialSignature?.id ?? '')
+  const [replyToField, setReplyToField] = useState(draft?.replyTo?.join(', ') ?? '')
+  const [replyToVisible, setReplyToVisible] = useState(Boolean(draft?.replyTo?.length))
+  const insertedSignature = useRef<ComposerSignature | undefined>(initialSignature)
+  const fromTouched = useRef(Boolean(draft))
   const [draftId, setDraftId] = useState(() => draft?.id ?? crypto.randomUUID())
   const [to, setTo] = useState(draft?.to.join(', ') ?? (forward ? '' : replyRecipients.join(', ') || initialTo || ''))
   const [cc, setCc] = useState(draft?.cc.join(', ') ?? replyCc.join(', '))
@@ -88,6 +108,8 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
   const [conflict, setConflict] = useState(false)
   const [recipientField, setRecipientField] = useState<'to' | 'cc' | 'bcc'>()
   const [recipientSuggestions, setRecipientSuggestions] = useState<MailRecipientSuggestion[]>([])
+  const ai = useAiAssistantStatus()
+  const [aiOpen, setAiOpen] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
   const editorHtmlRef = useRef(initialHtml)
   const firstRender = useRef(true)
@@ -109,10 +131,20 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
     text,
     html: html && html !== '<br>' ? html : undefined,
     attachmentPaths: attachments.map((item) => item.path),
+    fromIdentityId: identityId !== primaryIdentityId(accountId) ? identityId : undefined,
+    replyTo: replyToField.trim() ? splitAddresses(replyToField) : undefined,
     ...(sendOptions ? { sendOptions } : {})
-  }), [accountId, attachments, bcc, cc, draft?.inReplyTo, draft?.references, draft?.threadId, draftId, forward, html, replyMessage, replyTo?.id, sendOptions, subject, text, to])
+  }), [accountId, attachments, bcc, cc, draft?.inReplyTo, draft?.references, draft?.threadId, draftId, forward, html, identityId, replyMessage, replyTo?.id, replyToField, sendOptions, subject, text, to])
   const fingerprint = useMemo(() => JSON.stringify(input), [input])
   const initialFingerprint = useRef(fingerprint)
+  const latestFingerprint = useRef(fingerprint)
+  const rebaseline = useRef(false)
+  // Applying the default identity to an untouched composer is not a user edit, so it must not autosave a draft.
+  if (rebaseline.current) {
+    initialFingerprint.current = fingerprint
+    rebaseline.current = false
+  }
+  latestFingerprint.current = fingerprint
   const hasContent = Boolean(to || cc || bcc || subject || text.trim() || attachments.length)
   const hasChanges = fingerprint !== initialFingerprint.current
 
@@ -241,8 +273,57 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
     if (!editor) return
     editorHtmlRef.current = editor.innerHTML
     setHtml(editorHtmlRef.current)
-    setText(editor.innerText.replaceAll('\u00a0', ' '))
+    setText((editor.innerText ?? editor.textContent ?? '').replaceAll('\u00a0', ' '))
   }
+
+  const applySignature = (next: ComposerSignature | undefined, onlyIfUntouched = false) => {
+    const editor = editorRef.current
+    if (!editor || (onlyIfUntouched && !signatureBlockUnchanged(editor, insertedSignature.current))) return
+    setSignatureChoice(next?.id ?? '')
+    insertedSignature.current = next
+    if (replaceSignatureBlock(editor, next)) updateEditor()
+  }
+
+  /** Switches the From identity, swapping only its signature block and default Reply-To. */
+  const applyIdentity = (nextAccountId: string, nextIdentityId: string, available = identities, availableSignatures = signatures, onlyIfUntouched = false) => {
+    const previous = available.find((item) => item.id === identityId)
+    const next = available.find((item) => item.id === nextIdentityId)
+    setAccountId(nextAccountId)
+    setIdentityId(nextIdentityId)
+    // Keep a Reply-To the user typed; replace one that came from the previous identity.
+    if (splitAddresses(replyToField).join(', ') === (previous?.replyTo ?? []).join(', ')) {
+      setReplyToField((next?.replyTo ?? []).join(', '))
+      if (next?.replyTo.length) setReplyToVisible(true)
+    }
+    applySignature(signatureForIdentity(next, accounts.find((account) => account.id === nextAccountId), availableSignatures, signatureContext), onlyIfUntouched)
+  }
+
+  useEffect(() => {
+    const api = window.aerio.mail.identities
+    if (!api) return
+    let cancelled = false
+    void Promise.all([api.list(accounts.map((account) => account.id)), api.signatures.list()]).then(([loaded, loadedSignatures]) => {
+      if (cancelled) return
+      setIdentities(loaded)
+      setSignatures(loadedSignatures)
+      if (fromTouched.current) return
+      const received = replyMessage ? [...replyMessage.to, ...replyMessage.cc] : []
+      const chosen = replyTo ? replyIdentityId(loaded, accountId, received) : defaultIdentityId(loaded, accountId)
+      rebaseline.current = latestFingerprint.current === initialFingerprint.current
+      applyIdentity(accountId, chosen, loaded, loadedSignatures, true)
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+    // Identities load once per composer; later settings changes apply to the next composer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const senderOptions = accounts.filter((account) => !draft || account.id === draft.accountId).flatMap((account) => {
+    const own = identities.filter((identity) => identity.accountId === account.id)
+    return own.length
+      ? own.map((identity) => ({ accountId: account.id, id: identity.id, label: identityLabel(identity) }))
+      : [{ accountId: account.id, id: primaryIdentityId(account.id), label: `${account.displayName} \u00b7 ${account.email}` }]
+  })
+  const currentAccount = accounts.find((account) => account.id === accountId)
 
   const format = (command: string, value?: string) => {
     const editor = editorRef.current
@@ -280,6 +361,10 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
     }
     if (recipients.some((recipient) => !isCompleteMailAddress(recipient))) {
       onToast('Finish or correct the recipient email addresses before sending')
+      return
+    }
+    if (input.replyTo?.some((address) => !isCompleteMailAddress(address))) {
+      onToast('Finish or correct the Reply-To email addresses before sending')
       return
     }
     const deliveryAt = scheduledFor ? new Date(scheduledFor) : undefined
@@ -333,10 +418,16 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
       onClose={() => void closeComposer()}
     >
         <div className="compose">
-          <div className="compose-row"><label>From</label><select value={accountId} disabled={Boolean(draft)} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((account) => <option value={account.id} key={account.id}>{account.displayName} · {account.email}</option>)}</select></div>
+          <div className="compose-row"><label>From</label><select value={identityId} disabled={senderOptions.length < 2} onChange={(event) => {
+            const option = senderOptions.find((item) => item.id === event.target.value)
+            if (!option) return
+            fromTouched.current = true
+            applyIdentity(option.accountId, option.id)
+          }}>{senderOptions.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></div>
           <div className="compose-row"><label>To</label><input autoFocus value={to} onFocus={() => setRecipientField('to')} onChange={(event) => setTo(event.target.value)} placeholder="name@example.com" /></div>
-          <div className="compose-row"><label>Cc</label><input value={cc} onFocus={() => setRecipientField('cc')} onChange={(event) => setCc(event.target.value)} /><button className="text-button" onClick={() => setBccVisible((value) => !value)}>Bcc</button></div>
+          <div className="compose-row"><label>Cc</label><input value={cc} onFocus={() => setRecipientField('cc')} onChange={(event) => setCc(event.target.value)} /><button className="text-button" onClick={() => setBccVisible((value) => !value)}>Bcc</button><button className="text-button" onClick={() => setReplyToVisible((value) => !value)}>Reply-To</button></div>
           {bccVisible && <div className="compose-row"><label>Bcc</label><input value={bcc} onFocus={() => setRecipientField('bcc')} onChange={(event) => setBcc(event.target.value)} /></div>}
+          {(replyToVisible || replyToField) && <div className="compose-row"><label>Reply-To</label><input value={replyToField} onFocus={() => setRecipientField(undefined)} onChange={(event) => setReplyToField(event.target.value)} placeholder="replies@example.com" /></div>}
           {recipientField && recipientSuggestions.length > 0 && <div className="recipient-suggestions">{recipientSuggestions.map((suggestion) => <button key={`${suggestion.accountId}:${suggestion.email}`} onMouseDown={(event) => event.preventDefault()} onClick={() => chooseRecipient(suggestion)}><span className="avatar">{(suggestion.name || suggestion.email).slice(0, 2).toUpperCase()}</span><span><strong>{suggestion.name || suggestion.email}</strong><small>{suggestion.email}</small></span></button>)}</div>}
           <div className="compose-row"><label>Subject</label><input value={subject} onFocus={() => setRecipientField(undefined)} onChange={(event) => setSubject(event.target.value)} /></div>
           <div className="compose-formatting" role="toolbar" aria-label="Message formatting">
@@ -345,11 +436,21 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
             <button className="icon-button" title="Underline" onMouseDown={(event) => event.preventDefault()} onClick={() => format('underline')}><Underline size={15} /></button>
             <button className="icon-button" title="Bulleted list" onMouseDown={(event) => event.preventDefault()} onClick={() => format('insertUnorderedList')}><List size={15} /></button>
             <button className="icon-button" title="Add link" onMouseDown={(event) => event.preventDefault()} onClick={addLink}><Link size={15} /></button>
+            {(signatures.length > 0 || Boolean(currentAccount?.signature.trim())) && <select className="compose-signature-select" aria-label="Signature" value={signatureChoice} onChange={(event) => {
+              const stored = signatures.find((item) => item.id === event.target.value)
+              applySignature(stored ? { id: stored.id, html: stored.html } : event.target.value === LEGACY_SIGNATURE_ID ? signatureForIdentity(undefined, currentAccount, [], signatureContext) : undefined)
+            }}>
+              <option value="">No signature</option>
+              {currentAccount?.signature.trim() && <option value={LEGACY_SIGNATURE_ID}>Account signature</option>}
+              {signatures.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>}
             <MailTemplatePicker editorRef={editorRef} subject={subject} attachments={attachments} onEditorChange={updateEditor} onToast={onToast} onApplyTemplate={(changes) => {
               if (changes.subject) setSubject(changes.subject)
               setAttachments((current) => [...current, ...changes.attachments.filter((item) => !current.some((existing) => existing.path.toLowerCase() === item.path.toLowerCase()))])
             }} />
+            {aiFeatureAvailable(ai, 'compose') && <button className={`icon-button ${aiOpen ? 'active' : ''}`} title="Draft or rephrase with AI" aria-pressed={aiOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setAiOpen((open) => !open)}><Sparkles size={15} /></button>}
           </div>
+          {aiOpen && ai && <MailAiComposeAssist status={ai} editorRef={editorRef} text={text} replyTo={!forward && replyMessage ? { accountId: replyMessage.accountId, threadId: replyMessage.threadId, messageId: replyMessage.id } : undefined} onEditorChange={updateEditor} onClose={() => setAiOpen(false)} />}
           <div
             ref={bindEditor}
             className="compose-body compose-rich-body"

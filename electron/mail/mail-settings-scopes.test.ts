@@ -21,11 +21,12 @@ describe('mail settings scopes', () => {
   })
 
   it('reports granted, missing, and unsupported settings access with a reconnect explanation', () => {
-    expect(mailSettingsScopeStatus('gmail', `x ${GMAIL_SETTINGS_BASIC_SCOPE}`, 'server-rules')).toEqual({ provider: 'gmail', supported: true, granted: true, required: [GMAIL_SETTINGS_BASIC_SCOPE], missing: [] })
+    expect(mailSettingsScopeStatus('gmail', `x ${GMAIL_SETTINGS_BASIC_SCOPE}`, 'server-rules')).toEqual({ provider: 'gmail', supported: true, granted: true, known: true, required: [GMAIL_SETTINGS_BASIC_SCOPE], missing: [] })
     expect(mailSettingsScopeStatus('microsoft', 'mailboxsettings.readwrite', 'automatic-replies').granted).toBe(true)
     const missing = mailSettingsScopeStatus('microsoft', 'MailboxSettings.Read', 'automatic-replies')
     expect(missing).toMatchObject({ granted: false, missing: ['MailboxSettings.ReadWrite'] })
     expect(missing.message).toMatch(/Reconnect the account.*automatic replies/)
+    expect(mailSettingsScopeStatus('microsoft', undefined, 'server-rules')).toMatchObject({ granted: true, known: false })
     expect(mailSettingsScopeStatus('fastmail', undefined, 'server-rules')).toMatchObject({ supported: false, granted: false, message: expect.stringContaining('server rules') })
   })
 

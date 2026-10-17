@@ -235,6 +235,7 @@ vi.mock('./linux-login', () => ({ setLinuxLoginItem: mocks.setLinuxLoginItem }))
 vi.mock('./tray-availability', () => ({ linuxTrayHostAvailable: mocks.linuxTrayHostAvailable }))
 vi.mock('./mail/oauth-vault', () => ({ OAuthVault: vi.fn(function () { return mocks.vault }) }))
 vi.mock('./mail/worker-client', () => ({ MailWorkerClient: mocks.MailWorkerClient }))
+vi.mock('./mail/ai-assistant', () => ({ AiAssistantStore: vi.fn(), registerAiAssistant: vi.fn() }))
 vi.mock('./mail/imap-client', () => ({ ImapSmtpClient: vi.fn(function () { return mocks.imapClient }) }))
 vi.mock('./mail/provider-presets', () => ({ PROVIDER_PRESETS: [{ id: 'gmail' }], validateImapAccount: mocks.validateImap }))
 vi.mock('./diagnostics', () => ({ DiagnosticLogger: vi.fn(function () { return mocks.diagnosticLogger }) }))
@@ -846,6 +847,24 @@ describe.sequential('Electron main process', () => {
     expect(() => invoke('mail:saved-searches:delete', '')).toThrow(/saved search id/)
     await invoke('mail:saved-searches:delete', 'search-1')
     expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'saved-searches:delete', payload: { id: 'search-1' } })
+  })
+
+  it('validates and routes quick actions', async () => {
+    await invoke('mail:quick-actions:list')
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'quick-actions:list' })
+    await invoke('mail:quick-actions:save', { name: ' Triage ', accountId: 'a1', steps: [{ action: 'read', labelId: 'ignored' }, { action: 'move', labelId: 'folder:Done' }], shortcut: 2, showInToolbar: true })
+    expect(mocks.worker.request).toHaveBeenCalledWith({
+      type: 'quick-actions:save', payload: { name: 'Triage', accountId: 'a1', steps: [{ action: 'read' }, { action: 'move', labelId: 'folder:Done' }], shortcut: 2, showInToolbar: true }
+    })
+    expect(() => invoke('mail:quick-actions:save', { name: 'Bad', steps: [{ action: 'drop table' }] })).toThrow(/unknown action/)
+    expect(() => invoke('mail:quick-actions:save', { name: 'No account', steps: [{ action: 'label', labelId: 'x' }] })).toThrow(/choose an account/)
+    expect(() => invoke('mail:quick-actions:save', { name: 'Shortcut', steps: [{ action: 'read' }], shortcut: 12 })).toThrow(/shortcut/)
+    await invoke('mail:quick-actions:run', 'quick-1', [{ accountId: 'a1', threadIds: ['t1', 't1', 't2'] }])
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'quick-actions:run', payload: { id: 'quick-1', targets: [{ accountId: 'a1', threadIds: ['t1', 't2'] }] } })
+    expect(() => invoke('mail:quick-actions:run', 'quick-1', [])).toThrow(/at least one/)
+    expect(() => invoke('mail:quick-actions:run', '', [{ accountId: 'a1', threadIds: ['t1'] }])).toThrow(/quick action id/)
+    await invoke('mail:quick-actions:delete', 'quick-1')
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'quick-actions:delete', payload: { id: 'quick-1' } })
   })
 
   it('creates, updates, and deletes writable Google calendar events', async () => {

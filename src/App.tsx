@@ -1,6 +1,6 @@
 import {
   CalendarDays, CheckCircle2, ChevronRight, Command, ContactRound, HelpCircle, LockKeyhole, Mail,
-  Moon, NotebookPen, Plus, Search, Settings, Sparkles, Sun, UserRound, X
+  Moon, NotebookPen, Plus, Search, Settings, Sparkles, Sun, UserRound, X, Zap
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TitleBar from './components/TitleBar'
@@ -13,8 +13,12 @@ import ContactsView from './views/ContactsView'
 import TasksView from './views/TasksView'
 import NotesView from './views/NotesView'
 import ConnectedMailView from './views/ConnectedMailView'
-import type { AppLockStatus, AppPreferences, AppState, CalendarEvent, Contact, ModuleId } from './types'
-import type { MailAccountSummary } from './mail-types'
+import CalendarInterchangePanel from './components/CalendarInterchangePanel'
+import ContactInterchangePanel from './components/ContactInterchangePanel'
+import type { InterchangeSnapshot } from './interchange-types'
+import type { Account, AppLockStatus, AppPreferences, AppState, CalendarEvent, Contact, ModuleId } from './types'
+import type { MailAccountSummary, MailQuickAction } from './mail-types'
+import { quickActionShortcutLabel } from './lib/mail-quick-actions'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from './productivity-types'
 import { unreadCount } from './lib/domain'
 import { useContextMenu } from './components/ContextMenu'
@@ -30,6 +34,7 @@ const modules: { id: ModuleId; label: string; icon: typeof Mail; shortcut: strin
 
 const emptyProductivity: ProductivitySnapshot = { calendars: [], events: [], contacts: [], sync: [] }
 const emptyLocalModules: LocalModuleSnapshot = { tasks: [], notes: [], contacts: [] }
+const emptyInterchange: InterchangeSnapshot = { calendars: [], events: [] }
 
 interface ComposeRequest {
   id: number
@@ -51,9 +56,14 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved')
   const [composeRequest, setComposeRequest] = useState<ComposeRequest>({ id: 0 })
   const [mailSearchRequest, setMailSearchRequest] = useState({ id: 0, query: '' })
+  const [mailQuickActions, setMailQuickActions] = useState<MailQuickAction[]>([])
+  const [mailQuickActionRequest, setMailQuickActionRequest] = useState({ id: 0, quickActionId: '' })
   const [connectedAccounts, setConnectedAccounts] = useState<MailAccountSummary[]>([])
   const [productivity, setProductivity] = useState<ProductivitySnapshot>(emptyProductivity)
   const [localModules, setLocalModules] = useState<LocalModuleSnapshot>(emptyLocalModules)
+  // Local calendars and read-only internet subscriptions from file interchange.
+  const [interchange, setInterchange] = useState<InterchangeSnapshot>(emptyInterchange)
+  useEffect(() => window.aerio.interchange?.onChanged(setInterchange), [])
   const persistedLocalModules = useRef<LocalModuleSnapshot | undefined>(undefined)
   const localSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const localRestoreActive = useRef(false)
@@ -99,6 +109,9 @@ export default function App() {
     void window.aerio.productivity.localSnapshot().then((localSnapshot) => {
       applyLocalSnapshot(localSnapshot)
     }).catch(() => showToast('Local Tasks and Notes could not be opened'))
+    void window.aerio.interchange?.snapshot().then(setInterchange).catch(() => {
+      // Local and subscribed calendars are optional; provider data still loads without them.
+    })
   }, [applyLocalSnapshot, showToast])
 
   const applyAppLockStatus = useCallback((status: AppLockStatus) => {
@@ -188,16 +201,26 @@ export default function App() {
     }
   }, [productivity.calendars, showToast])
 
+  const localCalendarIds = useMemo(() => new Set(interchange.calendars.filter((calendar) => calendar.kind === 'local').map((calendar) => calendar.id)), [interchange.calendars])
+
   const saveProviderEvent = useCallback(async (event: CalendarEvent, exists: boolean) => {
+    if (localCalendarIds.has(event.calendarId)) {
+      setInterchange(await window.aerio.interchange.saveLocalEvent(event))
+      return
+    }
     const latest = exists
       ? await window.aerio.productivity.updateEvent(event)
       : await window.aerio.productivity.createEvent(event)
     setProductivity(latest)
-  }, [])
+  }, [localCalendarIds])
 
   const deleteProviderEvent = useCallback(async (event: CalendarEvent) => {
+    if (localCalendarIds.has(event.calendarId)) {
+      setInterchange(await window.aerio.interchange.deleteLocalEvent(event.id))
+      return
+    }
     setProductivity(await window.aerio.productivity.deleteEvent(event.id))
-  }, [])
+  }, [localCalendarIds])
 
   const enableContactEditing = useCallback(async (accountId?: string) => {
     setProductivitySyncing(true)
@@ -291,19 +314,34 @@ export default function App() {
     }
   }, [appLock?.enabled, startCompose])
 
+  // Saved mail Quick Actions are listed in the palette while Mail is open, so they run on the visible selection.
+  useEffect(() => {
+    if (!commandsOpen || activeModule !== 'mail') return
+    let cancelled = false
+    void Promise.resolve().then(() => window.aerio.mail.quickActions.list())
+      .then((items) => { if (!cancelled) setMailQuickActions(items) })
+      .catch(() => { if (!cancelled) setMailQuickActions([]) })
+    return () => { cancelled = true }
+  }, [activeModule, commandsOpen])
+
   const commandItems = useMemo(() => {
+    const mailQuick = activeModule === 'mail' ? mailQuickActions.map((item) => ({
+      label: `Run quick action: ${item.name}`, detail: item.shortcut ? quickActionShortcutLabel(item.shortcut).replaceAll('+', ' ') : '', icon: Zap,
+      action: () => setMailQuickActionRequest((current) => ({ id: current.id + 1, quickActionId: item.id })), preserveQuery: false
+    })) : []
     const quick = [
       { label: 'Compose a new message', detail: 'Ctrl N', icon: Plus, action: () => startCompose(), preserveQuery: false },
       ...modules.map((item) => ({ label: `Open ${item.label}`, detail: `Ctrl ${item.shortcut}`, icon: item.icon, action: () => setActiveModule(item.id), preserveQuery: false })),
       ...(appLock?.enabled ? [{ label: 'Lock Aerio', detail: 'Ctrl L', icon: LockKeyhole, action: () => { void window.aerio.appLock.lock() }, preserveQuery: false }] : []),
-      { label: 'Open settings', detail: '', icon: Settings, action: () => setSettingsOpen(true), preserveQuery: false }
+      { label: 'Open settings', detail: '', icon: Settings, action: () => setSettingsOpen(true), preserveQuery: false },
+      ...mailQuick
     ].filter((item) => !query || item.label.toLowerCase().includes(query.toLowerCase()))
     return query.trim()
       ? [{ label: `Search ${modules.find((item) => item.id === activeModule)?.label ?? 'Aerio'} for “${query.trim()}”`, detail: 'Enter', icon: Search, action: () => {
         if (activeModule === 'mail') setMailSearchRequest((current) => ({ id: current.id + 1, query: query.trim() }))
       }, preserveQuery: true }, ...quick]
       : quick
-  }, [activeModule, appLock?.enabled, query, startCompose])
+  }, [activeModule, appLock?.enabled, mailQuickActions, query, startCompose])
 
   useEffect(() => setCommandIndex(0), [commandsOpen, query])
 
@@ -332,7 +370,7 @@ export default function App() {
   const profileInitials = profile.displayName.trim().split(/\s+/).filter(Boolean).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || 'A'
   const accountById = new Map(connectedAccounts.map((account) => [account.id, account]))
   const connectedState: AppState = {
-    accounts: productivity.calendars.map((calendar) => {
+    accounts: productivity.calendars.map((calendar): Account => {
       const account = accountById.get(calendar.accountId)
       return {
         id: calendar.id,
@@ -342,13 +380,23 @@ export default function App() {
         color: calendar.color,
         provider: calendar.provider
       }
-    }),
-    events: productivity.events,
+    }).concat(interchange.calendars.map((calendar) => ({
+      id: calendar.id,
+      name: calendar.name,
+      email: calendar.url ?? 'On this PC',
+      initials: calendar.name.split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase(),
+      color: calendar.color,
+      provider: 'local' as const
+    }))),
+    events: [...productivity.events, ...interchange.events],
     contacts: [...(localModules.contacts ?? []), ...productivity.contacts],
     tasks: localModules.tasks,
     notes: localModules.notes
   }
-  const writableCalendarIds = new Set(productivity.calendars.filter((calendar) => calendar.canWrite).map((calendar) => calendar.id))
+  const writableCalendarIds = new Set([...productivity.calendars.filter((calendar) => calendar.canWrite).map((calendar) => calendar.id), ...localCalendarIds])
+  const providerContactAccounts = connectedAccounts.flatMap((account) => !account.archived && (account.provider === 'gmail' || account.provider === 'microsoft')
+    ? [{ id: account.id, email: account.email, provider: account.provider }]
+    : [])
   const updateConnectedLocal = (next: AppState) => setLocalModules((current) => ({ ...current, tasks: next.tasks, notes: next.notes }))
   const productivityMessage = productivity.sync.some((item) => item.phase === 'error')
     ? productivity.sync.find((item) => item.phase === 'error')?.error ?? 'A provider needs attention.'
@@ -412,7 +460,7 @@ export default function App() {
             </button>
           </header>
           <div className="module-content">
-            {activeModule === 'mail' && <ConnectedMailView onToast={showToast} composeRequest={composeRequest} searchRequest={mailSearchRequest} />}
+            {activeModule === 'mail' && <ConnectedMailView onToast={showToast} composeRequest={composeRequest} searchRequest={mailSearchRequest} quickActionRequest={mailQuickActionRequest} />}
             {activeModule === 'calendar' && <CalendarView
               state={connectedState}
               query={query}
@@ -424,6 +472,18 @@ export default function App() {
               onDeleteProviderEvent={deleteProviderEvent}
               syncing={productivitySyncing}
               sourceMessage={productivityMessage}
+              interchangePanel={window.aerio.interchange && <CalendarInterchangePanel
+                api={window.aerio.interchange}
+                snapshot={interchange}
+                calendars={[
+                  ...productivity.calendars.map((calendar) => ({ id: calendar.id, name: calendar.name, color: calendar.color, writable: calendar.canWrite })),
+                  ...interchange.calendars.map((calendar) => ({ id: calendar.id, name: calendar.name, color: calendar.color, writable: calendar.kind === 'local' }))
+                ]}
+                events={connectedState.events}
+                onSnapshot={setInterchange}
+                onSaveProviderEvent={saveProviderEvent}
+                onToast={showToast}
+              />}
             />}
             {activeModule === 'contacts' && <ContactsView
               state={connectedState}
@@ -435,11 +495,17 @@ export default function App() {
               onLocalContactsChange={(contacts) => setLocalModules((current) => ({ ...current, contacts }))}
               onSaveProviderContact={saveProviderContact}
               onDeleteProviderContact={deleteProviderContact}
-              providerAccounts={connectedAccounts.flatMap((account) => !account.archived && (account.provider === 'gmail' || account.provider === 'microsoft')
-                ? [{ id: account.id, email: account.email, provider: account.provider }]
-                : [])}
+              providerAccounts={providerContactAccounts}
               syncing={productivitySyncing}
               sourceMessage={productivityMessage}
+              interchangePanel={window.aerio.interchange && <ContactInterchangePanel
+                api={window.aerio.interchange}
+                contacts={connectedState.contacts}
+                providerAccounts={providerContactAccounts}
+                onLocalContactsChange={(contacts) => setLocalModules((current) => ({ ...current, contacts }))}
+                onSaveProviderContact={saveProviderContact}
+                onToast={showToast}
+              />}
             />}
             {activeModule === 'tasks' && <TasksView state={connectedState} query={query} accounts={connectedAccounts} onChange={updateConnectedLocal} onToast={showToast} />}
             {activeModule === 'notes' && <NotesView state={connectedState} query={query} onChange={updateConnectedLocal} onToast={showToast} />}

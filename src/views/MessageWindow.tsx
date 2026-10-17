@@ -7,6 +7,7 @@ import MailSnoozeModal from '../components/MailSnoozeModal'
 import TitleBar from '../components/TitleBar'
 import ThreadMessageAccordion from '../components/ThreadMessageAccordion'
 import { useMailMessageTools } from '../components/MailMessageTools'
+import { attachmentSearchStatus } from '../lib/mail-attachment-text'
 import { useThreadExpansion } from '../lib/use-thread-expansion'
 import { copyText, useContextMenu } from '../components/ContextMenu'
 import { formatFileSize } from '../lib/domain'
@@ -35,7 +36,7 @@ export default function MessageWindow() {
   const [actionBusy, setActionBusy] = useState<MailActionKind>()
   const [pendingOperation, setPendingOperation] = useState<PendingOperation>()
   const [pendingSend, setPendingSend] = useState<MailDraftResult>()
-  const [mailCompose, setMailCompose] = useState<{ reply: MailThreadDetail; replyAll?: boolean; forward?: boolean }>()
+  const [mailCompose, setMailCompose] = useState<{ reply: MailThreadDetail; replyAll?: boolean; forward?: boolean; initialBody?: string }>()
   const [organizeMode, setOrganizeMode] = useState<'move' | 'label'>()
   const [labels, setLabels] = useState<MailLabel[]>([])
   const [snoozeOpen, setSnoozeOpen] = useState(false)
@@ -47,7 +48,7 @@ export default function MessageWindow() {
   }
 
   const expansion = useThreadExpansion(thread, expandedMessageId, setExpandedMessageId)
-  const messageTools = useMailMessageTools({ accounts, onToast: showToast, collapseAll: expansion.collapseAll, expandAll: expansion.expandAll, onUpdated: (message, local) => setThread((current) => current && ({ ...current, messages: current.messages.map((item) => item.id === message.id ? { ...item, local } : item) })) })
+  const messageTools = useMailMessageTools({ accounts, onToast: showToast, collapseAll: expansion.collapseAll, expandAll: expansion.expandAll, onUpdated: (message, local) => setThread((current) => current && ({ ...current, messages: current.messages.map((item) => item.id === message.id ? { ...item, local } : item) })), onReplyWithText: (message, text) => { const reply = replyThreadFor(message); if (reply) setMailCompose({ reply, initialBody: text }) } })
 
   useEffect(() => {
     if (!source) {
@@ -267,18 +268,18 @@ export default function MessageWindow() {
           <article className="message-reader mail-thread message-window-reader">
             <header><div className="message-window-heading"><h2>{thread.subject}</h2></div></header>
             {thread.messages.map((message) => <ThreadMessageAccordion key={message.id} message={message} expanded={expansion.isExpanded(message.id)} onLoadRemoteImages={remoteImages ? undefined : () => void loadRemoteImages()} onToggle={() => expansion.toggle(message.id)} onReply={mailReadOnly ? undefined : () => { const reply = replyThreadFor(message); if (reply) setMailCompose({ reply }) }} onMoreActions={(event) => showMessageMenu(event, message)}>
-              {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} onContextMenu={(event) => showContextMenu(event, [
+              {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} title={attachmentSearchStatus(attachment.textIndex)?.label} onContextMenu={(event) => showContextMenu(event, [
                 { label: 'Open attachment', icon: Download, action: () => openAttachment(message, attachment) },
                 { label: 'Save as…', icon: Download, action: () => saveAttachment(message, attachment) },
                 { label: 'Copy filename', icon: Copy, separatorBefore: true, action: () => copyText(attachment.filename) }
-              ], attachment.filename)}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{formatFileSize(attachment.size)}</small></span><button className="icon-button" title="Open" onClick={() => void openAttachment(message, attachment)}><Download size={16} /></button><button className="button ghost small" onClick={() => void saveAttachment(message, attachment)}>Save as</button></div>)}</div>}
+              ], attachment.filename)}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{[formatFileSize(attachment.size), attachmentSearchStatus(attachment.textIndex)?.notice].filter(Boolean).join(' · ')}</small></span><button className="icon-button" title="Open" onClick={() => void openAttachment(message, attachment)}><Download size={16} /></button><button className="button ghost small" onClick={() => void saveAttachment(message, attachment)}>Save as</button></div>)}</div>}
             </ThreadMessageAccordion>)}
           </article>
         )}
       </main>
       {pendingOperation && <div className="undo-toast"><span>Mail change queued</span><button onClick={() => void undoMailAction()}><Undo2 size={15} /> Undo</button><button onClick={() => setPendingOperation(undefined)}>Dismiss</button></div>}
       {pendingSend && <div className="undo-toast send-undo-toast"><span>Message will send shortly</span><button onClick={() => void undoSend()}><Undo2 size={15} /> Undo Send</button><button onClick={() => setPendingSend(undefined)}>Dismiss</button></div>}
-      {mailCompose && <MailComposeModal accounts={accounts.filter((account) => !account.archived)} replyTo={mailCompose.reply} replyAll={mailCompose.replyAll} forward={mailCompose.forward} onClose={() => setMailCompose(undefined)} onSent={(result) => { if (result.status === 'send-pending') setPendingSend(result); void reloadMailThread() }} onToast={showToast} />}
+      {mailCompose && <MailComposeModal accounts={accounts.filter((account) => !account.archived)} replyTo={mailCompose.reply} replyAll={mailCompose.replyAll} forward={mailCompose.forward} initialBody={mailCompose.initialBody} onClose={() => setMailCompose(undefined)} onSent={(result) => { if (result.status === 'send-pending') setPendingSend(result); void reloadMailThread() }} onToast={showToast} />}
       {organizeMode && <MailOrganizeModal mode={organizeMode} items={organizeItems} accounts={accounts} labels={labels} onApply={async (requests) => { for (const request of requests) await applyMailAction(request.action, request.labelId) }} onClose={() => setOrganizeMode(undefined)} />}
       {snoozeOpen && source && <MailSnoozeModal count={1} onApply={async (until) => {
         try {

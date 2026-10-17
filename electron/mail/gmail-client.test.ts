@@ -23,6 +23,13 @@ describe('GmailClient', () => {
     )
   })
 
+  it('lists send-as aliases from Gmail settings', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ sendAs: [{ sendAsEmail: 'alias@example.com' }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(new GmailClient('account', async () => 'token').listSendAs()).resolves.toEqual({ sendAs: [{ sendAsEmail: 'alias@example.com' }] })
+    expect(fetchMock.mock.calls[0][0]).toBe('https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs')
+  })
+
   it('surfaces non-retryable API errors with their Gmail reason', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       error: { message: 'Invalid credentials', errors: [{ reason: 'authError' }] }

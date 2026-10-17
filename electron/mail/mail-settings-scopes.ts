@@ -15,6 +15,8 @@ export interface MailSettingsScopeStatus {
   /** False for IMAP-style providers with no settings API Aerio manages. */
   supported: boolean
   granted: boolean
+  /** False when the stored grant predates scope tracking; the provider's response decides. */
+  known: boolean
   required: string[]
   missing: string[]
   /** User-facing explanation when the feature can't be used yet. */
@@ -41,17 +43,20 @@ export function mailSettingsScopeStatus(provider: MailProviderId, grantedScope: 
   const required = requiredMailSettingsScopes(provider)
   const name = FEATURE_NAMES[feature]
   if (!required.length) {
-    return { provider, supported: false, granted: false, required, missing: [], message: `This account’s server doesn’t offer ${name} that Aerio can manage` }
+    return { provider, supported: false, granted: false, known: true, required, missing: [], message: `This account’s server doesn’t offer ${name} that Aerio can manage` }
   }
+  // Without a recorded scope list, try the request; a 403 becomes MailSettingsPermissionError.
+  if (grantedScope === undefined) return { provider, supported: true, granted: true, known: false, required, missing: [] }
   const granted = grantedScopeSet(grantedScope)
   const lowerGranted = new Set([...granted].map((value) => value.toLowerCase()))
   const missing = required.filter((scope) => !granted.has(scope) && !lowerGranted.has(scope.toLowerCase()))
-  if (!missing.length) return { provider, supported: true, granted: true, required, missing }
+  if (!missing.length) return { provider, supported: true, granted: true, known: true, required, missing }
   const permission = provider === 'gmail' ? 'manage Gmail settings (gmail.settings.basic)' : 'read and write mailbox settings (MailboxSettings.ReadWrite)'
   return {
     provider,
     supported: true,
     granted: false,
+    known: true,
     required,
     missing,
     message: `Aerio doesn’t have permission to ${permission} for this account. Reconnect the account and approve the new permission to use ${name}; mail keeps working meanwhile.`
