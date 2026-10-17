@@ -36,7 +36,8 @@ export default defineConfig(({ mode }) => {
       lib: {
         entry: {
           main: resolve(root, 'electron/main.ts'),
-          'mail-worker': resolve(root, 'electron/mail-worker.ts')
+          'mail-worker': resolve(root, 'electron/mail-worker.ts'),
+          'attachment-extract-worker': resolve(root, 'electron/mail/attachment-extract-worker.ts')
         },
         formats: ['es']
       },

@@ -125,16 +125,23 @@ const mocks = vi.hoisted(() => {
     accountData: vi.fn(() => ({ calendars: [], events: [], contacts: [] })), checkpoints: vi.fn(() => ({})),
     setSyncing: vi.fn(), setError: vi.fn(), replaceAccount: vi.fn((_id: string, _provider: string, data: any) => {
       storeSnapshot = { ...storeSnapshot, ...data }
-    }), removeAccount: vi.fn(), upsertEvent: vi.fn(), deleteEvent: vi.fn(), upsertContact: vi.fn(), deleteContact: vi.fn(), close: vi.fn()
+    }), removeAccount: vi.fn(), upsertEvent: vi.fn(), deleteEvent: vi.fn(), upsertContact: vi.fn(), deleteContact: vi.fn(), upsertContactGroup: vi.fn(), deleteContactGroup: vi.fn(), close: vi.fn()
   }
   const google = {
     sync: vi.fn(async () => ({ calendars: [], events: [], contacts: [], checkpoints: { contacts: 'google-token' } })),
     createEvent: vi.fn(async (_calendar: any, input: any) => ({ ...input, accountId: 'a1b2', provider: 'gmail', remoteId: 'remote', readOnly: false })),
     updateEvent: vi.fn(async (_calendar: any, _current: any, input: any) => ({ ...input, accountId: 'a1b2', provider: 'gmail', remoteId: 'remote', readOnly: false })),
     deleteEvent: vi.fn(async () => undefined),
+    updateEventSeries: vi.fn(async () => undefined),
+    deleteEventSeries: vi.fn(async () => undefined),
     createContact: vi.fn(async (input: any) => ({ ...input, id: 'a1b2:google-contact:people/new', accountId: 'a1b2', provider: 'gmail', remoteId: 'people/new', readOnly: false })),
     updateContact: vi.fn(async (_current: any, input: any) => ({ ...input, accountId: 'a1b2', provider: 'gmail', remoteId: 'people/existing', readOnly: false })),
-    deleteContact: vi.fn(async () => undefined)
+    deleteContact: vi.fn(async () => undefined),
+    useContactGroups: vi.fn(),
+    createContactGroup: vi.fn(async (name: string) => ({ id: 'abcdef:google-group:contactGroups/new', remoteId: 'contactGroups/new', accountId: 'abcdef', provider: 'gmail', name, system: false, readOnly: false })),
+    renameContactGroup: vi.fn(async (group: any, name: string) => ({ ...group, name })),
+    deleteContactGroup: vi.fn(async () => undefined),
+    modifyContactGroupMembers: vi.fn(async (_group: any, add: any[]) => ({ contacts: add.map((contact) => ({ ...contact, groupIds: ['contactGroups/team'], groups: ['Team'] })), skipped: 0 }))
   }
   const microsoft = {
     sync: vi.fn(async () => ({ calendars: [], events: [], contacts: [], checkpoints: { contacts: 'microsoft-token' } })),
@@ -894,6 +901,28 @@ describe.sequential('Electron main process', () => {
     expect(() => invoke('productivity:event-delete', '')).toThrow(/valid event/)
   })
 
+  it('routes series-wide and this-and-following calendar writes to the series master', async () => {
+    const calendar = { id: 'calendar', accountId: 'abcdef', provider: 'gmail', remoteId: 'remote-calendar', name: 'Work', canWrite: true }
+    const input = {
+      id: 'instance', calendarId: 'calendar', title: 'Standup', start: '2026-08-10T09:00:00Z', end: '2026-08-10T09:30:00Z',
+      color: '#6558e8', attendees: [], reminderMinutes: 15, recurrence: 'none', seriesId: 'series', originalStart: '2026-08-10T09:00:00Z', timeZone: 'Europe/London'
+    }
+    const current = { ...input, accountId: 'abcdef', provider: 'gmail', remoteId: 'series_20260810', readOnly: false }
+    mocks.setStoreSnapshot({ calendars: [calendar], events: [current], contacts: [], sync: [] })
+    await expect(invoke('productivity:event-update', { ...input, title: 'Renamed' }, 'series')).resolves.toBeDefined()
+    expect(mocks.google.updateEventSeries).toHaveBeenCalledWith(calendar, current, expect.objectContaining({ title: 'Renamed' }), 'series')
+    // The write is followed by a refresh, which replaces the stored events.
+    mocks.setStoreSnapshot({ calendars: [calendar], events: [current], contacts: [], sync: [] })
+    await expect(invoke('productivity:event-delete', 'instance', 'following')).resolves.toBeDefined()
+    expect(mocks.google.deleteEventSeries).toHaveBeenCalledWith(calendar, current, 'following')
+    mocks.setStoreSnapshot({ calendars: [calendar], events: [current], contacts: [], sync: [] })
+    await expect(invoke('productivity:event-update', input, 'occurrence')).resolves.toBeDefined()
+    expect(mocks.google.updateEvent).toHaveBeenCalledWith(calendar, current, expect.objectContaining({ id: 'instance' }))
+    expect(() => invoke('productivity:event-update', input, 'everything')).toThrow(/which events/)
+    expect(() => invoke('productivity:event-delete', 'instance', 'everything')).toThrow(/which events/)
+    expect(() => invoke('productivity:event-update', { ...input, occurrenceOf: 'master' })).toThrow(/valid event/)
+  })
+
   it('rejects unavailable, read-only, moved, and unsupported calendar writes', async () => {
     const eventInput = { id: 'event', calendarId: 'calendar', title: 'Event', start: '2026-08-10T09:00:00Z', end: '2026-08-10T10:00:00Z', color: '#fff', attendees: [], reminderMinutes: 0 }
     mocks.setStoreSnapshot({ calendars: [], events: [], contacts: [], sync: [] })
@@ -921,6 +950,40 @@ describe.sequential('Electron main process', () => {
     await expect(invoke('productivity:contact-delete', current.id)).resolves.toBeDefined()
     expect(mocks.google.updateContact).toHaveBeenCalled()
     expect(mocks.google.deleteContact).toHaveBeenCalledWith(current)
+  })
+
+  it('rejects provider contact edits made against an older revision', async () => {
+    await invoke('mail:accounts:connect')
+    const current = { id: 'abcdef:google-contact:people/existing', remoteId: 'people/existing', accountId: 'abcdef', provider: 'gmail', readOnly: false, revision: 'etag-2', name: 'Ada', email: '', group: 'Google', favorite: false, color: '#4d8f78' }
+    mocks.setStoreSnapshot({ calendars: [], events: [], contacts: [current], sync: [] })
+    mocks.google.updateContact.mockClear()
+    await expect(invoke('productivity:contact-update', { ...current, revision: 'etag-1', name: 'Ada King' })).rejects.toThrow(/changed since you opened it/)
+    expect(mocks.google.updateContact).not.toHaveBeenCalled()
+    expect(() => invoke('productivity:contact-update', { ...current, name: 'Ada King', photo: 'https://example.test/x.png' })).toThrow(/valid contact details/)
+    await expect(invoke('productivity:contact-update', { ...current, name: 'Ada King', emails: [{ value: 'ada@example.test', type: 'work' }], groups: ['Team'] })).resolves.toBeDefined()
+  })
+
+  it('manages Google contact groups and their membership through IPC', async () => {
+    await invoke('mail:accounts:connect')
+    const group = { id: 'abcdef:google-group:contactGroups/team', remoteId: 'contactGroups/team', accountId: 'abcdef', provider: 'gmail', name: 'Team', system: false, readOnly: false }
+    const member = { id: 'abcdef:google-contact:people/1', remoteId: 'people/1', accountId: 'abcdef', provider: 'gmail', readOnly: false, name: 'Ada', email: 'ada@example.test', group: 'Team', groups: ['Team'], groupIds: ['contactGroups/team'], favorite: false, color: '#4d8f78' }
+    mocks.setStoreSnapshot({ calendars: [], events: [], contacts: [member], contactGroups: [group], sync: [] })
+    mocks.store.accountData.mockReturnValue({ calendars: [], events: [], contacts: [member], contactGroups: [{ ...group, name: 'Crew' }] } as any)
+    await expect(invoke('productivity:contact-group-create', 'abcdef', 'Book club')).resolves.toBeDefined()
+    expect(mocks.store.upsertContactGroup).toHaveBeenCalledWith(expect.objectContaining({ name: 'Book club' }))
+    await invoke('productivity:contact-group-rename', group.id, 'Crew')
+    expect(mocks.store.upsertContact).toHaveBeenCalledWith(expect.objectContaining({ id: member.id, groups: ['Crew'], group: 'Crew' }))
+    await invoke('productivity:contact-group-members', group.id, [member.id], [])
+    expect(mocks.google.modifyContactGroupMembers).toHaveBeenCalledWith(group, [member], [])
+    await invoke('productivity:contact-group-delete', group.id)
+    expect(mocks.store.deleteContactGroup).toHaveBeenCalledWith(group.id)
+    expect(mocks.store.upsertContact).toHaveBeenLastCalledWith(expect.objectContaining({ groupIds: [], groups: [], group: 'Google' }))
+    expect(() => invoke('productivity:contact-group-create', 'abcdef', ' ')).toThrow(/group name/)
+    expect(() => invoke('productivity:contact-group-members', group.id, [], [])).toThrow(/Choose contacts/)
+    await expect(invoke('productivity:contact-group-members', group.id, ['missing'], [])).rejects.toThrow(/no longer available/)
+    await expect(invoke('productivity:contact-group-delete', 'missing')).rejects.toThrow(/no longer available/)
+    await expect(invoke('productivity:contact-group-create', '123456', 'Outlook list')).rejects.toThrow(/Google accounts/)
+    mocks.store.accountData.mockReturnValue({ calendars: [], events: [], contacts: [] } as any)
   })
 
   it('validates provider contact writes and protects unavailable or read-only records', async () => {
@@ -995,8 +1058,11 @@ describe.sequential('Electron main process', () => {
       { tasks: [{ id: 'x', title: 'x'.repeat(10_001) }], notes: [] }, { tasks: [], notes: [null] },
       { tasks: [], notes: [{ id: 3, title: 'x', content: '' }] }, { tasks: [], notes: [{ id: 'n', title: 3, content: '' }] },
       { tasks: [], notes: [{ id: 'n', title: 'x', content: 3 }] }, { tasks: [], notes: [{ id: 'x'.repeat(301), title: 'x', content: '' }] },
-      { tasks: [], notes: [{ id: 'n', title: 'x'.repeat(10_001), content: '' }] }, { tasks: [], notes: [{ id: 'n', title: 'x', content: 'x'.repeat(10_000_001) }] }
+      { tasks: [], notes: [{ id: 'n', title: 'x'.repeat(10_001), content: '' }] }, { tasks: [], notes: [{ id: 'n', title: 'x', content: 'x'.repeat(10_000_001) }] },
+      { tasks: [], notes: [], contactLists: 'bad' }, { tasks: [], notes: [], contactLists: [{ id: 'l', name: 'Team', source: 'local', members: [{ email: 'nope' }] }] },
+      { tasks: [], notes: [], contacts: [{ id: 'c', name: 'Ada', email: '', group: 'P', favorite: false, color: '#000', source: 'local', photo: 'data:text/html;base64,AAAA' }] }
     ]) expect(() => invoke('productivity:local-save', snapshot)).toThrow(/invalid/)
+    expect(() => invoke('productivity:local-save', { tasks: [], notes: [], contactLists: [{ id: 'l', name: 'Team', source: 'local', members: [{ email: 'ada@example.test', contactId: 'c' }] }] })).not.toThrow()
 
     const settings = { theme: 'system', density: 'comfortable', closeToTray: true, notifications: true, startModule: 'mail' }
     expect(invoke('preferences:save', { settings: { ...settings, profile: { displayName: 'Alex Avery', email: 'alex@aerio.app' } } })).toHaveProperty('savedAt')

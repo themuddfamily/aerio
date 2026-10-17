@@ -1,10 +1,10 @@
 export type MailAccountStatus = 'connecting' | 'syncing' | 'ready' | 'paused' | 'needs-auth' | 'archived' | 'error'
 export type MailSyncPhase = 'idle' | 'inventory' | 'downloading' | 'catch-up' | 'incremental' | 'paused' | 'complete' | 'error'
 export type MailActionKind = 'archive' | 'unarchive' | 'read' | 'unread' | 'star' | 'unstar' | 'important' | 'unimportant' | 'trash' | 'untrash' | 'label' | 'unlabel' | 'move'
-export type MailProviderId = 'gmail' | 'microsoft' | 'icloud' | 'yahoo' | 'fastmail' | 'imap' | 'proton-bridge'
+export type MailProviderId = 'gmail' | 'microsoft' | 'icloud' | 'yahoo' | 'fastmail' | 'imap' | 'proton-bridge' | 'local'
 
 export interface ImapAccountInput {
-  provider: Exclude<MailProviderId, 'gmail' | 'microsoft'>
+  provider: Exclude<MailProviderId, 'gmail' | 'microsoft' | 'local'>
   email: string
   displayName?: string
   username: string
@@ -19,7 +19,8 @@ export interface ImapAccountInput {
 }
 
 export interface MailProviderPreset {
-  id: MailProviderId
+  /** Local Folders are created from the import dialog, never from account setup. */
+  id: Exclude<MailProviderId, 'local'>
   name: string
   description: string
   auth: 'google-oauth' | 'microsoft-oauth' | 'app-password' | 'password' | 'bridge'
@@ -102,6 +103,30 @@ export interface MailThreadSummary {
   snoozedUntil?: string
 }
 
+/**
+ * Outcome of local attachment-content extraction. `pending` means the
+ * attachment has not been processed yet; every other state is final until the
+ * extractor version changes or the attachment itself changes.
+ */
+export type MailAttachmentTextStatus =
+  | 'pending'
+  | 'indexed'
+  | 'empty'
+  | 'unsupported'
+  | 'encrypted'
+  | 'too-large'
+  | 'timeout'
+  | 'memory-limit'
+  | 'failed'
+
+export interface MailAttachmentTextIndex {
+  status: MailAttachmentTextStatus
+  /** The extracted text hit the per-attachment limit, so only the start is searchable. */
+  truncated?: boolean
+  detail?: string
+  indexedAt?: string
+}
+
 export interface MailAttachment {
   id: string
   messageId: string
@@ -109,6 +134,7 @@ export interface MailAttachment {
   mimeType: string
   size: number
   contentId?: string
+  textIndex?: MailAttachmentTextIndex
 }
 
 export type MailAttachmentFileType = 'pdf' | 'calendar' | 'spreadsheet' | 'presentation' | 'document' | 'archive' | 'image' | 'audio' | 'video' | 'other'
@@ -577,14 +603,24 @@ export interface MailReplyWatchInput {
   deadlineAt?: string
 }
 
-export type MailRuleConditionField = 'from' | 'to' | 'subject' | 'body'
-export type MailRuleConditionOperator = 'contains' | 'equals' | 'starts-with' | 'ends-with'
+// Text fields compare with contains/equals/starts-with/ends-with; the others
+// use 'is' (has-attachment yes|no, importance high|normal|low, label <labelId>)
+// or greater-than/less-than (size in KB, age in days).
+export type MailRuleConditionField = 'from' | 'to' | 'cc' | 'subject' | 'body' | 'header' | 'has-attachment' | 'size' | 'age' | 'importance' | 'label'
+export type MailRuleConditionOperator = 'contains' | 'equals' | 'starts-with' | 'ends-with' | 'is' | 'greater-than' | 'less-than'
 
 export interface MailRuleCondition {
   field: MailRuleConditionField
   operator: MailRuleConditionOperator
   value: string
+  /** Header name for field 'header', e.g. List-Id. */
+  headerName?: string
 }
+
+/** incoming: newly received mail; outgoing: newly synced Sent mail. */
+export type MailRuleTrigger = 'incoming' | 'outgoing'
+/** local: Aerio applies the rule; server: the provider runs its copy and Aerio skips it. */
+export type MailRuleExecution = 'local' | 'server'
 
 export interface MailRuleAction {
   action: Extract<MailActionKind, 'archive' | 'read' | 'star' | 'important' | 'trash' | 'label' | 'move'>
@@ -599,6 +635,12 @@ export interface MailRuleInput {
   match: 'all' | 'any'
   conditions: MailRuleCondition[]
   actions: MailRuleAction[]
+  /** "Except if" clauses: the rule is skipped when any exception matches. */
+  exceptions?: MailRuleCondition[]
+  trigger?: MailRuleTrigger
+  execution?: MailRuleExecution
+  /** Provider filter/rule id once the rule is uploaded to the server. */
+  serverRuleId?: string
 }
 
 export interface MailRule extends Omit<MailRuleInput, 'id'> {
@@ -688,6 +730,7 @@ export interface MailDiagnosticHealth {
 export interface MailDesktopApi {
   messageTools: MessageToolsApi
   automaticReplies: MailAutomaticRepliesApi
+  cloudAttachments: import('./cloud-attachment-types').CloudAttachmentsApi
   credentials: {
     status(): Promise<MailCredentialStatus>
     import(): Promise<MailCredentialStatus>
@@ -761,6 +804,7 @@ export interface MailDesktopApi {
     delete(id: string): Promise<void>
     run(id: string): Promise<MailRuleRunResult>
   }
+  serverRules?: import('./mail-server-rule-types').MailServerRulesApi
   savedSearches: {
     list(): Promise<MailSavedSearch[]>
     save(input: MailSavedSearchInput): Promise<MailSavedSearch>
@@ -781,6 +825,8 @@ export interface MailDesktopApi {
     delete(id: string): Promise<void>
     run(id: string, targets: MailQuickActionTarget[]): Promise<MailQuickActionRunResult>
   }
+  /** Mail import and Local Folders; optional so test doubles of the API stay valid. */
+  imports?: MailImportApi
   onEvent(callback: (event: MailWorkerEvent) => void): () => void
 }
 
@@ -793,3 +839,91 @@ export type MailWorkerEvent =
   | { type: 'new-mail'; payload: { accountId: string; count: number; threadId?: string; subject?: string; sender?: string } }
   | { type: 'draft-delivery'; payload: MailDraftResult }
   | { type: 'reply-watch'; payload: { watch: MailReplyWatch; reason: 'replied' | 'expired' } }
+  | { type: 'import-progress'; payload: MailImportJob }
+
+export type MailImportStatus = 'queued' | 'running' | 'paused' | 'interrupted' | 'cancelled' | 'completed' | 'failed'
+export type MailImportDuplicatePolicy = 'review' | 'import'
+export type MailboxVariant = 'mboxrd' | 'mboxo'
+
+export interface MailImportStartInput {
+  paths: string[]
+  /** Existing Local Folders folder that receives the imported hierarchy; top level when omitted. */
+  parentLabelId?: string
+  duplicates: MailImportDuplicatePolicy
+  mboxVariant: MailboxVariant
+}
+
+export interface MailImportJob {
+  id: string
+  accountId: string
+  status: MailImportStatus
+  /** Short description of what is imported, such as the chosen file or folder name. */
+  label: string
+  sources: number
+  imported: number
+  duplicates: number
+  failed: number
+  skipped: number
+  /** Held duplicates still waiting for a decision. */
+  pendingReview: number
+  processedBytes: number
+  totalBytes: number
+  currentSource?: string
+  error?: string
+  createdAt: string
+  updatedAt: string
+  finishedAt?: string
+}
+
+export type MailImportItemStatus = 'duplicate' | 'failed' | 'skipped' | 'imported' | 'discarded'
+
+export interface MailImportItem {
+  key: string
+  jobId: string
+  status: MailImportItemStatus
+  reason: string
+  source: string
+  subject: string
+  from: string
+  date?: string
+  size: number
+  messageIdHeader?: string
+  /** The Local Folders message this one duplicates. */
+  duplicateOf?: { messageId: string; subject: string }
+}
+
+export interface MailImportChooseResult {
+  paths: string[]
+  /** Chosen paths Aerio cannot import, with the reason shown to the user. */
+  unsupported: { path: string; reason: string }[]
+}
+
+export interface MailLocalTransferInput {
+  sourceAccountId: string
+  threadIds: string[]
+  destinationLabelId: string
+  mode: 'copy' | 'move'
+}
+
+export interface MailLocalTransferResult {
+  copied: number
+  /** Messages already present in the destination folder. */
+  skipped: number
+  /** Messages whose original was not downloaded, so there was nothing to copy. */
+  missing: number
+  trashOperation?: PendingOperation
+}
+
+export interface MailImportApi {
+  ensureLocalFolders(): Promise<MailAccountSummary>
+  choose(kind: 'files' | 'folder'): Promise<MailImportChooseResult>
+  start(input: MailImportStartInput): Promise<MailImportJob>
+  list(): Promise<MailImportJob[]>
+  pause(id: string): Promise<MailImportJob>
+  resume(id: string): Promise<MailImportJob>
+  cancel(id: string): Promise<MailImportJob>
+  dismiss(id: string): Promise<void>
+  items(jobId: string): Promise<MailImportItem[]>
+  resolve(jobId: string, keys: string[], decision: 'import' | 'discard'): Promise<MailImportJob>
+  transfer(input: MailLocalTransferInput): Promise<MailLocalTransferResult>
+}

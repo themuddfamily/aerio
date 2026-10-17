@@ -10,7 +10,7 @@ import { createDefaultPreferences, defaultSettings } from '../src/preferences'
 import { setLinuxLoginItem } from './linux-login'
 import { linuxTrayHostAvailable } from './tray-availability'
 import { applicationMenuTemplate, registerMacLoginItem } from './mac-integration'
-import type { AppPreferences, Attachment, CalendarEvent, Contact, MessageWindowRequest, ModuleId, Settings } from '../src/types'
+import type { AppPreferences, Attachment, CalendarEvent, Contact, MessageWindowRequest, ModuleId, RecurrenceEditScope, Settings } from '../src/types'
 import type {
   ApplyMailActionInput,
   MailAccountSummary,
@@ -55,6 +55,7 @@ import { ImapSmtpClient } from './mail/imap-client'
 import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
 import { MailWorkerClient } from './mail/worker-client'
 import { validateCreateFolder, validateDeleteFolder, validateFolderReference, validateUpdateFolder } from './mail/folder-validation'
+import { registerMailRuleHandlers } from './mail/server-rule-ipc'
 import { normalizeAttachmentQuery } from './mail/attachment-index'
 import { DiagnosticLogger, type DiagnosticRecord } from './diagnostics'
 import { UpdateManager } from './update-manager'
@@ -72,16 +73,22 @@ import { MailTemplateStore, parseMailTemplateBackup, type MailTemplateBackup } f
 import { registerMailTemplates } from './mail/template-tools'
 import { registerMailIdentities, validateDraftSender } from './mail/identity-ipc'
 import { AutomaticRepliesService, registerAutomaticReplies } from './mail/automatic-replies'
+import { AvailabilityService, registerAvailability } from './productivity/availability'
+import { CloudAttachmentService, CloudAttachmentStateStore, registerCloudAttachments } from './mail/cloud-attachments'
+import { assertSecureCredentialStorage } from './mail/secure-storage'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import { InterchangeStore } from './productivity/interchange-store'
 import { registerCalendarContactInterchange } from './productivity/interchange-ipc'
-import { validContactInterchangeFields } from '../src/lib/interchange-validation'
+import { registerMailImport } from './mail/mail-import-ipc'
+import { validContactInterchangeFields, validContactLists, validEventInterchangeFields } from '../src/lib/interchange-validation'
+import { contactEditConflict } from '../src/lib/contact-fields'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
 import { senderDomainFromEmail } from '../src/lib/sender-avatar'
 import { isCompleteMailAddress } from '../src/lib/mail-address'
 import { validateMailSavedSearch } from '../src/lib/mail-saved-search'
 import { validateMailQuickAction, validateMailQuickActionTargets } from '../src/lib/mail-quick-actions'
+import { inlineImageBytes } from '../src/lib/mail-rich-text'
 import { mailPollingIntervalForWindow } from './mail/polling-policy'
 import { faviconDomainCandidates } from './mail/favicon-domains'
 import { fetchRemoteImage } from './mail/remote-image-fetch'
@@ -265,7 +272,8 @@ function validateDraft(input: MailDraftInput, forSend = false) {
   if (input.attachmentPaths.some((path) => typeof path !== 'string' || !approvedAttachmentPaths.has(path))) {
     throw new Error('A draft referenced a file that was not selected through Aerio')
   }
-  let attachmentBytes = 0
+  // Embedded images become MIME parts too, so they share the attachment budget.
+  let attachmentBytes = inlineImageBytes(input.html)
   for (const path of input.attachmentPaths) {
     try {
       const details = statSync(path)
@@ -275,7 +283,7 @@ function validateDraft(input: MailDraftInput, forSend = false) {
       throw new Error(`An attachment is no longer available: ${basename(path)}`)
     }
   }
-  if (attachmentBytes > 20 * 1024 * 1024) throw new Error('Attachments exceed Aerio’s 20 MB sending limit')
+  if (attachmentBytes > 20 * 1024 * 1024) throw new Error('Attachments and inline images exceed Aerio’s 20 MB sending limit')
   return input
 }
 
@@ -285,31 +293,6 @@ function validateFutureDate(value: unknown, label: string) {
   if (!Number.isFinite(timestamp) || timestamp <= Date.now()) throw new Error(`${label} must be in the future`)
   if (timestamp > Date.now() + 366 * 24 * 60 * 60 * 1_000) throw new Error(`${label} cannot be more than one year away`)
   return new Date(timestamp).toISOString()
-}
-
-function validateRule(input: MailRuleInput): MailRuleInput {
-  if (!input || typeof input !== 'object') throw new Error('The rule is invalid')
-  if (input.id !== undefined && (typeof input.id !== 'string' || !input.id || input.id.length > 200)) throw new Error('The rule id is invalid')
-  if (typeof input.accountId !== 'string' || !input.accountId || input.accountId.length > 200) throw new Error('Choose an account for this rule')
-  if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200) throw new Error('Give this rule a name')
-  if (typeof input.enabled !== 'boolean' || !['all', 'any'].includes(input.match)) throw new Error('Choose how this rule should match')
-  if (!Array.isArray(input.conditions) || input.conditions.length < 1 || input.conditions.length > 10) throw new Error('Add between one and ten conditions')
-  if (!Array.isArray(input.actions) || input.actions.length < 1 || input.actions.length > 10) throw new Error('Add between one and ten actions')
-  const fields = new Set(['from', 'to', 'subject', 'body'])
-  const operators = new Set(['contains', 'equals', 'starts-with', 'ends-with'])
-  const actions = new Set(['archive', 'read', 'star', 'important', 'trash', 'label', 'move'])
-  for (const condition of input.conditions) {
-    if (!condition || !fields.has(condition.field) || !operators.has(condition.operator) || typeof condition.value !== 'string' || !condition.value.trim() || condition.value.length > 500) throw new Error('Finish every rule condition')
-  }
-  for (const action of input.actions) {
-    if (!action || !actions.has(action.action)) throw new Error('Choose a valid rule action')
-    if ((action.action === 'label' || action.action === 'move') && (typeof action.labelId !== 'string' || !action.labelId || action.labelId.length > 500)) throw new Error('Choose a label or folder for the rule')
-  }
-  return {
-    ...input,
-    name: input.name.trim(),
-    conditions: input.conditions.map((condition) => ({ ...condition, value: condition.value.trim() }))
-  }
 }
 
 function requireProductivityStore() {
@@ -366,7 +349,8 @@ function validLocalModules(value: unknown): value is LocalModuleSnapshot {
     (input.contacts ?? []).every((contact) => contact && text(contact.id, 300, true) && text(contact.name, 10_000, true) && text(contact.email, 10_000) &&
       text(contact.group, 300, true) && text(contact.color, 100, true) && typeof contact.favorite === 'boolean' && contact.source === 'local' &&
       [contact.phone, contact.company, contact.title, contact.notes].every((field) => field === undefined || text(field, 1_000_000)) &&
-      validContactInterchangeFields(contact))
+      validContactInterchangeFields(contact)) &&
+    (input.contactLists === undefined || validContactLists(input.contactLists))
 }
 
 interface ArchivedNoteAttachment {
@@ -524,7 +508,8 @@ function validCalendarEvent(value: unknown): value is CalendarEvent {
   if (event.description !== undefined && !validText(event.description, 100_000)) return false
   if (!validText(event.color, 100) || !Array.isArray(event.attendees) || event.attendees.length > 1_000 || !event.attendees.every((item) => validText(item, 500))) return false
   if (!Number.isInteger(event.reminderMinutes) || Number(event.reminderMinutes) < 0 || Number(event.reminderMinutes) > 40_320) return false
-  return event.recurrence === undefined || event.recurrence === 'none' || event.recurrence === 'daily' || event.recurrence === 'weekly' || event.recurrence === 'monthly'
+  if (!(event.recurrence === undefined || event.recurrence === 'none' || event.recurrence === 'daily' || event.recurrence === 'weekly' || event.recurrence === 'monthly')) return false
+  return validEventInterchangeFields(event)
 }
 
 function validContact(value: unknown): value is Contact {
@@ -575,6 +560,8 @@ function writableCalendarConnector(calendar: import('../src/productivity-types')
   return calendar.provider === 'gmail' ? googleCalendarConnector(calendar.accountId) : microsoftCalendarConnector(calendar.accountId)
 }
 
+const validEventScope = (value: unknown): value is RecurrenceEditScope => value === undefined || value === 'occurrence' || value === 'following' || value === 'series'
+
 async function createProductivityEvent(input: CalendarEvent) {
   const store = requireProductivityStore()
   const calendar = store.snapshot().calendars.find((item) => item.id === input.calendarId)
@@ -584,10 +571,36 @@ async function createProductivityEvent(input: CalendarEvent) {
   store.upsertEvent(saved)
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { snapshot: store.snapshot() })
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-created', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
+  // A new series is stored as its master; synchronizing replaces it with the provider's occurrences.
+  if (saved.recurrenceRule && !saved.seriesId) return syncProductivity(calendar.accountId).catch(() => store.snapshot())
   return store.snapshot()
 }
 
-async function updateProductivityEvent(input: CalendarEvent) {
+// Series-wide and "this and following" writes go to the provider's series master, then the calendar is
+// synchronized so every affected occurrence is refreshed.
+async function writeProductivitySeries(eventId: string, scope: 'following' | 'series', input?: CalendarEvent) {
+  const store = requireProductivityStore()
+  const snapshot = store.snapshot()
+  const current = snapshot.events.find((item) => item.id === eventId)
+  if (!current) throw new Error('That event is no longer available')
+  if (current.readOnly) throw new Error(input ? 'This event cannot be edited' : 'This event cannot be deleted')
+  if (!current.seriesId) throw new Error('This event is not part of a repeating series')
+  const calendar = snapshot.calendars.find((item) => item.id === current.calendarId)
+  if (!calendar) throw new Error('That calendar is no longer available')
+  if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
+  if (current.provider !== calendar.provider || current.accountId !== calendar.accountId) throw new Error('The event’s calendar connection changed; synchronize before editing')
+  const connector = writableCalendarConnector(calendar)
+  if (input) await connector.updateEventSeries(calendar, current, input, scope)
+  else await connector.deleteEventSeries(calendar, current, scope)
+  diagnostic({ level: 'info', component: 'provider', event: input ? 'calendar-series-updated' : 'calendar-series-deleted', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id, scope } })
+  // A failed refresh is recorded on the account's sync state; the write itself already succeeded.
+  return syncProductivity(calendar.accountId).catch(() => store.snapshot())
+}
+
+async function updateProductivityEvent(input: CalendarEvent, scope?: RecurrenceEditScope) {
+  if (scope === 'following' || scope === 'series') {
+    if (requireProductivityStore().snapshot().events.find((item) => item.id === input.id)?.seriesId) return writeProductivitySeries(input.id, scope, input)
+  }
   const store = requireProductivityStore()
   const snapshot = store.snapshot()
   const current = snapshot.events.find((item) => item.id === input.id)
@@ -604,7 +617,10 @@ async function updateProductivityEvent(input: CalendarEvent) {
   return store.snapshot()
 }
 
-async function deleteProductivityEvent(eventId: string) {
+async function deleteProductivityEvent(eventId: string, scope?: RecurrenceEditScope) {
+  if (scope === 'following' || scope === 'series') {
+    if (requireProductivityStore().snapshot().events.find((item) => item.id === eventId)?.seriesId) return writeProductivitySeries(eventId, scope)
+  }
   const store = requireProductivityStore()
   const snapshot = store.snapshot()
   const current = snapshot.events.find((item) => item.id === eventId)
@@ -621,7 +637,72 @@ async function deleteProductivityEvent(eventId: string) {
 }
 
 function writableContactsConnector(accountId: string, provider: 'gmail' | 'microsoft') {
-  return provider === 'gmail' ? googleContactsConnector(accountId) : microsoftContactsConnector(accountId)
+  if (provider !== 'gmail') return microsoftContactsConnector(accountId)
+  const connector = googleContactsConnector(accountId)
+  connector.useContactGroups(requireProductivityStore().accountData(accountId).contactGroups ?? [])
+  return connector
+}
+
+// Google contactGroups management. Microsoft Graph has no contact-group API for personal contacts;
+// Outlook categories are edited through ordinary contact updates instead.
+function writableContactGroup(groupId: string) {
+  const store = requireProductivityStore()
+  const group = (store.snapshot().contactGroups ?? []).find((item) => item.id === groupId)
+  if (!group) throw new Error('That contact group is no longer available')
+  if (group.provider !== 'gmail') throw new Error('This provider does not support contact group management')
+  return { store, group, connector: writableContactsConnector(group.accountId, 'gmail') as GoogleProductivityConnector }
+}
+
+const validGroupName = (name: unknown): name is string => typeof name === 'string' && Boolean(name.trim()) && name.trim().length <= 300
+
+async function createProductivityContactGroup(accountId: string, name: string) {
+  if (accountProviders.get(accountId) !== 'gmail') throw new Error('Contact groups can be created for connected Google accounts')
+  const store = requireProductivityStore()
+  const group = await (writableContactsConnector(accountId, 'gmail') as GoogleProductivityConnector).createContactGroup(name)
+  store.upsertContactGroup(group)
+  diagnostic({ level: 'info', component: 'provider', event: 'contact-group-created', accountId, details: { provider: 'gmail' } })
+  return store.snapshot()
+}
+
+async function renameProductivityContactGroup(groupId: string, name: string) {
+  const { store, group, connector } = writableContactGroup(groupId)
+  const renamed = await connector.renameContactGroup(group, name)
+  store.upsertContactGroup(renamed)
+  // Member contacts carry the group's display name.
+  const data = store.accountData(group.accountId)
+  const names = new Map((data.contactGroups ?? []).map((item) => [item.remoteId, item.name]))
+  for (const contact of data.contacts.filter((item) => item.groupIds?.includes(group.remoteId))) {
+    const groups = (contact.groupIds ?? []).flatMap((id) => names.get(id) ?? [])
+    store.upsertContact({ ...contact, groups, group: groups[0] ?? 'Google' })
+  }
+  return store.snapshot()
+}
+
+async function deleteProductivityContactGroup(groupId: string) {
+  const { store, group, connector } = writableContactGroup(groupId)
+  await connector.deleteContactGroup(group)
+  store.deleteContactGroup(group.id)
+  for (const contact of store.accountData(group.accountId).contacts.filter((item) => item.groupIds?.includes(group.remoteId))) {
+    const groupIds = (contact.groupIds ?? []).filter((id) => id !== group.remoteId)
+    const groups = (contact.groups ?? []).filter((name) => name !== group.name)
+    store.upsertContact({ ...contact, groupIds, groups, group: groups[0] ?? 'Google' })
+  }
+  diagnostic({ level: 'info', component: 'provider', event: 'contact-group-deleted', accountId: group.accountId, details: { provider: 'gmail' } })
+  return store.snapshot()
+}
+
+async function updateProductivityContactGroupMembers(groupId: string, addIds: string[], removeIds: string[]) {
+  const { store, group, connector } = writableContactGroup(groupId)
+  const contacts = store.accountData(group.accountId).contacts
+  const pick = (ids: string[]) => ids.map((id) => {
+    const contact = contacts.find((item) => item.id === id)
+    if (!contact) throw new Error('A selected contact is no longer available; synchronize Contacts and try again')
+    return contact
+  })
+  const result = await connector.modifyContactGroupMembers(group, pick(addIds), pick(removeIds))
+  for (const contact of result.contacts) store.upsertContact(contact)
+  diagnostic({ level: 'info', component: 'provider', event: 'contact-group-members-updated', accountId: group.accountId, details: { provider: 'gmail', added: addIds.length, removed: removeIds.length, skipped: result.skipped } })
+  return store.snapshot()
 }
 
 async function createProductivityContact(accountId: string, input: Contact) {
@@ -639,6 +720,8 @@ async function updateProductivityContact(input: Contact) {
   const current = store.snapshot().contacts.find((contact) => contact.id === input.id)
   if (!current) throw new Error('That contact is no longer available')
   if (current.readOnly) throw new Error('Reconnect this account once to enable Contacts editing')
+  const conflict = contactEditConflict(current, input as Contact & { revision?: unknown })
+  if (conflict) throw new Error(conflict)
   const saved = await writableContactsConnector(current.accountId, current.provider).updateContact(current, input)
   store.upsertContact(saved)
   diagnostic({ level: 'info', component: 'provider', event: 'contact-updated', accountId: current.accountId, details: { provider: current.provider } })
@@ -1312,6 +1395,32 @@ function registerIpc() {
     grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider)
   })
   registerAutomaticReplies(ipcMain, () => automaticReplies)
+  const availability = new AvailabilityService({
+    calendars: () => requireProductivityStore().snapshot().calendars,
+    accountEmail: async (accountId) => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId)?.email,
+    googleToken: (accountId) => requireVault().accessToken(accountId),
+    microsoftToken: (accountId) => requireVault().microsoftAccessToken(accountId),
+    grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider)
+  })
+  registerAvailability(ipcMain, () => availability)
+  const cloudAttachments = new CloudAttachmentService({
+    account: async (accountId) => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId),
+    googleToken: (accountId) => requireVault().accessToken(accountId),
+    microsoftToken: (accountId) => requireVault().microsoftAccessToken(accountId),
+    grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider),
+    authorize: async (account, scopes) => {
+      const expected = { accountId: account.id, email: account.email }
+      if (account.provider === 'gmail') await requireVault().authorize(expected, { additionalScopes: scopes })
+      else await requireVault().authorizeMicrosoft(expected, { additionalScopes: scopes })
+    },
+    isApprovedPath: (path) => approvedAttachmentPaths.has(path),
+    // Upload session URLs are short-lived capabilities; keep them encrypted at rest.
+    state: new CloudAttachmentStateStore(join(app.getPath('userData'), 'cloud-uploads.dat'), {
+      encode: (value) => { assertSecureCredentialStorage(safeStorage); return safeStorage.encryptString(value).toString('base64') },
+      decode: (value) => { assertSecureCredentialStorage(safeStorage); return safeStorage.decryptString(Buffer.from(value, 'base64')) }
+    })
+  })
+  registerCloudAttachments(ipcMain, () => cloudAttachments)
   ipcMain.handle('preferences:load', () => loadPreferences())
   ipcMain.handle('preferences:save', (_event, preferences: AppPreferences) => savePreferences(preferences))
   ipcMain.handle('app-lock:status', () => appLockStatus())
@@ -1461,13 +1570,15 @@ function registerIpc() {
     if (!validCalendarEvent(input)) throw new Error('Enter valid event details')
     return createProductivityEvent(input)
   })
-  ipcMain.handle('productivity:event-update', (_event, input: unknown) => {
+  ipcMain.handle('productivity:event-update', (_event, input: unknown, scope?: unknown) => {
     if (!validCalendarEvent(input)) throw new Error('Enter valid event details')
-    return updateProductivityEvent(input)
+    if (!validEventScope(scope)) throw new Error('Choose which events to change')
+    return updateProductivityEvent(input, scope)
   })
-  ipcMain.handle('productivity:event-delete', (_event, eventId: unknown) => {
+  ipcMain.handle('productivity:event-delete', (_event, eventId: unknown, scope?: unknown) => {
     if (typeof eventId !== 'string' || !eventId || eventId.length > 500) throw new Error('Choose a valid event')
-    return deleteProductivityEvent(eventId)
+    if (!validEventScope(scope)) throw new Error('Choose which events to delete')
+    return deleteProductivityEvent(eventId, scope)
   })
   ipcMain.handle('productivity:contact-create', (_event, accountId: unknown, input: unknown) => {
     if (typeof accountId !== 'string' || !accountId || accountId.length > 200) throw new Error('Choose a valid provider account')
@@ -1481,6 +1592,24 @@ function registerIpc() {
   ipcMain.handle('productivity:contact-delete', (_event, contactId: unknown) => {
     if (typeof contactId !== 'string' || !contactId || contactId.length > 500) throw new Error('Choose a valid contact')
     return deleteProductivityContact(contactId)
+  })
+  const validId = (value: unknown): value is string => typeof value === 'string' && Boolean(value) && value.length <= 500
+  ipcMain.handle('productivity:contact-group-create', (_event, accountId: unknown, name: unknown) => {
+    if (!validId(accountId) || !validGroupName(name)) throw new Error('Enter a group name of up to 300 characters')
+    return createProductivityContactGroup(accountId, name)
+  })
+  ipcMain.handle('productivity:contact-group-rename', (_event, groupId: unknown, name: unknown) => {
+    if (!validId(groupId) || !validGroupName(name)) throw new Error('Enter a group name of up to 300 characters')
+    return renameProductivityContactGroup(groupId, name)
+  })
+  ipcMain.handle('productivity:contact-group-delete', (_event, groupId: unknown) => {
+    if (!validId(groupId)) throw new Error('Choose a valid contact group')
+    return deleteProductivityContactGroup(groupId)
+  })
+  ipcMain.handle('productivity:contact-group-members', (_event, groupId: unknown, add: unknown, remove: unknown) => {
+    const ids = (value: unknown): value is string[] => Array.isArray(value) && value.length <= 1_000 && value.every(validId)
+    if (!validId(groupId) || !ids(add) || !ids(remove) || add.length + remove.length === 0) throw new Error('Choose contacts to add or remove')
+    return updateProductivityContactGroupMembers(groupId, add, remove)
   })
   ipcMain.handle('app:update:status', () => updates?.status() ?? ({
     phase: 'unsupported',
@@ -1757,8 +1886,17 @@ function registerIpc() {
     requireMailWorker().request<MailFolderDeletePreview>({ type: 'folders:delete-preview', payload: validateFolderReference(accountId, labelId) }))
   ipcMain.handle('mail:rules:list', (_event, accountIds?: string[]) =>
     requireMailWorker().request<MailRule[]>({ type: 'rules:list', payload: { accountIds } }))
-  ipcMain.handle('mail:rules:save', (_event, input: MailRuleInput) =>
-    requireMailWorker().request<MailRule>({ type: 'rules:save', payload: validateRule(input) }))
+  registerMailRuleHandlers(ipcMain, {
+    request: (command) => requireMailWorker().request(command),
+    provider: (accountId) => accountProviders.get(accountId),
+    accessToken: async (accountId, provider) => {
+      const credential = await requireVault().credential(accountId, provider)
+      if (credential.type !== 'oauth') throw new Error('This account has no server rules')
+      return credential.accessToken
+    },
+    access: (accountId, provider) => requireVault().mailSettingsAccess(accountId, provider, 'server-rules'),
+    diagnostic: (event, accountId, details) => diagnostic({ level: 'info', component: 'provider', event, accountId, details })
+  })
   ipcMain.handle('mail:rules:delete', (_event, id: string) => {
     if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid rule id')
     return requireMailWorker().request({ type: 'rules:delete', payload: { id } })
@@ -1877,6 +2015,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   taskPolling = setInterval(() => { void taskService?.poll().catch(() => {}) }, 60_000)
   taskPolling.unref()
   registerIpc()
+  registerMailImport({ ipcMain, worker: requireMailWorker, localAccount: (account) => accountProviders.set(account.id, account.provider) })
   profileBackups = registerProfileBackup({
     userData: app.getPath('userData'),
     appVersion: app.getVersion(),

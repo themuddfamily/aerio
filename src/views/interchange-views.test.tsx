@@ -39,9 +39,12 @@ describe('interchange in the Calendar and Contacts views', () => {
     await user.clear(screen.getByLabelText('Event title'))
     await user.type(screen.getByLabelText('Event title'), 'Team offsite')
     await user.click(screen.getByRole('button', { name: /Save event/ }))
+    // Agenda rows are expanded occurrences, so saving asks which part of the series to change.
+    await user.click(screen.getByRole('button', { name: 'Save all events' }))
     await waitFor(() => expect(onSaveProviderEvent).toHaveBeenCalledWith(expect.objectContaining({
-      title: 'Team offsite', timeZone: 'Europe/Paris', recurrenceRule: 'FREQ=WEEKLY;BYDAY=MO,WE', recurrenceExceptions: ['2026-08-17T07:00:00.000Z'], sourceUid: 'uid-1@example.test'
-    }), true))
+      title: 'Team offsite', timeZone: 'Europe/Paris', recurrenceRule: 'FREQ=WEEKLY;BYDAY=MO,WE', recurrenceExceptions: ['2026-08-17T07:00:00.000Z'], sourceUid: 'uid-1@example.test',
+      occurrenceOf: 'event-1'
+    }), true, 'series'))
   })
 
   it('shows additional imported contact fields and keeps them when a local contact is edited', async () => {

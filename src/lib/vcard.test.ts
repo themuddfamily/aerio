@@ -28,8 +28,22 @@ describe('parseVCards', () => {
       emails: [{ value: 'ada@work.test', type: 'work' }, { value: 'ada@home.test', type: 'home', preferred: true }],
       phones: [{ value: '+44 20 1234', type: 'cell' }, { value: '+44 20 9999', type: 'work' }],
       addresses: [{ value: '12 St James, Square, London SW1, UK', type: 'home', parts: ['', '', '12 St James, Square', 'London', '', 'SW1', 'UK'] }],
-      urls: [{ value: 'https://ada.test' }]
+      urls: [{ value: 'https://ada.test' }],
+      groups: ['Friends', 'Science'], photo: 'data:image/jpeg;base64,AAAA'
     })
+  })
+
+  it('round-trips every group and embedded photos, skipping linked or unsupported images', () => {
+    const contact: Contact = { id: 'c', name: 'Ada', email: 'a@x.test', group: 'Friends', groups: ['Friends', 'Chess, club'], favorite: false, color: '#000', photo: 'data:image/png;base64,iVBORw0KGgo=' }
+    for (const version of ['3.0', '4.0'] as const) {
+      const text = serializeVCards([contact], version)
+      expect(text).toContain('CATEGORIES:Friends,Chess\\, club')
+      expect(text).toContain(version === '4.0' ? 'PHOTO:data:image/png;base64,iVBORw0KGgo=' : 'PHOTO;ENCODING=b;TYPE=PNG:iVBORw0KGgo=')
+      expect(parseVCards(text, options).contacts[0]).toMatchObject({ groups: ['Friends', 'Chess, club'], photo: contact.photo })
+    }
+    const { contacts } = parseVCards(['BEGIN:VCARD', 'VERSION:4.0', 'FN:Linked', 'PHOTO:https://example.test/a.jpg', 'END:VCARD',
+      'BEGIN:VCARD', 'VERSION:3.0', 'FN:Tiff', 'PHOTO;ENCODING=b;TYPE=TIFF:AAAA', 'END:VCARD', ''].join('\r\n'), options)
+    expect(contacts.map((item) => item.photo)).toEqual([undefined, undefined])
   })
 
   it('reads vCard 4.0 PREF parameters and vCard 2.1 bare types with quoted-printable values', () => {

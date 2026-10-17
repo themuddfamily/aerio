@@ -12,8 +12,12 @@ import MailOrganizeModal from '../components/MailOrganizeModal'
 import MailMessageSourceModal from '../components/MailMessageSourceModal'
 import MailRulesModal from '../components/MailRulesModal'
 import MailFolderManagerModal from '../components/MailFolderManagerModal'
+import { LocalFoldersSidebar, MailImportModal, MailLocalTransferModal, localFoldersAccountOf } from '../components/MailLocalFolders'
+import { isLocalFoldersAccount } from '../lib/local-folders'
+import { HardDrive, Import as ImportIcon } from 'lucide-react'
 import MailSearchFiltersPanel from '../components/MailSearchFiltersPanel'
 import { MailSavedSearchList, MailSaveSearchModal, savedSearchFromView, useMailSavedSearches, type MailSearchView } from '../components/MailSavedSearches'
+import { attachmentSearchStatus } from '../lib/mail-attachment-text'
 import { savedSearchMatchesView } from '../lib/mail-saved-search'
 import { mailSearchQueryError } from '../lib/mail-search-query'
 import { Bookmark, Sparkles, Zap } from 'lucide-react'
@@ -131,6 +135,12 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [remoteImages, setRemoteImages] = useState(false)
   const [accountSetup, setAccountSetup] = useState(false)
   const [settingsAccount, setSettingsAccount] = useState<MailAccountSummary>()
+  const [importOpen, setImportOpen] = useState(false)
+  const [localTransferOpen, setLocalTransferOpen] = useState(false)
+  const localAccount = localFoldersAccountOf(accounts)
+  // Local Folders cannot send, so compose and reply only use server accounts.
+  const sendableAccounts = accounts.filter((account) => !account.archived && !isLocalFoldersAccount(account))
+  const reloadLabels = useCallback(() => { void window.aerio.mail.mail.labels().then(setLabels).catch(() => undefined) }, [])
   const handledComposeRequest = useRef(0)
   const requestedMessage = useRef<{ threadKey: string; messageId: string } | undefined>(undefined)
   const pageRequest = useRef(0)
@@ -394,7 +404,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   useEffect(() => {
     if (!composeRequest.id || handledComposeRequest.current === composeRequest.id) return
     handledComposeRequest.current = composeRequest.id
-    if (accounts.some((account) => !account.archived)) setCompose({ initialTo: composeRequest.initialTo })
+    if (sendableAccounts.length) setCompose({ initialTo: composeRequest.initialTo })
     else setAccountSetup(true)
   }, [accounts, composeRequest])
 
@@ -464,6 +474,19 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       onToast('Account disconnected')
     } catch (error) {
       onToast(error instanceof Error ? error.message : 'The account could not be disconnected')
+    }
+  }
+
+  const removeLocalFolders = async (account: MailAccountSummary) => {
+    if (!window.confirm('Remove Local Folders and permanently delete every message stored in them on this computer? This cannot be undone.')) return
+    try {
+      await window.aerio.mail.accounts.disconnect(account.id, 'delete')
+      await refreshAccounts()
+      reloadLabels()
+      if (accountId === account.id) selectAccount('all')
+      onToast('Local Folders removed')
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Local Folders could not be removed')
     }
   }
 
@@ -847,9 +870,9 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     if (event.type === 'contextmenu' && (window.getSelection()?.toString() || (event.target instanceof Element && event.target.closest('a[href], img[src]')))) return
     const replyThread = replyThreadFor(message)
     showContextMenu(event, [
-      { label: 'Reply', icon: Reply, disabled: selectedAccount?.archived || !replyThread, action: () => setCompose({ reply: replyThread }) },
-      { label: 'Reply all', icon: ReplyAll, disabled: selectedAccount?.archived || !replyThread, action: () => setCompose({ reply: replyThread, replyAll: true }) },
-      { label: 'Forward', icon: Forward, disabled: selectedAccount?.archived || !replyThread, action: () => setCompose({ reply: replyThread, forward: true }) },
+      { label: 'Reply', icon: Reply, disabled: selectedAccount?.archived || isLocalFoldersAccount(selectedAccount) || !replyThread, action: () => setCompose({ reply: replyThread }) },
+      { label: 'Reply all', icon: ReplyAll, disabled: selectedAccount?.archived || isLocalFoldersAccount(selectedAccount) || !replyThread, action: () => setCompose({ reply: replyThread, replyAll: true }) },
+      { label: 'Forward', icon: Forward, disabled: selectedAccount?.archived || isLocalFoldersAccount(selectedAccount) || !replyThread, action: () => setCompose({ reply: replyThread, forward: true }) },
       ...(selected ? summaryMenu(selected).slice(6, -2) : []),
       ...messageTools.items(message),
       { label: 'View message headers', icon: AtSign, separatorBefore: true, action: () => viewMessageData(message, 'headers') },
@@ -870,13 +893,17 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     const progress = account ? sync.find((item) => item.accountId === account.id) : undefined
     showContextMenu(event, [
       { label: account ? `Open ${account.email}` : 'Open all accounts', icon: Mail, action: () => selectAccount(account?.id ?? 'all') },
-      { label: 'New message', icon: Plus, disabled: account?.archived, action: () => setCompose({}) },
-      { label: 'Check for mail', icon: RefreshCw, separatorBefore: true, disabled: account?.archived, action: () => startSync(account?.id) },
+      { label: 'New message', icon: Plus, disabled: account ? account.archived || isLocalFoldersAccount(account) : !sendableAccounts.length, action: () => setCompose({}) },
+      { label: 'Check for mail', icon: RefreshCw, separatorBefore: true, disabled: account?.archived || isLocalFoldersAccount(account), action: () => startSync(account?.id) },
       ...(account && progress ? [{ label: progress.phase === 'paused' ? 'Resume sync' : 'Pause sync', icon: progress.phase === 'paused' ? Play : Pause, action: () => toggleSync(account, progress.phase === 'paused') }] satisfies ContextMenuItem[] : []),
       { label: 'Offline storage', icon: Download, action: showStorage },
       ...(account ? [{ label: 'Account settings…', icon: Settings2, separatorBefore: true, action: () => setSettingsAccount(account) }] satisfies ContextMenuItem[] : []),
       ...(account ? [{ label: 'Copy email address', icon: Copy, separatorBefore: true, action: () => copyText(account.email) }] satisfies ContextMenuItem[] : []),
-      ...(account && !account.archived ? [{ label: 'Disconnect account…', icon: Settings2, separatorBefore: true, danger: true, action: () => disconnect(account) }] satisfies ContextMenuItem[] : [])
+      ...(account && !account.archived && !isLocalFoldersAccount(account) ? [{ label: 'Disconnect account…', icon: Settings2, separatorBefore: true, danger: true, action: () => disconnect(account) }] satisfies ContextMenuItem[] : []),
+      ...(account && isLocalFoldersAccount(account) ? [
+        { label: 'Import mail…', icon: ImportIcon, separatorBefore: true, action: () => setImportOpen(true) },
+        { label: 'Remove Local Folders…', icon: Trash2, danger: true, action: () => void removeLocalFolders(account) }
+      ] satisfies ContextMenuItem[] : [])
     ], account?.email ?? 'All accounts')
   }
 
@@ -898,13 +925,13 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
 
   const activeProgress = sync.filter((item) => shouldShowDetailedSync(item, accounts.find((account) => account.id === item.accountId)))
   const mailboxRefreshing = isMailboxRefreshing(accounts, sync, accountId)
-  const visibleLabels = labels.filter((label) => label.type === 'user' && (accountId === 'all' || label.accountId === accountId)).slice(0, 12)
+  const visibleLabels = labels.filter((label) => label.type === 'user' && label.accountId !== localAccount?.id && (accountId === 'all' || label.accountId === accountId)).slice(0, 12)
   const syncUnavailable = accountId === 'all'
     ? !accounts.some((account) => !account.archived)
     : Boolean(accounts.find((account) => account.id === accountId)?.archived)
   const showFolderMenu = (event: React.MouseEvent, value: typeof folder) => showContextMenu(event, [
     { label: `Open ${folderNames[value]}`, icon: Mail, action: () => { setLabelId(undefined); setFolder(value) } },
-    { label: 'New message', icon: Plus, separatorBefore: true, disabled: !accounts.some((account) => !account.archived), action: () => setCompose({}) },
+    { label: 'New message', icon: Plus, separatorBefore: true, disabled: !sendableAccounts.length, action: () => setCompose({}) },
     { label: 'Check for mail', icon: RefreshCw, disabled: syncUnavailable, action: () => startSync(accountId === 'all' ? undefined : accountId) }
   ], folderNames[value])
   const folderButton = (value: typeof folder, icon: React.ReactNode) => {
@@ -923,7 +950,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   return (
     <div ref={mailPanes.containerRef} className="workspace mail-workspace real-mail" style={mailPanes.style}>
       <aside className="context-sidebar">
-        <button className="compose-button" disabled={!accounts.some((account) => !account.archived)} onClick={() => setCompose({})}><Plus size={18} /> New message</button>
+        <button className="compose-button" disabled={!sendableAccounts.length} onClick={() => setCompose({})}><Plus size={18} /> New message</button>
         <div className="sidebar-group">
           <span className="sidebar-label">Mailboxes</span>
           {folderButton('inbox', <Inbox size={17} />)}
@@ -946,10 +973,15 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
         </div>
           {visibleLabels.length > 0 && <div className="sidebar-group"><span className="sidebar-label">Labels</span>{visibleLabels.map((label) => { const selected = labelId === label.id && accountId === label.accountId; return <button className={`sidebar-item ${selected ? 'active' : ''}`} aria-pressed={selected} key={`${label.accountId}:${label.id}`} onClick={() => toggleLabel(label)} onContextMenu={(event) => showContextMenu(event, [
             { label: selected ? `Clear ${label.name} filter` : `Open ${label.name}`, icon: Tag, action: () => toggleLabel(label) },
-            { label: 'New message', icon: Plus, separatorBefore: true, disabled: !accounts.some((account) => account.id === label.accountId && !account.archived), action: () => setCompose({}) },
+            { label: 'New message', icon: Plus, separatorBefore: true, disabled: !sendableAccounts.some((account) => account.id === label.accountId), action: () => setCompose({}) },
             { label: 'Check account for mail', icon: RefreshCw, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => startSync(label.accountId) },
             { label: 'Manage folders and labels…', icon: FolderInput, separatorBefore: true, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => setFoldersOpen(label.accountId) }
           ], label.name)}><Tag size={15} /><span>{label.name}</span></button> })}</div>}
+        {localAccount && <LocalFoldersSidebar account={localAccount} labels={labels} selectedAccountId={accountId} selectedLabelId={labelId} onOpen={toggleLabel} onManage={() => setFoldersOpen(localAccount.id)} onImport={() => setImportOpen(true)} onContextMenu={(event, label) => showContextMenu(event, [
+          { label: `Open ${label.name}`, icon: FolderInput, action: () => toggleLabel(label) },
+          { label: 'Manage Local Folders…', icon: Settings2, separatorBefore: true, action: () => setFoldersOpen(localAccount.id) },
+          { label: 'Import mail…', icon: ImportIcon, action: () => setImportOpen(true) }
+        ], label.name)} />}
         <MailSavedSearchList searches={savedSearches.searches} view={searchView} onOpen={openSavedSearch} onEdit={setSavingSearch} onReplace={(item) => void replaceSavedSearch(item)} onDelete={(item) => { if (window.confirm(`Delete the saved search “${item.name}”? Mail is not affected.`)) void savedSearches.remove(item) }} />
         <div className="mail-sidebar-footer">
           <button onClick={() => setAttachmentsOpen(true)}><Paperclip size={14} /> All attachments</button>
@@ -957,8 +989,9 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           <button onClick={() => setReplyWatchesOpen(true)}><Eye size={14} /> Reply watches</button>
           <button disabled={!accounts.some((account) => !account.archived)} onClick={() => setFoldersOpen(accountId === 'all' ? true : accountId)}><FolderInput size={14} /> Folders &amp; labels</button>
           <button onClick={() => setQuickActionsOpen(true)}><Zap size={14} /> Quick actions</button>
+          <button onClick={() => setImportOpen(true)}><ImportIcon size={14} /> Import mail</button>
           <button onClick={() => void showStorage()}><Download size={14} /> Offline storage</button>
-          {accounts.filter((account) => !account.archived).map((account) => <button key={account.id} title={`Settings for ${account.email}`} onClick={() => setSettingsAccount(account)} onContextMenu={(event) => showAccountMenu(event, account)}><Settings2 size={14} /> {account.email.split('@')[0]}</button>)}
+          {sendableAccounts.map((account) => <button key={account.id} title={`Settings for ${account.email}`} onClick={() => setSettingsAccount(account)} onContextMenu={(event) => showAccountMenu(event, account)}><Settings2 size={14} /> {account.email.split('@')[0]}</button>)}
         </div>
       </aside>
 
@@ -991,6 +1024,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           <button className="button ghost small" onClick={() => folder === 'snoozed' ? void unsnoozeMany(checkedItems) : setSnoozeItems(checkedItems)}>{folder === 'snoozed' ? <Inbox size={15} /> : <Clock3 size={15} />} {folder === 'snoozed' ? 'Return now' : 'Snooze'}</button>
           <button className="button ghost small" onClick={() => setOrganizeMode('move')}><FolderInput size={15} /> Move</button>
           <button className="button ghost small" onClick={() => setOrganizeMode('label')}><Tags size={15} /> Labels</button>
+          {localAccount && checkedItems.some((item) => item.accountId !== localAccount.id) && <button className="button ghost small" onClick={() => setLocalTransferOpen(true)}><HardDrive size={15} /> Local Folders</button>}
           <MailQuickActionButtons quickActions={quickActions.quickActions} className="button ghost small" onRun={(quickAction) => void runQuickAction(quickAction, checkedItems)} />
           <span className="spacer" />
           <button className="button danger-subtle small" onClick={() => void applyBulkAction('trash')}><Trash2 size={15} /> Trash</button>
@@ -1005,7 +1039,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           ], `${account.email} sync`)}><span><strong>{account?.email ?? 'Mail'}</strong><small>{item.message ?? item.phase} · {item.completed.toLocaleString()}/{item.total.toLocaleString()}</small></span><progress max={Math.max(item.total, 1)} value={item.completed} /><button className="icon-button" disabled={!account} aria-label={item.phase === 'paused' ? 'Resume sync' : 'Pause sync'} onClick={() => account && void toggleSync(account, item.phase === 'paused')}>{item.phase === 'paused' ? <Play size={14} /> : <Pause size={14} />}</button><em>{percent}%</em></div>
         })}
         <div className="message-list" ref={messageListRef} onContextMenu={(event) => showContextMenu(event, [
-          { label: 'New message', icon: Plus, disabled: !accounts.some((account) => !account.archived), action: () => setCompose({}) },
+          { label: 'New message', icon: Plus, disabled: !sendableAccounts.length, action: () => setCompose({}) },
           { label: 'Check for mail', icon: RefreshCw, separatorBefore: true, disabled: syncUnavailable, action: () => startSync(accountId === 'all' ? undefined : accountId) },
           { label: 'Mark visible conversations as read', icon: MailOpen, disabled: !page.items.some((item) => item.unread), action: markVisibleRead }
         ], 'Conversation list')}>
@@ -1070,8 +1104,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
         {selected && thread ? <>
           <div className="reader-toolbar">
             <div className="reader-toolbar-primary">
-              <button className="reader-toolbar-action" disabled={selectedAccount?.archived} title="Reply" onClick={() => setCompose({ reply: thread })}><Reply size={17} /><span>Reply</span></button>
-              <button className="reader-toolbar-action" disabled={selectedAccount?.archived} title="Reply all" onClick={() => setCompose({ reply: thread, replyAll: true })}><ReplyAll size={17} /><span>Reply all</span></button>
+              <button className="reader-toolbar-action" disabled={selectedAccount?.archived || isLocalFoldersAccount(selectedAccount)} title="Reply" onClick={() => setCompose({ reply: thread })}><Reply size={17} /><span>Reply</span></button>
+              <button className="reader-toolbar-action" disabled={selectedAccount?.archived || isLocalFoldersAccount(selectedAccount)} title="Reply all" onClick={() => setCompose({ reply: thread, replyAll: true })}><ReplyAll size={17} /><span>Reply all</span></button>
               <button className="reader-toolbar-action" disabled={selectedAccount?.archived} title={selected.unread ? 'Mark read' : 'Mark unread'} onClick={() => void applyAction(selected.unread ? 'read' : 'unread')}>{selected.unread ? <MailOpen size={17} /> : <Mail size={17} />}<span>{selected.unread ? 'Read' : 'Unread'}</span></button>
               <button className="reader-toolbar-action" disabled={selectedAccount?.archived || selected.trashed} title={selected.labelIds.includes('INBOX') ? 'Archive' : 'Move to inbox'} onClick={() => void applyAction(selected.labelIds.includes('INBOX') ? 'archive' : selected.labelIds.includes('SPAM') ? 'move' : 'unarchive', undefined, undefined, true, selected.labelIds.includes('SPAM') ? 'INBOX' : undefined)}>{selected.labelIds.includes('INBOX') ? <Archive size={17} /> : <Inbox size={17} />}<span>{selected.labelIds.includes('INBOX') ? 'Archive' : 'Inbox'}</span></button>
               <button className="reader-toolbar-action" disabled={selectedAccount?.archived} title={selected.trashed ? 'Restore from Trash' : 'Move to Trash'} onClick={() => void applyAction(selected.trashed ? 'untrash' : 'trash')}>{selected.trashed ? <Undo2 size={17} /> : <Trash2 size={17} />}<span>{selected.trashed ? 'Restore' : 'Trash'}</span></button>
@@ -1091,13 +1125,13 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
               expanded={expansion.isExpanded(message.id)}
               onLoadRemoteImages={remoteImages ? undefined : () => void loadRemoteImages()}
               onToggle={() => expansion.toggle(message.id)}
-              onReply={selectedAccount?.archived ? undefined : () => setCompose({ reply: replyThreadFor(message) })}
+              onReply={selectedAccount?.archived || isLocalFoldersAccount(selectedAccount) ? undefined : () => setCompose({ reply: replyThreadFor(message) })}
               onMoreActions={(event) => showProviderMessageMenu(event, message)}
               onContextMenu={(event) => showProviderMessageMenu(event, message)}
             >
-              {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} onContextMenu={(event) => showAttachmentMenu(event, message, attachment)}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{formatFileSize(attachment.size)}</small></span><button className="icon-button" title="Open" onClick={() => void openAttachment(message, attachment)}><Download size={16} /></button><button className="button ghost small" onClick={() => void saveAttachment(message, attachment)}>Save as</button></div>)}</div>}
+              {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} title={attachmentSearchStatus(attachment.textIndex)?.label} onContextMenu={(event) => showAttachmentMenu(event, message, attachment)}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{[formatFileSize(attachment.size), attachmentSearchStatus(attachment.textIndex)?.notice].filter(Boolean).join(' · ')}</small></span><button className="icon-button" title="Open" onClick={() => void openAttachment(message, attachment)}><Download size={16} /></button><button className="button ghost small" onClick={() => void saveAttachment(message, attachment)}>Save as</button></div>)}</div>}
             </ThreadMessageAccordion>)}
-            {!selectedAccount?.archived && <div className="quick-actions"><button className="button ghost" onClick={() => setCompose({ reply: thread })}><Reply size={16} /> Reply</button><button className="button ghost" onClick={() => setCompose({ reply: thread, replyAll: true })}><ReplyAll size={16} /> Reply all</button></div>}
+            {!selectedAccount?.archived && !isLocalFoldersAccount(selectedAccount) && <div className="quick-actions"><button className="button ghost" onClick={() => setCompose({ reply: thread })}><Reply size={16} /> Reply</button><button className="button ghost" onClick={() => setCompose({ reply: thread, replyAll: true })}><ReplyAll size={16} /> Reply all</button></div>}
           </article>
         </> : <div className="empty-state grow">{threadLoading ? <><LoaderCircle className="spin" size={34} /><h3>Opening conversation</h3><p>Loading the selected thread from local storage.</p></> : accounts.some((item) => item.status === 'syncing') ? <><LoaderCircle className="spin" size={34} /><h3>Downloading your mailbox</h3><p>Conversations appear here as soon as they are available.</p></> : <><Inbox size={34} /><h3>Select a conversation</h3><p>Choose a conversation to read it here.</p></>}</div>}
       </section>
@@ -1105,7 +1139,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       {pending.length > 0 && <div className="undo-toast"><span>{pending.length > 1 ? `${pending.length} mail changes queued` : 'Mail change queued'}</span><button onClick={() => void undo()}><Undo2 size={15} /> Undo</button><button onClick={() => setPending([])}>Dismiss</button></div>}
       {pendingSend && <div className="undo-toast send-undo-toast"><span>Message will send shortly</span><button onClick={() => void undoSend()}><Undo2 size={15} /> Undo Send</button><button onClick={() => setPendingSend(undefined)}>Dismiss</button></div>}
       {aiSearchOpen && aiStatus && <MailAiSearchDialog status={aiStatus} onRun={(query) => { setSearch(query); setSearchFiltersOpen(false) }} onClose={() => setAiSearchOpen(false)} />}
-      {compose && <MailComposeModal accounts={accounts.filter((account) => !account.archived)} draft={compose.draft} replyTo={compose.reply} replyAll={compose.replyAll} forward={compose.forward} initialTo={compose.initialTo} initialBody={compose.initialBody} onClose={() => { setCompose(undefined); if (folder === 'drafts' || folder === 'scheduled') void loadDrafts() }} onSent={(result) => { if (result.status === 'send-pending') setPendingSend(result); void loadPage(); void loadDrafts() }} onToast={onToast} />}
+      {compose && <MailComposeModal accounts={sendableAccounts} draft={compose.draft} replyTo={compose.reply} replyAll={compose.replyAll} forward={compose.forward} initialTo={compose.initialTo} initialBody={compose.initialBody} onClose={() => { setCompose(undefined); if (folder === 'drafts' || folder === 'scheduled') void loadDrafts() }} onSent={(result) => { if (result.status === 'send-pending') setPendingSend(result); void loadPage(); void loadDrafts() }} onToast={onToast} />}
       {accountSetup && <MailAccountSetupModal onClose={() => setAccountSetup(false)} onConnected={accountConnected} onToast={onToast} />}
       {settingsAccount && <MailAccountSettingsModal account={settingsAccount} onSaved={(updated) => { setAccounts((items) => items.map((item) => item.id === updated.id ? updated : item)); setSettingsAccount(updated) }} onClose={() => setSettingsAccount(undefined)} onToast={onToast} />}
       {organizeMode && <MailOrganizeModal mode={organizeMode} items={checkedItems} accounts={accounts} labels={labels} onApply={applyOrganizeRequests} onClose={() => setOrganizeMode(undefined)} />}
@@ -1123,6 +1157,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           else if (result.renamed[labelId]) setLabelId(result.renamed[labelId])
         }
       }} />}
+      {importOpen && <MailImportModal accounts={accounts} labels={labels} onClose={() => setImportOpen(false)} onToast={onToast} onLocalFoldersChanged={reloadLabels} />}
+      {localTransferOpen && <MailLocalTransferModal items={checkedItems} accounts={accounts} labels={labels} onClose={() => setLocalTransferOpen(false)} onToast={onToast} onDone={() => { setCheckedKeys(new Set()); void loadPage() }} />}
       {sourceViewer && <MailMessageSourceModal {...sourceViewer} onClose={() => setSourceViewer(undefined)} />}
       {messageTools.dialog}
     </div>
