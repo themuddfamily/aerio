@@ -1,10 +1,11 @@
 // Dependency-free RFC 5545 iCalendar parser and serializer for calendar import, export, and
 // read-only internet subscriptions. Parsing is bounded by ContentLimits; serialization folds lines.
-import type { CalendarEvent } from '../types'
+import type { CalendarEvent, EventAttendee, EventParticipant } from '../types'
 import {
   allProperties, escapeText, firstProperty, foldLine, formatParam, InterchangeFormatError, paramValue,
   parseComponents, unescapeText, type Component, type ContentLimits, type ContentLine
 } from './content-lines'
+import { attendeeKey, eventAttendees, kindFromIcs, kindToIcs, responseFromIcs, responseToIcs, roleFromIcs, roleToIcs } from './event-attendees'
 import { isIanaTimeZone, resolveTimeZoneName, timeZoneOffsetMinutes, wallTimeInZone, wallTimeMs, wallTimeToUtc, type WallTime } from './time-zones'
 
 export { InterchangeFormatError } from './content-lines'
@@ -35,13 +36,27 @@ export interface IcsEvent {
   recurrenceExceptions: string[]
   attendees: string[]
   reminderMinutes?: number
+  // Scheduling properties (RFC 5546). Only present when the source carries them.
+  organizer?: EventParticipant
+  attendeeDetails?: EventAttendee[]
+  sequence?: number
+  dtstamp?: string
+  status?: string
+  comment?: string
 }
 
 export interface IcsParseResult {
   calendarName?: string
   timeZone?: string
+  // The iTIP METHOD (REQUEST, CANCEL, REPLY, COUNTER, ...) of a scheduling message, upper-cased.
+  method?: string
   events: IcsEvent[]
   warnings: string[]
+}
+
+export interface IcsParseOptions {
+  // iTIP CANCEL messages mark their events STATUS:CANCELLED; imports and subscriptions skip them.
+  keepCancelled?: boolean
 }
 
 type DateValue = { kind: 'date'; date: string } | { kind: 'datetime'; utcMs: number; timeZone?: string }
@@ -204,6 +219,7 @@ export function simpleRecurrence(rule: string | undefined): NonNullable<Calendar
 interface ZoneContext {
   zones: Map<string, VTimeZone>
   defaultZone?: string
+  keepCancelled?: boolean
   warn(message: string): void
 }
 
@@ -252,7 +268,8 @@ function parseEvent(component: Component, context: ZoneContext): IcsEvent | unde
     context.warn('An event without a valid start time was skipped')
     return undefined
   }
-  if (text(component, 'STATUS')?.toUpperCase() === 'CANCELLED') return undefined
+  const status = text(component, 'STATUS')?.trim().toUpperCase().slice(0, 40)
+  if (status === 'CANCELLED' && !context.keepCancelled) return undefined
   const endLine = firstProperty(component, 'DTEND')
   let end = endLine ? parseDateValue(endLine, context) : undefined
   if (end && end.kind !== start.kind) end = undefined
@@ -289,10 +306,19 @@ function parseEvent(component: Component, context: ZoneContext): IcsEvent | unde
   }
   const recurrenceLine = firstProperty(component, 'RECURRENCE-ID')
   const recurrenceId = recurrenceLine ? parseDateValue(recurrenceLine, context) : undefined
-  const attendees = allProperties(component, 'ATTENDEE')
-    .map((line) => line.value.replace(/^mailto:/i, '').trim())
-    .filter((value) => value && value.length <= 500)
+  const attendeeLines = allProperties(component, 'ATTENDEE')
+    .map((line) => ({ line, email: calAddress(line.value) }))
+    .filter((item) => item.email && item.email.length <= 500)
     .slice(0, MAX_ATTENDEES)
+  const attendees = attendeeLines.map((item) => item.email)
+  const details = attendeeLines.map(({ line, email }) => attendeeFromLine(line, email))
+  const organizerProperty = firstProperty(component, 'ORGANIZER')
+  const organizerEmail = organizerProperty ? calAddress(organizerProperty.value) : ''
+  const organizerName = organizerProperty ? paramValue(organizerProperty, 'CN')?.trim().slice(0, 500) : undefined
+  const sequence = Number(firstProperty(component, 'SEQUENCE')?.value.trim() || Number.NaN)
+  const stampLine = firstProperty(component, 'DTSTAMP')
+  const stamp = stampLine ? parseDateValue(stampLine, context) : undefined
+  const comment = text(component, 'COMMENT')?.slice(0, 5_000)
   const uid = text(component, 'UID')?.trim().slice(0, 1_000)
   return {
     ...(uid ? { uid } : {}),
@@ -307,11 +333,36 @@ function parseEvent(component: Component, context: ZoneContext): IcsEvent | unde
     ...(recurrenceRule ? { recurrenceRule } : {}),
     recurrenceExceptions: exceptions,
     attendees,
-    ...(reminderFor(component) !== undefined ? { reminderMinutes: reminderFor(component) } : {})
+    ...(reminderFor(component) !== undefined ? { reminderMinutes: reminderFor(component) } : {}),
+    ...(organizerEmail && organizerEmail.length <= 500 ? { organizer: { email: organizerEmail, ...(organizerName ? { name: organizerName } : {}) } } : {}),
+    ...(details.some((detail) => Object.keys(detail).length > 1) ? { attendeeDetails: details } : {}),
+    ...(Number.isInteger(sequence) && sequence >= 0 && sequence <= 2_147_483_647 ? { sequence } : {}),
+    ...(stamp?.kind === 'datetime' ? { dtstamp: new Date(stamp.utcMs).toISOString() } : {}),
+    ...(status ? { status } : {}),
+    ...(comment ? { comment } : {})
   }
 }
 
-export function parseIcs(input: string, limits: ContentLimits = ICS_LIMITS, maxEvents = ICS_MAX_EVENTS): IcsParseResult {
+// CAL-ADDRESS values are usually mailto: URIs; other schemes are kept as written.
+const calAddress = (value: string) => value.trim().replace(/^mailto:/i, '').trim()
+
+function attendeeFromLine(line: ContentLine, email: string): EventAttendee {
+  const name = paramValue(line, 'CN')?.trim().slice(0, 500)
+  const role = roleFromIcs(paramValue(line, 'ROLE'))
+  const kind = kindFromIcs(paramValue(line, 'CUTYPE'))
+  const response = responseFromIcs(paramValue(line, 'PARTSTAT'))
+  const rsvp = paramValue(line, 'RSVP')?.toUpperCase()
+  return {
+    email,
+    ...(name ? { name } : {}),
+    ...(role ? { role } : {}),
+    ...(kind ? { kind } : {}),
+    ...(response ? { response } : {}),
+    ...(rsvp === 'TRUE' || rsvp === 'FALSE' ? { rsvp: rsvp === 'TRUE' } : {})
+  }
+}
+
+export function parseIcs(input: string, limits: ContentLimits = ICS_LIMITS, maxEvents = ICS_MAX_EVENTS, options: IcsParseOptions = {}): IcsParseResult {
   const { roots, warnings } = parseComponents(input, limits)
   const calendars = roots.filter((root) => root.name === 'VCALENDAR')
   if (!calendars.length) throw new InterchangeFormatError('This is not an iCalendar (.ics) file: no VCALENDAR was found')
@@ -320,7 +371,9 @@ export function parseIcs(input: string, limits: ContentLimits = ICS_LIMITS, maxE
   const events: IcsEvent[] = []
   let calendarName: string | undefined
   let declaredZone: string | undefined
+  let method: string | undefined
   for (const calendar of calendars) {
+    method ??= text(calendar, 'METHOD')?.trim().toUpperCase().slice(0, 40) || undefined
     calendarName ??= text(calendar, 'X-WR-CALNAME')?.trim().slice(0, 200) || text(calendar, 'NAME')?.trim().slice(0, 200)
     const zoneName = text(calendar, 'X-WR-TIMEZONE')?.trim()
     const defaultZone = zoneName ? resolveTimeZoneName(zoneName) : undefined
@@ -331,7 +384,7 @@ export function parseIcs(input: string, limits: ContentLimits = ICS_LIMITS, maxE
       const zone = tzid ? VTimeZone.parse(child) : undefined
       if (tzid && zone) zones.set(tzid, zone)
     }
-    const context: ZoneContext = { zones, defaultZone, warn }
+    const context: ZoneContext = { zones, defaultZone, keepCancelled: options.keepCancelled, warn }
     for (const child of calendar.children.filter((item) => item.name === 'VEVENT')) {
       if (events.length >= maxEvents) throw new InterchangeFormatError(`The calendar contains more than ${maxEvents.toLocaleString('en-US')} events`)
       const event = parseEvent(child, context)
@@ -339,7 +392,7 @@ export function parseIcs(input: string, limits: ContentLimits = ICS_LIMITS, maxE
     }
   }
   const allWarnings = [...warnings, ...[...warningCounts].map(([message, count]) => count > 1 ? `${message} (${count} times)` : message)]
-  return { ...(calendarName ? { calendarName } : {}), ...(declaredZone ? { timeZone: declaredZone } : {}), events, warnings: allWarnings }
+  return { ...(calendarName ? { calendarName } : {}), ...(declaredZone ? { timeZone: declaredZone } : {}), ...(method ? { method } : {}), events, warnings: allWarnings }
 }
 
 export function icsEventToCalendarEvent(event: IcsEvent, calendarId: string, color: string, id: string): CalendarEvent {
@@ -354,7 +407,10 @@ export function icsEventToCalendarEvent(event: IcsEvent, calendarId: string, col
     ...(event.recurrenceRule ? { recurrenceRule: event.recurrenceRule } : {}),
     ...(event.recurrenceExceptions.length ? { recurrenceExceptions: event.recurrenceExceptions } : {}),
     ...(event.recurrenceId ? { recurrenceId: event.recurrenceId } : {}),
-    ...(event.uid ? { sourceUid: event.uid } : {})
+    ...(event.uid ? { sourceUid: event.uid } : {}),
+    ...(event.organizer ? { organizer: event.organizer } : {}),
+    ...(event.attendeeDetails ? { attendeeDetails: event.attendeeDetails } : {}),
+    ...(event.sequence !== undefined ? { sequence: event.sequence } : {})
   }
 }
 
@@ -463,7 +519,9 @@ export function serializeIcs(events: CalendarEvent[], options: IcsSerializeOptio
         ? `EXDATE${formatParam('TZID', [zone])}:${timeExceptions.map((value) => icsWall(wallTimeInZone(Date.parse(value), zone))).join(',')}`
         : `EXDATE:${timeExceptions.map((value) => icsUtc(Date.parse(value))).join(',')}`)
     }
-    for (const attendee of event.attendees) lines.push(`ATTENDEE:mailto:${attendee.replace(/[\r\n;:,]/g, '')}`)
+    if (event.organizer) lines.push(organizerLine(event.organizer))
+    if (event.sequence !== undefined) lines.push(`SEQUENCE:${event.sequence}`)
+    for (const attendee of eventAttendees(event)) lines.push(attendeeLine(attendee))
     if (event.reminderMinutes > 0) {
       lines.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${escapeText(event.title)}`, `TRIGGER:-PT${event.reminderMinutes}M`, 'END:VALARM')
     }
@@ -472,6 +530,25 @@ export function serializeIcs(events: CalendarEvent[], options: IcsSerializeOptio
   lines.push('END:VCALENDAR')
   return `${lines.map(foldLine).join('\r\n')}\r\n`
 }
+
+const mailto = (email: string) => `mailto:${email.replace(/[\r\n;:,"]/g, '')}`
+
+export const organizerLine = (organizer: EventParticipant) =>
+  `ORGANIZER${organizer.name ? formatParam('CN', [organizer.name]) : ''}:${mailto(organizer.email)}`
+
+// Plain attendees keep the historical `ATTENDEE:mailto:` form; structured ones add CN, ROLE, CUTYPE, PARTSTAT, RSVP.
+export function attendeeLine(attendee: EventAttendee) {
+  const params = [
+    attendee.name ? formatParam('CN', [attendee.name]) : '',
+    attendee.role ? `;ROLE=${roleToIcs(attendee.role)}` : '',
+    attendee.kind ? `;CUTYPE=${kindToIcs(attendee.kind)}` : '',
+    attendee.response ? `;PARTSTAT=${responseToIcs(attendee.response)}` : '',
+    attendee.rsvp !== undefined ? `;RSVP=${attendee.rsvp ? 'TRUE' : 'FALSE'}` : ''
+  ]
+  return `ATTENDEE${params.join('')}:${mailto(attendee.email)}`
+}
+
+export const sameAddress = (a: string, b: string) => attendeeKey(a) === attendeeKey(b)
 
 // Identity used to detect re-imports and to keep subscription event ids stable across refreshes.
 export const eventIdentity = (event: Pick<CalendarEvent, 'sourceUid' | 'recurrenceId'>) =>

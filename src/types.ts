@@ -51,6 +51,32 @@ export interface CalendarEvent {
   originalStart?: string
   // Set only on occurrences generated in the view by the recurrence expander; never persisted.
   occurrenceOf?: string
+  // Meeting details (E22). `attendees` stays the plain address list every caller reads; `attendeeDetails`
+  // adds role, kind, and response for those addresses (matched case-insensitively). `sequence` is the
+  // iCalendar SEQUENCE the organizer last published.
+  organizer?: EventParticipant
+  attendeeDetails?: EventAttendee[]
+  sequence?: number
+}
+
+// RFC 5545 ROLE, CUTYPE, and PARTSTAT values in Aerio's vocabulary.
+export type AttendeeRole = 'chair' | 'required' | 'optional' | 'non-participant'
+export type AttendeeKind = 'individual' | 'group' | 'resource' | 'room' | 'unknown'
+export type AttendeeResponse = 'needs-action' | 'accepted' | 'tentative' | 'declined' | 'delegated'
+
+export interface EventParticipant {
+  email: string
+  name?: string
+  // The participant is the account that owns this copy of the event.
+  self?: boolean
+}
+
+export interface EventAttendee extends EventParticipant {
+  role?: AttendeeRole
+  kind?: AttendeeKind
+  response?: AttendeeResponse
+  // RSVP=TRUE: the organizer asked this attendee to reply.
+  rsvp?: boolean
 }
 
 export type RecurrenceEditScope = 'occurrence' | 'following' | 'series'

@@ -20,6 +20,9 @@ export interface SyncedCalendarEvent extends CalendarEvent {
   accountId: string
   provider: ProductivityProvider
   readOnly: boolean
+  // The iCalendar UID the provider reports (Google iCalUID, Microsoft uid/iCalUId), used to match incoming
+  // invitations. Kept apart from `sourceUid` because synced instances of one series share it.
+  icalUid?: string
 }
 
 export interface SyncedContact extends Contact {
@@ -102,6 +105,9 @@ export interface ProductivityDesktopApi {
   createEvent(event: CalendarEvent): Promise<ProductivitySnapshot>
   updateEvent(event: CalendarEvent, scope?: RecurrenceEditScope): Promise<ProductivitySnapshot>
   deleteEvent(eventId: string, scope?: RecurrenceEditScope): Promise<ProductivitySnapshot>
+  // Meeting responses (E22): answer a synced invitation from the calendar, or an iTIP message from mail.
+  respondToEvent?(eventId: string, input: import('./invitation-types').EventResponseInput): Promise<ProductivitySnapshot>
+  invitations?: import('./invitation-types').MeetingInvitationApi
   createContact(accountId: string, contact: Contact): Promise<ProductivityContactWriteResult>
   updateContact(contact: Contact): Promise<ProductivityContactWriteResult>
   deleteContact(contactId: string): Promise<ProductivitySnapshot>

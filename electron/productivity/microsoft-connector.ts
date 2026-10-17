@@ -5,6 +5,8 @@ import { addDaysIso, eventRecurrenceRule, formatRecurrenceRule, isAllDayEvent, o
 import { shiftSeriesTiming } from '../../src/lib/recurrence-edit'
 import { graphRecurrenceToRule, ruleToGraphRecurrence, type GraphRecurrence } from '../../src/lib/provider-recurrence'
 import { isIanaTimeZone, resolveTimeZoneName, wallTimeInZone, windowsTimeZoneName } from '../../src/lib/time-zones'
+import { eventAttendees, fromGraphAttendee, participant, toGraphAttendee, withAttendees, type GraphAttendee } from '../../src/lib/event-attendees'
+import type { EventResponseInput } from '../../src/invitation-types'
 import { mapMicrosoftRichContact, microsoftRichContactBody, microsoftRichContactSelect, type GraphRichContact } from './microsoft-contacts'
 
 interface GraphPage<T> { value: T[]; '@odata.nextLink'?: string; '@odata.deltaLink'?: string }
@@ -17,7 +19,11 @@ interface GraphEvent {
   location?: { displayName?: string }
   start?: { dateTime?: string; timeZone?: string }
   end?: { dateTime?: string; timeZone?: string }
-  attendees?: { emailAddress?: { address?: string } }[]
+  attendees?: GraphAttendee[]
+  organizer?: { emailAddress?: { address?: string; name?: string } }
+  responseStatus?: { response?: string; time?: string }
+  iCalUId?: string
+  uid?: string
   recurrence?: GraphRecurrence | null
   reminderMinutesBeforeStart?: number
   isCancelled?: boolean
@@ -103,7 +109,7 @@ export const microsoftEventBody = (event: CalendarEvent, options: { instance?: b
     start: times.start,
     end: times.end,
     location: { displayName: event.location ?? '' },
-    attendees: event.attendees.map((address) => ({ emailAddress: { address }, type: 'required' })),
+    attendees: eventAttendees(event).map(toGraphAttendee),
     isReminderOn: true,
     reminderMinutesBeforeStart: event.reminderMinutes,
     ...(isAllDayEvent(event) ? { isAllDay: true } : {})
@@ -126,7 +132,11 @@ export function mapMicrosoftEvent(accountId: string, calendar: SyncedCalendar, e
   const zone = resolveTimeZoneName(event.originalStartTimeZone)
   const recurrenceRule = event.seriesMasterId ? undefined : graphRecurrenceToRule(event.recurrence)
   const allDay = event.isAllDay ? { allDay: true, start: allDayDate(event.start!.dateTime!, zone), end: allDayDate(event.end!.dateTime!, zone) } : {}
-  return {
+  const details = (event.attendees ?? []).flatMap((attendee) => fromGraphAttendee(attendee) ?? [])
+  const organizer = participant(event.organizer?.emailAddress?.address, event.organizer?.emailAddress?.name, event.isOrganizer)
+  // `uid` is shared by a series master and its occurrences; iCalUId differs per occurrence.
+  const icalUid = event.uid ?? event.iCalUId
+  return withAttendees({
     id: `${accountId}:microsoft-event:${calendar.remoteId}:${event.id}`,
     remoteId: event.id,
     accountId,
@@ -146,8 +156,10 @@ export function mapMicrosoftEvent(accountId: string, calendar: SyncedCalendar, e
     ...(zone && !event.isAllDay ? { timeZone: zone } : {}),
     ...(recurrenceRule ? { recurrenceRule } : {}),
     ...(event.seriesMasterId ? { seriesId: event.seriesMasterId } : {}),
-    ...(event.seriesMasterId && event.originalStart ? { originalStart: event.isAllDay ? allDayDate(event.originalStart, zone) : new Date(utc(event.originalStart)!).toISOString() } : {})
-  }
+    ...(event.seriesMasterId && event.originalStart ? { originalStart: event.isAllDay ? allDayDate(event.originalStart, zone) : new Date(utc(event.originalStart)!).toISOString() } : {}),
+    ...(organizer ? { organizer } : {}),
+    ...(icalUid ? { icalUid } : {})
+  } satisfies SyncedCalendarEvent, details)
 }
 
 // calendarView never returns series masters, so one stored from a write is replaced by its occurrences.
@@ -348,6 +360,31 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
   async deleteEvent(calendar: SyncedCalendar, event: SyncedCalendarEvent) {
     this.assertWritable(calendar)
     await retryingJson<void>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(event.remoteId)}`, this.token, { method: 'DELETE' })
+  }
+
+  // RSVP through Graph's accept/tentativelyAccept/decline actions with sendResponse=true. A proposed time is
+  // only accepted on tentativelyAccept and decline, and only when the organizer allows new time proposals
+  // (Graph then rejects the request, which is reported as is). `remoteId` may be a series master.
+  async respondToEvent(calendar: SyncedCalendar, remoteId: string, input: EventResponseInput) {
+    if (calendar.accountId !== this.accountId || calendar.provider !== this.provider || !this.calendarWriteAuthorized) {
+      throw new Error('Reconnect this Microsoft account once to enable Calendar responses')
+    }
+    if (input.proposed && input.response === 'accepted') throw new Error('Microsoft accepts a proposed time only with a tentative or decline response')
+    const action = input.response === 'accepted' ? 'accept' : input.response === 'tentative' ? 'tentativelyAccept' : 'decline'
+    const url = `https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(remoteId)}`
+    const graphTime = (value: string) => ({ dateTime: new Date(value).toISOString().replace(/Z$/, ''), timeZone: 'UTC' })
+    await retryingJson<void>(this.provider, `${url}/${action}`, this.token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sendResponse: true,
+        ...(input.comment?.trim() ? { comment: input.comment.trim().slice(0, 2_000) } : {}),
+        ...(input.proposed ? { proposedNewTime: { start: graphTime(input.proposed.start), end: graphTime(input.proposed.end) } } : {})
+      })
+    })
+    // A decline removes the meeting from the calendar; there is nothing left to read back.
+    if (input.response === 'declined') return undefined
+    const remote = await retryingJson<GraphEvent>(this.provider, url, this.token, { headers: { Prefer: 'outlook.timezone="UTC"' } })
+    return mapMicrosoftEvent(this.accountId, calendar, remote)
   }
 
   async createContact(contact: Contact) {

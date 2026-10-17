@@ -18,6 +18,8 @@ import {
 } from '../lib/recurrence'
 import { isIanaTimeZone, localTimeZone, resolveTimeZoneName, timeZoneOffsetLabel, timeZoneOptions, wallTimeInZone, wallTimeToUtc } from '../lib/time-zones'
 import { RecurrenceScopeChooser, RepeatField } from './RecurrenceFields'
+import EventAttendeesField, { attendeeFieldValues, attendeesFromFields } from './EventAttendeesField'
+import { withAttendees } from '../lib/event-attendees'
 
 type CalendarMode = 'month' | 'week' | 'day' | 'agenda'
 
@@ -477,7 +479,7 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
   const [calendarId, setCalendarId] = useState(event?.calendarId ?? defaultCalendarId ?? state.accounts[0].id)
   const [location, setLocation] = useState(event?.location ?? '')
   const [description, setDescription] = useState(event?.description ?? '')
-  const [attendees, setAttendees] = useState(event?.attendees.join(', ') ?? '')
+  const [attendees, setAttendees] = useState(() => attendeeFieldValues(event))
   const [rule, setRule] = useState<string | undefined>(initialRule)
   const [reminderMinutes, setReminderMinutes] = useState(event?.reminderMinutes ?? 15)
   const [busy, setBusy] = useState<'save' | 'delete'>()
@@ -504,16 +506,18 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
   }
 
   const build = (): CalendarEvent => {
-    const base: CalendarEvent = {
+    const guests: CalendarEvent = withAttendees<CalendarEvent>({
       id: event?.id ?? uid('event'), calendarId, title: title.trim(),
       start: allDay ? start : new Date(startTime).toISOString(),
       end: allDay ? addDaysIso(end, 1) : new Date(endTime).toISOString(),
       location, description, color,
-      attendees: attendees.split(',').map((value) => value.trim()).filter(Boolean), reminderMinutes,
+      attendees: [], reminderMinutes,
       allDay: allDay || undefined,
       timeZone: allDay ? undefined : zone,
       recurrence: 'none'
-    }
+    }, attendeesFromFields(attendees, event))
+    // attendeeDetails is always set explicitly so a cleared role is not restored from the original event.
+    const base: CalendarEvent = { ...guests, attendeeDetails: guests.attendeeDetails }
     // Synced occurrences never carry a rule; the provider keeps the series pattern.
     if (providerInstance) return preserveEventInterchangeFields(event, base)
     const parsed = parseRecurrenceRule(rule)
@@ -557,7 +561,7 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
           onChange={setRule}
         />
         <label className="field-label"><MapPin size={14} /> Location<input value={location} disabled={readOnly} onChange={(e) => setLocation(e.target.value)} placeholder="Add a place or video link" /></label>
-        <label className="field-label"><Users size={14} /> Attendees<input value={attendees} disabled={readOnly} onChange={(e) => setAttendees(e.target.value)} placeholder="Separate email addresses with commas" /></label>
+        <EventAttendeesField value={attendees} event={event} disabled={readOnly} onChange={setAttendees} />
         <label className="field-label">Notes<textarea value={description} disabled={readOnly} onChange={(e) => setDescription(e.target.value)} /></label>
         {pendingScope ? (
           <footer className="modal-footer">

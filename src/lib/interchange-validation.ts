@@ -1,5 +1,5 @@
 // Bounds checks for interchange data crossing the IPC boundary into the main process.
-import type { CalendarEvent, Contact, ContactField, ContactList } from '../types'
+import type { CalendarEvent, Contact, ContactField, ContactList, EventAttendee, EventParticipant } from '../types'
 import { CONTACT_GROUP_LIMIT, isContactPhoto } from './contact-fields'
 import { isCompleteMailAddress } from './mail-address'
 
@@ -41,8 +41,33 @@ export function validContactLists(value: unknown): value is ContactList[] {
   return Array.isArray(value) && value.length <= CONTACT_LIST_LIMIT && value.every(validContactList) && new Set(value.map((list) => list.id)).size === value.length
 }
 
+const ATTENDEE_ROLES = ['chair', 'required', 'optional', 'non-participant']
+const ATTENDEE_KINDS = ['individual', 'group', 'resource', 'room', 'unknown']
+const ATTENDEE_RESPONSES = ['needs-action', 'accepted', 'tentative', 'declined', 'delegated']
+const optionalChoice = (value: unknown, choices: string[]) => value === undefined || (typeof value === 'string' && choices.includes(value))
+const optionalFlag = (value: unknown) => value === undefined || typeof value === 'boolean'
+
+function validParticipant(value: unknown): value is EventParticipant {
+  if (!value || typeof value !== 'object') return false
+  const participant = value as Partial<EventParticipant>
+  return text(participant.email, 500, true) && optionalText(participant.name, 500) && optionalFlag(participant.self)
+}
+
+function validAttendee(value: unknown): value is EventAttendee {
+  if (!validParticipant(value)) return false
+  const attendee = value as Partial<EventAttendee>
+  return optionalChoice(attendee.role, ATTENDEE_ROLES) && optionalChoice(attendee.kind, ATTENDEE_KINDS) &&
+    optionalChoice(attendee.response, ATTENDEE_RESPONSES) && optionalFlag(attendee.rsvp)
+}
+
+export function validEventMeetingFields(event: Partial<CalendarEvent>) {
+  return (event.organizer === undefined || validParticipant(event.organizer)) &&
+    (event.attendeeDetails === undefined || (Array.isArray(event.attendeeDetails) && event.attendeeDetails.length <= 1_000 && event.attendeeDetails.every(validAttendee))) &&
+    (event.sequence === undefined || (Number.isInteger(event.sequence) && Number(event.sequence) >= 0 && Number(event.sequence) <= 2_147_483_647))
+}
+
 export function validEventInterchangeFields(event: Partial<CalendarEvent>) {
-  return (event.allDay === undefined || typeof event.allDay === 'boolean') && optionalText(event.timeZone, 200) &&
+  return validEventMeetingFields(event) && (event.allDay === undefined || typeof event.allDay === 'boolean') && optionalText(event.timeZone, 200) &&
     optionalText(event.recurrenceRule, 1_000) && optionalText(event.recurrenceId, 100) && optionalText(event.sourceUid, 1_000) &&
     optionalText(event.seriesId, 1_000) && optionalText(event.originalStart, 100) && event.occurrenceOf === undefined &&
     (event.recurrenceExceptions === undefined || (Array.isArray(event.recurrenceExceptions) && event.recurrenceExceptions.length <= 5_000 &&

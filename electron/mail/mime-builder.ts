@@ -65,6 +65,41 @@ export function createMimeBuffer(input: MailDraftInput, from?: string, omitBcc =
   return Buffer.from(`${headers.join('\r\n')}\r\n\r\n${sections.join('\r\n')}\r\n--${boundary}--\r\n`)
 }
 
+export interface CalendarMimeInput {
+  from: string
+  to: string[]
+  subject: string
+  text: string
+  // A complete VCALENDAR (CRLF line endings) and its iTIP METHOD.
+  ics: string
+  method: 'REPLY' | 'COUNTER' | 'REQUEST' | 'CANCEL' | 'DECLINECOUNTER'
+  inReplyTo?: string
+  references?: string[]
+}
+
+// iTIP over mail (RFC 6047): multipart/alternative with a text/plain summary and a text/calendar part
+// carrying the same METHOD parameter as the VCALENDAR, which is what Outlook, Gmail, and Apple Calendar read.
+// The calendar part is base64-encoded so long folded lines and non-ASCII names survive any relay.
+export function createCalendarMimeBuffer(input: CalendarMimeInput) {
+  const boundary = `aerio-cal-${crypto.randomUUID()}`
+  const headers = [
+    `Message-ID: <${crypto.randomUUID()}@aerio.local>`,
+    `Date: ${new Date().toUTCString()}`,
+    `From: ${encodeHeader(input.from)}`,
+    `To: ${input.to.map(encodeHeader).join(', ')}`,
+    `Subject: ${encodeHeader(input.subject)}`,
+    'MIME-Version: 1.0',
+    ...(input.inReplyTo ? [`In-Reply-To: ${encodeHeader(input.inReplyTo)}`] : []),
+    ...(input.references?.length ? [`References: ${input.references.map(encodeHeader).join(' ')}`] : []),
+    `Content-Type: multipart/alternative; boundary="${boundary}"`
+  ]
+  const sections = [
+    `--${boundary}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${input.text}`,
+    `--${boundary}\r\nContent-Type: text/calendar; charset=utf-8; method=${input.method}\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64Lines(Buffer.from(input.ics, 'utf8'))}`
+  ]
+  return Buffer.from(`${headers.join('\r\n')}\r\n\r\n${sections.join('\r\n')}\r\n--${boundary}--\r\n`)
+}
+
 export function createMime(input: MailDraftInput, from?: string) {
   return createMimeBuffer(input, from).toString('base64url')
 }

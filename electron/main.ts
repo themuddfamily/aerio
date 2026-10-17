@@ -77,9 +77,13 @@ import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import { InterchangeStore } from './productivity/interchange-store'
 import { registerCalendarContactInterchange } from './productivity/interchange-ipc'
+import { InvitationStore } from './productivity/invitation-store'
+import { registerMeetingInvitations } from './productivity/invitation-ipc'
 import { validContactInterchangeFields, validContactLists, validEventInterchangeFields } from '../src/lib/interchange-validation'
 import { contactEditConflict } from '../src/lib/contact-fields'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
+import type { InvitationMessageSource } from '../src/invitation-types'
+import type { MailSenderIdentity } from '../src/mail-identity-types'
 import { senderDomainFromEmail } from '../src/lib/sender-avatar'
 import { isCompleteMailAddress } from '../src/lib/mail-address'
 import { validateMailSavedSearch } from '../src/lib/mail-saved-search'
@@ -131,6 +135,7 @@ let diagnostics: DiagnosticLogger | null = null
 let updates: UpdateManager | null = null
 let productivityStore: ProductivityStore | null = null
 let interchangeStore: InterchangeStore | null = null
+let invitationStore: InvitationStore | null = null
 let interchangeService: ReturnType<typeof registerCalendarContactInterchange> | null = null
 let taskService: TaskService | null = null
 let taskPolling: NodeJS.Timeout | undefined
@@ -1738,6 +1743,7 @@ function registerIpc() {
     await requireVault().remove(accountId)
     await requireMailWorker().request({ type: 'accounts:disconnect', payload: { accountId, mode } })
     requireProductivityStore().removeAccount(accountId)
+    if (mode === 'delete') invitationStore?.removeAccount(accountId)
     accountProviders.delete(accountId)
     if (mode === 'delete') await taskService?.removeAccount(accountId)
     else await taskService?.accountChanged()
@@ -1950,7 +1956,8 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   await initializeMail()
   productivityStore = new ProductivityStore(join(app.getPath('userData'), 'productivity.sqlite'))
   interchangeStore = new InterchangeStore(join(app.getPath('userData'), 'productivity.sqlite'))
-  taskService = new TaskService(new TaskStore(join(app.getPath('userData'), 'provider-tasks.sqlite')), {
+  invitationStore = new InvitationStore(join(app.getPath('userData'), 'productivity.sqlite'))
+  taskService =new TaskService(new TaskStore(join(app.getPath('userData'), 'provider-tasks.sqlite')), {
     accounts: () => requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' }),
     access: (id, provider) => provider === 'gmail'
       ? { read: requireVault().hasGoogleTasksAccess(id), write: requireVault().hasGoogleTasksAccess(id, true) }
@@ -1980,6 +1987,32 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     interchange: () => {
       if (!interchangeStore) throw new Error('Calendar import and subscription storage is not ready')
       return interchangeStore
+    },
+    diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
+  })
+  registerMeetingInvitations({
+    source: (accountId, messageId) => requireMailWorker().request<InvitationMessageSource>({ type: 'invitations:source', payload: { accountId, messageId } }),
+    sendMail: (input) => requireMailWorker().request<void>({ type: 'invitations:send', payload: input }),
+    respondProvider: async (calendar, remoteId, addresses, input) => {
+      if (calendar.provider === 'gmail') await googleCalendarConnector(calendar.accountId).respondToEvent(calendar, remoteId, addresses, input)
+      else await microsoftCalendarConnector(calendar.accountId).respondToEvent(calendar, remoteId, input)
+    },
+    addresses: async (accountId) => (await requireMailWorker().request<MailSenderIdentity[]>({ type: 'identities:list', payload: { accountIds: [accountId] } })).map((identity) => identity.email),
+    sync: syncProductivity,
+    productivity: requireProductivityStore,
+    interchange: () => {
+      if (!interchangeStore) throw new Error('Calendar import and subscription storage is not ready')
+      return interchangeStore
+    },
+    invitations: () => {
+      if (!invitationStore) throw new Error('Meeting invitation storage is not ready')
+      return invitationStore
+    },
+    changed: () => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send('productivity:changed', { snapshot: requireProductivityStore().snapshot() })
+        if (interchangeStore) window.webContents.send('interchange:changed', interchangeStore.snapshot())
+      }
     },
     diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
   })
@@ -2016,6 +2049,8 @@ app.on('before-quit', () => {
   interchangeService?.dispose()
   interchangeStore?.close()
   interchangeStore = null
+  invitationStore?.close()
+  invitationStore = null
   productivityStore?.close()
   messageLocalStore?.close()
   mailTemplateStore?.close()

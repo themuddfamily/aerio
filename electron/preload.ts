@@ -73,6 +73,12 @@ const api: AerioDesktopApi = {
     createEvent: (event) => ipcRenderer.invoke('productivity:event-create', event),
     updateEvent: (event, scope) => scope ? ipcRenderer.invoke('productivity:event-update', event, scope) : ipcRenderer.invoke('productivity:event-update', event),
     deleteEvent: (eventId, scope) => scope ? ipcRenderer.invoke('productivity:event-delete', eventId, scope) : ipcRenderer.invoke('productivity:event-delete', eventId),
+    respondToEvent: (eventId, input) => ipcRenderer.invoke('productivity:event-respond', eventId, input),
+    invitations: {
+      inspect: (accountId, messageId) => ipcRenderer.invoke('invitations:inspect', accountId, messageId),
+      respond: (input) => ipcRenderer.invoke('invitations:respond', input),
+      applyCancellation: (accountId, messageId) => ipcRenderer.invoke('invitations:apply-cancellation', accountId, messageId)
+    },
     createContact: (accountId, contact) => ipcRenderer.invoke('productivity:contact-create', accountId, contact),
     updateContact: (contact) => ipcRenderer.invoke('productivity:contact-update', contact),
     deleteContact: (contactId) => ipcRenderer.invoke('productivity:contact-delete', contactId),

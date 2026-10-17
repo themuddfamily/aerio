@@ -36,7 +36,8 @@ import { mailRuleTriggersForLabels } from '../src/lib/mail-rules'
 import { parseMessageSource } from './mail/message-source'
 import { runMailQuickAction } from './mail/quick-actions'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
-import { createMime, createMimeBuffer } from './mail/mime-builder'
+import { createCalendarMimeBuffer, createMime, createMimeBuffer } from './mail/mime-builder'
+import { calendarPartsFromRaw } from './mail/invitation-parts'
 import { describeSenderRejection, parseGmailSendAs, parseMicrosoftProxyAddresses, resolveDraftSender } from './mail/sender-identity'
 import { createReceiptService } from './mail/receipts'
 import { AttachmentContentIndexer } from './mail/attachment-text-indexer'
@@ -1206,6 +1207,34 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   }
   if (command.type === 'receipts:respond') {
     return receiptService().respond(command.payload.accountId, command.payload.messageId, command.payload.decision, command.payload.policy)
+  }
+  if (command.type === 'invitations:source') {
+    const { accountId, messageId } = command.payload
+    const context = database.receiptMessageContext(accountId, messageId)
+    const account = database.getAccount(accountId)
+    if (!context || !account) throw new Error('Message not found')
+    const parts = context.rawPath && existsSync(context.rawPath) ? await calendarPartsFromRaw(readFileSync(context.rawPath)) : []
+    const aliases = parts.length ? database.identities.list(database.listAccounts(), [accountId]).map((identity) => identity.email) : []
+    return {
+      parts,
+      account: { id: account.id, email: account.email, displayName: account.displayName, provider: account.provider, archived: account.archived },
+      addresses: [...new Set([account.email, ...aliases].filter(Boolean))],
+      fromEmail: context.fromEmail,
+      subject: context.subject,
+      messageIdHeader: context.messageIdHeader
+    }
+  }
+  if (command.type === 'invitations:send') {
+    const input = command.payload
+    const account = database.getAccount(input.accountId)
+    if (!account || account.archived) throw new Error('Connect this account before responding to invitations')
+    if (!online) throw new Error('Connect to the internet to send your response')
+    const raw = createCalendarMimeBuffer({ ...input, from: account.displayName ? `${account.displayName} <${account.email}>` : account.email })
+    if (account.provider === 'gmail') await clientFor(account.id).sendMessage(raw.toString('base64url'))
+    else if (account.provider === 'microsoft') await microsoftClientFor(account.id).send(raw)
+    else await (await imapClientFor(account.id)).send(raw, input.to)
+    if (!paused.has(account.id)) void syncAccount(account.id)
+    return
   }
   if (command.type === 'mail:source') {
     const rawPath = database.getMessageRaw(command.payload.accountId, command.payload.messageId)

@@ -5,6 +5,8 @@ import { eventRecurrenceRule, formatRecurrenceRule, isAllDayEvent, occurrenceKey
 import { shiftSeriesTiming } from '../../src/lib/recurrence-edit'
 import { googleRecurrenceRule, replaceGoogleRecurrenceRule } from '../../src/lib/provider-recurrence'
 import { isIanaTimeZone, resolveTimeZoneName, wallTimeInZone } from '../../src/lib/time-zones'
+import { attendeeKey, eventAttendees, fromGoogleAttendee, googleResponseStatus, participant, toGoogleAttendee, withAttendees, type GoogleAttendee } from '../../src/lib/event-attendees'
+import type { EventResponseInput } from '../../src/invitation-types'
 import {
   attachGooglePhotos, googleContactGroupFields, googlePhotoBytes, googleRichContactBody, googleRichContactFields, googleUpdatePersonFields,
   mapGoogleContactGroup, mapGoogleRichContact, type GoogleContactGroup, type GoogleRichPerson
@@ -20,7 +22,10 @@ interface GoogleEvent {
   location?: string
   start?: { dateTime?: string; date?: string; timeZone?: string }
   end?: { dateTime?: string; date?: string; timeZone?: string }
-  attendees?: { email?: string }[]
+  attendees?: GoogleAttendee[]
+  organizer?: { email?: string; displayName?: string; self?: boolean }
+  iCalUID?: string
+  sequence?: number
   reminders?: { useDefault?: boolean; overrides?: { minutes?: number }[] }
   recurrence?: string[]
   recurringEventId?: string
@@ -95,7 +100,7 @@ export const googleEventBody = (event: CalendarEvent, options: { instance?: bool
     location: event.location || undefined,
     start: allDay ? { date: event.start.slice(0, 10) } : { dateTime: event.start, timeZone },
     end: allDay ? { date: event.end.slice(0, 10) } : { dateTime: event.end, timeZone },
-    attendees: event.attendees.map((email) => ({ email })),
+    attendees: eventAttendees(event).map(toGoogleAttendee),
     reminders: {
       useDefault: false,
       overrides: [{ method: 'popup', minutes: event.reminderMinutes }]
@@ -108,7 +113,9 @@ export function mapGoogleEvent(accountId: string, calendar: SyncedCalendar, even
   const start = event.start?.dateTime ?? event.start?.date
   const end = event.end?.dateTime ?? event.end?.date
   if (!start || !end || event.status === 'cancelled') return
-  return {
+  const details = (event.attendees ?? []).flatMap((attendee) => fromGoogleAttendee(attendee) ?? [])
+  const organizer = participant(event.organizer?.email, event.organizer?.displayName, event.organizer?.self)
+  return withAttendees({
     id: `${accountId}:google-event:${calendar.remoteId}:${event.id}`,
     remoteId: event.id,
     accountId,
@@ -128,9 +135,15 @@ export function mapGoogleEvent(accountId: string, calendar: SyncedCalendar, even
     ...(resolveTimeZoneName(event.start?.timeZone) ? { timeZone: resolveTimeZoneName(event.start?.timeZone) } : {}),
     ...(googleRecurrenceRule(event.recurrence) ? { recurrenceRule: googleRecurrenceRule(event.recurrence) } : {}),
     ...(event.recurringEventId ? { seriesId: event.recurringEventId } : {}),
-    ...(event.originalStartTime?.dateTime ?? event.originalStartTime?.date ? { originalStart: event.originalStartTime?.dateTime ?? event.originalStartTime?.date } : {})
-  }
+    ...(event.originalStartTime?.dateTime ?? event.originalStartTime?.date ? { originalStart: event.originalStartTime?.dateTime ?? event.originalStartTime?.date } : {}),
+    ...(organizer ? { organizer } : {}),
+    ...(event.iCalUID ? { icalUid: event.iCalUID } : {}),
+    ...(Number.isInteger(event.sequence) ? { sequence: event.sequence } : {})
+  } satisfies SyncedCalendarEvent, details)
 }
+
+// Meetings with guests tell them about changes (sendUpdates=all); events without guests keep the default.
+const notifyAttendees = (...events: Pick<CalendarEvent, 'attendees'>[]) => events.some((event) => event.attendees.length) ? '?sendUpdates=all' : ''
 
 // Synced feeds use singleEvents=true, so a stored series master (returned by a write) is replaced by its
 // instances on the next sync instead of being kept alongside them.
@@ -262,7 +275,7 @@ export class GoogleProductivityConnector implements ProductivityConnector {
 
   async createEvent(calendar: SyncedCalendar, event: CalendarEvent) {
     this.assertWritable(calendar)
-    const remote = await retryingJson<GoogleEvent>(this.provider, this.eventsUrl(calendar), this.token, {
+    const remote = await retryingJson<GoogleEvent>(this.provider, `${this.eventsUrl(calendar)}${notifyAttendees(event)}`, this.token, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(googleEventBody(event))
@@ -272,7 +285,7 @@ export class GoogleProductivityConnector implements ProductivityConnector {
 
   async updateEvent(calendar: SyncedCalendar, current: SyncedCalendarEvent, event: CalendarEvent) {
     this.assertWritable(calendar)
-    const remote = await retryingJson<GoogleEvent>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(current.remoteId)}`, this.token, {
+    const remote = await retryingJson<GoogleEvent>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(current.remoteId)}${notifyAttendees(event, current)}`, this.token, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(googleEventBody(event, { instance: Boolean(current.seriesId) }))
@@ -330,7 +343,32 @@ export class GoogleProductivityConnector implements ProductivityConnector {
 
   async deleteEvent(calendar: SyncedCalendar, event: SyncedCalendarEvent) {
     this.assertWritable(calendar)
-    await retryingJson<void>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(event.remoteId)}`, this.token, { method: 'DELETE' })
+    await retryingJson<void>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(event.remoteId)}${notifyAttendees(event)}`, this.token, { method: 'DELETE' })
+  }
+
+  // RSVP as an attendee: events.patch with the full attendee list (Google replaces the array) where only
+  // this account's entry changes, and sendUpdates=all so the organizer is told. `remoteId` is the series
+  // master to answer every occurrence, or one instance id. Google's API cannot propose a new time.
+  async respondToEvent(calendar: SyncedCalendar, remoteId: string, selfEmails: readonly string[], input: EventResponseInput) {
+    if (calendar.accountId !== this.accountId || calendar.provider !== this.provider || !this.calendarWriteAuthorized) {
+      throw new Error('Reconnect this Google account once to enable Calendar responses')
+    }
+    if (input.proposed) throw new Error('Google Calendar does not accept proposed times through its API; propose a new time in Google Calendar instead')
+    const url = `${this.eventsUrl(calendar)}/${encodeURIComponent(remoteId)}`
+    const remote = await retryingJson<GoogleEvent>(this.provider, url, this.token)
+    const keys = new Set(selfEmails.map(attendeeKey))
+    const attendees = remote.attendees ?? []
+    const index = attendees.findIndex((attendee) => attendee.self) >= 0
+      ? attendees.findIndex((attendee) => attendee.self)
+      : attendees.findIndex((attendee) => attendee.email && keys.has(attendeeKey(attendee.email)))
+    if (index < 0) throw new Error('You are not on this meeting’s guest list in Google Calendar, so Google cannot record a response')
+    const next = attendees.map((attendee, position) => position === index
+      ? { ...attendee, responseStatus: googleResponseStatus(input.response), ...(input.comment?.trim() ? { comment: input.comment.trim().slice(0, 2_000) } : {}) }
+      : attendee)
+    const saved = await retryingJson<GoogleEvent>(this.provider, `${url}?sendUpdates=all`, this.token, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ attendees: next })
+    })
+    return mapGoogleEvent(this.accountId, calendar, saved)
   }
 
   async createContact(contact: Contact) {

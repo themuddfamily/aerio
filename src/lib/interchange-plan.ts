@@ -174,6 +174,10 @@ export function preserveEventInterchangeFields(original: CalendarEvent | undefin
     ...(original.seriesId && !explicit('seriesId') ? { seriesId: original.seriesId } : {}),
     ...(original.originalStart && !explicit('originalStart') ? { originalStart: original.originalStart } : {}),
     ...(original.occurrenceOf ? { occurrenceOf: original.occurrenceOf } : {}),
+    ...(original.organizer && !explicit('organizer') ? { organizer: original.organizer } : {}),
+    ...(original.sequence !== undefined && !explicit('sequence') ? { sequence: original.sequence } : {}),
+    // Details for addresses the editor removed are ignored by eventAttendees, so keeping them is safe.
+    ...(original.attendeeDetails && !explicit('attendeeDetails') ? { attendeeDetails: original.attendeeDetails } : {}),
     ...(original.allDay && !timesChanged && !explicit('allDay') ? { allDay: true, start: original.start, end: original.end } : {}),
     ...(original.recurrenceRule && !recurrenceChanged && !explicit('recurrenceRule') ? { recurrenceRule: original.recurrenceRule } : {}),
     ...(original.recurrenceExceptions?.length && !recurrenceChanged && !explicit('recurrenceExceptions') ? { recurrenceExceptions: original.recurrenceExceptions } : {})

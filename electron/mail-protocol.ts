@@ -53,6 +53,8 @@ export type MailWorkerCommand =
   | { type: 'mail:source'; payload: { accountId: string; messageId: string } }
   | { type: 'receipts:inspect'; payload: { accountId: string; messageId: string; policy: MailReadReceiptPolicy } }
   | { type: 'receipts:respond'; payload: { accountId: string; messageId: string; decision: 'send' | 'decline'; policy: MailReadReceiptPolicy } }
+  | { type: 'invitations:source'; payload: { accountId: string; messageId: string } }
+  | { type: 'invitations:send'; payload: import('../src/invitation-types').InvitationMailInput }
   | { type: 'mail:copy'; payload: { accountId: string; threadId: string; messageId: string; destination: string } }
   | { type: 'mail:export'; payload: { accountId: string; messageId: string; targetPath: string } }
   | { type: 'mail:action'; payload: ApplyMailActionInput }
@@ -142,6 +144,7 @@ export type MailWorkerResult =
   | MailDraftRecord[]
   | MailDraftAttachmentFile[]
   | import('../src/mail-types').MailReceiptInfo
+  | import('../src/invitation-types').InvitationMessageSource
   | import('../src/mail-types').MailFolderMutationResult
   | import('../src/mail-types').MailFolderDeletePreview
 

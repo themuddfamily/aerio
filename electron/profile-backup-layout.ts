@@ -5,6 +5,7 @@ import { MailDatabase } from './mail/database'
 import { MessageLocalStore } from './mail/message-local-store'
 import { MailTemplateStore } from './mail/template-store'
 import { InterchangeStore } from './productivity/interchange-store'
+import { InvitationStore } from './productivity/invitation-store'
 import { ProductivityStore } from './productivity/store'
 import { TaskStore } from './productivity/task-store'
 import { countRows, PROFILE_PREVIEW_LABELS, profileTableExists, type ProfileBackupLayout } from './profile-backup'
@@ -88,7 +89,7 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
     {
       file: 'productivity.sqlite',
       label: 'Local Tasks, Notes, Contacts, local calendars, and calendar cache',
-      prepareRestore: (path) => { new ProductivityStore(path).close(); new InterchangeStore(path).close() },
+      prepareRestore: (path) => { new ProductivityStore(path).close(); new InterchangeStore(path).close(); new InvitationStore(path).close() },
       summarize: (db) => {
         const module = (name: string) => {
           if (!profileTableExists(db, 'local_module_state')) return 0
