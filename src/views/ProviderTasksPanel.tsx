@@ -7,6 +7,9 @@ import { compactExtendedFields } from '../lib/task-schedule'
 import Modal from '../components/Modal'
 import { copyText, useContextMenu } from '../components/ContextMenu'
 import MicrosoftTaskEditor, { type ProviderTaskEditorProps } from './MicrosoftTaskEditor'
+import CalDavTaskEditor from './CalDavTaskEditor'
+import { taskProviderName, taskProviderShortName } from '../lib/task-providers'
+import { describeRecurrenceRule } from '../lib/vtodo'
 import type { ProviderTaskList, TaskDesktopApi, TaskEntity, TaskLocalMetadata, TaskNativeFields, TaskOperation, TaskSnapshot } from '../task-provider-types'
 
 export const taskNeedsReview = (operation: TaskOperation) => ['failed', 'conflict', 'review'].includes(operation.status)
@@ -64,13 +67,13 @@ export default function ProviderTasksPanel({ snapshot, listId, query, showComple
   const reviewing = operations.find((operation) => operation.id === review && taskNeedsReview(operation))
   if (!list) return <section className="module-panel tasks-panel"><div className="empty-state"><h2>This task list is no longer available</h2><p>Select another list from the sidebar.</p></div></section>
   return <section className="module-panel tasks-panel">
-    <header className="module-header"><div><h1>{list.title}</h1><p>{list.provider === 'microsoft' ? 'Microsoft To Do' : 'Google Tasks'} · {allTasks.filter((task) => !task.fields.completed).length} still open{list.readOnly ? ' · Read-only' : ''}</p></div>
+    <header className="module-header"><div><h1>{list.title}</h1><p>{taskProviderName(list.provider)} · {allTasks.filter((task) => !task.fields.completed).length} still open{list.readOnly ? ' · Read-only' : ''}</p></div>
       <div className="provider-task-actions"><label className="check-label"><input type="checkbox" checked={showCompleted} onChange={(event) => setShowCompleted(event.target.checked)} /> Show completed</label>
         <button className="button ghost small" disabled={busy || account?.archived || account?.syncEnabled === false} onClick={() => void run((api) => api.sync(list.accountId))}><RefreshCw size={15} /> Sync now</button></div>
     </header>
     {reminders}
     {error && !editing && !reviewing && <p className="provider-task-error" role="alert">{error}</p>}
-    {account?.error && <p className="provider-task-notice" role="status">{account.error === 'offline' ? 'Offline. Saved changes will synchronize when you reconnect.' : account.error === 'needs-consent' ? 'Reconnect this account to grant Tasks access.' : 'Synchronization failed. Your cached tasks are available.'}</p>}
+    {account?.error && <p className="provider-task-notice" role="status">{account.error === 'offline' ? 'Offline. Saved changes will synchronize when you reconnect.' : account.error === 'needs-consent' ? list.provider === 'dav' ? 'Enter the app password again in Settings › Calendar and contacts accounts.' : 'Reconnect this account to grant Tasks access.' : 'Synchronization failed. Your cached tasks are available.'}</p>}
     <div className="task-list">
       {tasks.map((task) => <div className={`task-row ${task.fields.completed ? 'completed' : ''}`} key={task.id} style={{ marginLeft: `${depth(task) * 20}px` }} onContextMenu={(event) => showContextMenu(event, [
         { label: 'Edit task', icon: Edit3, disabled: !canEdit(task) || busy, action: () => setEditing(task) },
@@ -82,7 +85,8 @@ export default function ProviderTasksPanel({ snapshot, listId, query, showComple
         <button className="task-main" aria-label={`Open task ${task.fields.title}`} onClick={() => setEditing(task)}><span><strong>{task.fields.title}</strong>{task.fields.notes && <small>{task.fields.notes}</small>}</span><span className="task-meta">
           {task.fields.due && <em>Due {task.fields.due}</em>}{task.parentId && <em>Subtask of {allTasks.find((parent) => parent.id === task.parentId)?.fields.title ?? 'another task'}</em>}
           {task.local.recurrence !== 'none' && <em><Repeat2 size={13} /> {task.local.recurrence} in Aerio</em>}{statusLabel(latest(task.id)) && <em>{statusLabel(latest(task.id))}</em>}{task.remote?.readOnly && <em>Read-only</em>}
-          {task.fields.native?.recurrence && <em><Repeat2 size={13} /> {task.fields.native.recurrence.pattern.type} in Microsoft</em>}{task.fields.due && task.fields.native?.dueTimeZone && <em>{task.fields.native.dueTimeZone}</em>}
+          {task.fields.native?.recurrence && <em><Repeat2 size={13} /> {task.fields.native.recurrence.pattern.type} in Microsoft</em>}
+          {task.remote?.native?.caldav?.recurrence && <em title={describeRecurrenceRule(task.remote.native.caldav.recurrence)}><Repeat2 size={13} /> Repeats</em>}{task.remote?.native?.caldav?.recurrenceId && <em><Repeat2 size={13} /> One occurrence</em>}{task.fields.native?.status === 'cancelled' && <em>Cancelled</em>}{task.fields.due && task.fields.native?.dueTimeZone && <em>{task.fields.native.dueTimeZone}</em>}
           <TaskFieldChips fields={connectedTaskFields(task)} completed={task.fields.completed} />
         </span></button><span className={`priority-dot ${task.fields.native?.priority ?? task.local.priority}`} title={`${task.fields.native?.priority ?? task.local.priority} priority`} />
       </div>)}
@@ -101,11 +105,12 @@ export default function ProviderTasksPanel({ snapshot, listId, query, showComple
     {editing && <ProviderTaskEditor key={editing === 'new' ? 'new' : editing.id} task={editing === 'new' ? undefined : editing} list={list} tasks={allTasks} writable={editing === 'new' ? writable : canEdit(editing)} busy={busy} error={error} onClose={() => setEditing(null)} onSave={async (fields, local, parentId) => {
       const success = await run((api) => {
         if (editing === 'new') return api.create(list.accountId, list.id, fields, parentId, local)
-        if (list.provider !== 'microsoft') return api.update(editing.id, { ...fields, notes: fields.notes ?? null, due: fields.due ?? null }, local)
+        if (list.provider === 'gmail') return api.update(editing.id, { ...fields, notes: fields.notes ?? null, due: fields.due ?? null }, local)
         const patch: Parameters<TaskDesktopApi['update']>[1] = {}
         for (const key of ['title', 'notes', 'due', 'completed'] as const) if (fields[key] !== editing.fields[key]) (patch as Record<string, unknown>)[key] = fields[key] ?? null
         if (fields.native && Object.keys(fields.native).length) patch.native = fields.native
         // Microsoft has no percentage, so progress is a local overlay saved with (or without) field edits.
+        // CalDAV keeps added files as a local overlay the same way.
         const localChanged = JSON.stringify(local.extended ?? null) !== JSON.stringify(editing.local.extended ?? null)
         if (Object.keys(patch).length) return localChanged ? api.update(editing.id, patch, local) : api.update(editing.id, patch)
         return localChanged ? api.setLocal(editing.id, local) : api.snapshot()
@@ -139,7 +144,7 @@ export default function ProviderTasksPanel({ snapshot, listId, query, showComple
 }
 
 function ProviderTaskEditor(props: ProviderTaskEditorProps) {
-  return props.list.provider === 'microsoft' ? <MicrosoftTaskEditor {...props} /> : <GoogleTaskEditor {...props} />
+  return props.list.provider === 'microsoft' ? <MicrosoftTaskEditor {...props} /> : props.list.provider === 'dav' ? <CalDavTaskEditor {...props} /> : <GoogleTaskEditor {...props} />
 }
 
 function GoogleTaskEditor({ task, list, tasks, writable, busy, error, onClose, onSave, onMove, onDelete }: {
@@ -180,8 +185,8 @@ export function withExtended(local: TaskLocalMetadata, extended: TaskExtendedFie
 }
 
 function TaskReview({ operation, snapshot, busy, error, writable, onClose, onResolve, onRefresh }: { operation: TaskOperation; snapshot: TaskSnapshot; busy: boolean; error: string; writable: boolean; onClose(): void; onResolve(resolution: Parameters<TaskDesktopApi['resolve']>[1]): Promise<void>; onRefresh(): void }) {
-  const providerName = operation.provider === 'microsoft' ? 'Microsoft' : 'Google'
-  const nativeDescription = (value?: TaskNativeFields) => value ? [value.priority && `Priority: ${value.priority}`, value.status && `Progress: ${{ notStarted: 'Not started', inProgress: 'In progress', completed: 'Completed', waitingOnOthers: 'Waiting on others', deferred: 'Deferred' }[value.status]}`, value.dueTimeZone && `Time zone: ${value.dueTimeZone}`, value.recurrence !== undefined && (value.recurrence ? `Repeat: ${value.recurrence.pattern.type}, every ${value.recurrence.pattern.interval}${value.recurrence.pattern.daysOfWeek?.length ? ` (${value.recurrence.pattern.daysOfWeek.join(', ')})` : ''}, from ${value.recurrence.range.startDate}${value.recurrence.range.type === 'endDate' ? ` through ${value.recurrence.range.endDate}` : value.recurrence.range.type === 'numbered' ? ` for ${value.recurrence.range.numberOfOccurrences} occurrences` : ''}` : 'Repeat: Never'), value.body && 'Rich notes restored', value.start !== undefined && (value.start ? `Start: ${value.start}${value.startTimeZone ? ` (${value.startTimeZone})` : ''}` : 'Start: Cleared'), value.reminder !== undefined && (value.reminder ? `Reminder: ${new Date(value.reminder).toLocaleString()}` : 'Reminder: Off'), value.categories !== undefined && `Categories: ${value.categories.length ? value.categories.join(', ') : 'None'}`].filter(Boolean).join(' · ') : ''
+  const providerName = taskProviderShortName(operation.provider)
+  const nativeDescription = (value?: TaskNativeFields) => value ? [value.priority && `Priority: ${value.priority}`, value.status && `Progress: ${{ notStarted: 'Not started', inProgress: 'In progress', completed: 'Completed', waitingOnOthers: 'Waiting on others', deferred: 'Deferred', cancelled: 'Cancelled' }[value.status]}`, value.percentComplete !== undefined && `Percent complete: ${value.percentComplete === null ? 'Not tracked' : `${value.percentComplete}%`}`, value.dueTimeZone && `Time zone: ${value.dueTimeZone}`, value.recurrence !== undefined && (value.recurrence ? `Repeat: ${value.recurrence.pattern.type}, every ${value.recurrence.pattern.interval}${value.recurrence.pattern.daysOfWeek?.length ? ` (${value.recurrence.pattern.daysOfWeek.join(', ')})` : ''}, from ${value.recurrence.range.startDate}${value.recurrence.range.type === 'endDate' ? ` through ${value.recurrence.range.endDate}` : value.recurrence.range.type === 'numbered' ? ` for ${value.recurrence.range.numberOfOccurrences} occurrences` : ''}` : 'Repeat: Never'), value.body && 'Rich notes restored', value.start !== undefined && (value.start ? `Start: ${value.start}${value.startTimeZone ? ` (${value.startTimeZone})` : ''}` : 'Start: Cleared'), value.reminder !== undefined && (value.reminder ? `Reminder: ${new Date(value.reminder).toLocaleString()}` : 'Reminder: Off'), value.categories !== undefined && `Categories: ${value.categories.length ? value.categories.join(', ') : 'None'}`].filter(Boolean).join(' · ') : ''
   const current = snapshot.remoteTasks.find((task) => task.id === operation.base?.id)
   const candidates = snapshot.remoteTasks.filter((task) => task.accountId === operation.accountId && task.listId === operation.before.listId)
   const [candidateId, setCandidateId] = useState('')

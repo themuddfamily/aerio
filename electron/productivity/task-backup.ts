@@ -26,7 +26,7 @@ const keys = (value: unknown, allowed: string[]) => record(value) && Object.keys
 const text = (value: unknown, max = 2048): value is string => typeof value === 'string' && Boolean(value.trim()) && value.length <= max
 const optionalText = (value: unknown, max = 2048) => value === undefined || (typeof value === 'string' && value.length <= max)
 const date = (value: unknown) => typeof value === 'string' && value.length <= 100 && /^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(`${value.slice(0, 10)}T00:00:00Z`).toISOString().slice(0, 10) === value.slice(0, 10)
-const provider = (value: unknown): value is TaskProvider => value === 'gmail' || value === 'microsoft'
+const provider = (value: unknown): value is TaskProvider => value === 'gmail' || value === 'microsoft' || value === 'dav'
 const statuses = ['queued', 'running', 'succeeded', 'cancelled', 'failed', 'conflict', 'review']
 const identity = (value: any) => text(value.accountId) && provider(value.provider)
 const fields = (value: unknown): value is ProviderTaskInput => keys(value, ['title', 'notes', 'due', 'completed', 'native']) && text((value as any).title, 1024) && optionalText((value as any).notes, (value as any).native?.body ? 1_000_000 : 8192) && ((value as any).due === undefined || date((value as any).due)) && typeof (value as any).completed === 'boolean' && ((value as any).native === undefined || validTaskNativeFields((value as any).native))
@@ -47,7 +47,7 @@ const checkpointValid = (value: unknown, owner: ProviderTaskList) => {
   } catch { return false }
 }
 const unique = (values: string[]) => new Set(values).size === values.length
-const providerFields = (value: TaskEntity) => value.provider === 'microsoft' ? value.local.priority === 'normal' && value.local.recurrence === 'none' && value.local.timedDue === undefined : value.fields.native === undefined && value.remote?.native === undefined
+const providerFields = (value: TaskEntity) => value.provider !== 'gmail' ? value.local.priority === 'normal' && value.local.recurrence === 'none' && value.local.timedDue === undefined : value.fields.native === undefined && value.remote?.native === undefined
 const groupKey = (accountId: string, type: TaskProvider) => JSON.stringify([accountId, type])
 const boundedArray = (value: unknown, limit = 100_000): value is any[] => Array.isArray(value) && value.length <= limit
 const acyclic = <T extends { parentId?: string }>(values: Map<string, T>) => {
@@ -109,7 +109,7 @@ export function parseTaskBackup(value: unknown): TaskBackup {
     const owner = entities.get(item?.entityId)
     if (!keys(item, ['id', 'sequence', 'entityId', 'accountId', 'provider', 'kind', 'status', 'patch', 'before', 'parentId', 'base', 'result', 'attempts', 'retryAt', 'error', 'undoOf', 'dependsOn']) || !text(item.id) || operations.has(item.id) || !owner || item.accountId !== owner.accountId || item.provider !== owner.provider || !Number.isSafeInteger(item.sequence) || item.sequence <= sequence || !['create', 'update', 'delete', 'move'].includes(item.kind) || !statuses.includes(item.status) || !patch(item.patch) || !entity(item.before) || item.before.id !== owner.id || !sameScope(owner, item.before) || !parentValid(item.before) || !Number.isSafeInteger(item.attempts) || item.attempts < 0 || !Number.isSafeInteger(item.retryAt) || item.retryAt < 0 || !optionalText(item.error)) return invalid()
     for (const original of [item.base, item.result]) if (original !== undefined && (!remote(original) || !sameScope(owner, original))) return invalid()
-    if (!providerFields(item.before) || (item.provider !== 'microsoft' && item.patch.native !== undefined)) return invalid()
+    if (!providerFields(item.before) || (item.provider === 'gmail' && item.patch.native !== undefined) || (item.provider === 'dav' && item.kind !== 'create' && item.patch.native?.caldav !== undefined)) return invalid()
     if (item.provider === 'microsoft' && (item.before.parentId || item.base?.kind === 'checklist') && (item.patch.notes || item.patch.due || (item.patch.native && Object.values(item.patch.native).some((value) => value !== undefined)))) return invalid()
     if ([item.parentId, item.undoOf, item.dependsOn].some((reference) => reference !== undefined && !text(reference))) return invalid()
     if (item.parentId && (!entities.has(item.parentId) || !sameScope(owner, entities.get(item.parentId)))) return invalid()

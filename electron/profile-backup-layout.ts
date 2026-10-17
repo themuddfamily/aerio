@@ -120,7 +120,7 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
     {
       // DAV app passwords live in dav-credentials.dat, which is not in this allowlist.
       file: 'dav.sqlite',
-      label: 'CalDAV/CardDAV accounts, calendar and contact cache, and pending writes',
+      label: 'CalDAV/CardDAV accounts, calendar, task, and contact cache, and pending writes',
       prepareRestore: (path, context) => {
         new DavStore(path).close()
         context.report.accountsToReauthorize += withDatabase(path, (db) => prepareRestoredDavDatabase(db).accounts)

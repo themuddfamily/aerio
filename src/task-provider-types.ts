@@ -1,4 +1,5 @@
-export type TaskProvider = 'gmail' | 'microsoft'
+// `dav` is a CalDAV account's VTODO collections (E45); see docs/caldav-tasks.md.
+export type TaskProvider = 'gmail' | 'microsoft' | 'dav'
 
 export interface TaskProviderCapabilities {
   recurrence: 'local' | 'native'
@@ -25,7 +26,8 @@ export interface TaskNativeFields {
   priority?: 'low' | 'normal' | 'high'
   recurrence?: TaskNativeRecurrence | null
   dueTimeZone?: string
-  status?: 'notStarted' | 'inProgress' | 'completed' | 'waitingOnOthers' | 'deferred'
+  // CalDAV STATUS maps NEEDS-ACTION/IN-PROCESS/COMPLETED/CANCELLED to notStarted/inProgress/completed/cancelled.
+  status?: 'notStarted' | 'inProgress' | 'completed' | 'waitingOnOthers' | 'deferred' | 'cancelled'
   body?: { contentType: 'text' | 'html'; content: string }
   // Microsoft Graph startDateTime (wall clock + zone), reminderDateTime/isReminderOn (as a UTC
   // instant), and categories (E44). null clears start/reminder. Attachments are provider metadata
@@ -35,6 +37,10 @@ export interface TaskNativeFields {
   reminder?: string | null
   categories?: string[]
   attachments?: import('./task-fields-types').TaskNativeAttachment[]
+  /** CalDAV PERCENT-COMPLETE (E45). null clears it. */
+  percentComplete?: number | null
+  /** CalDAV provider metadata (E45). Read-only: never part of a field patch, except `source` on an import create. */
+  caldav?: import('./caldav-task-types').CalDavTaskInfo
 }
 
 export interface ProviderTaskList {
@@ -193,6 +199,8 @@ export interface TaskAccountState {
   syncEnabled?: boolean
   phase: 'idle' | 'syncing' | 'ready' | 'error'
   error?: 'needs-consent' | 'offline' | 'sync-failed'
+  /** Display name for accounts that are not mail accounts (CalDAV, E45). */
+  name?: string
 }
 
 export interface TaskSnapshot {
@@ -223,4 +231,6 @@ export interface TaskDesktopApi {
   onChanged(callback: (snapshot: TaskSnapshot) => void): () => void
   reminders?: import('./task-fields-types').TaskReminderApi
   attachments?: import('./task-fields-types').TaskAttachmentApi
+  /** iCalendar (.ics) task import and export (E45). */
+  ics?: import('./task-interchange-types').TaskIcsApi
 }

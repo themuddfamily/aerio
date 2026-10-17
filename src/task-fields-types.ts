@@ -29,7 +29,7 @@ export type TaskExtendedFieldName = 'start' | 'reminder' | 'percentComplete' | '
 /** `native`: stored by the provider. `local`: kept in Aerio beside the cached task and never sent. */
 export type TaskFieldSupport = 'native' | 'local'
 export type TaskFieldCapabilities = Record<TaskExtendedFieldName, TaskFieldSupport>
-export type TaskFieldSource = 'local' | 'gmail' | 'microsoft'
+export type TaskFieldSource = 'local' | 'gmail' | 'microsoft' | 'dav'
 
 /** The published provider capability matrix (see docs/task-fields-reminders.md). */
 export const TASK_FIELD_CAPABILITIES: Record<TaskFieldSource, TaskFieldCapabilities> = {
@@ -38,7 +38,10 @@ export const TASK_FIELD_CAPABILITIES: Record<TaskFieldSource, TaskFieldCapabilit
   gmail: { start: 'local', reminder: 'local', percentComplete: 'local', categories: 'local', attachments: 'local' },
   // Microsoft Graph todoTask has startDateTime, reminderDateTime/isReminderOn, categories and
   // taskFileAttachment, but only a status (no percentage).
-  microsoft: { start: 'native', reminder: 'native', percentComplete: 'local', categories: 'native', attachments: 'native' }
+  microsoft: { start: 'native', reminder: 'native', percentComplete: 'local', categories: 'native', attachments: 'native' },
+  // CalDAV VTODO (E45): DTSTART, VALARM, PERCENT-COMPLETE and CATEGORIES. ATTACH URIs are shown and kept;
+  // files added in Aerio stay a local overlay.
+  dav: { start: 'native', reminder: 'native', percentComplete: 'native', categories: 'native', attachments: 'local' }
 }
 
 /** Fields a provider task may keep in its local overlay. */

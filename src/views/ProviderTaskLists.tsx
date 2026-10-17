@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Modal from '../components/Modal'
 import type { TaskDesktopApi, TaskListOperation, TaskResolution, TaskSnapshot } from '../task-provider-types'
+import { taskProviderShortName } from '../lib/task-providers'
 
 const active = (operation: TaskListOperation) => !['succeeded', 'cancelled'].includes(operation.status)
 export default function ProviderTaskLists({ snapshot, accountId, onSnapshot, onToast, onClose }: { snapshot: TaskSnapshot; accountId: string; onSnapshot(snapshot: TaskSnapshot): void; onToast(message: string): void; onClose(): void }) {
@@ -12,7 +13,7 @@ export default function ProviderTaskLists({ snapshot, accountId, onSnapshot, onT
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const account = snapshot.accounts.find((account) => account.accountId === accountId)
-  const providerName = account?.provider === 'microsoft' ? 'Microsoft' : 'Google'
+  const providerName = taskProviderShortName(account?.provider)
   const writable = Boolean(account?.canWrite && !account.archived && account.syncEnabled !== false)
   const lists = snapshot.lists.filter((list) => list.accountId === accountId)
   const operations = (snapshot.listOperations ?? []).filter((operation) => operation.accountId === accountId)

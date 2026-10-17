@@ -74,7 +74,8 @@ describe('DavAccountsSection', () => {
     render(<DavAccountsSection />)
     const collections = await screen.findByRole('list', { name: /calendars and address books/ })
     expect(within(collections).getByText(/Read-only · Shared/)).toBeInTheDocument()
-    expect(within(collections).getByRole('checkbox', { name: 'Show Reminders' })).toBeDisabled()
+    expect(within(collections).getByRole('checkbox', { name: 'Show Reminders' })).toBeEnabled()
+    expect(within(collections).getByText(/Tasks only \(shown in Tasks\)/)).toBeInTheDocument()
     expect(screen.getByText(/2 changes waiting to send/)).toBeInTheDocument()
 
     const review = screen.getByRole('region', { name: /changes to review/ })

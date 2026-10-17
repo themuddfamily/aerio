@@ -40,6 +40,18 @@ describe('preload task reminders and attachments bridge', () => {
     ]) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(...call)
   })
 
+  it('maps .ics task import and export commands to their IPC channels', async () => {
+    const ics = mocks.exposed.aerio.tasks.ics
+    await ics.choose()
+    await ics.duplicates('list', ['uid-1'])
+    await ics.importConnected('list', ['BEGIN:VCALENDAR'], 'copy')
+    await ics.exportList({ kind: 'local', listId: 'Today' })
+    for (const call of [
+      ['tasks:ics:choose'], ['tasks:ics:duplicates', 'list', ['uid-1']], ['tasks:ics:import-connected', 'list', ['BEGIN:VCALENDAR'], 'copy'],
+      ['tasks:ics:export', { kind: 'local', listId: 'Today' }]
+    ]) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(...call)
+  })
+
   it('forwards reminder changes and unsubscribes', () => {
     const callback = vi.fn()
     const unsubscribe = mocks.exposed.aerio.tasks.reminders.onChanged(callback)

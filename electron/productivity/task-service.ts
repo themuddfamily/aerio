@@ -1,12 +1,24 @@
 import type { MailAccountSummary } from '../../src/mail-types'
-import type { ProviderTaskInput, TaskAccountState, TaskFieldPatch, TaskLocalMetadata, TaskProvider, TaskProviderConnector, TaskResolution, TaskSnapshot } from '../../src/task-provider-types'
+import type { ProviderTaskInput, TaskAccountState, TaskEntity, TaskFieldPatch, TaskLocalMetadata, TaskProvider, TaskProviderConnector, TaskResolution, TaskSnapshot } from '../../src/task-provider-types'
+import { emitComponents, parseVTodos, replaceUid } from '../../src/lib/vtodo'
+
+/** The UID a connected task exports with when the provider stores none: stable per provider task. */
+export const connectedTaskUid = (entity: Pick<TaskEntity, 'id' | 'provider' | 'remote'>) => `${entity.remote?.remoteId ?? entity.id}@${entity.provider}.tasks.aerio`
+const replaceSourceUid = (source: string, uid: string) => {
+  const calendar = parseVTodos(source).calendars[0]
+  replaceUid(calendar, uid)
+  return emitComponents([calendar])
+}
 import { TaskStore } from './task-store'
 import { TaskSyncEngine } from './task-sync-engine'
 import type { TaskBackup } from './task-backup'
 import type { TaskReminderCandidate } from './task-reminders'
 
+/** A mail account, or a CalDAV account presented with provider `dav` (E45). */
+export type TaskServiceAccount = Omit<MailAccountSummary, 'provider'> & { provider: MailAccountSummary['provider'] | 'dav' }
+
 interface TaskServiceOptions {
-  accounts: () => Promise<MailAccountSummary[]>
+  accounts: () => Promise<TaskServiceAccount[]>
   access: (accountId: string, provider: TaskProvider) => { read: boolean; write: boolean }
   connector: (accountId: string, provider: TaskProvider) => TaskProviderConnector
   online: () => boolean
@@ -14,7 +26,7 @@ interface TaskServiceOptions {
 }
 
 export class TaskService {
-  private accounts: MailAccountSummary[] = []
+  private accounts: TaskServiceAccount[] = []
   private states = new Map<string, Pick<TaskAccountState, 'phase' | 'error'>>()
   private disabled = new Set<string>()
   private writeRefreshBlocked = new Set<string>()
@@ -37,7 +49,7 @@ export class TaskService {
 
   private provider(id: string): TaskProvider | undefined {
     const provider = this.accounts.find((account) => account.id === id)?.provider
-    return provider === 'gmail' || provider === 'microsoft' ? provider : undefined
+    return provider === 'gmail' || provider === 'microsoft' || provider === 'dav' ? provider : undefined
   }
   private access(id: string) { const provider = this.provider(id); return provider ? this.options.access(id, provider) : { read: false, write: false } }
 
@@ -51,15 +63,15 @@ export class TaskService {
 
   private view(): TaskSnapshot {
     const result: TaskSnapshot = { lists: [], tasks: [], remoteTasks: [], operations: [], accounts: [], listOperations: [] }
-    const visible = this.accounts.filter((item) => item.provider === 'gmail' || item.provider === 'microsoft').map((account) => ({ ...account, recovered: false }))
-    for (const account of this.store.cachedAccounts()) if (!visible.some((item) => item.id === account.accountId && item.provider === account.provider)) visible.push({ id: account.accountId, provider: account.provider, email: '', displayName: account.provider === 'gmail' ? 'Recovered Google tasks' : 'Recovered Microsoft tasks', color: '#6558e8', signature: '', notifications: false, status: 'ready', archived: true, syncEnabled: false, recovered: true })
+    const visible = this.accounts.filter((item) => item.provider === 'gmail' || item.provider === 'microsoft' || item.provider === 'dav').map((account) => ({ ...account, recovered: false }))
+    for (const account of this.store.cachedAccounts()) if (!visible.some((item) => item.id === account.accountId && item.provider === account.provider)) visible.push({ id: account.accountId, provider: account.provider, email: '', displayName: account.provider === 'gmail' ? 'Recovered Google tasks' : account.provider === 'dav' ? 'Recovered CalDAV tasks' : 'Recovered Microsoft tasks', color: '#6558e8', signature: '', notifications: false, status: 'ready', archived: true, syncEnabled: false, recovered: true })
     for (const account of visible) {
       const provider = account.provider as TaskProvider
       const connected = !account.archived && !this.disabled.has(account.id) && account.syncEnabled
       const access = connected ? this.options.access(account.id, provider) : { read: false, write: false }
       const canRead = connected && access.read
       const canWrite = connected && access.write
-      result.accounts.push({ accountId: account.id, provider, canRead, canWrite, archived: account.archived, recovered: account.recovered, syncEnabled: account.syncEnabled, ...this.states.get(account.id) ?? (account.status === 'needs-auth' ? { phase: 'error', error: 'needs-consent' } : account.status === 'error' ? { phase: 'error', error: 'sync-failed' } : { phase: 'idle' }) })
+      result.accounts.push({ accountId: account.id, provider, canRead, canWrite, archived: account.archived, recovered: account.recovered, syncEnabled: account.syncEnabled, ...(provider === 'dav' && account.displayName ? { name: account.displayName } : {}), ...this.states.get(account.id) ?? (account.status === 'needs-auth' ? { phase: 'error', error: 'needs-consent' } : account.status === 'error' ? { phase: 'error', error: 'sync-failed' } : { phase: 'idle' }) })
       const snapshot = this.store.providerSnapshot(account.id, provider)
       result.lists.push(...snapshot.lists.map((list) => ({ ...list, readOnly: list.readOnly || !canWrite || this.store.listQueue.blocked(list.id) })))
       result.tasks.push(...this.store.entities(account.id, provider))
@@ -77,7 +89,8 @@ export class TaskService {
       for (const id of queuedAccounts) {
         if (!this.available(id) || !this.access(id).write) continue
         const snapshot = this.store.providerSnapshot(id, this.provider(id)!)
-        const stalePermissions = snapshot.lists.some((list) => list.readOnly) || snapshot.tasks.some((task) => task.readOnly && !task.assigned)
+        // CalDAV read-only lists come from server privileges, not an app grant, so they never imply a stale cache.
+        const stalePermissions = this.provider(id) !== 'dav' && (snapshot.lists.some((list) => list.readOnly) || snapshot.tasks.some((task) => task.readOnly && !task.assigned))
         if (!stalePermissions) { this.writeRefreshBlocked.delete(id); continue }
         // A new write grant does not rewrite cached permission flags. Refresh
         // first, while retaining every queued operation's original revision.
@@ -260,11 +273,95 @@ export class TaskService {
       const known = this.accounts.find((item) => item.id === account.accountId && item.provider === account.provider)
       if (!known || known.archived || this.disabled.has(account.accountId)) continue
       for (const task of this.store.entities(account.accountId, account.provider)) {
-        const reminder = task.provider === 'microsoft' ? task.fields.native?.reminder : task.local.extended?.reminder
+        const reminder = task.provider === 'gmail' ? task.local.extended?.reminder : task.fields.native?.reminder ?? undefined
         if (reminder) candidates.push({ source: 'connected', taskId: task.id, title: task.fields.title, reminder, completed: task.fields.completed })
       }
     }
     return candidates
+  }
+
+  /**
+   * Imports .ics tasks into a connected list through the offline queue (E45). Duplicates are matched by
+   * UID: CalDAV stores it; for Google and Microsoft Aerio remembers the UID each import used.
+   */
+  importTasks(listId: string, items: { uid: string; parentUid?: string; build(provider: TaskProvider): { input: ProviderTaskInput; local: TaskLocalMetadata } }[], mode: 'skip' | 'replace' | 'copy', newUid: () => string): Promise<{ created: number; replaced: number; skipped: number; failures: string[]; snapshot: TaskSnapshot }> {
+    return this.serial(async () => {
+      await this.reload()
+      const list = this.writableList(listId)
+      const provider = list.provider
+      const existing = this.listUids(list.accountId, provider, listId)
+      const created = new Map<string, string>()
+      let replaced = 0, skipped = 0, count = 0
+      // Parents first, so subtasks can refer to them.
+      const pending = [...items]
+      const ordered: typeof items = []
+      while (pending.length) {
+        const index = pending.findIndex((item) => !item.parentUid || !pending.some((other) => other !== item && other.uid === item.parentUid))
+        ordered.push(...pending.splice(index < 0 ? 0 : index, 1))
+      }
+      const failures: string[] = []
+      for (const item of ordered) try {
+        const duplicate = existing.get(item.uid)
+        if (duplicate && mode === 'skip') { skipped++; continue }
+        const { input, local } = item.build(provider)
+        if (duplicate && mode === 'replace') {
+          const { native, ...fields } = input
+          const patch: TaskFieldPatch = { ...fields, notes: fields.notes ?? null, due: fields.due ?? null }
+          if (native && provider !== 'gmail') { const { caldav: _source, ...rest } = native; patch.native = rest }
+          this.store.update(duplicate, patch, Date.now(), local)
+          replaced++
+          continue
+        }
+        let uid = item.uid
+        if (duplicate || created.has(uid)) {
+          uid = newUid()
+          if (input.native?.caldav) input.native = { ...input.native, caldav: { uid, source: input.native.caldav.source && replaceSourceUid(input.native.caldav.source, uid) } }
+        }
+        const parentId = item.parentUid ? created.get(item.parentUid) ?? existing.get(item.parentUid) : undefined
+        const parent = parentId ? this.store.entity(parentId) : undefined
+        const usableParent = parent && parent.listId === listId && (provider !== 'microsoft') ? parentId : undefined
+        const { entity } = this.store.create(list.accountId, provider, listId, input, usableParent, local)
+        if (provider !== 'dav') this.store.linkImportedUid(entity.id, list.accountId, uid)
+        created.set(item.uid, entity.id)
+        count++
+      } catch (error) {
+        // One unusable task (read-only duplicate, invalid field) does not stop the rest of the import.
+        failures.push(error instanceof Error ? error.message : 'A task could not be imported')
+      }
+      this.emit()
+      void this.serial(async () => { await this.reload(); await this.dispatch() }).catch(() => {})
+      return { created: count, replaced, skipped, failures, snapshot: this.view() }
+    })
+  }
+
+  /** Task UIDs in a connected list, mapped to entity ids (E45). */
+  private listUids(accountId: string, provider: TaskProvider, listId: string) {
+    const imported = this.store.importedUids(accountId)
+    const uids = new Map<string, string>()
+    for (const entity of this.store.entities(accountId, provider).filter((item) => item.listId === listId)) {
+      const uid = provider === 'dav' ? entity.remote?.native?.caldav?.uid ?? entity.fields.native?.caldav?.uid : imported.get(entity.id)
+      uids.set(uid ?? connectedTaskUid(entity), entity.id)
+    }
+    return uids
+  }
+
+  /** UIDs from `uids` already present in a connected list. */
+  async duplicateUids(listId: string, uids: string[]) {
+    await this.reload()
+    const list = this.store.cachedAccounts().flatMap((account) => this.store.providerSnapshot(account.accountId, account.provider).lists).find((item) => item.id === listId)
+    if (!list) throw new Error('Task list not found')
+    const known = this.listUids(list.accountId, list.provider, listId)
+    return uids.filter((uid) => known.has(uid))
+  }
+
+  /** A connected list and its visible tasks with their iCalendar UIDs, for .ics export (E45). */
+  async exportList(listId: string) {
+    await this.reload()
+    const list = this.store.cachedAccounts().flatMap((account) => this.store.providerSnapshot(account.accountId, account.provider).lists).find((item) => item.id === listId)
+    if (!list) throw new Error('Task list not found')
+    const imported = this.store.importedUids(list.accountId)
+    const entities = this.store.entities(list.accountId, list.provider).filter((entity) => entity.listId === listId)
+    return { list, entities, uid: (entity: TaskEntity) => (list.provider === 'dav' ? entity.remote?.native?.caldav?.uid ?? entity.fields.native?.caldav?.uid : imported.get(entity.id)) ?? connectedTaskUid(entity) }
   }
 
   async flush() { return this.serial(async () => { await this.reload(); await this.dispatch() }) }

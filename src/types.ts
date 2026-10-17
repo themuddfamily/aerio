@@ -173,6 +173,8 @@ export interface Task {
   percentComplete?: number
   categories?: string[]
   attachments?: Attachment[]
+  /** Imported from an .ics file (E45): its UID and the source VTODO, so export keeps unmapped properties. */
+  icalendar?: { uid: string; source?: string }
 }
 
 export interface Note {

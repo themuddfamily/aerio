@@ -18,6 +18,9 @@ import TaskRemindersBar from '../components/TaskRemindersBar'
 import { TASK_FIELD_CAPABILITIES, type TaskExtendedFields, type TaskReminder } from '../task-fields-types'
 import { advanceExtendedFields, compactExtendedFields, localTaskExtendedFields } from '../lib/task-schedule'
 import { localTimeZone } from '../lib/time-zones'
+import { taskAccountLabel, taskProviderName, taskProviderShortName } from '../lib/task-providers'
+import TaskIcsImportModal from '../components/TaskIcsImportModal'
+import type { TaskIcsPreview } from '../task-interchange-types'
 
 interface TasksViewProps {
   state: AppState
@@ -76,6 +79,8 @@ export default function TasksView({ state, query, onChange, onToast, accounts = 
   const [reconnecting, setReconnecting] = useState<string>()
   const [backupBusy, setBackupBusy] = useState(false)
   const [managingLists, setManagingLists] = useState<string>()
+  const [icsPreview, setIcsPreview] = useState<TaskIcsPreview>()
+  const [icsBusy, setIcsBusy] = useState(false)
   const setList = (value: string) => { setLocalList(value); setProviderListId(undefined); setProviderEditing(null) }
   useEffect(() => {
     const api = window.aerio?.tasks
@@ -92,7 +97,7 @@ export default function TasksView({ state, query, onChange, onToast, accounts = 
     try {
       await window.aerio.mail.accounts.reconnect(accountId)
       setProvider(await window.aerio.tasks.sync(accountId))
-      onToast(provider.accounts.find((account) => account.accountId === accountId)?.provider === 'microsoft' ? 'Microsoft To Do connected' : 'Google Tasks connected')
+      onToast(`${taskProviderName(provider.accounts.find((account) => account.accountId === accountId)?.provider)} connected`)
     } catch (error) { onToast(error instanceof Error ? error.message : 'Connected tasks could not be connected') }
     finally { setReconnecting(undefined) }
   }
@@ -110,6 +115,23 @@ export default function TasksView({ state, query, onChange, onToast, accounts = 
       }
     } catch (error) { onToast(error instanceof Error ? error.message : 'Connected task backup failed') }
     finally { setBackupBusy(false) }
+  }
+  // .ics task files (E45): preview before importing; export the open local or connected list.
+  const chooseTaskFile = async () => {
+    if (icsBusy || !window.aerio?.tasks?.ics) return
+    setIcsBusy(true)
+    try { const preview = await window.aerio.tasks.ics.choose(); if (preview) setIcsPreview(preview) }
+    catch (error) { onToast(error instanceof Error ? error.message : 'That task file could not be read') }
+    finally { setIcsBusy(false) }
+  }
+  const exportTaskFile = async () => {
+    if (icsBusy || !window.aerio?.tasks?.ics) return
+    setIcsBusy(true)
+    try {
+      const result = await window.aerio.tasks.ics.exportList(providerListId ? { kind: 'connected', listId: providerListId } : { kind: 'local', listId: list })
+      if (result.savedPath) onToast(`${result.count ?? 0} task${result.count === 1 ? '' : 's'} exported`)
+    } catch (error) { onToast(error instanceof Error ? error.message : 'The tasks could not be exported') }
+    finally { setIcsBusy(false) }
   }
   const [showCompleted, setShowCompleted] = useState(true)
   const [editing, setEditing] = useState<Task | 'new' | null>(null)
@@ -225,14 +247,15 @@ export default function TasksView({ state, query, onChange, onToast, accounts = 
             setEditing('new')
           }}><Plus size={17} /><span>New list</span></button>
         </div>
-        {provider.accounts.length > 0 && <div className="sidebar-group"><span className="sidebar-label">{provider.accounts.some((account) => account.provider === 'microsoft') ? 'Connected tasks' : 'Google Tasks'}</span>
-          {provider.accounts.map((account) => <div key={`${account.provider}:${account.accountId}`} className="provider-task-account"><span className="sidebar-label">{accounts.find((item) => item.id === account.accountId)?.email ?? (account.recovered ? account.provider === 'microsoft' ? 'Recovered Microsoft tasks' : 'Recovered Google tasks' : account.provider === 'microsoft' ? 'Microsoft account' : 'Google account')}{account.archived && !account.recovered ? ' · Archived' : ''}</span>
+        {provider.accounts.length > 0 && <div className="sidebar-group"><span className="sidebar-label">{provider.accounts.some((account) => account.provider !== 'gmail') ? 'Connected tasks' : 'Google Tasks'}</span>
+          {provider.accounts.map((account) => <div key={`${account.provider}:${account.accountId}`} className="provider-task-account"><span className="sidebar-label">{accounts.find((item) => item.id === account.accountId)?.email ?? account.name ?? taskAccountLabel(account.provider, account.recovered)}{account.archived && !account.recovered ? ' · Archived' : ''}</span>
             {provider.lists.filter((item) => item.accountId === account.accountId).map((item) => <button key={item.id} className={`sidebar-item ${providerListId === item.id ? 'active' : ''}`} onClick={() => { setProviderListId(item.id); setProviderEditing(null); setEditing(null) }}><ListTodo size={17} /><span>{item.title}</span><em>{provider.tasks.filter((task) => task.listId === item.id && !task.fields.completed).length}</em></button>)}
             {!account.archived && account.syncEnabled === false && <span className="sidebar-label">Synchronization paused</span>}
-            <button className="button ghost small" aria-label={`Manage ${account.provider === 'microsoft' ? 'Microsoft' : 'Google'} lists for ${accounts.find((item) => item.id === account.accountId)?.email ?? (account.provider === 'microsoft' ? 'Microsoft account' : 'Google account')}`} onClick={() => setManagingLists(account.accountId)}>Manage lists</button>
-            {!account.archived && account.syncEnabled !== false && (!account.canRead || !account.canWrite || account.error === 'needs-consent') && <button className="button ghost small" disabled={Boolean(reconnecting)} onClick={() => void reconnect(account.accountId)}>{reconnecting === account.accountId ? 'Connecting…' : account.provider === 'microsoft' ? 'Connect Microsoft To Do' : 'Connect Google Tasks'}</button>}
+            <button className="button ghost small" aria-label={`Manage ${taskProviderShortName(account.provider)} lists for ${accounts.find((item) => item.id === account.accountId)?.email ?? account.name ?? taskAccountLabel(account.provider)}`} onClick={() => setManagingLists(account.accountId)}>Manage lists</button>
+            {account.provider !== 'dav' && !account.archived && account.syncEnabled !== false && (!account.canRead || !account.canWrite || account.error === 'needs-consent') && <button className="button ghost small" disabled={Boolean(reconnecting)} onClick={() => void reconnect(account.accountId)}>{reconnecting === account.accountId ? 'Connecting…' : account.provider === 'microsoft' ? 'Connect Microsoft To Do' : 'Connect Google Tasks'}</button>}
           </div>)}
         </div>}
+        {window.aerio?.tasks?.ics && <div className="sidebar-group"><span className="sidebar-label">Task files (.ics)</span><button className="button ghost small" disabled={icsBusy} onClick={() => void chooseTaskFile()}>Import tasks</button><button className="button ghost small" disabled={icsBusy} aria-label={`Export ${providerListId ? provider.lists.find((item) => item.id === providerListId)?.title ?? 'list' : list} as .ics`} onClick={() => void exportTaskFile()}>Export this list</button></div>}
         {window.aerio?.tasks && <div className="sidebar-group"><span className="sidebar-label">Connected task backups</span><button className="button ghost small" disabled={backupBusy} onClick={() => void backupTasks()}>Back up connected tasks</button><button className="button ghost small" disabled={backupBusy} onClick={() => void backupTasks(true)}>Restore connected tasks</button></div>}
         <div className="task-progress-card">
           <div className="progress-ring" style={{ '--progress': `${completedPercent}%` } as React.CSSProperties}>
@@ -294,6 +317,7 @@ export default function TasksView({ state, query, onChange, onToast, accounts = 
           }}
         />
       )}
+      {icsPreview && <TaskIcsImportModal preview={icsPreview} localLists={lists} connectedLists={provider.lists.filter((item) => !item.readOnly)} defaultTarget={providerListId && provider.lists.some((item) => item.id === providerListId && !item.readOnly) ? `connected:${providerListId}` : `local:${list === 'All tasks' ? 'Today' : list}`} localTasks={state.tasks} newId={() => uid('task')} onLocalImport={(tasks) => onChange({ ...state, tasks })} onConnectedImport={setProvider} onToast={onToast} onClose={() => setIcsPreview(undefined)} />}
       {managingLists && <ProviderTaskLists snapshot={provider} accountId={managingLists} onSnapshot={setProvider} onToast={onToast} onClose={() => setManagingLists(undefined)} />}
     </div>
   )
@@ -339,7 +363,7 @@ function TaskEditor({ task, defaultList, lists, onClose, onSave, onDelete }: { t
           <button className="button primary" disabled={!title.trim()} onClick={() => onSave({
             id: task?.id ?? uid('task'), listId, title: title.trim(), notes,
             due: due ? new Date(due).toISOString() : undefined, priority, completed: task?.completed ?? false, subtasks, recurrence,
-            ...compactExtendedFields(extended)
+            ...compactExtendedFields(extended), ...(task?.icalendar ? { icalendar: task.icalendar } : {})
           })}>Save task</button>
         </footer>
       </div>

@@ -72,6 +72,8 @@ import { MicrosoftTasksConnector } from './productivity/microsoft-tasks-connecto
 import type { ProviderTaskInput, TaskFieldPatch, TaskLocalMetadata, TaskResolution } from '../src/task-provider-types'
 import { archivedAttachmentsMatch, parseTaskBackup, type ArchivedTaskAttachment } from './productivity/task-backup'
 import { registerTaskExtras, validLocalTaskExtras } from './productivity/task-extras-ipc'
+import { CalDavTasksConnector, davTaskAccounts } from './productivity/caldav-tasks'
+import { registerTaskIcs } from './productivity/task-ics-ipc'
 import { TaskAttachmentFiles } from './productivity/task-attachments'
 import { MessageLocalStore } from './mail/message-local-store'
 import { registerMessageTools } from './mail/message-tools'
@@ -2208,11 +2210,11 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     log: (event, details) => diagnostic({ level: 'info', component: 'provider', event, details })
   })
   taskService =new TaskService(new TaskStore(join(app.getPath('userData'), 'provider-tasks.sqlite')), {
-    accounts: () => requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' }),
-    access: (id, provider) => provider === 'gmail'
+    accounts: async () => [...await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' }), ...davTaskAccounts(davService)],
+    access: (id, provider) => provider === 'dav' ? { read: true, write: true } : provider === 'gmail'
       ? { read: requireVault().hasGoogleTasksAccess(id), write: requireVault().hasGoogleTasksAccess(id, true) }
       : { read: requireVault().hasMicrosoftTasksAccess(id), write: requireVault().hasMicrosoftTasksAccess(id, true) },
-    connector: (id, provider) => provider === 'gmail'
+    connector: (id, provider) => provider === 'dav' ? new CalDavTasksConnector(id, requireDavService(), davStore!) : provider === 'gmail'
       ? new GoogleTasksConnector(id, () => requireVault().accessToken(id), requireVault().hasGoogleTasksAccess(id, true))
       : new MicrosoftTasksConnector(id, () => requireVault().microsoftAccessToken(id), requireVault().hasMicrosoftTasksAccess(id, true)),
     online: () => taskNetworkOnline && net.isOnline(),
@@ -2240,6 +2242,27 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
       notification.show()
     },
     broadcast: (channel, payload) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send(channel, payload))
+  })
+  // .ics task import/export for local and connected lists (E45).
+  registerTaskIcs({
+    ipcMain,
+    service: () => taskService ?? undefined,
+    localTasks: () => requireProductivityStore().localSnapshot().tasks,
+    davStore: () => davStore ?? undefined,
+    isLocked: () => appLockStatus().locked,
+    openFile: async (event) => {
+      const owner = BrowserWindow.fromWebContents(event.sender)
+      const options: Electron.OpenDialogOptions = { title: 'Import tasks', filters: [{ name: 'iCalendar tasks', extensions: ['ics', 'ical', 'icalendar', 'vcs'] }], properties: ['openFile'] }
+      const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
+      return result.canceled ? undefined : result.filePaths[0]
+    },
+    saveFile: async (event, defaultName) => {
+      const owner = BrowserWindow.fromWebContents(event.sender)
+      const options: Electron.SaveDialogOptions = { title: 'Export tasks', defaultPath: defaultName, filters: [{ name: 'iCalendar', extensions: ['ics'] }] }
+      const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options)
+      return result.canceled ? undefined : result.filePath
+    },
+    diagnostic: (event, details) => diagnostic({ level: 'info', component: 'provider', event, details })
   })
   taskPolling = setInterval(() => { void taskService?.poll().catch(() => {}) }, 60_000)
   taskPolling.unref()
@@ -2335,7 +2358,10 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     productivity: requireProductivityStore,
     credentials: new DavCredentialVault(join(app.getPath('userData'), 'dav-credentials.dat'), safeStorage),
     online: () => taskNetworkOnline && net.isOnline(),
-    diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
+    diagnostic: (record) => diagnostic({ ...record, component: 'provider' }),
+    // CalDAV task lists appear in Tasks (E45).
+    tasksChanged: (accountId) => { void taskService?.accountChanged().then(() => taskService?.sync(accountId)).catch(() => {}) },
+    accountRemoved: (accountId) => { void taskService?.removeAccount(accountId).catch(() => {}) }
   })
   davIpc = registerDavAccounts({ service: requireDavService, productivityChanged: broadcastProductivity })
   registerRemoteImageProtocol()

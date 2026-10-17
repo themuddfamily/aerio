@@ -46,7 +46,7 @@ export class TaskListQueue {
   }
 
   enqueue(accountId: string, provider: TaskProvider, kind: TaskListOperation['kind'], title?: string, listId?: string) {
-    if (typeof accountId !== 'string' || !accountId.trim() || !['gmail', 'microsoft'].includes(provider) || !['create', 'update', 'delete'].includes(kind)) throw new Error('Invalid task list change')
+    if (typeof accountId !== 'string' || !accountId.trim() || !['gmail', 'microsoft', 'dav'].includes(provider) || !['create', 'update', 'delete'].includes(kind)) throw new Error('Invalid task list change')
     if ((kind === 'create' && listId !== undefined) || (kind === 'delete' && title !== undefined)) throw new Error('Invalid task list change')
     if (kind !== 'delete' && (typeof title !== 'string' || !title.trim() || title.length > 1024)) throw new Error('List names must contain 1 to 1024 characters')
     return this.transaction(() => {
