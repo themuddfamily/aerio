@@ -9,7 +9,7 @@ import { ProductivityStore } from './productivity/store'
 import { DavStore, RESTORED_DAV_MESSAGE, RESTORED_DAV_WRITE_MESSAGE } from './productivity/dav-store'
 import { TaskStore } from './productivity/task-store'
 import { applyPendingProfileRestore, createProfileBackup, previewProfileBackup, stageProfileRestore } from './profile-backup'
-import { PROFILE_BACKUP_LAYOUT, RESTORED_ACCOUNT_MESSAGE, RESTORED_SEND_HOLD_MESSAGE } from './profile-backup-layout'
+import { PROFILE_BACKUP_LAYOUT, RESTORED_ACCOUNT_MESSAGE, RESTORED_MERGE_HOLD_MESSAGE, RESTORED_SEND_HOLD_MESSAGE } from './profile-backup-layout'
 
 const directories: string[] = []
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) })
@@ -117,6 +117,30 @@ describe('full profile layout', () => {
     tasks.close()
     expect(readFileSync(join(profile, 'oauth-vault.dat'), 'utf8')).toBe('encrypted-refresh-token')
     expect(readFileSync(join(profile, 'openpgp-keyring.dat'), 'utf8')).toBe('wrapped-openpgp-keys')
+  })
+
+  it('holds every unsent recipient of an unfinished mail merge for review after a restore', async () => {
+    const profile = makeProfile()
+    const mail = new MailDatabase(join(profile, 'aerio.sqlite'), join(profile, 'mail'))
+    const merge = (id: string) => mail.mailMerge.create(id, { accountId: 'account-1', subject: 'Hi', text: 'Hi', attachmentPaths: [], recipients: [{ email: 'a@example.com' }, { email: 'b@example.com' }, { email: 'c@example.com' }], limits: { perMinute: 60, dailyCap: 100 } })
+    merge('running')
+    mail.mailMerge.claim('running', 0)
+    mail.mailMerge.markSent('running', 0, undefined)
+    merge('finished')
+    mail.mailMerge.cancel('finished')
+    mail.close()
+    const { path } = await backupOf(profile)
+    expect(Object.fromEntries((await previewProfileBackup(path, profile, PROFILE_BACKUP_LAYOUT)).counts.map((item) => [item.label, item.count]))).toMatchObject({ 'Unfinished mail merges': 1 })
+
+    const report = await stageProfileRestore({ backupPath: path, userData: profile, layout: PROFILE_BACKUP_LAYOUT })
+    expect(report.heldSends).toBe(3 + 2)
+    applyPendingProfileRestore(profile)
+    const restored = new MailDatabase(join(profile, 'aerio.sqlite'), join(profile, 'mail'))
+    try {
+      expect(restored.mailMerge.get('running')).toMatchObject({ status: 'needs-review', lastError: RESTORED_MERGE_HOLD_MESSAGE, counts: { sent: 1, ambiguous: 2, pending: 0 } })
+      expect(restored.mailMerge.get('finished')).toMatchObject({ status: 'cancelled', counts: { cancelled: 3 } })
+      expect(restored.mailMerge.dueJobs(new Date(Date.now() + 86_400_000).toISOString())).toEqual([])
+    } finally { restored.close() }
   })
 
   it('does not restore an app lock from the backup onto a device without one', async () => {

@@ -4494,6 +4494,46 @@ kbd {
 .csv-mapping-row > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .csv-mapping-row > small { color: var(--muted); }
 
+/* Mail merge */
+.mail-merge-body { display: grid; gap: 12px; max-height: 64vh; padding: 16px 20px; overflow-y: auto; color: var(--text-soft); font-size: 11px; }
+.mail-merge-tabs { display: flex; gap: 6px; }
+.mail-merge-tabs button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--text-soft); background: var(--surface-2); font-size: 10.5px; }
+.mail-merge-tabs button.active { border-color: var(--accent); color: var(--accent-text); background: var(--accent-soft); }
+.mail-merge-search { display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-2); }
+.mail-merge-search input { flex: 1; min-width: 0; min-height: 34px; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 11px; }
+.mail-merge-contacts { display: grid; max-height: 34vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }
+.mail-merge-contacts label { display: flex; align-items: center; gap: 10px; padding: 7px 11px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.mail-merge-contacts label:last-child { border-bottom: 0; }
+.mail-merge-file { justify-self: start; position: relative; cursor: pointer; }
+.mail-merge-file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.mail-merge-summary, .mail-merge-note { margin: 0; line-height: 1.5; }
+.mail-merge-note { color: var(--muted); font-size: 10px; }
+.modal-footer .mail-merge-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-merge-warning { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--danger); line-height: 1.45; }
+.mail-merge-warning > svg { flex: none; margin-top: 2px; }
+.mail-merge-stepper { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text); font-weight: 600; }
+.mail-merge-preview-headers { display: grid; gap: 4px; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.mail-merge-preview-headers div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
+.mail-merge-preview-headers dt { color: var(--muted); font-weight: 600; }
+.mail-merge-preview-headers dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.mail-merge-preview-body { min-height: 160px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); line-height: 1.55; overflow-wrap: anywhere; }
+.mail-merge-preview-text { white-space: pre-wrap; }
+.mail-merge-checklist { display: grid; gap: 8px; margin: 0; padding-left: 18px; line-height: 1.5; }
+.mail-merge-checklist li.mail-merge-warning { margin-left: -18px; }
+.mail-merge-limits { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.mail-merge-progress-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text); }
+.mail-merge-progress { width: 100%; height: 8px; accent-color: var(--accent); }
+.mail-merge-review { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--danger); border-radius: 10px; background: var(--danger-soft); color: var(--text); }
+.mail-merge-review p { display: flex; align-items: flex-start; gap: 6px; margin: 0; line-height: 1.45; }
+.mail-merge-review-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.mail-merge-recipients { display: grid; border: 1px solid var(--line); border-radius: 10px; }
+.mail-merge-recipient { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 5px 11px; border-bottom: 1px solid var(--line); }
+.mail-merge-recipient:last-child { border-bottom: 0; }
+.mail-merge-status { flex: none; color: var(--muted); font-size: 9.5px; font-weight: 650; }
+.mail-merge-recipient.status-sent .mail-merge-status { color: var(--success); }
+.mail-merge-recipient.status-failed .mail-merge-status,
+.mail-merge-recipient.status-ambiguous .mail-merge-status { color: var(--danger); }
+
 /* OpenPGP mail: composer control, message banner, and key manager. */
 .mail-openpgp-options .mail-send-options-panel { width: 320px; }
 .mail-openpgp-options.attention > summary { color: var(--danger); }

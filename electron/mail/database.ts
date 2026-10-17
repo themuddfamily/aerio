@@ -39,6 +39,7 @@ import { ReplyWatchStore } from './reply-watches'
 import { RuleRunLedger, readRawHeaders } from './rule-ledger'
 import { mailRuleMatches as evaluateMailRule, mailRuleNeedsHeaders, mailRuleTrigger, type MailRuleMessage } from '../../src/lib/mail-rules'
 import { AttachmentTextStore } from './attachment-text-store'
+import { MailMergeStore } from './mail-merge-store'
 import { listAttachmentPage } from './attachment-index'
 import { MailDraftOpenPgpStore } from './openpgp-draft-store'
 import { LocalMailStore } from './local-mail-store'
@@ -104,6 +105,7 @@ export class MailDatabase {
   readonly localMail: LocalMailStore
   readonly ruleLedger: RuleRunLedger
   readonly attachmentText: AttachmentTextStore
+  readonly mailMerge: MailMergeStore
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -120,6 +122,7 @@ export class MailDatabase {
     this.localMail = new LocalMailStore(this.db, this)
     this.ruleLedger = new RuleRunLedger(this.db)
     this.attachmentText = new AttachmentTextStore(this.db)
+    this.mailMerge = new MailMergeStore(this.db)
   }
 
   close() {

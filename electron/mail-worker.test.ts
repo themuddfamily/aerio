@@ -125,6 +125,8 @@ const mocks = vi.hoisted(() => {
     process: vi.fn((): any[] => [])
   }
   method('recoverInterruptedFolderOperations', () => [])
+  // Replaced with a real SQLite-backed store in the mail merge test.
+  db.mailMerge = { recoverInterrupted: vi.fn(() => []), pruneSendLog: vi.fn(), dueJobs: vi.fn(() => []) } as any
   db.openPgp = { get: vi.fn((): any => ({})) }
 
   const gmail = {
@@ -1490,6 +1492,60 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.fs.existsSync.mockReset()
     mocks.fs.existsSync.mockReturnValue(false)
   })
+
+  it('runs a mail merge as single-recipient Gmail sends, recovering in-flight rows on initialize', async () => {
+    const { DatabaseSync } = await import('node:sqlite')
+    const { MailMergeStore } = await import('./mail/mail-merge-store')
+    const sqlite = new DatabaseSync(':memory:')
+    sqlite.exec(`PRAGMA foreign_keys=ON; CREATE TABLE gmail_accounts(id TEXT PRIMARY KEY); INSERT INTO gmail_accounts(id) VALUES('account-1')`)
+    const store = new MailMergeStore(sqlite)
+    const stub = mocks.db.mailMerge
+    mocks.db.mailMerge = store
+    // A delivery left `sending` by a previous run is held for review on startup.
+    store.create('old-job', { accountId: 'account-1', subject: 'Old', text: 'Old', attachmentPaths: [], recipients: [{ email: 'old@example.test' }], limits: { perMinute: 60, dailyCap: 100 } })
+    store.claim('old-job', 0)
+    mocks.setCredential({ type: 'oauth', accessToken: 'token' })
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    await request({ type: 'initialize', payload: { databasePath: 'mail.db', contentPath: 'C:\\content' } })
+    expect(store.summary('old-job')).toMatchObject({ status: 'needs-review', counts: { ambiguous: 1 } })
+
+    const { createMime } = await import('./mail/mime-builder')
+    vi.mocked(createMime).mockClear()
+    mocks.gmail.sendMessage.mockClear()
+    mocks.fs.copyFileSync.mockClear()
+    // Only the merge's own attachment copies exist on disk.
+    mocks.fs.existsSync.mockImplementation((path?: unknown) => String(path).includes('mail-merge'))
+    const created = await request({ type: 'merge:create', payload: {
+      accountId: 'account-1', subject: 'Hi {{firstName|there}}', text: 'Hello {{firstName|there}}', html: '<p>{{company|}}</p>',
+      attachmentPaths: ['C:\\content\\drafts\\d\\0-0123456789-report.pdf'],
+      recipients: [{ email: 'ada@example.test', firstName: 'Ada', company: '<b>A&B</b>' }, { email: 'grace@example.test' }, { email: 'ADA@example.test' }, { email: 'bad' }],
+      limits: { perMinute: 60, dailyCap: 100_000 }
+    } })
+    expect(created.result).toMatchObject({ status: 'running', total: 2, limits: { perMinute: 60, dailyCap: 2_000 } })
+    expect(mocks.fs.copyFileSync).toHaveBeenCalledWith('C:\\content\\drafts\\d\\0-0123456789-report.pdf', expect.stringMatching(/mail-merge.+0-report\.pdf$/))
+    await vi.waitFor(() => expect(mocks.gmail.sendMessage).toHaveBeenCalledTimes(2), { timeout: 5_000 })
+    const deliveries = vi.mocked(createMime).mock.calls.map(([input]) => input)
+    expect(deliveries.map((input) => [input.to, input.cc, input.bcc, input.subject])).toEqual([
+      [['"Ada" <ada@example.test>'], [], [], 'Hi Ada'],
+      [['grace@example.test'], [], [], 'Hi there']
+    ])
+    expect(deliveries[0].html).toBe('<p>&lt;b&gt;A&amp;B&lt;/b&gt;</p>')
+    await vi.waitFor(() => expect(store.summary(created.result.id)).toMatchObject({ status: 'completed', counts: { sent: 2 } }))
+    expect(mocks.posted.some((message) => message.kind === 'event' && message.event.type === 'mail-merge' && message.event.payload.status === 'completed')).toBe(true)
+
+    // Review, controls, and deletion route to the store.
+    expect((await request({ type: 'merge:resolve', payload: { id: 'old-job', positions: [0], resolution: 'skip' } })).result).toMatchObject({ status: 'completed' })
+    expect((await request({ type: 'merge:list' })).result).toHaveLength(2)
+    expect((await request({ type: 'merge:get', payload: { id: 'old-job' } })).result.recipients[0].status).toBe('skipped')
+    expect((await request({ type: 'merge:cancel', payload: { id: created.result.id } })).result.status).toBe('completed')
+    await request({ type: 'merge:delete', payload: { id: 'old-job' } })
+    expect(store.get('old-job')).toBeUndefined()
+    await expect(request({ type: 'merge:create', payload: { accountId: 'account-1', subject: 'S', text: 'T', attachmentPaths: [], recipients: [{ email: 'bad' }], limits: { perMinute: 1, dailyCap: 1 } } }))
+      .resolves.toMatchObject({ error: { message: expect.stringMatching(/at least one recipient/) } })
+    mocks.db.mailMerge = stub
+    mocks.fs.existsSync.mockImplementation(() => false)
+    sqlite.close()
+  }, 15_000)
 
   it('shuts down cleanly', async () => {
     // Touch the import service so shutdown has a running service to halt.
