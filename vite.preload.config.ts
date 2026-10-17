@@ -10,13 +10,17 @@ export default defineConfig({
     emptyOutDir: true,
     minify: false,
     lib: {
-      entry: resolve(root, 'electron/preload.ts'),
+      entry: {
+        preload: resolve(root, 'electron/preload.ts'),
+        // Sandboxed preload for the hidden chat service webContents (electron/chat/service-host.ts).
+        'chat-service-preload': resolve(root, 'electron/chat/service-preload.ts')
+      },
       formats: ['cjs']
     },
     rolldownOptions: {
       external: ['electron'],
       output: {
-        entryFileNames: 'preload.cjs'
+        entryFileNames: '[name].cjs'
       }
     }
   }
