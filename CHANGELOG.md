@@ -5,6 +5,7 @@
 ### Added
 
 - QuickText snippets and whole-message mail templates with subject, sanitized HTML, and managed attachments; search, edit, and insert them from the composer without losing the editor selection, and back them up with local data or as a standalone template file.
+- User-defined mail Quick Actions: save ordered sequences of mail actions (read, star, label, move, archive, Trash, and more) and run them on the selection from the toolbars, the conversation context menu, the command palette, or Ctrl+Shift+1–9. Steps use the queued operation pipeline with Undo; account-specific destinations are checked at run time and skipped or partly updated accounts are reported. Undo of several queued changes now reverts them newest first, and queued operations created in the same millisecond reach the provider in insertion order.
 
 ## 0.5.0 — 2026-08-08
 

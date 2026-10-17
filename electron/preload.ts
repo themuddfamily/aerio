@@ -166,6 +166,12 @@ const api: AerioDesktopApi = {
       save: (input) => ipcRenderer.invoke('mail:saved-searches:save', input),
       delete: (id) => ipcRenderer.invoke('mail:saved-searches:delete', id)
     },
+    quickActions: {
+      list: () => ipcRenderer.invoke('mail:quick-actions:list'),
+      save: (input) => ipcRenderer.invoke('mail:quick-actions:save', input),
+      delete: (id) => ipcRenderer.invoke('mail:quick-actions:delete', id),
+      run: (id, targets) => ipcRenderer.invoke('mail:quick-actions:run', id, targets)
+    },
     sync: {
       start: (accountId) => ipcRenderer.invoke('mail:sync:start', accountId),
       pause: (accountId) => ipcRenderer.invoke('mail:sync:pause', accountId),
