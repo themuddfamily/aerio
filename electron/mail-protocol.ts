@@ -207,6 +207,7 @@ export type AccountCredential =
   | { type: 'oauth'; accessToken: string }
   | { type: 'imap'; config: ImapAccountInput }
   | { type: 'pop3'; config: import('../src/pop3-types').Pop3ConnectionConfig }
+  | { type: 'exchange'; config: import('./exchange/exchange-config').ExchangeAccountConfig }
 
 export interface WorkerCredentialRequest {
   kind: 'credential-request'

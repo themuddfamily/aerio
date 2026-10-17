@@ -4,6 +4,7 @@ import type { MailCredentialStatus, ImapAccountInput, MailProviderId, MailProvid
 import { ModalShell } from './Modal'
 import ProviderLogo from './ProviderLogo'
 import { Pop3AccountSetupForm } from './Pop3Account'
+import ExchangeAccountSetup from './ExchangeAccountSetup'
 
 interface Props {
   onClose(): void
@@ -16,6 +17,7 @@ const emptyStatus: MailCredentialStatus = { configured: false }
 const providerPresentation: Record<MailProviderPreset['id'], { action: string; detail: string }> = {
   gmail: { action: 'Continue with Google', detail: 'Gmail, Calendar and Contacts' },
   microsoft: { action: 'Continue with Microsoft', detail: 'Outlook.com, Hotmail and Microsoft 365' },
+  exchange: { action: 'Connect Exchange Server', detail: 'On-premises Exchange through EWS' },
   icloud: { action: 'Continue with iCloud', detail: 'Use an Apple app-specific password' },
   yahoo: { action: 'Continue with Yahoo', detail: 'Yahoo Mail and AOL accounts' },
   fastmail: { action: 'Continue with Fastmail', detail: 'Use a Fastmail app password' },
@@ -53,7 +55,7 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
 
   const choose = (value: MailProviderPreset) => {
     setSelected(value.id)
-    if (value.id !== 'gmail' && value.id !== 'microsoft' && value.id !== 'pop3') {
+    if (value.id !== 'gmail' && value.id !== 'microsoft' && value.id !== 'pop3' && value.id !== 'exchange') {
       setImap({
         provider: value.id,
         email: '', displayName: '', username: '', password: '',
@@ -166,8 +168,9 @@ export default function MailAccountSetupModal({ onClose, onConnected, onToast }:
         </div>}
 
         {preset?.id === 'pop3' && <Pop3AccountSetupForm onBusy={setBusy} onToast={onToast} onConnected={async () => { await onConnected(); onClose() }} />}
+        {preset?.id === 'exchange' && <ExchangeAccountSetup busy={busy} onConnect={finish} onToast={onToast} />}
 
-        {preset && preset.id !== 'gmail' && preset.id !== 'microsoft' && preset.id !== 'pop3' && <form className="provider-setup-body imap-form" onSubmit={(event) => { event.preventDefault(); void finish(() => window.aerio.mail.accounts.connectImap(imap), `${preset.name} account connected — sync has started`) }}>
+        {preset && preset.id !== 'gmail' && preset.id !== 'microsoft' && preset.id !== 'pop3' && preset.id !== 'exchange' && <form className="provider-setup-body imap-form" onSubmit={(event) => { event.preventDefault(); void finish(() => window.aerio.mail.accounts.connectImap(imap), `${preset.name} account connected — sync has started`) }}>
           <div className="field-grid"><label className="field"><span>Email address</span><input type="email" required value={imap.email} onChange={(event) => { const value = event.target.value; if (!imap.username || imap.username === imap.email) update('username', value); update('email', value) }} /></label><label className="field"><span>Display name</span><input value={imap.displayName} onChange={(event) => update('displayName', event.target.value)} placeholder="Optional" /></label></div>
           <div className="field-grid"><label className="field"><span>Username</span><input required value={imap.username} onChange={(event) => update('username', event.target.value)} placeholder={preset.usernameHint ?? 'Usually your full email address'} /></label><label className="field"><span>{preset.passwordHint ?? 'Password'}</span><input type="password" required value={imap.password} onChange={(event) => update('password', event.target.value)} /></label></div>
           <div className="server-fields"><strong>Incoming mail (IMAP)</strong><label className="field grow"><span>Server</span><input required value={imap.imapHost} onChange={(event) => update('imapHost', event.target.value)} /></label><label className="field port"><span>Port</span><input type="number" required value={imap.imapPort} onChange={(event) => update('imapPort', Number(event.target.value))} /></label><label className="field security"><span>Security</span><select value={imap.imapSecurity} onChange={(event) => update('imapSecurity', event.target.value as 'tls' | 'starttls')}><option value="tls">TLS</option><option value="starttls">STARTTLS</option></select></label></div>

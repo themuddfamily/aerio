@@ -228,6 +228,21 @@ const localMocks = vi.hoisted(() => {
   }
   return { job, service, deps: [] as any[], transfer: vi.fn(async (): Promise<any> => ({ copied: 1, skipped: 0, missing: 0 })) }
 })
+const exchangeMocks = vi.hoisted(() => ({
+  client: {
+    probe: vi.fn().mockResolvedValue({ id: 'inbox' }),
+    getFolders: vi.fn().mockResolvedValue([]),
+    syncFolderHierarchy: vi.fn().mockResolvedValue({ syncState: 'H1', changes: [] }),
+    syncFolderItems: vi.fn().mockResolvedValue({ syncState: 'I1', includesLastItemInRange: true, changes: [] }),
+    getItems: vi.fn().mockResolvedValue([]), getMime: vi.fn().mockResolvedValue([]),
+    updateItems: vi.fn().mockResolvedValue([{ id: 'item-1' }]), moveItems: vi.fn().mockResolvedValue([{ id: 'item-2' }]),
+    copyItems: vi.fn().mockResolvedValue(undefined), deleteItems: vi.fn().mockResolvedValue([undefined]),
+    sendMime: vi.fn().mockResolvedValue(undefined), saveDraftMime: vi.fn().mockResolvedValue({ id: 'ews-draft', changeKey: 'ck-2' }),
+    changeKey: vi.fn().mockResolvedValue('ck-1'), close: vi.fn()
+  },
+  configs: [] as any[]
+}))
+vi.mock('./exchange/exchange-config', () => ({ ewsClientFor: vi.fn((config: any) => { exchangeMocks.configs.push(config); return exchangeMocks.client }) }))
 vi.mock('./mail/mail-import', () => ({ MailImportService: vi.fn(function (deps: any) { localMocks.deps.push(deps); return localMocks.service }) }))
 vi.mock('./mail/local-folders', () => ({ transferToLocalFolders: localMocks.transfer }))
 const archiveMocks = vi.hoisted(() => {
@@ -1651,6 +1666,54 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.fs.existsSync.mockImplementation(() => false)
     sqlite.close()
   }, 15_000)
+
+  it('routes Exchange (EWS) sync, queued actions, drafts, sending, and session expiry', async () => {
+    const { EwsAuthError } = await import('./exchange/ews-transport')
+    const exchangeAccount = { ...mocks.account, provider: 'exchange' }
+    const config = { email: 'ada@contoso.test', username: 'CONTOSO\\ada', password: 'secret', ewsUrl: 'https://mail.contoso.test/EWS/Exchange.asmx', auth: 'ntlm' }
+    mocks.setCredential({ type: 'exchange', config })
+    mocks.db.getAccount.mockReturnValue(exchangeAccount)
+    mocks.db.listAccounts.mockReturnValue([exchangeAccount])
+    mocks.db.getProviderState.mockImplementation((_id: string, fallback: any) => fallback)
+
+    await expect(request({ type: 'accounts:verify', payload: { accountId: 'account-1' } })).resolves.toMatchObject({ result: undefined })
+    expect(exchangeMocks.client.probe).toHaveBeenCalled()
+    expect(exchangeMocks.configs.at(-1)).toEqual(config)
+
+    mocks.fs.statfsSync.mockReturnValue({ bavail: 2_000_000n, bsize: 4096n })
+    await request({ type: 'sync:resume', payload: { accountId: 'account-1' } })
+    await vi.waitFor(() => expect(mocks.db.setAccountHistory).toHaveBeenCalledWith('account-1', expect.stringMatching(/^ews:/), true))
+    expect(exchangeMocks.client.syncFolderHierarchy).toHaveBeenCalled()
+
+    // A queued read action from the durable operation queue becomes UpdateItem.
+    mocks.db.remoteMessagesForThreads.mockReturnValue([{ id: 'ews-local', remoteFolderId: 'inbox-id', remoteUid: 'AAMkItem' }])
+    mocks.db.dueOperations.mockReturnValueOnce([{ id: 'ews-read', account_id: 'account-1', kind: 'read', thread_ids_json: '["thread-1"]', label_id: null }]).mockReturnValue([])
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(exchangeMocks.client.updateItems).toHaveBeenCalledWith([{ item: { id: 'AAMkItem' }, updates: expect.stringContaining('message:IsRead') }], expect.objectContaining({ conflictResolution: 'AutoResolve' })))
+    expect(mocks.db.updateOperation).toHaveBeenCalledWith('ews-read', 'succeeded')
+
+    const input = { id: 'ews-draft-local', accountId: 'account-1', to: ['grace@contoso.test'], cc: [], bcc: [], subject: 'EWS draft', text: 'Body', references: [], attachmentPaths: [] }
+    mocks.db.getDraft.mockReturnValue({ gmail_draft_id: 'old-draft', remote_revision: 'ck-1' })
+    await expect(request({ type: 'drafts:save', payload: input })).resolves.toMatchObject({ result: { status: 'synced', remoteDraftId: 'ews-draft', remoteRevision: 'ck-2' } })
+    expect(exchangeMocks.client.changeKey).toHaveBeenCalledWith('old-draft')
+    expect(exchangeMocks.client.deleteItems).toHaveBeenCalledWith(['old-draft'], 'HardDelete')
+
+    const row = { id: 'ews-delivery', account_id: 'account-1', thread_id: null, in_reply_to: null, references_json: '[]', to_json: '["grace@contoso.test"]', cc_json: '[]', bcc_json: '[]', subject: 'Send', body_text: 'Body', body_html: null, attachment_paths_json: '[]', gmail_draft_id: null }
+    mocks.db.getDraft.mockReturnValue(row)
+    queueDeliveries([row])
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(exchangeMocks.client.sendMime).toHaveBeenCalledWith(expect.any(Buffer), { readReceipt: false, deliveryReceipt: false }))
+
+    exchangeMocks.client.syncFolderHierarchy.mockRejectedValueOnce(new EwsAuthError('Exchange rejected the user name or password (401 Unauthorized)'))
+    mocks.db.setAccountStatus.mockClear()
+    await request({ type: 'sync:resume', payload: { accountId: 'account-1' } })
+    await vi.waitFor(() => expect(mocks.db.setAccountStatus).toHaveBeenCalledWith('account-1', 'needs-auth', expect.stringMatching(/401/)))
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.listAccounts.mockReturnValue([mocks.account])
+    mocks.db.remoteMessagesForThreads.mockReturnValue([])
+    mocks.db.getDraft.mockReturnValue(undefined)
+    mocks.setCredential({ type: 'oauth', accessToken: 'token' })
+  })
 
   it('shuts down cleanly', async () => {
     // Touch the import service so shutdown has a running service to halt.

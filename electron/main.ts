@@ -97,6 +97,10 @@ import { DavStore } from './productivity/dav-store'
 import { DavCredentialVault } from './productivity/dav-credentials'
 import { DavService } from './productivity/dav-service'
 import { registerDavAccounts } from './productivity/dav-ipc'
+import { ExchangeStore } from './exchange/exchange-store'
+import { ExchangeProductivityService } from './exchange/exchange-productivity'
+import { registerExchangeAccounts } from './exchange/exchange-ipc'
+import { ewsClientFor } from './exchange/exchange-config'
 import { carryPendingConferences } from './productivity/online-meetings'
 import { validEventConference } from '../src/lib/online-meetings'
 import { registerMailImport } from './mail/mail-import-ipc'
@@ -192,6 +196,9 @@ let interchangeService: ReturnType<typeof registerCalendarContactInterchange> | 
 let davStore: DavStore | null = null
 let davService: DavService | null = null
 let davIpc: ReturnType<typeof registerDavAccounts> | null = null
+let exchangeStore: ExchangeStore | null = null
+let exchangeService: ExchangeProductivityService | null = null
+let exchangeIpc: ReturnType<typeof registerExchangeAccounts> | null = null
 let taskService: TaskService | null = null
 let taskPolling: NodeJS.Timeout | undefined
 let taskExtras: ReturnType<typeof registerTaskExtras> | null = null
@@ -551,9 +558,20 @@ function broadcastProductivity() {
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { snapshot })
 }
 
+function requireExchangeService() {
+  if (!exchangeService) throw new Error('Exchange accounts are not ready')
+  return exchangeService
+}
+
 async function syncProductivity(accountId: string): Promise<ProductivitySnapshot> {
   if (davService?.hasAccount(accountId)) {
     try { await davService.sync(accountId) } finally { davIpc?.broadcast() }
+    return requireProductivityStore().snapshot()
+  }
+  // An Exchange mail account restored without its calendar cache starts a fresh one.
+  if (exchangeService && accountProviders.get(accountId) === 'exchange' && !exchangeService.hasAccount(accountId)) exchangeService.addAccount(accountId)
+  if (exchangeService?.hasAccount(accountId)) {
+    try { await exchangeService.sync(accountId) } finally { exchangeIpc?.broadcast() }
     return requireProductivityStore().snapshot()
   }
   const provider = accountProviders.get(accountId)
@@ -668,6 +686,11 @@ async function createProductivityEvent(input: CalendarEvent) {
     davIpc?.broadcast()
     return store.snapshot()
   }
+  if (calendar.provider === 'exchange') {
+    await requireExchangeService().createEvent(calendar, input)
+    exchangeIpc?.broadcast()
+    return store.snapshot()
+  }
   if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
   // Zoom and Webex meetings are created before the event and written into it (meeting-coordinator.ts).
   const meetings = requireMeetingHosts().coordinator
@@ -694,6 +717,11 @@ async function writeProductivitySeries(eventId: string, scope: 'following' | 'se
   if (!calendar) throw new Error('That calendar is no longer available')
   if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
   if (current.provider !== calendar.provider || current.accountId !== calendar.accountId) throw new Error('The event’s calendar connection changed; synchronize before editing')
+  if (calendar.provider === 'exchange') {
+    await requireExchangeService().writeSeries(current, scope, input)
+    exchangeIpc?.broadcast()
+    return store.snapshot()
+  }
   const connector = writableCalendarConnector(calendar)
   if (input) await connector.updateEventSeries(calendar, current, input, scope)
   else await connector.deleteEventSeries(calendar, current, scope)
@@ -703,6 +731,14 @@ async function writeProductivitySeries(eventId: string, scope: 'following' | 'se
 }
 
 async function updateProductivityEvent(input: CalendarEvent, scope?: RecurrenceEditScope) {
+  // Exchange keeps series masters; a generated occurrence is written through its master.
+  const exchangeOccurrence = exchangeService?.occurrenceTarget(input.id)
+  if (exchangeOccurrence) {
+    if (scope === 'series' || scope === 'following') await requireExchangeService().writeSeries({ ...exchangeOccurrence.master, start: exchangeOccurrence.originalStart, end: new Date(Date.parse(exchangeOccurrence.originalStart) + Date.parse(exchangeOccurrence.master.end) - Date.parse(exchangeOccurrence.master.start)).toISOString() }, scope, input)
+    else await requireExchangeService().changeOccurrence(exchangeOccurrence.master, exchangeOccurrence.originalStart, input)
+    exchangeIpc?.broadcast()
+    return requireProductivityStore().snapshot()
+  }
   if (scope === 'following' || scope === 'series') {
     if (requireProductivityStore().snapshot().events.find((item) => item.id === input.id)?.seriesId) return writeProductivitySeries(input.id, scope, input)
   }
@@ -721,6 +757,11 @@ async function updateProductivityEvent(input: CalendarEvent, scope?: RecurrenceE
     davIpc?.broadcast()
     return store.snapshot()
   }
+  if (calendar.provider === 'exchange') {
+    await requireExchangeService().updateEvent(current, input)
+    exchangeIpc?.broadcast()
+    return store.snapshot()
+  }
   // A requested meeting is stored with its request id before the write, so a failed or interrupted save is
   // retried under the same id (and the editor reopens with it) instead of requesting a second meeting.
   if (input.conference?.status === 'pending' && input.conference.requestId && !current.conference) store.upsertEvent({ ...current, conference: input.conference })
@@ -734,6 +775,13 @@ async function updateProductivityEvent(input: CalendarEvent, scope?: RecurrenceE
 }
 
 async function deleteProductivityEvent(eventId: string, scope?: RecurrenceEditScope) {
+  const exchangeOccurrence = exchangeService?.occurrenceTarget(eventId)
+  if (exchangeOccurrence) {
+    if (scope === 'series' || scope === 'following') await requireExchangeService().writeSeries(exchangeOccurrence.master, scope)
+    else await requireExchangeService().changeOccurrence(exchangeOccurrence.master, exchangeOccurrence.originalStart)
+    exchangeIpc?.broadcast()
+    return requireProductivityStore().snapshot()
+  }
   if (scope === 'following' || scope === 'series') {
     if (requireProductivityStore().snapshot().events.find((item) => item.id === eventId)?.seriesId) return writeProductivitySeries(eventId, scope)
   }
@@ -749,6 +797,11 @@ async function deleteProductivityEvent(eventId: string, scope?: RecurrenceEditSc
   if (calendar.provider === 'dav') {
     await requireDavService().deleteEvent(current)
     davIpc?.broadcast()
+    return store.snapshot()
+  }
+  if (calendar.provider === 'exchange') {
+    await requireExchangeService().deleteEvent(current)
+    exchangeIpc?.broadcast()
     return store.snapshot()
   }
   await writableCalendarConnector(calendar).deleteEvent(calendar, current)
@@ -834,6 +887,11 @@ async function createProductivityContact(accountId: string, input: Contact) {
     davIpc?.broadcast()
     return { contact, snapshot: requireProductivityStore().snapshot() }
   }
+  if (exchangeService?.hasAccount(accountId)) {
+    const contact = await exchangeService.createContact(accountId, input)
+    exchangeIpc?.broadcast()
+    return { contact, snapshot: requireProductivityStore().snapshot() }
+  }
   const provider = accountProviders.get(accountId)
   if (provider !== 'gmail' && provider !== 'microsoft') throw new Error('Choose a connected Google or Microsoft account')
   const store = requireProductivityStore()
@@ -853,6 +911,12 @@ async function updateProductivityContact(input: Contact) {
     davIpc?.broadcast()
     return { contact, snapshot: store.snapshot() }
   }
+  if (current.provider === 'exchange') {
+    if (current.readOnly) throw new Error('This contacts folder is read-only')
+    const contact = await requireExchangeService().updateContact(current, input)
+    exchangeIpc?.broadcast()
+    return { contact, snapshot: store.snapshot() }
+  }
   if (current.readOnly) throw new Error('Reconnect this account once to enable Contacts editing')
   const conflict = contactEditConflict(current, input as Contact & { revision?: unknown })
   if (conflict) throw new Error(conflict)
@@ -870,6 +934,12 @@ async function deleteProductivityContact(contactId: string) {
     if (current.readOnly) throw new Error('This address book is read-only')
     await requireDavService().deleteContact(current)
     davIpc?.broadcast()
+    return store.snapshot()
+  }
+  if (current.provider === 'exchange') {
+    if (current.readOnly) throw new Error('This contacts folder is read-only')
+    await requireExchangeService().deleteContact(current)
+    exchangeIpc?.broadcast()
     return store.snapshot()
   }
   if (current.readOnly) throw new Error('Reconnect this account once to enable Contacts editing')
@@ -952,6 +1022,7 @@ async function initializeMail() {
         details: event.payload as unknown as Record<string, unknown>
       })
       if (event.type === 'new-mail') showNewMailNotification(event.payload)
+      if (event.type === 'accounts-changed') for (const account of event.payload) if (account.provider === 'exchange' && account.status === 'needs-auth') exchangeService?.markNeedsAuth(account.id)
       if (event.type === 'reply-watch') showReplyWatchNotification(event.payload)
       mainWindow?.webContents.send('mail:event', event)
       for (const window of messageWindows.values()) if (!window.isDestroyed()) window.webContents.send('mail:event', event)
@@ -1795,7 +1866,13 @@ function registerIpc() {
   })
   registerContactMerge(ipcMain, () => ({
     store: requireProductivityStore(),
-    connector: (accountId, provider) => writableContactsConnector(accountId, provider as 'gmail' | 'microsoft'),
+    connector: (accountId, provider) => provider === 'exchange'
+      ? {
+        createContact: (contact) => requireExchangeService().createContact(accountId, contact),
+        updateContact: (current, contact) => requireExchangeService().updateContact(current, contact),
+        deleteContact: (contact) => requireExchangeService().deleteContact(contact)
+      }
+      : writableContactsConnector(accountId, provider as 'gmail' | 'microsoft'),
     log: (event, accountId, details) => diagnostic({ level: 'info', component: 'provider', event, accountId, details })
   }), validContact)
   ipcMain.handle('app:update:status', () => updates?.status() ?? ({
@@ -1970,6 +2047,7 @@ function registerIpc() {
     await requireVault().remove(accountId)
     await requireMailWorker().request({ type: 'accounts:disconnect', payload: { accountId, mode } })
     requireProductivityStore().removeAccount(accountId)
+    if (exchangeService?.hasAccount(accountId)) { exchangeService.removeAccount(accountId); exchangeIpc?.broadcast() }
     if (mode === 'delete') invitationStore?.removeAccount(accountId)
     accountProviders.delete(accountId)
     if (mode === 'delete') await taskService?.removeAccount(accountId)
@@ -2154,6 +2232,7 @@ function registerIpc() {
     taskNetworkOnline = online
     if (online) void taskService?.flush().catch(() => {})
     if (online) void davIpc?.flushNow()
+    if (online) void exchangeIpc?.flushNow()
     chatRuntime?.networkChanged()
     return requireMailWorker().request({ type: 'network', payload: { online } })
   })
@@ -2340,6 +2419,25 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
   })
   davIpc = registerDavAccounts({ service: requireDavService, productivityChanged: broadcastProductivity })
+  exchangeStore = new ExchangeStore(join(app.getPath('userData'), 'exchange.sqlite'))
+  exchangeService = new ExchangeProductivityService({
+    store: exchangeStore,
+    productivity: requireProductivityStore,
+    client: (accountId) => ewsClientFor(requireVault().exchangeCredential(accountId)),
+    online: () => taskNetworkOnline && net.isOnline(),
+    diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
+  })
+  exchangeIpc = registerExchangeAccounts({
+    ipcMain,
+    service: requireExchangeService,
+    vault: requireVault,
+    worker: requireMailWorker,
+    accountColor,
+    accountAdded: (account) => accountProviders.set(account.id, account.provider),
+    accountRemoved: (accountId) => accountProviders.delete(accountId),
+    broadcast: (snapshot) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('exchange:changed', snapshot)),
+    productivityChanged: broadcastProductivity
+  })
   registerRemoteImageProtocol()
   readyToOpenWindows = true
   createWindow()
@@ -2377,6 +2475,9 @@ app.on('before-quit', () => {
   davIpc?.dispose()
   davStore?.close()
   davStore = null
+  exchangeIpc?.dispose()
+  exchangeStore?.close()
+  exchangeStore = null
   interchangeStore?.close()
   interchangeStore = null
   invitationStore?.close()

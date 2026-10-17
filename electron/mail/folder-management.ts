@@ -22,6 +22,8 @@ import { FolderConflictError, FolderNotEmptyError } from './folder-errors'
 import { GmailApiError, type GmailClient } from './gmail-client'
 import { labelsForImapFolders, type ImapSmtpClient } from './imap-client'
 import { MicrosoftGraphError, microsoftLabels, type MicrosoftGraphClient } from './microsoft-client'
+import type { ExchangeFolderApi } from '../exchange/ews-mail'
+import { EwsError } from '../exchange/ews-client'
 
 type GmailFolderApi = Pick<GmailClient, 'listLabels' | 'getLabel' | 'createLabel' | 'patchLabel' | 'deleteLabel'>
 type MicrosoftFolderApi = Pick<MicrosoftGraphClient, 'listFolders' | 'folder' | 'createFolder' | 'renameFolder' | 'moveFolder' | 'deleteFolder'>
@@ -33,6 +35,8 @@ export interface MailFolderManagerDeps {
   gmail(accountId: string): GmailFolderApi
   microsoft(accountId: string): MicrosoftFolderApi
   imap(accountId: string): Promise<ImapFolderApi>
+  /** On-premises Exchange (EWS); optional so existing test doubles stay valid. */
+  exchange?(accountId: string): Promise<Pick<ExchangeFolderApi, 'listLabels' | 'folder' | 'createFolder' | 'renameFolder' | 'moveFolder' | 'deleteFolder'>>
 }
 
 const folderPath = (labelId: string) => labelId.startsWith('folder:') ? labelId.slice(7) : labelId
@@ -72,12 +76,18 @@ export class MailFolderManager {
     let labels: MailLabel[]
     if (provider === 'gmail') labels = await this.deps.gmail(accountId).listLabels()
     else if (provider === 'microsoft') labels = microsoftLabels(accountId, await this.deps.microsoft(accountId).listFolders())
+    else if (provider === 'exchange') labels = await (await this.exchange(accountId)).listLabels(accountId)
     else {
       const client = await this.deps.imap(accountId)
       labels = labelsForImapFolders(accountId, await client.withConnection((connection) => client.listFolders(connection)))
     }
     this.database.replaceLabels(accountId, labels)
     return this.database.listLabels([accountId])
+  }
+
+  private async exchange(accountId: string) {
+    if (!this.deps.exchange) throw new Error('Exchange folder management is not available')
+    return this.deps.exchange(accountId)
   }
 
   private async journal<T>(accountId: string, kind: 'create' | 'update' | 'delete', labelId: string | undefined, input: unknown, run: () => Promise<T>) {
@@ -107,7 +117,7 @@ export class MailFolderManager {
       ...usage,
       childFolders: mailFolderDescendants(label, labels).length,
       deleteKeepsMessages: capabilities.deleteKeepsMessages,
-      messagesMoveTo: account.provider === 'gmail' ? 'All Mail' : account.provider === 'microsoft' ? 'Deleted Items' : 'Trash'
+      messagesMoveTo: account.provider === 'gmail' ? 'All Mail' : account.provider === 'microsoft' || account.provider === 'exchange' ? 'Deleted Items' : 'Trash'
     }
   }
 
@@ -143,6 +153,7 @@ export class MailFolderManager {
     const createdId = await this.journal(input.accountId, 'create', undefined, input, async () => {
       if (account.provider === 'gmail') return (await this.deps.gmail(input.accountId).createLabel(parent ? `${parent.name}/${name}` : name, color)).id
       if (account.provider === 'microsoft') return `folder:${(await this.deps.microsoft(input.accountId).createFolder(name, parent ? folderPath(parent.id) : undefined)).id}`
+      if (account.provider === 'exchange') return `folder:${(await (await this.exchange(input.accountId)).createFolder(name, parent ? folderPath(parent.id) : undefined)).id}`
       return `folder:${(await (await this.deps.imap(input.accountId)).createFolder(parent ? folderPath(parent.id) : undefined, name)).path}`
     })
     const refreshed = await this.refresh(input.accountId)
@@ -188,6 +199,16 @@ export class MailFolderManager {
       }
       if (account.provider === 'microsoft') {
         const client = this.deps.microsoft(input.accountId)
+        const id = folderPath(label.id)
+        if (renaming) await client.renameFolder(id, name)
+        if (moving) {
+          const moved = await client.moveFolder(id, parent ? folderPath(parent.id) : undefined)
+          if (moved?.id && moved.id !== id) renamed[label.id] = `folder:${moved.id}`
+        }
+        return
+      }
+      if (account.provider === 'exchange') {
+        const client = await this.exchange(input.accountId)
         const id = folderPath(label.id)
         if (renaming) await client.renameFolder(id, name)
         if (moving) {
@@ -242,10 +263,22 @@ export class MailFolderManager {
         await client.deleteFolder(folderPath(label.id))
         return
       }
+      if (account.provider === 'exchange') {
+        const client = await this.exchange(input.accountId)
+        const folder = await client.folder(folderPath(label.id))
+        if (folder.childFolderCount) throw new Error('Delete or move this folder’s subfolders first')
+        if ((folder.totalCount ?? 0) > 0 && !input.confirmNonEmpty) throw new FolderNotEmptyError(folder.totalCount ?? 0)
+        await client.deleteFolder(folderPath(label.id))
+        return
+      }
       await (await this.deps.imap(input.accountId)).deleteFolder(folderPath(label.id), Boolean(input.confirmNonEmpty))
     })
     if (account.provider === 'gmail') this.database.removeLabelReferences(input.accountId, label.id)
-    else if (account.provider !== 'microsoft') {
+    else if (account.provider === 'exchange') {
+      // The folder (and its messages) moved to Deleted Items; the next sync lists them there.
+      this.database.reconcileRemoteFolder(input.accountId, folderPath(label.id), new Set())
+      this.renameProviderState(input.accountId, { [label.id]: '' })
+    } else if (account.provider !== 'microsoft') {
       // The server copies now live in Trash and are downloaded there by the
       // next sync; drop the cached copies that still point at the old path.
       this.database.reconcileRemoteFolder(input.accountId, folderPath(label.id), new Set())
@@ -282,6 +315,11 @@ export function providerFolderError(error: unknown): Error {
   if (error instanceof GmailApiError || error instanceof MicrosoftGraphError) {
     if (error.status === 409) return new Error('A folder or label with that name already exists on the server')
     if (error.status === 404) return new FolderConflictError('The folder was changed or removed on the server. The folder list was refreshed.')
+    return error
+  }
+  if (error instanceof EwsError) {
+    if (error.code === 'ErrorFolderExists') return new Error('A folder with that name already exists on the Exchange server')
+    if (error.code === 'ErrorFolderNotFound' || error.code === 'ErrorItemNotFound') return new FolderConflictError('The folder was changed or removed on the Exchange server. The folder list was refreshed.')
     return error
   }
   const code = (error as { serverResponseCode?: string } | undefined)?.serverResponseCode

@@ -15,6 +15,7 @@ Automated unit tests deliberately mock provider responses. This matrix is the re
 | `proton-bridge` | Proton Mail Bridge on the test machine | Bridge credentials | Beta |
 | `zoom` | Disposable Zoom user that may schedule meetings, plus a Google or Microsoft calendar account from this table | Zoom user-managed OAuth app (Settings › Online meetings) | Beta |
 | `webex` | Disposable Webex user with a Meetings license, plus a Google or Microsoft calendar account from this table | Webex integration (Settings › Online meetings) | Beta |
+| `exchange-2016`, `exchange-2019`, `exchange-se` | Disposable mailbox on on-premises Exchange Server 2016, 2019, and Subscription Edition (EWS) | NTLM and Basic over HTTPS; OAuth bearer on a hybrid test tenant | Beta |
 
 Record no secrets in evidence. Use an account alias such as `gmail-a`, the Aerio version and commit, Windows version, start/end times, result, diagnostic export filename, and issue link.
 
@@ -97,6 +98,27 @@ Zoom and Webex meetings are scheduled through the host's own account and written
 | --- | --- | --- | --- | --- | --- |
 | zoom | Beta | Beta | Beta | Beta | Beta |
 | webex | Beta | Beta | Beta | Beta | Beta |
+
+## Exchange Server (EWS) coverage
+
+On-premises Exchange uses EWS ([exchange-ews.md](exchange-ews.md)); Microsoft 365 stays on the `microsoft` rows above. These scenarios add to the mail and Calendar/Contacts scenarios:
+
+| ID | Scenario | Pass criteria |
+| --- | --- | --- |
+| `EWS-DISC-01` | Autodiscover | Discovery succeeds through `https://<domain>/autodiscover`, `autodiscover.<domain>`, the HTTP redirect method, and the SRV record on separately configured test domains; a cross-domain redirect asks for consent before any password is sent there; a domain without Autodiscover reports every attempt and accepts a manual EWS URL. |
+| `EWS-AUTH-01` | Authentication matrix | Automatic picks NTLM where enabled; NTLM, Negotiate-with-NTLM, and Basic over HTTPS connect; a Kerberos-only virtual directory, Basic turned off, `http://` URLs, and Exchange 2010 are refused with their specific messages; an expired hybrid token or changed password shows Sign-in needed and re-authentication resumes sync without losing local mail or queued writes. |
+| `EWS-SYNC-01` | Large folders and checkpoints | A folder with more than 512 items synchronizes completely in 100-item pages; killing Aerio mid-folder resumes from the saved page; invalidating the sync state (mailbox move or server restore) relists the folder without duplicates or stale items. |
+| `EWS-CONFLICT-01` | ChangeKey conflicts | An event and a contact edited in Outlook before a stale Aerio edit or delete reach review with the server version shown; both resolutions converge in Outlook and OWA. |
+
+Use account aliases starting with `exchange-2016-`, `exchange-2019-`, or `exchange-se-`. Exchange is not part of the release gate checked by `verify:live-evidence` until it moves from Beta to Required.
+
+| Server | EWS-DISC-01 | EWS-AUTH-01 | EWS-SYNC-01 | EWS-CONFLICT-01 | AUTH-02 | SYNC-02 | SYNC-03 | SYNC-04 | SYNC-05 | SYNC-09 | DRAFT-01 | DRAFT-04 | SEND-01 | SEND-02 | CAL-01 | CAL-02 | CAL-WRITE-01 | CAL-WRITE-02 | CONTACT-01 | CONTACT-WRITE-01 | CONTACT-WRITE-02 | PROD-SYNC-01 | PROD-FAIL-01 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| exchange-2016 | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta |
+| exchange-2019 | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta |
+| exchange-se | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta |
+
+No Exchange results have been recorded yet.
 
 ## Execution log
 

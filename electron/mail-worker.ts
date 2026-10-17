@@ -30,6 +30,10 @@ import { GmailApiError, GmailClient, type GmailRawMessage } from './mail/gmail-c
 import { ImapSmtpClient, labelsForImapFolders, type ImapFolder } from './mail/imap-client'
 import { MicrosoftGraphClient, MicrosoftGraphError, microsoftLabels, microsoftMessageLabels } from './mail/microsoft-client'
 import { MailFolderManager } from './mail/folder-management'
+import { applyExchangeAction, ExchangeFolderApi, saveExchangeDraft, sendExchangeMime, syncExchangeMail, type ExchangeProviderState } from './exchange/ews-mail'
+import { ewsClientFor } from './exchange/exchange-config'
+import { EwsError, type EwsClient } from './exchange/ews-client'
+import { EwsAuthError } from './exchange/ews-transport'
 import { sanitizeMessageHtmlWithReport } from './mail/message-security'
 import { buildNewMailNotification } from './mail/new-mail'
 import { messageIdFromMime } from './mail/reply-watches'
@@ -210,12 +214,27 @@ function microsoftClientFor(accountId: string) {
   })
 }
 
+// One EWS client per Exchange account, so NTLM's authenticated connection is reused; a changed
+// password or token replaces it.
+const exchangeClients = new Map<string, { key: string; client: EwsClient }>()
+async function exchangeClientFor(accountId: string) {
+  const credential = await getCredential(accountId)
+  if (credential.type !== 'exchange') throw new Error('The Exchange account does not have server credentials')
+  const key = JSON.stringify(credential.config)
+  const cached = exchangeClients.get(accountId)
+  if (cached?.key === key) return cached.client
+  cached?.client.close()
+  const client = ewsClientFor(credential.config)
+  exchangeClients.set(accountId, { key, client })
+  return client
+}
+
 let folderManagerInstance: MailFolderManager | undefined
 function folderManager() {
   if (!database) throw new Error('Database is not initialized')
   if (!folderManagerInstance) {
     const db = database
-    folderManagerInstance = new MailFolderManager({ database: db, online: () => online, gmail: clientFor, microsoft: microsoftClientFor, imap: imapClientFor })
+    folderManagerInstance = new MailFolderManager({ database: db, online: () => online, gmail: clientFor, microsoft: microsoftClientFor, imap: imapClientFor, exchange: async (accountId) => new ExchangeFolderApi(await exchangeClientFor(accountId)) })
   }
   return folderManagerInstance
 }
@@ -407,7 +426,7 @@ function progress(accountId: string, phase?: SyncProgress['phase'], message?: st
 
 function isAuthenticationError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
-  return (error instanceof GmailApiError && (error.status === 401 || error.status === 403)) ||
+  return error instanceof EwsAuthError || (error instanceof GmailApiError && (error.status === 401 || error.status === 403)) ||
     (error instanceof MicrosoftGraphError && (error.status === 401 || error.status === 403)) ||
     /invalid_grant|connect(ed)? again|unauthori[sz]ed|authentication failed|invalid credentials|login failed/i.test(message)
 }
@@ -745,6 +764,23 @@ async function syncMicrosoftAccount(accountId: string) {
   if (!firstSync) emitNewMail(accountId, newMessages)
 }
 
+async function syncExchangeAccount(accountId: string) {
+  if (!database) throw new Error('Database is not initialized')
+  const result = await syncExchangeMail({
+    accountId,
+    database,
+    client: await exchangeClientFor(accountId),
+    store: (message) => parseRawAndStore(accountId, message),
+    progress: (phase, message) => progress(accountId, phase, message),
+    checkpoint: () => assertCanSync(accountId)
+  })
+  database.setAccountHistory(accountId, `ews:${Date.now()}`, true)
+  progress(accountId, 'complete', 'Up to date')
+  emit({ type: 'accounts-changed', payload: database.listAccounts() })
+  emit({ type: 'mail-changed', payload: { accountId } })
+  if (!result.firstSync) emitNewMail(accountId, result.newRecords)
+}
+
 async function syncAccount(accountId: string, forceFull = false) {
   if (!database || syncing.has(accountId) || syncScheduled.has(accountId)) return
   // Local Folders have no server to synchronize with.
@@ -766,6 +802,7 @@ async function syncAccount(accountId: string, forceFull = false) {
     if (forceFull) database.resetInventory(accountId)
     if (provider === 'pop3') await syncPop3Account(accountId)
     else if (provider === 'microsoft') await syncMicrosoftAccount(accountId)
+    else if (provider === 'exchange') await syncExchangeAccount(accountId)
     else if (provider && provider !== 'gmail') await syncImapAccount(accountId)
     else if (forceFull || !database.getAccountHistory(accountId)) await downloadInventory(accountId)
     else await incrementalSync(accountId)
@@ -879,6 +916,9 @@ async function runOperations() {
           const special = kind === 'trash' ? 'deleteditems' : kind === 'archive' ? 'archive' : kind === 'untrash' || kind === 'unarchive' ? 'inbox' : undefined
           const destination = labelId?.startsWith('folder:') ? labelId.slice(7) : special ? state.specialFolders?.[special] : undefined
           await microsoftClientFor(accountId).applyAction(messages.map((message) => message.id), kind, destination)
+        } else if (provider === 'exchange') {
+          const state = database.getProviderState<Partial<ExchangeProviderState>>(accountId, {})
+          await applyExchangeAction(await exchangeClientFor(accountId), state.special ?? {}, messages.flatMap((message) => message.remoteUid ? [message.remoteUid] : []), kind, labelId)
         } else {
           await (await imapClientFor(accountId)).applyAction(messages.flatMap((message) => message.remoteFolderId && message.remoteUid
             ? [{ folder: message.remoteFolderId, uid: Number(message.remoteUid) }] : []), kind, labelId)
@@ -1001,6 +1041,7 @@ function receiptService() {
       if (account.archived) throw new Error('Connect this account before sending read receipts')
       if (account.provider === 'gmail') await clientFor(account.id).sendMessage(raw.toString('base64url'))
       else if (account.provider === 'microsoft') await microsoftClientFor(account.id).send(raw)
+      else if (account.provider === 'exchange') await sendExchangeMime(await exchangeClientFor(account.id), raw)
       else await (await imapClientFor(account.id)).send(raw, recipients)
     }
   })
@@ -1013,9 +1054,10 @@ async function assertRemoteDraftUnchanged(accountId: string, provider: MailAccou
   try {
     currentRevision = provider === 'gmail'
       ? await clientFor(accountId).draftRevision(remoteId)
-      : await microsoftClientFor(accountId).draftRevision(remoteId)
+      : provider === 'exchange' ? await (await exchangeClientFor(accountId)).changeKey(remoteId)
+        : await microsoftClientFor(accountId).draftRevision(remoteId)
   } catch (error) {
-    if (((error instanceof GmailApiError || error instanceof MicrosoftGraphError) && error.status === 404) || /no longer available for editing/i.test(error instanceof Error ? error.message : '')) {
+    if (((error instanceof GmailApiError || error instanceof MicrosoftGraphError) && error.status === 404) || (error instanceof EwsError && error.code === 'ErrorItemNotFound') || /no longer available for editing/i.test(error instanceof Error ? error.message : '')) {
       throw new DraftConflictError()
     }
     throw error
@@ -1048,6 +1090,11 @@ async function saveDraft(input: MailDraftInput) {
     } else if (provider === 'microsoft') {
       if (row?.gmail_draft_id) await assertRemoteDraftUnchanged(input.accountId, provider, String(row.gmail_draft_id), row.remote_revision ? String(row.remote_revision) : undefined)
       const remote = await microsoftClientFor(input.accountId).saveDraft(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined, input.sendOptions)
+      remoteId = remote.id
+      remoteRevision = remote.revision
+    } else if (provider === 'exchange') {
+      if (row?.gmail_draft_id) await assertRemoteDraftUnchanged(input.accountId, provider, String(row.gmail_draft_id), row.remote_revision ? String(row.remote_revision) : undefined)
+      const remote = await saveExchangeDraft(await exchangeClientFor(input.accountId), createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined)
       remoteId = remote.id
       remoteRevision = remote.revision
     } else {
@@ -1088,6 +1135,14 @@ async function transmitMessage(input: MailDraftInput, provider: MailAccountSumma
       if (remoteDraftId) await client.deleteDraft(remoteDraftId).catch(() => undefined)
     } else await microsoftClientFor(input.accountId).send(mime, remoteDraftId, input.sendOptions)
     return { threadId: input.threadId }
+  }
+  if (provider === 'exchange') {
+    // CreateItem with SendAndSaveCopy sends the final MIME; the superseded draft is then removed.
+    const client = await exchangeClientFor(input.accountId)
+    const mime = await protectOutgoing(createMimeBuffer(input, from), input, from)
+    await sendExchangeMime(client, mime, input.sendOptions)
+    if (remoteDraftId) await client.deleteItems([remoteDraftId], 'HardDelete').catch(() => undefined)
+    return { messageIdHeader: messageIdFromMime(mime), threadId: input.threadId }
   }
   const client = await imapClientFor(input.accountId)
   const recipients = [...input.to, ...input.cc, ...input.bcc]
@@ -1153,7 +1208,10 @@ async function discardDraft(id: string) {
     if (remoteId) {
       if (provider === 'gmail') await clientFor(accountId).deleteDraft(remoteId)
       else if (provider === 'microsoft') await microsoftClientFor(accountId).deleteDraft(remoteId)
-      else await (await imapClientFor(accountId)).deleteDraft(remoteId)
+      else if (provider === 'exchange') {
+        const [failure] = await (await exchangeClientFor(accountId)).deleteItems([remoteId], 'MoveToDeletedItems')
+        if (failure && failure.code !== 'ErrorItemNotFound') throw failure
+      } else await (await imapClientFor(accountId)).deleteDraft(remoteId)
     }
     database.deleteDraftRecord(id)
     database.replyWatches.cancelForDraft(id)
@@ -1434,6 +1492,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
       await pop3Service().verify(account.id)
       await (await imapClientFor(account.id)).verifySmtp()
     }
+    else if (account.provider === 'exchange') await (await exchangeClientFor(account.id)).probe()
     else await (await imapClientFor(account.id)).verify()
     return
   }
@@ -1486,6 +1545,9 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     } else if (account.provider === 'microsoft') {
       if (!destination.startsWith('folder:')) throw new Error('Choose a mail folder')
       await microsoftClientFor(accountId).copyMessage(messageId, destination.slice(7))
+    } else if (account.provider === 'exchange') {
+      if (!message.remoteUid || !destination.startsWith('folder:')) throw new Error('The source or destination folder is unavailable')
+      await (await exchangeClientFor(accountId)).copyItems([message.remoteUid], { id: destination.slice(7), distinguished: false })
     } else {
       if (!message.remoteFolderId || !message.remoteUid || !destination.startsWith('folder:')) throw new Error('The source or destination folder is unavailable')
       await (await imapClientFor(accountId)).copyMessage(message.remoteFolderId, Number(message.remoteUid), destination.slice(7))
@@ -1530,6 +1592,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     const raw = createCalendarMimeBuffer({ ...input, from: account.displayName ? `${account.displayName} <${account.email}>` : account.email })
     if (account.provider === 'gmail') await clientFor(account.id).sendMessage(raw.toString('base64url'))
     else if (account.provider === 'microsoft') await microsoftClientFor(account.id).send(raw)
+    else if (account.provider === 'exchange') await sendExchangeMime(await exchangeClientFor(account.id), raw)
     else await (await imapClientFor(account.id)).send(raw, input.to)
     if (!paused.has(account.id)) void syncAccount(account.id)
     return
@@ -1802,6 +1865,8 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     await stopAttachmentIndexing()
     database.close()
     database = undefined
+    for (const { client } of exchangeClients.values()) client.close()
+    exchangeClients.clear()
     folderManagerInstance = undefined
     importServiceInstance = undefined
     pop3ServiceInstance = undefined

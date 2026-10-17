@@ -26,7 +26,7 @@ interface ContactsViewProps {
   onLocalContactsChange?(contacts: Contact[]): void
   onSaveProviderContact?(accountId: string, contact: Contact, exists: boolean): Promise<Contact>
   onDeleteProviderContact?(contactId: string): Promise<void>
-  providerAccounts?: { id: string; email: string; provider: 'gmail' | 'microsoft' | 'dav' }[]
+  providerAccounts?: { id: string; email: string; provider: 'gmail' | 'microsoft' | 'dav' | 'exchange' }[]
   syncing?: boolean
   sourceMessage?: string
   interchangePanel?: React.ReactNode
@@ -325,7 +325,7 @@ function ContactEditor({
   contact, providerAccounts, onClose, onSave, onDelete, onToast
 }: {
   contact?: Contact
-  providerAccounts: { id: string; email: string; provider: 'gmail' | 'microsoft' | 'dav' }[]
+  providerAccounts: { id: string; email: string; provider: 'gmail' | 'microsoft' | 'dav' | 'exchange' }[]
   onClose(): void
   onSave(contact: Contact, accountId?: string): Promise<void> | void
   onDelete?(): void
@@ -351,14 +351,14 @@ function ContactEditor({
   return (
     <Modal
       title={contact ? 'Edit contact' : 'New contact'}
-      subtitle={providerTarget ? `Saved to ${providerTarget.email} through ${providerTarget.provider === 'gmail' ? 'Google Contacts' : providerTarget.provider === 'dav' ? 'CardDAV' : 'Microsoft People'}.` : 'Stored locally on this PC.'}
+      subtitle={providerTarget ? `Saved to ${providerTarget.email} through ${providerTarget.provider === 'gmail' ? 'Google Contacts' : providerTarget.provider === 'dav' ? 'CardDAV' : providerTarget.provider === 'exchange' ? 'Exchange Server' : 'Microsoft People'}.` : 'Stored locally on this PC.'}
       onClose={onClose}
     >
       <div className="form-stack">
         <label className="field-label">Save to
           <select value={target} disabled={Boolean(contact)} onChange={(event) => setTarget(event.target.value)}>
             <option value="local">Local contacts on this PC</option>
-            {providerAccounts.map((account) => <option key={account.id} value={account.id}>{account.email} · {account.provider === 'gmail' ? 'Google' : account.provider === 'dav' ? 'CardDAV' : 'Microsoft'}</option>)}
+            {providerAccounts.map((account) => <option key={account.id} value={account.id}>{account.email} · {account.provider === 'gmail' ? 'Google' : account.provider === 'dav' ? 'CardDAV' : account.provider === 'exchange' ? 'Exchange' : 'Microsoft'}</option>)}
           </select>
         </label>
         <ContactPhotoPicker photo={photo} name={name} color={contact?.color ?? '#4d8f78'} disabled={provider === 'microsoft'} onChange={setPhoto} onError={onToast} />

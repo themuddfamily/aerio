@@ -14,7 +14,7 @@ export interface Account {
   email: string
   initials: string
   color: string
-  provider: 'gmail' | 'microsoft' | 'outlook' | 'imap' | 'local' | 'dav'
+  provider: 'gmail' | 'microsoft' | 'outlook' | 'imap' | 'local' | 'dav' | 'exchange'
 }
 
 export interface Attachment {
@@ -285,6 +285,8 @@ export interface AerioDesktopApi {
   dav: import('./dav-types').DavDesktopApi
   /** Zoom and Webex meeting-host accounts (E47). */
   meetingHosts?: import('./meeting-host-types').MeetingHostApi
+  /** On-premises Exchange (EWS) accounts; optional so test doubles of the API stay valid. */
+  exchange?: import('./exchange-types').ExchangeDesktopApi
   contactMerge?: import('./contact-merge-types').ContactMergeDesktopApi
   /** Matrix chat; the Chat module still appears only when its gate passes. */
   chat?: import('./chat-types').ChatDesktopApi

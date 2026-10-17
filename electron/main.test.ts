@@ -274,6 +274,14 @@ const meetingMocks = vi.hoisted(() => ({
   }
 }))
 vi.mock('./productivity/meeting-host-ipc', () => ({ initializeMeetingHosts: vi.fn(() => ({ coordinator: meetingMocks.coordinator, vault: {}, close: vi.fn() })) }))
+const exchangeMocks = vi.hoisted(() => ({
+  store: { close: vi.fn() },
+  service: { hasAccount: vi.fn((_id: string): boolean => false), occurrenceTarget: vi.fn((_id: string): unknown => undefined), markNeedsAuth: vi.fn(), removeAccount: vi.fn() },
+  ipc: { broadcast: vi.fn(), flushNow: vi.fn(async () => undefined), dispose: vi.fn() }
+}))
+vi.mock('./exchange/exchange-store', () => ({ ExchangeStore: vi.fn(function () { return exchangeMocks.store }) }))
+vi.mock('./exchange/exchange-productivity', () => ({ ExchangeProductivityService: vi.fn(function () { return exchangeMocks.service }) }))
+vi.mock('./exchange/exchange-ipc', () => ({ registerExchangeAccounts: vi.fn(() => exchangeMocks.ipc) }))
 const chatMocks = vi.hoisted(() => {
   const gate = { enabled: false, preview: false, checks: [], sdkVersion: 'matrix-js-sdk 43.0.0', message: 'Chat stays unavailable until these checks pass: two-device interoperability.' }
   const service = { timeline: vi.fn(() => ({ items: [] })), snapshot: vi.fn(() => ({ gate: { ...gate, enabled: true }, accounts: [], rooms: [], verifications: [] })) }
@@ -1682,6 +1690,46 @@ describe.sequential('Electron main process', () => {
       mocks.store.snapshot.mockReset()
       mocks.store.snapshot.mockImplementation(originalSnapshot)
       service.hasAccount.mockImplementation(() => false)
+    }
+  })
+
+  it('routes on-premises Exchange calendars, occurrences, and contacts to the EWS service', async () => {
+    const calendar = { id: 'ex-1:exchange-folder:cal', remoteId: 'AAMkCal', accountId: 'ex-1', provider: 'exchange', name: 'Calendar', color: '#000000', primary: true, canWrite: true }
+    const event = { id: 'ex-1:exchange-event:e', calendarId: calendar.id, title: 'Standup', start: '2026-10-20T09:00:00.000Z', end: '2026-10-20T10:00:00.000Z', color: '#000000', attendees: [], reminderMinutes: 0, remoteId: 'AAMkE', accountId: 'ex-1', provider: 'exchange', readOnly: false, recurrenceRule: 'FREQ=DAILY' }
+    const contact = { id: 'ex-1:exchange-contact:c', name: 'Ada', email: '', group: 'Contacts', favorite: false, color: '#000000', remoteId: 'AAMkP', accountId: 'ex-1', provider: 'exchange', readOnly: false, folderId: 'ex-1:exchange-folder:book' }
+    const service = Object.assign(exchangeMocks.service, {
+      hasAccount: vi.fn((id: string): boolean => id === 'ex-1'), sync: vi.fn(async () => undefined),
+      createEvent: vi.fn(async () => undefined), updateEvent: vi.fn(async () => undefined), deleteEvent: vi.fn(async () => undefined),
+      changeOccurrence: vi.fn(async () => undefined), writeSeries: vi.fn(async () => undefined),
+      occurrenceTarget: vi.fn((id: string): unknown => id === `${event.id}::1760950800000` ? { master: event, originalStart: '2025-10-20T09:00:00.000Z' } : undefined),
+      createContact: vi.fn(async () => contact), updateContact: vi.fn(async () => contact), deleteContact: vi.fn(async () => undefined)
+    })
+    const originalSnapshot = mocks.store.snapshot.getMockImplementation()!
+    mocks.store.snapshot.mockReturnValue({ calendars: [calendar], events: [event], contacts: [contact], sync: [] } as any)
+    try {
+      await invoke('productivity:sync', 'ex-1')
+      expect(service.sync).toHaveBeenCalledWith('ex-1')
+      expect(exchangeMocks.ipc.broadcast).toHaveBeenCalled()
+      await invoke('productivity:event-create', { ...event, id: 'event-new' })
+      expect(service.createEvent).toHaveBeenCalledWith(calendar, expect.objectContaining({ id: 'event-new' }))
+      await invoke('productivity:event-update', { ...event, title: 'Moved' })
+      expect(service.updateEvent).toHaveBeenCalledWith(event, expect.objectContaining({ title: 'Moved' }))
+      await invoke('productivity:event-delete', `${event.id}::1760950800000`, 'occurrence')
+      expect(service.changeOccurrence).toHaveBeenCalledWith(event, '2025-10-20T09:00:00.000Z')
+      await invoke('productivity:event-delete', event.id)
+      expect(service.deleteEvent).toHaveBeenCalledWith(event)
+      await expect(invoke('productivity:contact-create', 'ex-1', { ...contact, id: 'contact-new' })).resolves.toMatchObject({ contact })
+      await invoke('productivity:contact-update', { ...contact, title: 'Analyst' })
+      expect(service.updateContact).toHaveBeenCalledWith(contact, expect.objectContaining({ title: 'Analyst' }))
+      await invoke('productivity:contact-delete', contact.id)
+      expect(service.deleteContact).toHaveBeenCalledWith(contact)
+      mocks.emitWorker({ type: 'accounts-changed', payload: [{ id: 'ex-1', provider: 'exchange', status: 'needs-auth' }] })
+      expect(service.markNeedsAuth).toHaveBeenCalledWith('ex-1')
+    } finally {
+      mocks.store.snapshot.mockReset()
+      mocks.store.snapshot.mockImplementation(originalSnapshot)
+      service.hasAccount.mockImplementation(() => false)
+      service.occurrenceTarget.mockImplementation(() => undefined)
     }
   })
 

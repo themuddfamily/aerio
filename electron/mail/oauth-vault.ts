@@ -24,6 +24,7 @@ interface StoredOAuthData {
   imapAccounts: Record<string, ImapAccountInput>
   /** POP3 connection settings and passwords (E38). */
   pop3Accounts?: Record<string, Pop3ConnectionConfig>
+  exchangeAccounts?: Record<string, import('../exchange/exchange-config').ExchangeAccountConfig>
 }
 
 interface MicrosoftTokenSet {
@@ -85,7 +86,8 @@ export class OAuthVault {
         microsoftConfig: parsed.microsoftConfig,
         microsoftTokens: parsed.microsoftTokens ?? {},
         imapAccounts: parsed.imapAccounts ?? {},
-        pop3Accounts: parsed.pop3Accounts ?? {}
+        pop3Accounts: parsed.pop3Accounts ?? {},
+        exchangeAccounts: parsed.exchangeAccounts ?? {}
       }
     } catch {
       // Keep any credentials already held in memory. This also prevents a
@@ -499,10 +501,27 @@ export class OAuthVault {
     return config
   }
 
+  /** On-premises Exchange (EWS) settings with the password or token; see exchange/exchange-config.ts. */
+  storeExchange(accountId: string, config: import('../exchange/exchange-config').ExchangeAccountConfig) {
+    this.data.exchangeAccounts = { ...this.data.exchangeAccounts, [accountId]: config }
+    this.save()
+  }
+
+  exchangeCredential(accountId: string) {
+    let config = this.data.exchangeAccounts?.[accountId]
+    if (!config) {
+      this.load()
+      config = this.data.exchangeAccounts?.[accountId]
+    }
+    if (!config) throw new Error('This Exchange account needs to be connected again')
+    return config
+  }
+
   async credential(accountId: string, provider: MailProviderId) {
     if (provider === 'gmail') return { type: 'oauth' as const, accessToken: await this.accessToken(accountId) }
     if (provider === 'microsoft') return { type: 'oauth' as const, accessToken: await this.microsoftAccessToken(accountId) }
     if (provider === 'pop3') return { type: 'pop3' as const, config: this.pop3Credential(accountId) }
+    if (provider === 'exchange') return { type: 'exchange' as const, config: this.exchangeCredential(accountId) }
     return { type: 'imap' as const, config: this.imapCredential(accountId) }
   }
 
@@ -522,6 +541,7 @@ export class OAuthVault {
     delete this.data.microsoftTokens[accountId]
     delete this.data.imapAccounts[accountId]
     if (this.data.pop3Accounts) delete this.data.pop3Accounts[accountId]
+    if (this.data.exchangeAccounts) delete this.data.exchangeAccounts[accountId]
     this.accessCache.delete(accountId)
     this.save()
   }

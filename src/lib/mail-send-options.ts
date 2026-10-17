@@ -42,6 +42,14 @@ export function providerReceiptSupport(provider?: MailProviderId): ProviderRecei
       note: 'Outlook stores these as message properties. Recipients can decline read receipts, and other servers may not return delivery reports.'
     }
   }
+  if (provider === 'exchange') {
+    return {
+      importance: 'header',
+      readReceipt: 'native',
+      deliveryReceipt: 'native',
+      note: 'Exchange stores read and delivery receipt requests as message properties. Recipients can decline read receipts, and other servers may not return delivery reports.'
+    }
+  }
   if (provider === 'gmail') {
     return {
       importance: 'header',

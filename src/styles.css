@@ -5032,3 +5032,17 @@ button.mail-folder-twisty:hover { background: var(--surface-hover); color: var(-
 .inbox-tab-editor li, .inbox-rule-list li, .inbox-rule-add { display: flex; align-items: center; gap: 6px; }
 .inbox-tab-editor input:not([type="checkbox"]), .inbox-rule-add input { flex: 1 1 auto; min-width: 0; }
 .inbox-rule-list li > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* On-premises Exchange (EWS) account setup and settings */
+.exchange-discovery { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.exchange-redirect { display: flex; gap: 8px; padding: 9px 10px; border: 1px solid var(--warning, var(--line)); border-radius: 8px; background: var(--surface-2); font-size: 11px; }
+.exchange-redirect p { margin: 0 0 4px; }
+.exchange-redirect ul { margin: 4px 0 0; padding-left: 16px; color: var(--muted); font-size: 9.5px; }
+.exchange-redirect code, .exchange-found code, .exchange-url code { overflow-wrap: anywhere; }
+.exchange-found { display: flex; align-items: flex-start; gap: 6px; }
+.exchange-account-section h3 { display: flex; align-items: center; gap: 6px; }
+.exchange-capabilities { display: grid; gap: 3px; margin: 6px 0; padding: 0; list-style: none; }
+.exchange-capabilities small { color: var(--muted); font-size: 9.5px; }
+.exchange-credentials { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.exchange-credentials.attention { border-color: var(--danger); background: var(--danger-soft); }
+.exchange-credentials p { margin: 0 0 6px; font-size: 10.5px; }

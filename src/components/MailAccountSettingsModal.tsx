@@ -6,6 +6,7 @@ import MailArchivingSection from './MailArchivingSection'
 import Modal from './Modal'
 import MailSenderIdentities from './MailSenderIdentities'
 import { Pop3AccountSettingsSection } from './Pop3Account'
+import ExchangeAccountSection from './ExchangeAccountSection'
 
 interface MailAccountSettingsModalProps {
   account: MailAccountSummary
@@ -27,7 +28,7 @@ export default function MailAccountSettingsModal({ account, onSaved, onClose, on
   const [password, setPassword] = useState('')
 
   useEffect(() => {
-    if (account.provider === 'gmail' || account.provider === 'microsoft' || account.provider === 'pop3') return
+    if (account.provider === 'gmail' || account.provider === 'microsoft' || account.provider === 'pop3' || account.provider === 'exchange') return
     void window.aerio.mail.accounts.imapSettings(account.id).then(setServer).catch((error) => onToast(error instanceof Error ? error.message : 'Server settings could not be loaded'))
   }, [account.id, account.provider, onToast])
 
@@ -144,6 +145,7 @@ export default function MailAccountSettingsModal({ account, onSaved, onClose, on
         </div>
       </section>
       {account.provider === 'pop3' && <Pop3AccountSettingsSection account={account} onToast={onToast} />}
+      {account.provider === 'exchange' && <ExchangeAccountSection account={account} onToast={onToast} />}
       {server && <section>
         <h3>IMAP and SMTP servers</h3>
         <p>The saved password remains encrypted and is never displayed. Leave the password blank to keep it.</p>
