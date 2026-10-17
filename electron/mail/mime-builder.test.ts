@@ -56,4 +56,18 @@ describe('outgoing MIME builder', () => {
     expect(raw).toContain('In-Reply-To: <parent@example.com>')
     expect(raw).toContain('References: <one@example.com> <two@example.com>')
   })
+
+  it('writes outgoing importance and receipt request headers addressed to the sender', async () => {
+    const raw = createMimeBuffer({ ...input(), sendOptions: { importance: 'high', requestReadReceipt: true, requestDeliveryReceipt: true } }, 'Aerio Person <sender@example.com>').toString()
+    const headers = raw.slice(0, raw.indexOf('\r\n\r\n'))
+    expect(headers).toContain('Importance: High\r\nX-Priority: 1 (Highest)')
+    expect(headers).toContain('Disposition-Notification-To: Aerio Person <sender@example.com>')
+    expect(headers).toContain('Return-Receipt-To: Aerio Person <sender@example.com>')
+    const low = createMimeBuffer({ ...input(), sendOptions: { importance: 'low' } }, 'sender@example.com').toString()
+    expect(low).toContain('Importance: Low\r\nX-Priority: 5 (Lowest)')
+    const plain = createMimeBuffer({ ...input(), sendOptions: { importance: 'normal', requestReadReceipt: false } }, 'sender@example.com').toString()
+    expect(plain).not.toMatch(/Importance:|X-Priority:|Disposition-Notification-To:|Return-Receipt-To:/)
+    // Without a known sender there is nowhere safe to return a receipt.
+    expect(createMimeBuffer({ ...input(), sendOptions: { requestReadReceipt: true } }).toString()).not.toContain('Disposition-Notification-To')
+  })
 })

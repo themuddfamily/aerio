@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { ImapFlow, type ListResponse } from 'imapflow'
 import nodemailer from 'nodemailer'
 import PostalMime from 'postal-mime'
-import type { ImapAccountInput, MailActionKind } from '../../src/mail-types'
+import type { ImapAccountInput, MailActionKind, MailSendOptions } from '../../src/mail-types'
 
 export interface ImapFolder {
   path: string
@@ -207,7 +207,7 @@ export class ImapSmtpClient {
     })
   }
 
-  async send(raw: Buffer, recipients: string[]) {
+  async send(raw: Buffer, recipients: string[], options?: MailSendOptions) {
     const transport = nodemailer.createTransport({
       host: this.config.smtpHost,
       port: this.config.smtpPort,
@@ -217,7 +217,9 @@ export class ImapSmtpClient {
       tls: { rejectUnauthorized: !this.config.allowInvalidCertificates },
       connectionTimeout: 30_000
     })
-    await transport.sendMail({ envelope: { from: this.config.email, to: recipients }, raw })
+    // Nodemailer only adds DSN parameters when the SMTP server advertises DSN.
+    const dsn = options?.requestDeliveryReceipt ? { return: 'headers' as const, notify: ['success', 'failure', 'delay'] as ('success' | 'failure' | 'delay')[], recipient: this.config.email } : undefined
+    await transport.sendMail({ envelope: { from: this.config.email, to: recipients }, raw, ...(dsn ? { dsn } : {}) })
   }
 }
 

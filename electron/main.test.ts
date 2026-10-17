@@ -416,6 +416,22 @@ describe.sequential('Electron main process', () => {
     expect(routed).toEqual(expect.arrayContaining(['mail:list', 'mail:unread-counts', 'mail:account-unread-counts', 'mail:thread', 'mail:action', 'rules:list', 'sync:rebuild', 'storage:stats']))
   })
 
+  it('routes read-receipt requests with the stored policy instead of renderer input', async () => {
+    const settings = { theme: 'dark', density: 'compact', closeToTray: false, notifications: true, startModule: 'mail' }
+    invoke('preferences:save', { schemaVersion: 1, settings: { ...settings, readReceiptPolicy: 'always' } })
+    await invoke('mail:receipts:inspect', 'a1b2', 'message')
+    expect(mocks.worker.request).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'receipts:inspect', payload: { accountId: 'a1b2', messageId: 'message', policy: 'always' } }))
+    invoke('preferences:save', { schemaVersion: 1, settings: { ...settings, readReceiptPolicy: 'sometimes' } })
+    expect(await invoke('preferences:load')).toMatchObject({ settings: { readReceiptPolicy: 'ask' } })
+    await invoke('mail:receipts:respond', 'a1b2', 'message', 'decline')
+    expect(mocks.worker.request).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'receipts:respond', payload: { accountId: 'a1b2', messageId: 'message', decision: 'decline', policy: 'ask' } }))
+    expect(() => invoke('mail:receipts:respond', 'a1b2', 'message', 'always')).toThrow(/valid read receipt/)
+    expect(() => invoke('mail:receipts:inspect', '', 'message')).toThrow(/valid message/)
+    const draft = { accountId: 'a1b2', to: ['reader@example.test'], cc: [], bcc: [], subject: 'Hello', text: 'Body', attachmentPaths: [], sendOptions: { importance: 'high', requestReadReceipt: 'yes' } }
+    await invoke('mail:drafts:save', draft)
+    expect(mocks.worker.request).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'drafts:save', payload: expect.objectContaining({ sendOptions: { importance: 'high' } }) }))
+  })
+
   it('accepts unfinished recipients while saving but requires complete recipients when sending', async () => {
     const draft = { id: 'draft', accountId: 'a1b2', to: ['unfinished'], cc: [], bcc: [], subject: 'Hello', text: 'Body', attachmentPaths: [] }
     await expect(invoke('mail:drafts:save', draft)).resolves.toMatchObject({ command: 'drafts:save' })

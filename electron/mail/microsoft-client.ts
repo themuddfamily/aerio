@@ -1,4 +1,5 @@
-import type { MailLabel, MailActionKind } from '../../src/mail-types'
+import type { MailLabel, MailActionKind, MailSendOptions } from '../../src/mail-types'
+import { normalizeSendOptions } from '../../src/lib/mail-send-options'
 
 interface GraphPage<T> {
   value: T[]
@@ -168,7 +169,7 @@ export class MicrosoftGraphClient {
     }
   }
 
-  async saveDraft(raw: Buffer, existingId?: string) {
+  async saveDraft(raw: Buffer, existingId?: string, options?: MailSendOptions) {
     if (existingId) await this.request(`/me/messages/${encodeURIComponent(existingId)}`, { method: 'DELETE' }).catch(() => undefined)
     const result = await this.request<{ id?: string; changeKey?: string }>('/me/messages', {
       method: 'POST',
@@ -176,7 +177,20 @@ export class MicrosoftGraphClient {
       body: raw.toString('base64')
     })
     if (!result?.id) throw new Error('Microsoft could not save the draft')
-    return { id: result.id, revision: result.changeKey }
+    const patched = await this.applySendOptions(result.id, options)
+    return { id: result.id, revision: patched?.changeKey ?? result.changeKey }
+  }
+
+  // MIME import does not reliably map receipt headers, so the Graph message
+  // properties are set explicitly whenever the user chose non-default options.
+  async applySendOptions(id: string, value?: MailSendOptions) {
+    const options = normalizeSendOptions(value)
+    if (!options) return undefined
+    return this.request<{ changeKey?: string }>(`/me/messages/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(graphSendOptions(options))
+    })
   }
 
   async draftRevision(id: string) {
@@ -185,9 +199,16 @@ export class MicrosoftGraphClient {
     return result.changeKey
   }
 
-  async send(raw: Buffer, draftId?: string) {
+  async send(raw: Buffer, draftId?: string, options?: MailSendOptions) {
     if (draftId) {
+      await this.applySendOptions(draftId, options)
       await this.request(`/me/messages/${encodeURIComponent(draftId)}/send`, { method: 'POST' })
+      return
+    }
+    if (normalizeSendOptions(options)) {
+      // sendMail with MIME cannot carry Graph properties; stage a draft first.
+      const staged = await this.saveDraft(raw, undefined, options)
+      await this.request(`/me/messages/${encodeURIComponent(staged.id)}/send`, { method: 'POST' })
       return
     }
     await this.request<void>('/me/sendMail', {
@@ -199,6 +220,14 @@ export class MicrosoftGraphClient {
 
   deleteDraft(id: string) {
     return this.request<void>(`/me/messages/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
+}
+
+export function graphSendOptions(options: MailSendOptions) {
+  return {
+    importance: options.importance ?? 'normal',
+    isReadReceiptRequested: Boolean(options.requestReadReceipt),
+    isDeliveryReceiptRequested: Boolean(options.requestDeliveryReceipt)
   }
 }
 

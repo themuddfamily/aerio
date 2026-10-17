@@ -6,7 +6,8 @@ export const defaultSettings: Settings = {
   closeToTray: true,
   launchAtLogin: false,
   notifications: true,
-  startModule: 'mail'
+  startModule: 'mail',
+  readReceiptPolicy: 'ask'
 }
 
 export function createDefaultPreferences(): AppPreferences {

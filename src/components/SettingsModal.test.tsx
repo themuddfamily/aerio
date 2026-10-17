@@ -113,6 +113,16 @@ describe('SettingsModal', () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ settings: expect.objectContaining({ startModule: 'notes' }) }))
   })
 
+  it('defaults read receipts to asking and saves an explicit policy', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(<SettingsModal preferences={preferences} onChange={onChange} onClose={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Ask me' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText(/sends nothing unless you choose Send receipt/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Never send' }))
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ settings: expect.objectContaining({ readReceiptPolicy: 'never' }) }))
+  })
+
   it('checks, downloads, and installs application updates from live status events', async () => {
     const user = userEvent.setup()
     render(<SettingsModal preferences={preferences} onChange={vi.fn()} onClose={vi.fn()} />)

@@ -301,6 +301,47 @@ export interface MailDraftInput {
   text: string
   html?: string
   attachmentPaths: string[]
+  sendOptions?: MailSendOptions
+}
+
+export type MailImportance = 'low' | 'normal' | 'high'
+
+// Outgoing importance and receipt requests. Receipts are requests only: the
+// recipient's client or server decides whether one is ever returned.
+export interface MailSendOptions {
+  importance?: MailImportance
+  requestReadReceipt?: boolean
+  requestDeliveryReceipt?: boolean
+}
+
+export type MailReadReceiptPolicy = 'never' | 'ask' | 'always'
+
+export type MailReceiptRequestStatus = 'pending' | 'sent' | 'declined' | 'failed' | 'suppressed'
+
+export interface MailReceiptRequestInfo {
+  notifyTo: string
+  status: MailReceiptRequestStatus
+  policy: MailReadReceiptPolicy
+  automatic?: boolean
+  respondedAt?: string
+  // Why an automatic receipt was held back for the user to decide.
+  reason?: string
+  error?: string
+}
+
+export interface MailReceiptReportInfo {
+  kind: 'read' | 'delivery'
+  reporter?: string
+  originalMessageId?: string
+  originalSubject?: string
+  originalSentAt?: string
+  disposition?: string
+  recipients: { recipient: string; action?: string; status?: string }[]
+}
+
+export interface MailReceiptInfo {
+  request?: MailReceiptRequestInfo
+  report?: MailReceiptReportInfo
 }
 
 export interface MailRecipientSuggestion {
@@ -481,6 +522,10 @@ export interface MailDesktopApi {
     list(): Promise<MailSavedSearch[]>
     save(input: MailSavedSearchInput): Promise<MailSavedSearch>
     delete(id: string): Promise<void>
+  }
+  receipts?: {
+    inspect(accountId: string, messageId: string): Promise<MailReceiptInfo>
+    respond(accountId: string, messageId: string, decision: 'send' | 'decline'): Promise<MailReceiptInfo>
   }
   onEvent(callback: (event: MailWorkerEvent) => void): () => void
 }

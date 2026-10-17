@@ -2865,6 +2865,51 @@ kbd {
   background: transparent;
 }
 
+.mail-send-options { position: relative; }
+.mail-send-options > summary { list-style: none; cursor: pointer; }
+.mail-send-options > summary::-webkit-details-marker { display: none; }
+.mail-send-options.active > summary { color: var(--accent-text); }
+
+.mail-send-options-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  width: 260px;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 18%);
+  font-size: 12px;
+}
+
+.mail-send-options-panel > label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mail-send-options-panel > label.mail-send-options-check { justify-content: flex-start; }
+.mail-send-options-panel small { color: var(--muted); line-height: 1.5; }
+
+.mail-receipt-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-bottom: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.mail-receipt-notice > svg { flex-shrink: 0; margin-top: 3px; color: var(--muted); }
+.mail-receipt-notice p { margin: 0; }
+.mail-receipt-notice small { color: var(--muted); }
+.mail-receipt-actions { display: inline-flex; gap: 10px; margin-left: 8px; }
+.mail-receipt-actions button { padding: 0; border: 0; background: transparent; color: var(--accent-text); font: inherit; cursor: pointer; }
+.mail-receipt-actions button:hover { text-decoration: underline; }
+
 .undo-toast:not(.send-undo-toast):has(~ .send-undo-toast) { bottom: 78px; }
 
 .snooze-options {

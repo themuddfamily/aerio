@@ -29,6 +29,7 @@ import type {
   SyncProgress
 } from '../../src/mail-types'
 import { compileMailSearchQuery } from '../../src/lib/mail-search-query'
+import { normalizeSendOptions } from '../../src/lib/mail-send-options'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -70,6 +71,11 @@ const json = <T>(value: string | null | undefined, fallback: T): T => {
     return fallback
   }
 }
+const sendOptionsJson = (value: MailDraftInput['sendOptions']) => {
+  const options = normalizeSendOptions(value)
+  return options ? JSON.stringify(options) : null
+}
+const draftSendOptions = (row: DatabaseRow) => normalizeSendOptions(json<unknown>(row.send_options_json ? String(row.send_options_json) : undefined, undefined))
 const containsPattern = (value: string) => `%${value.trim().replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`
 
 type MailRuleMessage = Pick<ParsedMailMessage, 'accountId' | 'threadId' | 'fromName' | 'fromEmail' | 'to' | 'cc' | 'subject' | 'text'>
@@ -386,6 +392,21 @@ export class MailDatabase {
     const draftColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_drafts)').all() as { name: string }[]).map((column) => column.name))
     if (!draftColumns.has('delivery_at')) this.db.exec('ALTER TABLE gmail_drafts ADD COLUMN delivery_at TEXT')
     if (!draftColumns.has('remote_revision')) this.db.exec('ALTER TABLE gmail_drafts ADD COLUMN remote_revision TEXT')
+    if (!draftColumns.has('send_options_json')) this.db.exec('ALTER TABLE gmail_drafts ADD COLUMN send_options_json TEXT')
+    // One row per incoming message that asked for a read receipt and was answered.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS mail_receipt_responses (
+        account_id TEXT NOT NULL REFERENCES gmail_accounts(id) ON DELETE CASCADE,
+        message_id TEXT NOT NULL,
+        notify_to TEXT NOT NULL,
+        original_message_id TEXT,
+        status TEXT NOT NULL,
+        automatic INTEGER NOT NULL DEFAULT 0,
+        error TEXT,
+        responded_at TEXT NOT NULL,
+        PRIMARY KEY (account_id, message_id)
+      );
+    `)
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(4, ?)').run(nowIso())
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(5, ?)').run(nowIso())
     this.stmt('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(6, ?)').run(nowIso())
@@ -1127,16 +1148,17 @@ export class MailDatabase {
     const status = result.status ?? (retainedDelivery ? existingStatus : 'local') ?? 'local'
     const deliveryAt = result.deliveryAt ?? (retainedDelivery && existing?.delivery_at ? String(existing.delivery_at) : undefined)
     this.stmt(`
-      INSERT INTO gmail_drafts(id,account_id,gmail_draft_id,remote_revision,thread_id,in_reply_to,references_json,to_json,cc_json,bcc_json,subject,body_text,body_html,attachment_paths_json,status,delivery_at,error,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO gmail_drafts(id,account_id,gmail_draft_id,remote_revision,thread_id,in_reply_to,references_json,to_json,cc_json,bcc_json,subject,body_text,body_html,attachment_paths_json,status,delivery_at,error,updated_at,send_options_json)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET gmail_draft_id=COALESCE(excluded.gmail_draft_id,gmail_drafts.gmail_draft_id),remote_revision=COALESCE(excluded.remote_revision,gmail_drafts.remote_revision),thread_id=excluded.thread_id,in_reply_to=excluded.in_reply_to,
         references_json=excluded.references_json,to_json=excluded.to_json,cc_json=excluded.cc_json,bcc_json=excluded.bcc_json,
         subject=excluded.subject,body_text=excluded.body_text,body_html=excluded.body_html,attachment_paths_json=excluded.attachment_paths_json,
-        status=excluded.status,delivery_at=excluded.delivery_at,error=excluded.error,updated_at=excluded.updated_at
+        status=excluded.status,delivery_at=excluded.delivery_at,error=excluded.error,updated_at=excluded.updated_at,send_options_json=excluded.send_options_json
     `).run(
       id, input.accountId, result.remoteDraftId ?? null, result.remoteRevision ?? null, input.threadId ?? null, input.inReplyTo ?? null,
       JSON.stringify(input.references ?? []), JSON.stringify(input.to), JSON.stringify(input.cc), JSON.stringify(input.bcc),
-      input.subject, input.text, input.html ?? null, JSON.stringify(input.attachmentPaths), status, deliveryAt ?? null, result.error ?? null, updatedAt
+      input.subject, input.text, input.html ?? null, JSON.stringify(input.attachmentPaths), status, deliveryAt ?? null, result.error ?? null, updatedAt,
+      sendOptionsJson(input.sendOptions)
     )
     const stored = this.getDraft(id)
     return {
@@ -1156,6 +1178,7 @@ export class MailDatabase {
   }
 
   private draftRecord(row: DatabaseRow): MailDraftRecord {
+    const sendOptions = draftSendOptions(row)
     return {
       id: String(row.id),
       accountId: String(row.account_id),
@@ -1171,6 +1194,7 @@ export class MailDatabase {
       text: String(row.body_text),
       html: row.body_html ? String(row.body_html) : undefined,
       attachmentPaths: json<string[]>(String(row.attachment_paths_json), []),
+      ...(sendOptions ? { sendOptions } : {}),
       status: String(row.status) as MailDraftRecord['status'],
       updatedAt: String(row.updated_at),
       deliveryAt: row.delivery_at ? String(row.delivery_at) : undefined,
@@ -1384,6 +1408,48 @@ export class MailDatabase {
   recordRuleMatch(id: string, count = 1) {
     if (count <= 0) return
     this.stmt('UPDATE mail_rules SET match_count=match_count+?,last_matched_at=?,updated_at=? WHERE id=?').run(count, nowIso(), nowIso(), id)
+  }
+
+  receiptMessageContext(accountId: string, messageId: string) {
+    const row = this.stmt('SELECT from_email,subject,header_message_id,label_ids_json,raw_path FROM gmail_messages WHERE account_id=? AND id=?').get(accountId, messageId) as DatabaseRow | undefined
+    if (!row) return undefined
+    return {
+      fromEmail: String(row.from_email ?? ''),
+      subject: String(row.subject ?? ''),
+      messageIdHeader: row.header_message_id ? String(row.header_message_id) : undefined,
+      labelIds: json<string[]>(String(row.label_ids_json), []),
+      rawPath: row.raw_path ? String(row.raw_path) : undefined
+    }
+  }
+
+  // Correlates a returned receipt with the locally synced message it reports on.
+  messageByHeaderId(accountId: string, messageIdHeader: string) {
+    const bare = messageIdHeader.trim().replace(/^<|>$/g, '').toLowerCase()
+    if (!bare) return undefined
+    const row = this.stmt(`SELECT id,subject,internal_date FROM gmail_messages WHERE account_id=? AND lower(trim(header_message_id,'<> ')) = ? ORDER BY internal_date LIMIT 1`).get(accountId, bare) as DatabaseRow | undefined
+    return row ? { id: String(row.id), subject: String(row.subject ?? ''), date: String(row.internal_date ?? '') } : undefined
+  }
+
+  getReceiptResponse(accountId: string, messageId: string) {
+    const row = this.stmt('SELECT * FROM mail_receipt_responses WHERE account_id=? AND message_id=?').get(accountId, messageId) as DatabaseRow | undefined
+    if (!row) return undefined
+    return {
+      notifyTo: String(row.notify_to),
+      status: String(row.status) as 'sent' | 'declined' | 'failed',
+      automatic: Number(row.automatic) === 1,
+      error: row.error ? String(row.error) : undefined,
+      respondedAt: String(row.responded_at)
+    }
+  }
+
+  recordReceiptResponse(accountId: string, messageId: string, input: { notifyTo: string; originalMessageId?: string; status: 'sent' | 'declined' | 'failed'; automatic: boolean; error?: string }) {
+    this.stmt(`
+      INSERT INTO mail_receipt_responses(account_id,message_id,notify_to,original_message_id,status,automatic,error,responded_at)
+      VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(account_id,message_id) DO UPDATE SET notify_to=excluded.notify_to,original_message_id=excluded.original_message_id,
+        status=excluded.status,automatic=excluded.automatic,error=excluded.error,responded_at=excluded.responded_at
+    `).run(accountId, messageId, input.notifyTo, input.originalMessageId ?? null, input.status, input.automatic ? 1 : 0, input.error ?? null, nowIso())
+    return this.getReceiptResponse(accountId, messageId)!
   }
 
   getMessageRaw(accountId: string, messageId: string) {

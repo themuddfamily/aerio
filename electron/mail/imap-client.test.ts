@@ -366,4 +366,17 @@ describe('IMAP and SMTP connections', () => {
       envelope: { from: config.email, to: ['one@example.test', 'two@example.test'] }, raw
     })
   })
+
+  it('requests an SMTP delivery status notification only when asked', async () => {
+    const transport = { sendMail: vi.fn().mockResolvedValue(undefined) }
+    mocks.createTransport.mockReturnValue(transport)
+    const raw = Buffer.from('Subject: Hello\r\n\r\nBody')
+    await new ImapSmtpClient(config).send(raw, ['one@example.test'], { requestDeliveryReceipt: true })
+    expect(transport.sendMail).toHaveBeenCalledWith({
+      envelope: { from: config.email, to: ['one@example.test'] }, raw,
+      dsn: { return: 'headers', notify: ['success', 'failure', 'delay'], recipient: config.email }
+    })
+    await new ImapSmtpClient(config).send(raw, ['one@example.test'], { requestReadReceipt: true })
+    expect(transport.sendMail).toHaveBeenLastCalledWith({ envelope: { from: config.email, to: ['one@example.test'] }, raw })
+  })
 })

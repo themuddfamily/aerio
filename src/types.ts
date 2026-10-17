@@ -85,6 +85,7 @@ export interface Settings {
   launchAtLogin?: boolean
   notifications: boolean
   startModule: ModuleId
+  readReceiptPolicy?: import('./mail-types').MailReadReceiptPolicy
   profile?: UserProfile
 }
 

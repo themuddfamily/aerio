@@ -12,6 +12,7 @@ import type {
   MailSavedSearchInput,
   MailSnooze,
   MailMessageSource,
+  MailReadReceiptPolicy,
   MailThreadDetail,
   MailWorkerEvent,
   ImapAccountInput,
@@ -41,6 +42,8 @@ export type MailWorkerCommand =
   | { type: 'mail:account-unread-counts' }
   | { type: 'mail:thread'; payload: { accountId: string; threadId: string; allowRemoteImages?: boolean } }
   | { type: 'mail:source'; payload: { accountId: string; messageId: string } }
+  | { type: 'receipts:inspect'; payload: { accountId: string; messageId: string; policy: MailReadReceiptPolicy } }
+  | { type: 'receipts:respond'; payload: { accountId: string; messageId: string; decision: 'send' | 'decline'; policy: MailReadReceiptPolicy } }
   | { type: 'mail:copy'; payload: { accountId: string; threadId: string; messageId: string; destination: string } }
   | { type: 'mail:export'; payload: { accountId: string; messageId: string; targetPath: string } }
   | { type: 'mail:action'; payload: ApplyMailActionInput }
@@ -100,6 +103,7 @@ export type MailWorkerResult =
   | MailDraftRecord
   | MailDraftRecord[]
   | MailDraftAttachmentFile[]
+  | import('../src/mail-types').MailReceiptInfo
 
 export interface WorkerRequest {
   kind: 'request'
