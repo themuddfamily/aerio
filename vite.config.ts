@@ -20,6 +20,7 @@ export default defineConfig({
   },
   test: {
     setupFiles: ['./test/setup.ts'],
+    exclude: ['**/node_modules/**', '**/dist/**', '.claude/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary', 'html'],
