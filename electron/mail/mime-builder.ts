@@ -31,6 +31,7 @@ export function createMimeBuffer(input: MailDraftInput, from?: string, omitBcc =
     `To: ${input.to.map(encodeHeader).join(', ')}`,
     ...(input.cc.length ? [`Cc: ${input.cc.map(encodeHeader).join(', ')}`] : []),
     ...(!omitBcc && input.bcc.length ? [`Bcc: ${input.bcc.map(encodeHeader).join(', ')}`] : []),
+    ...(input.replyTo?.length ? [`Reply-To: ${input.replyTo.map(encodeHeader).join(', ')}`] : []),
     `Subject: ${encodeHeader(input.subject)}`,
     ...sendOptionHeaders(input.sendOptions, from),
     'MIME-Version: 1.0',

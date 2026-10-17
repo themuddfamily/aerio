@@ -236,6 +236,11 @@ export class MicrosoftGraphClient {
     return this.request<void>(`/me/messages/${encodeURIComponent(id)}`, { method: 'DELETE' })
   }
 
+  /** The mailbox's SMTP proxy addresses (aliases), readable with User.Read. */
+  senderAddresses() {
+    return this.request<import('./sender-identity').MicrosoftUserAddresses>('/me?$select=mail,proxyAddresses')
+  }
+
   folder(id: string) {
     return this.request<GraphFolder & { totalItemCount?: number }>(`/me/mailFolders/${encodeURIComponent(id)}?$select=id,displayName,parentMailFolderId,childFolderCount,totalItemCount`)
   }

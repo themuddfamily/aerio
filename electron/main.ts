@@ -24,6 +24,8 @@ import type {
   MailRuleRunResult,
   MailSavedSearch,
   MailSavedSearchInput,
+  MailQuickAction,
+  MailQuickActionRunResult,
   MailSnooze,
   MailReplyWatch,
   MailReplyWatchInput,
@@ -53,6 +55,7 @@ import { ImapSmtpClient } from './mail/imap-client'
 import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
 import { MailWorkerClient } from './mail/worker-client'
 import { validateCreateFolder, validateDeleteFolder, validateFolderReference, validateUpdateFolder } from './mail/folder-validation'
+import { registerMailRuleHandlers } from './mail/server-rule-ipc'
 import { normalizeAttachmentQuery } from './mail/attachment-index'
 import { DiagnosticLogger, type DiagnosticRecord } from './diagnostics'
 import { UpdateManager } from './update-manager'
@@ -65,8 +68,10 @@ import type { ProviderTaskInput, TaskFieldPatch, TaskLocalMetadata, TaskResoluti
 import { parseTaskBackup } from './productivity/task-backup'
 import { MessageLocalStore } from './mail/message-local-store'
 import { registerMessageTools } from './mail/message-tools'
+import { AiAssistantStore, registerAiAssistant } from './mail/ai-assistant'
 import { MailTemplateStore, parseMailTemplateBackup, type MailTemplateBackup } from './mail/template-store'
 import { registerMailTemplates } from './mail/template-tools'
+import { registerMailIdentities, validateDraftSender } from './mail/identity-ipc'
 import { AutomaticRepliesService, registerAutomaticReplies } from './mail/automatic-replies'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
@@ -78,9 +83,13 @@ import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productiv
 import { senderDomainFromEmail } from '../src/lib/sender-avatar'
 import { isCompleteMailAddress } from '../src/lib/mail-address'
 import { validateMailSavedSearch } from '../src/lib/mail-saved-search'
+import { validateMailQuickAction, validateMailQuickActionTargets } from '../src/lib/mail-quick-actions'
 import { mailPollingIntervalForWindow } from './mail/polling-policy'
 import { faviconDomainCandidates } from './mail/favicon-domains'
 import { fetchRemoteImage } from './mail/remote-image-fetch'
+import { applyPendingProfileRestore, finalizeProfileRestore } from './profile-backup'
+import { PROFILE_BACKUP_LAYOUT } from './profile-backup-layout'
+import { registerProfileBackup } from './profile-backup-tools'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -127,6 +136,7 @@ let taskPolling: NodeJS.Timeout | undefined
 let taskNetworkOnline = true
 let messageLocalStore: MessageLocalStore | null = null
 let mailTemplateStore: MailTemplateStore | null = null
+let profileBackups: ReturnType<typeof registerProfileBackup> | null = null
 let readyToOpenWindows = false
 const senderFaviconCache = new Map<string, { image: Buffer | null; expiresAt: number }>()
 const senderFaviconCandidateRequests = new Map<string, Promise<Buffer | null>>()
@@ -242,6 +252,7 @@ function validateDraft(input: MailDraftInput, forSend = false) {
   if (typeof input.subject !== 'string' || input.subject.length > 998) throw new Error('The subject is too long')
   if (typeof input.text !== 'string' || (input.html !== undefined && typeof input.html !== 'string') || input.text.length > 20_000_000 || (input.html?.length ?? 0) > 20_000_000) throw new Error('The message body is too large')
   if (input.attachmentPaths.length > 50) throw new Error('A message cannot contain more than 50 attachments')
+  validateDraftSender(input, forSend)
   input.sendOptions = normalizeSendOptions(input.sendOptions)
   if (input.attachmentPaths.some((path) => typeof path !== 'string' || !approvedAttachmentPaths.has(path))) {
     throw new Error('A draft referenced a file that was not selected through Aerio')
@@ -266,31 +277,6 @@ function validateFutureDate(value: unknown, label: string) {
   if (!Number.isFinite(timestamp) || timestamp <= Date.now()) throw new Error(`${label} must be in the future`)
   if (timestamp > Date.now() + 366 * 24 * 60 * 60 * 1_000) throw new Error(`${label} cannot be more than one year away`)
   return new Date(timestamp).toISOString()
-}
-
-function validateRule(input: MailRuleInput): MailRuleInput {
-  if (!input || typeof input !== 'object') throw new Error('The rule is invalid')
-  if (input.id !== undefined && (typeof input.id !== 'string' || !input.id || input.id.length > 200)) throw new Error('The rule id is invalid')
-  if (typeof input.accountId !== 'string' || !input.accountId || input.accountId.length > 200) throw new Error('Choose an account for this rule')
-  if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200) throw new Error('Give this rule a name')
-  if (typeof input.enabled !== 'boolean' || !['all', 'any'].includes(input.match)) throw new Error('Choose how this rule should match')
-  if (!Array.isArray(input.conditions) || input.conditions.length < 1 || input.conditions.length > 10) throw new Error('Add between one and ten conditions')
-  if (!Array.isArray(input.actions) || input.actions.length < 1 || input.actions.length > 10) throw new Error('Add between one and ten actions')
-  const fields = new Set(['from', 'to', 'subject', 'body'])
-  const operators = new Set(['contains', 'equals', 'starts-with', 'ends-with'])
-  const actions = new Set(['archive', 'read', 'star', 'important', 'trash', 'label', 'move'])
-  for (const condition of input.conditions) {
-    if (!condition || !fields.has(condition.field) || !operators.has(condition.operator) || typeof condition.value !== 'string' || !condition.value.trim() || condition.value.length > 500) throw new Error('Finish every rule condition')
-  }
-  for (const action of input.actions) {
-    if (!action || !actions.has(action.action)) throw new Error('Choose a valid rule action')
-    if ((action.action === 'label' || action.action === 'move') && (typeof action.labelId !== 'string' || !action.labelId || action.labelId.length > 500)) throw new Error('Choose a label or folder for the rule')
-  }
-  return {
-    ...input,
-    name: input.name.trim(),
-    conditions: input.conditions.map((condition) => ({ ...condition, value: condition.value.trim() }))
-  }
 }
 
 function requireProductivityStore() {
@@ -1344,9 +1330,11 @@ function registerIpc() {
     if (!mailTemplateStore) throw new Error('Template storage is not ready')
     return mailTemplateStore
   }, approveAttachment: (path) => approvedAttachmentPaths.add(path) })
+  registerMailIdentities({ worker: requireMailWorker })
   registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
   } })
+  registerAiAssistant({ worker: requireMailWorker, store: new AiAssistantStore(join(app.getPath('userData'), 'ai-assistant.json'), join(app.getPath('userData'), 'ai-assistant-key.dat')) })
   const automaticReplies = new AutomaticRepliesService({
     account: async (accountId) => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId),
     googleToken: (accountId) => requireVault().accessToken(accountId),
@@ -1811,8 +1799,17 @@ function registerIpc() {
     requireMailWorker().request<MailFolderDeletePreview>({ type: 'folders:delete-preview', payload: validateFolderReference(accountId, labelId) }))
   ipcMain.handle('mail:rules:list', (_event, accountIds?: string[]) =>
     requireMailWorker().request<MailRule[]>({ type: 'rules:list', payload: { accountIds } }))
-  ipcMain.handle('mail:rules:save', (_event, input: MailRuleInput) =>
-    requireMailWorker().request<MailRule>({ type: 'rules:save', payload: validateRule(input) }))
+  registerMailRuleHandlers(ipcMain, {
+    request: (command) => requireMailWorker().request(command),
+    provider: (accountId) => accountProviders.get(accountId),
+    accessToken: async (accountId, provider) => {
+      const credential = await requireVault().credential(accountId, provider)
+      if (credential.type !== 'oauth') throw new Error('This account has no server rules')
+      return credential.accessToken
+    },
+    access: (accountId, provider) => requireVault().mailSettingsAccess(accountId, provider, 'server-rules'),
+    diagnostic: (event, accountId, details) => diagnostic({ level: 'info', component: 'provider', event, accountId, details })
+  })
   ipcMain.handle('mail:rules:delete', (_event, id: string) => {
     if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid rule id')
     return requireMailWorker().request({ type: 'rules:delete', payload: { id } })
@@ -1829,6 +1826,18 @@ function registerIpc() {
     if (typeof id !== 'string' || !id || id.length > 500) throw new Error('Invalid saved search id')
     return requireMailWorker().request({ type: 'saved-searches:delete', payload: { id } })
   })
+  const quickActionId = (id: unknown) => {
+    if (typeof id !== 'string' || !id || id.length > 500) throw new Error('Invalid quick action id')
+    return id
+  }
+  ipcMain.handle('mail:quick-actions:list', () =>
+    requireMailWorker().request<MailQuickAction[]>({ type: 'quick-actions:list' }))
+  ipcMain.handle('mail:quick-actions:save', (_event, input: unknown) =>
+    requireMailWorker().request<MailQuickAction>({ type: 'quick-actions:save', payload: validateMailQuickAction(input) }))
+  ipcMain.handle('mail:quick-actions:delete', (_event, id: unknown) =>
+    requireMailWorker().request({ type: 'quick-actions:delete', payload: { id: quickActionId(id) } }))
+  ipcMain.handle('mail:quick-actions:run', (_event, id: unknown, targets: unknown) =>
+    requireMailWorker().request<MailQuickActionRunResult>({ type: 'quick-actions:run', payload: { id: quickActionId(id), targets: validateMailQuickActionTargets(targets) } }))
   ipcMain.handle('mail:sync:start', (_event, accountId?: string) =>
     requireMailWorker().request({ type: 'sync:start', payload: { accountId } }))
   ipcMain.handle('mail:sync:pause', (_event, accountId: string) =>
@@ -1894,6 +1903,13 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   diagnostic({ level: 'info', component: 'app', event: 'startup', details: { version: app.getVersion(), packaged: app.isPackaged } })
   const menu = applicationMenuTemplate(process.platform, () => openMainWindow())
   Menu.setApplicationMenu(menu ? Menu.buildFromTemplate(menu) : null)
+  // A staged full-profile restore is swapped in before any profile database opens.
+  try {
+    const restored = applyPendingProfileRestore(app.getPath('userData'))
+    if (restored) diagnostic({ level: restored.status === 'applied' ? 'info' : 'error', component: 'app', event: `profile-restore-${restored.status}`, message: restored.error, details: { ...restored.report } })
+  } catch (error) {
+    diagnostic({ level: 'error', component: 'app', event: 'profile-restore-failed', message: error instanceof Error ? error.message : String(error) })
+  }
   await initializePreferencesDatabase()
   await initializeMail()
   productivityStore = new ProductivityStore(join(app.getPath('userData'), 'productivity.sqlite'))
@@ -1912,6 +1928,17 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   taskPolling = setInterval(() => { void taskService?.poll().catch(() => {}) }, 60_000)
   taskPolling.unref()
   registerIpc()
+  profileBackups = registerProfileBackup({
+    userData: app.getPath('userData'),
+    appVersion: app.getVersion(),
+    defaultDirectory: join(app.getPath('documents'), 'Aerio Backups'),
+    layout: PROFILE_BACKUP_LAYOUT,
+    isLocked: () => applicationLocked,
+    relaunch: () => { app.relaunch(); app.quit() },
+    log: (event, details, error) => diagnostic({ level: error ? 'error' : 'info', component: 'app', event, details, message: error === undefined ? undefined : error instanceof Error ? error.message : String(error) })
+  })
+  // Every store opened on the restored data, so the rollback copy is no longer needed.
+  try { finalizeProfileRestore(app.getPath('userData')) } catch { /* Retried on the next launch. */ }
   interchangeService = registerCalendarContactInterchange({
     productivity: requireProductivityStore,
     interchange: () => {
@@ -1947,6 +1974,7 @@ app.on('before-quit', () => {
   quitting = true
   stopTrayMonitor()
   if (taskPolling) clearInterval(taskPolling)
+  profileBackups?.stop()
   void taskService?.close().catch(() => {})
   updates?.stop()
   interchangeService?.dispose()

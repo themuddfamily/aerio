@@ -147,4 +147,27 @@ describe('email dropdown tools', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Storage unavailable')
     expect(onToast).not.toHaveBeenCalledWith('Task created from email')
   })
+  it('shows AI actions only when AI assistance and the feature are turned on, keeping translation', async () => {
+    const features = { summarize: true, compose: true, replies: false, search: true }
+    const ai = { status: vi.fn(async () => ({ enabled: true, provider: 'anthropic', model: 'claude-sonnet-5-5', baseUrl: '', hasApiKey: true, features, includeSenderDetails: false, secureStorage: true })), summarize: vi.fn(async () => 'Short summary'), cancel: vi.fn() }
+    Object.assign(window.aerio, { ai })
+    renderTools()
+    await waitFor(() => expect(ai.status).toHaveBeenCalled())
+    const user = userEvent.setup()
+    await user.click(screen.getAllByRole('button', { name: 'Message options' })[0])
+    expect(screen.getByRole('menuitem', { name: 'Translate…' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Suggest replies with AI…' })).toBeNull()
+    await user.click(screen.getByRole('menuitem', { name: 'Summarize with AI…' }))
+    await user.click(screen.getByRole('button', { name: 'Summarize' }))
+    expect(await screen.findByText('Short summary')).toBeInTheDocument()
+    expect(ai.summarize).toHaveBeenCalledWith(expect.any(String), ref)
+  })
+  it('hides AI actions while AI assistance is off', async () => {
+    Object.assign(window.aerio, { ai: { status: vi.fn(async () => ({ enabled: false, features: { summarize: true, compose: true, replies: true, search: true } })) } })
+    renderTools()
+    const user = userEvent.setup()
+    await user.click(screen.getAllByRole('button', { name: 'Message options' })[0])
+    expect(screen.queryByRole('menuitem', { name: 'Summarize with AI…' })).toBeNull()
+    expect(screen.queryByRole('menuitem', { name: 'Suggest replies with AI…' })).toBeNull()
+  })
 })

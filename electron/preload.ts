@@ -31,6 +31,15 @@ const api: AerioDesktopApi = {
       return () => ipcRenderer.removeListener('app:update:status-changed', listener)
     }
   },
+  profileBackup: {
+    status: () => ipcRenderer.invoke('profile-backup:status'),
+    saveSchedule: (schedule) => ipcRenderer.invoke('profile-backup:schedule', schedule),
+    chooseDirectory: () => ipcRenderer.invoke('profile-backup:choose-directory'),
+    backupNow: () => ipcRenderer.invoke('profile-backup:backup-now'),
+    preview: (path) => ipcRenderer.invoke('profile-backup:preview', path),
+    restore: (path) => ipcRenderer.invoke('profile-backup:restore', path),
+    dismissRestoreOutcome: () => ipcRenderer.invoke('profile-backup:dismiss-restore')
+  },
   tasks: {
     createList: (accountId, title) => ipcRenderer.invoke('tasks:list:create', accountId, title),
     renameList: (listId, title) => ipcRenderer.invoke('tasks:list:rename', listId, title),
@@ -113,6 +122,15 @@ const api: AerioDesktopApi = {
     ipcRenderer.on('command:compose', listener)
     return () => ipcRenderer.removeListener('command:compose', listener)
   },
+  ai: {
+    status: () => ipcRenderer.invoke('ai:status'),
+    configure: (input) => ipcRenderer.invoke('ai:configure', input),
+    summarize: (requestId, ref) => ipcRenderer.invoke('ai:summarize', requestId, ref),
+    suggestReplies: (requestId, ref) => ipcRenderer.invoke('ai:replies', requestId, ref),
+    compose: (requestId, input) => ipcRenderer.invoke('ai:compose', requestId, input),
+    search: (requestId, request) => ipcRenderer.invoke('ai:search', requestId, request),
+    cancel: (requestId) => ipcRenderer.invoke('ai:cancel', requestId)
+  },
   mail: {
     messageTools: {
       updateLocal: (ref, updates) => ipcRenderer.invoke('mail:message:local', ref, updates),
@@ -182,6 +200,17 @@ const api: AerioDesktopApi = {
       exportBackup: () => ipcRenderer.invoke('mail:templates:export'),
       importBackup: () => ipcRenderer.invoke('mail:templates:import')
     },
+    identities: {
+      list: (accountIds) => ipcRenderer.invoke('mail:identities:list', accountIds),
+      save: (input) => ipcRenderer.invoke('mail:identities:save', input),
+      delete: (id) => ipcRenderer.invoke('mail:identities:delete', id),
+      refresh: (accountId) => ipcRenderer.invoke('mail:identities:refresh', accountId),
+      signatures: {
+        list: () => ipcRenderer.invoke('mail:signatures:list'),
+        save: (input) => ipcRenderer.invoke('mail:signatures:save', input),
+        delete: (id) => ipcRenderer.invoke('mail:signatures:delete', id)
+      }
+    },
     replyWatches: {
       list: (accountIds) => ipcRenderer.invoke('mail:reply-watches:list', accountIds),
       create: (input) => ipcRenderer.invoke('mail:reply-watches:create', input),
@@ -199,6 +228,13 @@ const api: AerioDesktopApi = {
       delete: (id) => ipcRenderer.invoke('mail:rules:delete', id),
       run: (id) => ipcRenderer.invoke('mail:rules:run', id)
     },
+    serverRules: {
+      capabilities: (accountId) => ipcRenderer.invoke('mail:server-rules:capabilities', accountId),
+      list: (accountId) => ipcRenderer.invoke('mail:server-rules:list', accountId),
+      upload: (ruleId) => ipcRenderer.invoke('mail:server-rules:upload', ruleId),
+      delete: (accountId, serverRuleId) => ipcRenderer.invoke('mail:server-rules:delete', accountId, serverRuleId),
+      setEnabled: (accountId, serverRuleId, enabled) => ipcRenderer.invoke('mail:server-rules:set-enabled', accountId, serverRuleId, enabled)
+    },
     savedSearches: {
       list: () => ipcRenderer.invoke('mail:saved-searches:list'),
       save: (input) => ipcRenderer.invoke('mail:saved-searches:save', input),
@@ -207,6 +243,12 @@ const api: AerioDesktopApi = {
     receipts: {
       inspect: (accountId, messageId) => ipcRenderer.invoke('mail:receipts:inspect', accountId, messageId),
       respond: (accountId, messageId, decision) => ipcRenderer.invoke('mail:receipts:respond', accountId, messageId, decision)
+    },
+    quickActions: {
+      list: () => ipcRenderer.invoke('mail:quick-actions:list'),
+      save: (input) => ipcRenderer.invoke('mail:quick-actions:save', input),
+      delete: (id) => ipcRenderer.invoke('mail:quick-actions:delete', id),
+      run: (id, targets) => ipcRenderer.invoke('mail:quick-actions:run', id, targets)
     },
     sync: {
       start: (accountId) => ipcRenderer.invoke('mail:sync:start', accountId),
