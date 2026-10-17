@@ -154,6 +154,7 @@ export interface AerioDesktopApi {
   notify(title: string, body: string): Promise<void>
   appLock: AppLockControls
   updates: AppUpdateControls
+  profileBackup: import('./profile-backup-types').ProfileBackupApi
   productivity: import('./productivity-types').ProductivityDesktopApi
   tasks: import('./task-provider-types').TaskDesktopApi
   window: WindowControls

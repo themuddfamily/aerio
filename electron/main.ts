@@ -74,6 +74,9 @@ import { validateMailSavedSearch } from '../src/lib/mail-saved-search'
 import { mailPollingIntervalForWindow } from './mail/polling-policy'
 import { faviconDomainCandidates } from './mail/favicon-domains'
 import { fetchRemoteImage } from './mail/remote-image-fetch'
+import { applyPendingProfileRestore, finalizeProfileRestore } from './profile-backup'
+import { PROFILE_BACKUP_LAYOUT } from './profile-backup-layout'
+import { registerProfileBackup } from './profile-backup-tools'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -118,6 +121,7 @@ let taskPolling: NodeJS.Timeout | undefined
 let taskNetworkOnline = true
 let messageLocalStore: MessageLocalStore | null = null
 let mailTemplateStore: MailTemplateStore | null = null
+let profileBackups: ReturnType<typeof registerProfileBackup> | null = null
 let readyToOpenWindows = false
 const senderFaviconCache = new Map<string, { image: Buffer | null; expiresAt: number }>()
 const senderFaviconCandidateRequests = new Map<string, Promise<Buffer | null>>()
@@ -1788,6 +1792,13 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   diagnostic({ level: 'info', component: 'app', event: 'startup', details: { version: app.getVersion(), packaged: app.isPackaged } })
   const menu = applicationMenuTemplate(process.platform, () => openMainWindow())
   Menu.setApplicationMenu(menu ? Menu.buildFromTemplate(menu) : null)
+  // A staged full-profile restore is swapped in before any profile database opens.
+  try {
+    const restored = applyPendingProfileRestore(app.getPath('userData'))
+    if (restored) diagnostic({ level: restored.status === 'applied' ? 'info' : 'error', component: 'app', event: `profile-restore-${restored.status}`, message: restored.error, details: { ...restored.report } })
+  } catch (error) {
+    diagnostic({ level: 'error', component: 'app', event: 'profile-restore-failed', message: error instanceof Error ? error.message : String(error) })
+  }
   await initializePreferencesDatabase()
   await initializeMail()
   productivityStore = new ProductivityStore(join(app.getPath('userData'), 'productivity.sqlite'))
@@ -1805,6 +1816,17 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   taskPolling = setInterval(() => { void taskService?.poll().catch(() => {}) }, 60_000)
   taskPolling.unref()
   registerIpc()
+  profileBackups = registerProfileBackup({
+    userData: app.getPath('userData'),
+    appVersion: app.getVersion(),
+    defaultDirectory: join(app.getPath('documents'), 'Aerio Backups'),
+    layout: PROFILE_BACKUP_LAYOUT,
+    isLocked: () => applicationLocked,
+    relaunch: () => { app.relaunch(); app.quit() },
+    log: (event, details, error) => diagnostic({ level: error ? 'error' : 'info', component: 'app', event, details, message: error === undefined ? undefined : error instanceof Error ? error.message : String(error) })
+  })
+  // Every store opened on the restored data, so the rollback copy is no longer needed.
+  try { finalizeProfileRestore(app.getPath('userData')) } catch { /* Retried on the next launch. */ }
   registerRemoteImageProtocol()
   readyToOpenWindows = true
   createWindow()
@@ -1832,6 +1854,7 @@ app.on('before-quit', () => {
   quitting = true
   stopTrayMonitor()
   if (taskPolling) clearInterval(taskPolling)
+  profileBackups?.stop()
   void taskService?.close().catch(() => {})
   updates?.stop()
   productivityStore?.close()

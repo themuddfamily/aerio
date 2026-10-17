@@ -6,6 +6,7 @@
 
 - QuickText snippets and whole-message mail templates with subject, sanitized HTML, and managed attachments; search, edit, and insert them from the composer without losing the editor selection, and back them up with local data or as a standalone template file.
 - Watch for replies: turn it on in the composer or from a sent message’s menu, with an optional deadline. Aerio matches replies by Message-ID references and the provider thread for the sending account, notifies from the background or tray when a recipient answers or the deadline passes without a reply, and lists active and past watches under Mail › Reply watches, where they can be cancelled.
+- Full-profile backup and restore in Settings: daily, 3-day, or weekly snapshots (or on demand) of the mail cache, drafts, queued changes, rules, templates, local Tasks/Notes/Contacts, connected-task cache, and preferences, using SQLite's online backup API with per-file SHA-256 checksums and keep-N retention. Restore verifies and previews the backup, migrates and stages it, then swaps it in on restart with automatic rollback if the swap fails or is interrupted. Credentials are never included, restored outgoing and scheduled sends are held in Drafts for review, connected task writes wait for review, and accounts reauthorize.
 
 ## 0.5.0 — 2026-08-08
 
