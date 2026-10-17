@@ -3,6 +3,7 @@ import type { ImapAccountInput, MailProviderPreset } from '../../src/mail-types'
 export const PROVIDER_PRESETS: MailProviderPreset[] = [
   { id: 'gmail', name: 'Google Gmail', description: 'Gmail API with labels, drafts, and History sync.', auth: 'google-oauth' },
   { id: 'microsoft', name: 'Outlook & Microsoft 365', description: 'Microsoft Graph for Outlook.com and work or school mailboxes.', auth: 'microsoft-oauth' },
+  { id: 'exchange', name: 'Microsoft Exchange Server', description: 'On-premises Exchange 2013 SP1, 2016, 2019, or Subscription Edition through Exchange Web Services.', auth: 'exchange' },
   { id: 'icloud', name: 'Apple iCloud Mail', description: 'IMAP and SMTP using an Apple app-specific password.', auth: 'app-password', imapHost: 'imap.mail.me.com', imapPort: 993, imapSecurity: 'tls', smtpHost: 'smtp.mail.me.com', smtpPort: 587, smtpSecurity: 'starttls', passwordHint: 'Apple app-specific password' },
   { id: 'yahoo', name: 'Yahoo Mail & AOL', description: 'IMAP and SMTP using a Yahoo app password.', auth: 'app-password', imapHost: 'imap.mail.yahoo.com', imapPort: 993, imapSecurity: 'tls', smtpHost: 'smtp.mail.yahoo.com', smtpPort: 465, smtpSecurity: 'tls', passwordHint: 'Yahoo app password' },
   { id: 'fastmail', name: 'Fastmail', description: 'IMAP and SMTP using a Fastmail app password.', auth: 'app-password', imapHost: 'imap.fastmail.com', imapPort: 993, imapSecurity: 'tls', smtpHost: 'smtp.fastmail.com', smtpPort: 465, smtpSecurity: 'tls', passwordHint: 'Fastmail app password' },

@@ -9,7 +9,7 @@ import Modal from './Modal'
 export interface ContactProviderAccount {
   id: string
   email: string
-  provider: 'gmail' | 'microsoft' | 'dav'
+  provider: 'gmail' | 'microsoft' | 'dav' | 'exchange'
 }
 
 interface ContactInterchangePanelProps {
@@ -128,7 +128,7 @@ function ContactImportModal({ preview, contacts, providerAccounts, onLocalContac
           <label className="field-label">Import into
             <select value={destination} disabled={Boolean(progress)} onChange={(event) => setDestination(event.target.value)}>
               <option value="local">Local contacts on this PC</option>
-              {providerAccounts.map((account) => <option key={account.id} value={account.id}>{account.email} · {account.provider === 'gmail' ? 'Google' : account.provider === 'dav' ? 'CardDAV' : 'Microsoft'}</option>)}
+              {providerAccounts.map((account) => <option key={account.id} value={account.id}>{account.email} · {account.provider === 'gmail' ? 'Google' : account.provider === 'dav' ? 'CardDAV' : account.provider === 'exchange' ? 'Exchange' : 'Microsoft'}</option>)}
             </select>
           </label>
           <label className="field-label">Contacts already saved

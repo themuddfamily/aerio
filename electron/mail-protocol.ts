@@ -191,6 +191,7 @@ export interface WorkerResponse {
 export type AccountCredential =
   | { type: 'oauth'; accessToken: string }
   | { type: 'imap'; config: ImapAccountInput }
+  | { type: 'exchange'; config: import('./exchange/exchange-config').ExchangeAccountConfig }
 
 export interface WorkerCredentialRequest {
   kind: 'credential-request'

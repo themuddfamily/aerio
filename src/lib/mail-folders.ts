@@ -23,7 +23,8 @@ export function gmailLabelColor(backgroundColor: string) {
 
 export function mailFolderCapabilities(provider: MailProviderId | undefined): MailFolderCapabilities {
   if (provider === 'gmail') return { kind: 'label', canCreate: true, canRename: true, canDelete: true, canNest: true, canColor: true, deleteKeepsMessages: true }
-  if (provider === 'microsoft') return { kind: 'folder', canCreate: true, canRename: true, canDelete: true, canNest: true, canColor: false, deleteKeepsMessages: true }
+  // Exchange (Graph or EWS) deletes a folder into Deleted Items together with its messages.
+  if (provider === 'microsoft' || provider === 'exchange') return { kind: 'folder', canCreate: true, canRename: true, canDelete: true, canNest: true, canColor: false, deleteKeepsMessages: true }
   if (!provider) return { kind: 'folder', canCreate: false, canRename: false, canDelete: false, canNest: false, canColor: false, deleteKeepsMessages: false }
   return { kind: 'folder', canCreate: true, canRename: true, canDelete: true, canNest: true, canColor: false, deleteKeepsMessages: false }
 }
@@ -95,7 +96,7 @@ export function mailFolderNameError(name: string, provider: MailProviderId | und
   if (/[\u0000-\u001f\u007f]/.test(value)) return 'The name cannot contain control characters'
   if (provider === 'gmail' && value.includes('/')) return 'Use the parent setting instead of “/” to nest labels'
   if (provider === 'local' && value.includes('/')) return 'Use the parent setting instead of “/” to nest folders'
-  if (provider !== 'gmail' && provider !== 'microsoft' && provider !== 'local' && delimiter && value.includes(delimiter)) return `The name cannot contain the folder separator “${delimiter}”`
+  if (provider !== 'gmail' && provider !== 'microsoft' && provider !== 'exchange' && provider !== 'local' && delimiter && value.includes(delimiter)) return `The name cannot contain the folder separator “${delimiter}”`
   if (provider !== 'gmail' && provider !== 'microsoft' && provider !== 'local' && /[*%]/.test(value)) return 'IMAP folder names cannot contain * or %'
   if (provider !== 'local' && value.toUpperCase() === 'INBOX') return 'Inbox is reserved by the provider'
   return undefined

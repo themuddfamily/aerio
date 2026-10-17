@@ -21,6 +21,7 @@ interface StoredOAuthData {
   microsoftConfig?: { clientId: string }
   microsoftTokens: Record<string, MicrosoftTokenSet>
   imapAccounts: Record<string, ImapAccountInput>
+  exchangeAccounts?: Record<string, import('../exchange/exchange-config').ExchangeAccountConfig>
 }
 
 interface MicrosoftTokenSet {
@@ -81,7 +82,8 @@ export class OAuthVault {
         googleCalendarWrite: parsed.googleCalendarWrite ?? {},
         microsoftConfig: parsed.microsoftConfig,
         microsoftTokens: parsed.microsoftTokens ?? {},
-        imapAccounts: parsed.imapAccounts ?? {}
+        imapAccounts: parsed.imapAccounts ?? {},
+        exchangeAccounts: parsed.exchangeAccounts ?? {}
       }
     } catch {
       // Keep any credentials already held in memory. This also prevents a
@@ -478,9 +480,26 @@ export class OAuthVault {
     }
   }
 
+  /** On-premises Exchange (EWS) settings with the password or token; see exchange/exchange-config.ts. */
+  storeExchange(accountId: string, config: import('../exchange/exchange-config').ExchangeAccountConfig) {
+    this.data.exchangeAccounts = { ...this.data.exchangeAccounts, [accountId]: config }
+    this.save()
+  }
+
+  exchangeCredential(accountId: string) {
+    let config = this.data.exchangeAccounts?.[accountId]
+    if (!config) {
+      this.load()
+      config = this.data.exchangeAccounts?.[accountId]
+    }
+    if (!config) throw new Error('This Exchange account needs to be connected again')
+    return config
+  }
+
   async credential(accountId: string, provider: MailProviderId) {
     if (provider === 'gmail') return { type: 'oauth' as const, accessToken: await this.accessToken(accountId) }
     if (provider === 'microsoft') return { type: 'oauth' as const, accessToken: await this.microsoftAccessToken(accountId) }
+    if (provider === 'exchange') return { type: 'exchange' as const, config: this.exchangeCredential(accountId) }
     return { type: 'imap' as const, config: this.imapCredential(accountId) }
   }
 
@@ -499,6 +518,7 @@ export class OAuthVault {
     delete this.data.googleCalendarWrite[accountId]
     delete this.data.microsoftTokens[accountId]
     delete this.data.imapAccounts[accountId]
+    if (this.data.exchangeAccounts) delete this.data.exchangeAccounts[accountId]
     this.accessCache.delete(accountId)
     this.save()
   }

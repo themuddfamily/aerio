@@ -32,7 +32,7 @@ export interface AvailabilityDependencies {
   googleToken(accountId: string): Promise<string>
   microsoftToken(accountId: string): Promise<string>
   /** Undefined means the grant predates scope tracking; the provider response decides. */
-  grantedScopes(accountId: string, provider: Exclude<ProductivityProvider, 'dav'>): string[] | undefined
+  grantedScopes(accountId: string, provider: Exclude<ProductivityProvider, 'dav' | 'exchange'>): string[] | undefined
   now?: () => number
 }
 
@@ -282,6 +282,14 @@ export class AvailabilityService {
         ...base,
         attendees: [...addresses.map((email) => unknownAttendee(email, 'unsupported')), ...invalid],
         message: 'Free/busy lookup needs a Google or Microsoft calendar. CalDAV calendars can’t check other people’s availability yet.'
+      }
+    }
+    // EWS GetUserAvailability is not implemented for on-premises Exchange accounts (E39).
+    if (calendar.provider === 'exchange') {
+      return {
+        ...base,
+        attendees: [...addresses.map((email) => unknownAttendee(email, 'unsupported')), ...invalid],
+        message: 'Free/busy lookup needs a Google or Microsoft calendar. Exchange Server calendars can’t check other people’s availability yet.'
       }
     }
     const accountId = calendar.accountId

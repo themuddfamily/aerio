@@ -1,10 +1,10 @@
 export type MailAccountStatus = 'connecting' | 'syncing' | 'ready' | 'paused' | 'needs-auth' | 'archived' | 'error'
 export type MailSyncPhase = 'idle' | 'inventory' | 'downloading' | 'catch-up' | 'incremental' | 'paused' | 'complete' | 'error'
 export type MailActionKind = 'archive' | 'unarchive' | 'read' | 'unread' | 'star' | 'unstar' | 'important' | 'unimportant' | 'trash' | 'untrash' | 'label' | 'unlabel' | 'move'
-export type MailProviderId = 'gmail' | 'microsoft' | 'icloud' | 'yahoo' | 'fastmail' | 'imap' | 'proton-bridge' | 'local'
+export type MailProviderId = 'gmail' | 'microsoft' | 'icloud' | 'yahoo' | 'fastmail' | 'imap' | 'proton-bridge' | 'local' | 'exchange'
 
 export interface ImapAccountInput {
-  provider: Exclude<MailProviderId, 'gmail' | 'microsoft' | 'local'>
+  provider: Exclude<MailProviderId, 'gmail' | 'microsoft' | 'local' | 'exchange'>
   email: string
   displayName?: string
   username: string
@@ -23,7 +23,7 @@ export interface MailProviderPreset {
   id: Exclude<MailProviderId, 'local'>
   name: string
   description: string
-  auth: 'google-oauth' | 'microsoft-oauth' | 'app-password' | 'password' | 'bridge'
+  auth: 'google-oauth' | 'microsoft-oauth' | 'app-password' | 'password' | 'bridge' | 'exchange'
   imapHost?: string
   imapPort?: number
   imapSecurity?: 'tls' | 'starttls'

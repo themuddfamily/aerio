@@ -147,7 +147,7 @@ export async function deleteRecipientList(actions: ContactListActions, contacts:
 export function ContactListEditor({ list, contacts, providerAccounts, canCreateGroups, onClose, onSave, onToast }: {
   list?: RecipientList
   contacts: Contact[]
-  providerAccounts: { id: string; email: string; provider: 'gmail' | 'microsoft' | 'dav' }[]
+  providerAccounts: { id: string; email: string; provider: 'gmail' | 'microsoft' | 'dav' | 'exchange' }[]
   canCreateGroups: boolean
   onClose(): void
   onSave(target: ListTarget, name: string, memberIds: Set<string>, extraAddresses: string[]): Promise<void>

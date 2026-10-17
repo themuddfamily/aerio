@@ -14,7 +14,7 @@ export interface Account {
   email: string
   initials: string
   color: string
-  provider: 'gmail' | 'microsoft' | 'outlook' | 'imap' | 'local' | 'dav'
+  provider: 'gmail' | 'microsoft' | 'outlook' | 'imap' | 'local' | 'dav' | 'exchange'
 }
 
 export interface Attachment {
@@ -267,6 +267,8 @@ export interface AerioDesktopApi {
   smime?: import('./smime-types').SmimeApi
   interchange: import('./interchange-types').InterchangeDesktopApi
   dav: import('./dav-types').DavDesktopApi
+  /** On-premises Exchange (EWS) accounts; optional so test doubles of the API stay valid. */
+  exchange?: import('./exchange-types').ExchangeDesktopApi
   contactMerge?: import('./contact-merge-types').ContactMergeDesktopApi
   /** Matrix chat; the Chat module still appears only when its gate passes. */
   chat?: import('./chat-types').ChatDesktopApi

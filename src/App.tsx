@@ -173,7 +173,7 @@ export default function App() {
     try {
       const accounts = (await window.aerio.mail.accounts.list()).filter((account) => !account.archived)
       setConnectedAccounts(accounts)
-      const supported = accounts.filter((account) => account.provider === 'gmail' || account.provider === 'microsoft')
+      const supported = accounts.filter((account) => account.provider === 'gmail' || account.provider === 'microsoft' || account.provider === 'exchange')
       const davAccounts = (await window.aerio.dav?.snapshot().catch(() => undefined))?.accounts.filter((account) => account.status !== 'needs-auth') ?? []
       if (!supported.length && !davAccounts.length) {
         if (!options?.quiet) showToast('Connect Google or Microsoft to synchronize Calendar and Contacts')
@@ -199,7 +199,7 @@ export default function App() {
   }, [showToast])
 
   const supportedProductivityAccounts = connectedAccounts
-    .filter((account) => !account.archived && (account.provider === 'gmail' || account.provider === 'microsoft'))
+    .filter((account) => !account.archived && (account.provider === 'gmail' || account.provider === 'microsoft' || account.provider === 'exchange'))
     .map((account) => account.id)
     .sort()
     .join(',')
@@ -456,7 +456,7 @@ export default function App() {
     notes: localModules.notes
   }
   const writableCalendarIds = new Set([...productivity.calendars.filter((calendar) => calendar.canWrite).map((calendar) => calendar.id), ...localCalendarIds])
-  const providerContactAccounts = connectedAccounts.flatMap((account): { id: string; email: string; provider: import('./productivity-types').ProductivityProvider }[] => !account.archived && (account.provider === 'gmail' || account.provider === 'microsoft')
+  const providerContactAccounts = connectedAccounts.flatMap((account): { id: string; email: string; provider: import('./productivity-types').ProductivityProvider }[] => !account.archived && (account.provider === 'gmail' || account.provider === 'microsoft' || account.provider === 'exchange')
     ? [{ id: account.id, email: account.email, provider: account.provider }]
     : []).concat((dav?.accounts ?? [])
     .filter((account) => dav?.collections.some((collection) => collection.accountId === account.id && collection.kind === 'addressbook' && collection.enabled && !collection.readOnly))

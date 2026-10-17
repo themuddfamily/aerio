@@ -6,6 +6,7 @@ import { MessageLocalStore } from './mail/message-local-store'
 import { holdMailMergesForRestore, MAIL_MERGE_ACTIVE } from './mail/mail-merge-store'
 import { MailTemplateStore } from './mail/template-store'
 import { DavStore, prepareRestoredDavDatabase } from './productivity/dav-store'
+import { ExchangeStore, prepareRestoredExchangeDatabase } from './exchange/exchange-store'
 import { InterchangeStore } from './productivity/interchange-store'
 import { InvitationStore } from './productivity/invitation-store'
 import { ProductivityStore } from './productivity/store'
@@ -118,6 +119,20 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
       summarize: (db) => [
         { label: 'Calendar and contacts accounts (CalDAV/CardDAV)', count: countRows(db, 'dav_accounts') },
         { label: 'Pending calendar and contact changes', count: countRows(db, 'dav_operations', `status IN ('queued','held')`) }
+      ]
+    },
+    {
+      // Exchange passwords and tokens live in oauth-vault.dat, which is not in this allowlist.
+      file: 'exchange.sqlite',
+      label: 'Exchange calendar and contact cache and pending writes',
+      // Queued writes are held for review; the mail account itself is already counted for sign-in.
+      prepareRestore: (path) => {
+        new ExchangeStore(path).close()
+        withDatabase(path, (db) => prepareRestoredExchangeDatabase(db))
+      },
+      summarize: (db) => [
+        { label: 'Exchange calendar and contacts folders', count: countRows(db, 'exchange_folders') },
+        { label: 'Pending Exchange calendar and contact changes', count: countRows(db, 'exchange_operations', `status IN ('queued','held')`) }
       ]
     },
     {

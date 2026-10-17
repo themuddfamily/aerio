@@ -4,6 +4,7 @@ import type { MailAccountSummary, ImapServerSettings } from '../mail-types'
 import MailAutomaticRepliesSection from './MailAutomaticRepliesSection'
 import Modal from './Modal'
 import MailSenderIdentities from './MailSenderIdentities'
+import ExchangeAccountSection from './ExchangeAccountSection'
 
 interface MailAccountSettingsModalProps {
   account: MailAccountSummary
@@ -25,7 +26,7 @@ export default function MailAccountSettingsModal({ account, onSaved, onClose, on
   const [password, setPassword] = useState('')
 
   useEffect(() => {
-    if (account.provider === 'gmail' || account.provider === 'microsoft') return
+    if (account.provider === 'gmail' || account.provider === 'microsoft' || account.provider === 'exchange') return
     void window.aerio.mail.accounts.imapSettings(account.id).then(setServer).catch((error) => onToast(error instanceof Error ? error.message : 'Server settings could not be loaded'))
   }, [account.id, account.provider, onToast])
 
@@ -140,6 +141,7 @@ export default function MailAccountSettingsModal({ account, onSaved, onClose, on
           <button className="button danger-subtle" disabled={Boolean(busy) || !syncEnabled} onClick={() => void rebuild()}><RotateCcw size={15} /> {busy === 'rebuild' ? 'Starting…' : 'Rebuild local mailbox'}</button>
         </div>
       </section>
+      {account.provider === 'exchange' && <ExchangeAccountSection account={account} onToast={onToast} />}
       {server && <section>
         <h3>IMAP and SMTP servers</h3>
         <p>The saved password remains encrypted and is never displayed. Leave the password blank to keep it.</p>

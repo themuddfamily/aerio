@@ -17,6 +17,7 @@ The layout is an allowlist. Only these profile entries are copied:
 | `productivity.sqlite` | Local Tasks, Notes, and Contacts, local calendars and internet-calendar subscriptions, plus the provider calendar/contact cache |
 | `provider-tasks.sqlite` | The connected-task cache, durable task/list operations, and resolution history |
 | `dav.sqlite` | CalDAV/CardDAV accounts (no passwords), discovered collections with sync tokens and ctags, the resource cache with ETags, and pending writes |
+| `exchange.sqlite` | On-premises Exchange (EWS) Calendar and Contacts: account status, folders with sync states, the item cache with ChangeKeys, and pending writes (held for review after a restore). Exchange passwords and tokens stay in `oauth-vault.dat`. |
 | `mail/` | Downloaded `.eml` files and staged draft attachments |
 | `note-attachments/`, `template-attachments/` | Managed attachment copies |
 
@@ -24,7 +25,7 @@ Writable local mail folders (roadmap E18) don't exist yet. When they're added, t
 
 ### Never included
 
-- `oauth-vault.dat`: OAuth access and refresh tokens, IMAP/SMTP passwords, and the secure-storage (DPAPI/Keychain/libsecret) encryption around them. The engine also refuses any file with this name inside a managed folder, and rejects any manifest that lists one.
+- `oauth-vault.dat`: OAuth access and refresh tokens, IMAP/SMTP and Exchange (EWS) passwords and tokens, and the secure-storage (DPAPI/Keychain/libsecret) encryption around them. The engine also refuses any file with this name inside a managed folder, and rejects any manifest that lists one.
 - `openpgp-keyring.dat`: OpenPGP public keys and passphrase-protected private keys, wrapped with the same secure storage. It is on the same forbidden list and stays as it is on the device during a restore. Export keys from Settings › OpenPGP keys to move them ([OpenPGP mail](openpgp-mail.md)).
 - `smime-certificates.dat`: S/MIME certificates, trust choices, sender defaults, and passphrase-protected private keys, wrapped with the same secure storage. It is on the forbidden list and stays as it is on the device during a restore. Export a password-protected PKCS#12 from Settings › S/MIME certificates to move your certificate ([S/MIME mail](smime-mail.md)).
 - `dav-credentials.dat`: CalDAV/CardDAV app passwords encrypted with OS secure storage. On restore, DAV accounts ask for the password again, and writes that were still queued are held for review instead of being sent.

@@ -136,6 +136,20 @@ const api: AerioDesktopApi = {
     setCollectionEnabled: (collectionId, enabled) => ipcRenderer.invoke('dav:collection-enabled', collectionId, enabled),
     resolve: (reviewId, resolution) => ipcRenderer.invoke('dav:resolve', reviewId, resolution)
   },
+  // On-premises Exchange (EWS): passwords and tokens go to the main process and never come back.
+  exchange: {
+    discover: (input) => ipcRenderer.invoke('exchange:discover', input),
+    connect: (input) => ipcRenderer.invoke('exchange:connect', input),
+    snapshot: () => ipcRenderer.invoke('exchange:snapshot'),
+    updateCredentials: (accountId, input) => ipcRenderer.invoke('exchange:update-credentials', accountId, input),
+    sync: (accountId) => ipcRenderer.invoke('exchange:sync', accountId),
+    resolve: (reviewId, resolution) => ipcRenderer.invoke('exchange:resolve', reviewId, resolution),
+    onChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, snapshot: import('../src/exchange-types').ExchangeSnapshot) => callback(snapshot)
+      ipcRenderer.on('exchange:changed', listener)
+      return () => ipcRenderer.removeListener('exchange:changed', listener)
+    }
+  },
   // Matrix chat: display snapshots and commands only; tokens and keys never cross this bridge.
   chat: {
     snapshot: () => ipcRenderer.invoke('chat:snapshot'),

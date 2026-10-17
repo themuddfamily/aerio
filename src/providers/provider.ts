@@ -83,6 +83,18 @@ export const providerCatalog: Record<ProviderId, ProviderCapabilities> = {
       chat: unavailable('Teams chat requires organization-specific permissions and is not part of this connector.')
     }
   },
+  exchange: {
+    id: 'exchange',
+    name: 'Microsoft Exchange Server',
+    modules: {
+      mail: remoteReady('Mail, folders, drafts, and sending are connected through Exchange Web Services (EWS).'),
+      calendar: remoteReady('Exchange calendars synchronize through EWS, with ChangeKey-checked edits and conflict review.'),
+      contacts: remoteReady('Exchange contacts folders synchronize through EWS, with ChangeKey-checked edits and conflict review.'),
+      tasks: localReady('Exchange tasks are not synchronized; Aerio tasks remain local.'),
+      notes: localReady('Exchange notes are not synchronized; Aerio notes remain local.'),
+      chat: unavailable('Exchange does not provide chat.')
+    }
+  },
   icloud: imapCapabilities('icloud', 'Apple iCloud Mail'),
   yahoo: imapCapabilities('yahoo', 'Yahoo Mail'),
   fastmail: imapCapabilities('fastmail', 'Fastmail'),
