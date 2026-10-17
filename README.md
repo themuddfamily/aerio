@@ -19,7 +19,7 @@ Remaining release work and optional future features are tracked in [ROADMAP.md](
 - Persistent snooze/remind-later with automatic Inbox restoration, plus account-specific rules for sender, recipient, subject, and body filtering
 - Per-account identity, synchronization, notification, OAuth, IMAP/SMTP, connection-test, and local-rebuild settings
 - Privacy-redacted diagnostics, storage-integrity checks, and native new-mail notifications that open the relevant conversation
-- Sanitized HTML; scripts and unsafe links are removed, and remote images are blocked by default
+- Sanitized HTML; scripts and unsafe links are removed, remote images are blocked by default, and suspected tracking pixels stay blocked with an explanation even after remote images are permitted ([tracking protection](docs/tracking-protection.md))
 - Dedicated message windows for provider mail; double-click a conversation to open or focus its window
 - Read-only local archive or complete local deletion when disconnecting an account
 - Google and Microsoft Calendar synchronization with event creation, editing, deletion, recurrence, and configurable reminders

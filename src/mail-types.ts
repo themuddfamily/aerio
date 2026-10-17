@@ -127,8 +127,25 @@ export interface MailMessageDetail {
   text: string
   html: string
   sanitizedHtml: string
+  /** Remote images and suspected trackers found while sanitizing `html`. */
+  remoteContent?: MailRemoteContentReport
   labelIds: string[]
   attachments: MailAttachment[]
+}
+
+export type MailTrackingReason = 'tiny-dimensions' | 'hidden-style' | 'known-tracker-host' | 'tracking-path'
+
+export interface MailTrackingFinding {
+  host: string
+  reasons: MailTrackingReason[]
+  count: number
+}
+
+export interface MailRemoteContentReport {
+  /** Remote images in the message, including suspected trackers. */
+  remoteImages: number
+  /** Suspected trackers stay blocked even after remote images are permitted. */
+  trackers: MailTrackingFinding[]
 }
 
 export interface MailMessageSource {

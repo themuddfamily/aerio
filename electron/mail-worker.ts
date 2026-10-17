@@ -28,7 +28,7 @@ import { MailDatabase, type ParsedMailMessage } from './mail/database'
 import { GmailApiError, GmailClient, type GmailRawMessage } from './mail/gmail-client'
 import { ImapSmtpClient, labelsForImapFolders, type ImapFolder } from './mail/imap-client'
 import { MicrosoftGraphClient, MicrosoftGraphError, microsoftLabels, microsoftMessageLabels } from './mail/microsoft-client'
-import { sanitizeMessageHtml } from './mail/message-security'
+import { sanitizeMessageHtmlWithReport } from './mail/message-security'
 import { buildNewMailNotification } from './mail/new-mail'
 import { parseMessageSource } from './mail/message-source'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
@@ -1017,10 +1017,10 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'mail:account-unread-counts') return database.accountUnreadCounts()
   if (command.type === 'mail:thread') {
     const thread = database.getThread(command.payload.accountId, command.payload.threadId)
-    thread.messages = thread.messages.map((message: MailMessageDetail) => ({
-      ...message,
-      sanitizedHtml: sanitizeMessageHtml(message.html, command.payload.allowRemoteImages)
-    }))
+    thread.messages = thread.messages.map((message: MailMessageDetail) => {
+      const { html, remoteContent } = sanitizeMessageHtmlWithReport(message.html, command.payload.allowRemoteImages)
+      return { ...message, sanitizedHtml: html, remoteContent }
+    })
     return thread
   }
   if (command.type === 'mail:export') {

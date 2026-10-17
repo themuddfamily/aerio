@@ -4,6 +4,7 @@ import type { MailMessageDetail } from '../mail-types'
 import { formatMailArrival, formatMailArrivalTooltip } from '../lib/mail-date'
 import MessageHtml from './MessageHtml'
 import SenderAvatar from './SenderAvatar'
+import TrackingProtectionNotice from './TrackingProtectionNotice'
 
 interface ThreadMessageAccordionProps {
   message: MailMessageDetail
@@ -62,6 +63,7 @@ export default function ThreadMessageAccordion({
             <TriangleAlert size={15} aria-hidden="true" />
             <p><button type="button" onClick={onLoadRemoteImages}>Load remote images</button><span>. To preserve your privacy, external images have been blocked.</span></p>
           </div>}
+          {expanded && <TrackingProtectionNotice report={message.remoteContent} remoteImagesPermitted={!onLoadRemoteImages} />}
           {message.sanitizedHtml && message.local?.format !== 'plain'
             ? <MessageHtml className="message-body mail-html" html={message.sanitizedHtml} />
             : <div className="message-body mail-text">{message.text}</div>}

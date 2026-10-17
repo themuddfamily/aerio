@@ -1,4 +1,7 @@
 import sanitizeHtml from 'sanitize-html'
+import type { MailRemoteContentReport } from '../../src/mail-types'
+import { describeTrackingReasons } from '../../src/lib/tracking-reasons'
+import { classifyTrackingImage, RemoteContentRecorder, type TrackingClassification } from './tracking-protection'
 
 const encodeRemote = (url: string) => Buffer.from(url, 'utf8').toString('base64url')
 
@@ -8,11 +11,11 @@ const imageDimension = (value: string | undefined, maximum: number) => {
   return Math.min(Math.max(Number(match[1]), 1), maximum)
 }
 
-const blockedImageAttributes = (attributes: Record<string, string>) => {
+const blockedImageAttributes = (attributes: Record<string, string>, classification: TrackingClassification) => {
   const width = imageDimension(attributes.width, 1600)
   const height = imageDimension(attributes.height, 1200)
   const compact = width !== undefined && height !== undefined && width <= 96 && height <= 96
-  const tracker = width !== undefined && height !== undefined && width <= 4 && height <= 4
+  const tracker = classification.tracker
   const className = [
     'remote-image-blocked',
     compact ? 'remote-image-compact' : '',
@@ -25,6 +28,10 @@ const blockedImageAttributes = (attributes: Record<string, string>) => {
     width && height ? `--blocked-image-aspect:${width}/${height}` : ''
   ].filter(Boolean).join(';')
   const description = attributes.alt?.trim()
+  if (tracker) {
+    const explanation = `Suspected tracking image blocked because ${describeTrackingReasons(classification.reasons)}`
+    return { class: className, title: explanation, role: 'img', 'aria-label': explanation }
+  }
 
   return {
     class: className,
@@ -36,7 +43,17 @@ const blockedImageAttributes = (attributes: Record<string, string>) => {
 }
 
 export function sanitizeMessageHtml(html: string, allowRemoteImages = false) {
-  return sanitizeHtml(html, {
+  return sanitizeMessageHtmlWithReport(html, allowRemoteImages).html
+}
+
+/**
+ * Sanitizes message HTML and reports remote images and suspected trackers.
+ * Permitting remote images never unblocks suspected trackers: they keep an
+ * explanatory placeholder and are never routed through the image proxy.
+ */
+export function sanitizeMessageHtmlWithReport(html: string, allowRemoteImages = false): { html: string; remoteContent: MailRemoteContentReport } {
+  const recorder = new RemoteContentRecorder()
+  const sanitized = sanitizeHtml(html, {
     allowedTags: [
       'a', 'abbr', 'address', 'article', 'aside', 'b', 'blockquote', 'br', 'caption', 'center',
       'cite', 'code', 'col', 'colgroup', 'dd', 'del', 'details', 'div', 'dl', 'dt', 'em',
@@ -83,11 +100,18 @@ export function sanitizeMessageHtml(html: string, allowRemoteImages = false) {
       img: (_tag, attributes) => {
         const src = attributes.src ?? ''
         const remote = /^https?:\/\//i.test(src)
-        if (remote && !allowRemoteImages) {
+        const classification = classifyTrackingImage({
+          src,
+          width: imageDimension(attributes.width, 1600),
+          height: imageDimension(attributes.height, 1200),
+          style: attributes.style
+        })
+        if (remote) recorder.recordImage(classification)
+        if (remote && (!allowRemoteImages || classification.tracker)) {
           return {
             tagName: 'span',
-            attribs: blockedImageAttributes(attributes),
-            text: 'Remote image blocked'
+            attribs: blockedImageAttributes(attributes, classification),
+            text: classification.tracker ? 'Tracking image blocked' : 'Remote image blocked'
           }
         }
         const attribs: Record<string, string> = { ...attributes }
@@ -103,4 +127,5 @@ export function sanitizeMessageHtml(html: string, allowRemoteImages = false) {
       }
     }
   })
+  return { html: sanitized, remoteContent: recorder.report() }
 }

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { sanitizeMessageHtml } from './message-security'
+import { describe, expect, it, vi } from 'vitest'
+import { sanitizeMessageHtml, sanitizeMessageHtmlWithReport } from './message-security'
 
 describe('sanitizeMessageHtml', () => {
   it('removes active content and blocks tracking images by default', () => {
@@ -8,7 +8,7 @@ describe('sanitizeMessageHtml', () => {
     expect(result).not.toContain('javascript:')
     expect(result).not.toContain('tracker.example')
     expect(result).toContain('remote-image-blocked')
-    expect(result).toContain('Remote image blocked')
+    expect(result).toContain('Tracking image blocked')
   })
 
   it('preserves safe, clamped dimensions for blocked image placeholders', () => {
@@ -56,5 +56,52 @@ describe('sanitizeMessageHtml', () => {
     expect(local).toContain('src="cid:logo"')
     expect(local).toContain('href="#"')
     expect(local).toContain('href="mailto:ada@example.com"')
+  })
+})
+
+describe('sanitizeMessageHtmlWithReport tracking protection', () => {
+  const newsletter = [
+    '<img src="https://images.example/hero.png" width="600" height="300" alt="Hero">',
+    '<img src="https://open.example/o.gif" width="1" height="1">',
+    '<img src="https://cdn.example/spacer.png" style="display:none">',
+    '<img src="https://u1.ct.sendgrid.net/wf/open?upn=abc">',
+    '<img src="https://u1.ct.sendgrid.net/wf/open?upn=def">'
+  ].join('')
+
+  it('reports remote images and groups suspected trackers by host while blocked', () => {
+    const { html, remoteContent } = sanitizeMessageHtmlWithReport(newsletter)
+    expect(html).not.toContain('aerio-image://fetch/')
+    expect(remoteContent.remoteImages).toBe(5)
+    expect(remoteContent.trackers).toEqual([
+      { host: 'open.example', reasons: ['tiny-dimensions', 'tracking-path'], count: 1 },
+      { host: 'cdn.example', reasons: ['hidden-style'], count: 1 },
+      { host: 'u1.ct.sendgrid.net', reasons: ['known-tracker-host', 'tracking-path'], count: 2 }
+    ])
+  })
+
+  it('keeps suspected trackers blocked when other remote images are permitted', () => {
+    const { html, remoteContent } = sanitizeMessageHtmlWithReport(newsletter, true)
+    const proxied = [...html.matchAll(/aerio-image:\/\/fetch\/([A-Za-z0-9_-]+)/g)].map((match) => Buffer.from(match[1], 'base64url').toString('utf8'))
+    expect(proxied).toEqual(['https://images.example/hero.png'])
+    expect(html.match(/remote-image-tracker/g)).toHaveLength(4)
+    expect(html).toContain('Suspected tracking image blocked because it is served by a known email tracking service and its address looks like an open-tracking link')
+    expect(html).toContain('Suspected tracking image blocked because it is styled to be hidden')
+    expect(html).not.toContain('display:none')
+    expect(remoteContent.trackers).toHaveLength(3)
+  })
+
+  it('never forwards untrusted image styles once remote images are permitted', () => {
+    const { html } = sanitizeMessageHtmlWithReport('<img src="https://images.example/a.png" style="position:fixed" width="200" height="100">', true)
+    expect(html).toContain('aerio-image://fetch/')
+    expect(html).not.toContain('position')
+  })
+
+  it('does not report local or embedded images and does not fetch while classifying', () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const { remoteContent } = sanitizeMessageHtmlWithReport('<img src="cid:logo" width="1" height="1"><img src="data:image/gif;base64,R0lGOD" width="1" height="1">', true)
+    sanitizeMessageHtmlWithReport(newsletter, true)
+    expect(remoteContent).toEqual({ remoteImages: 0, trackers: [] })
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
   })
 })

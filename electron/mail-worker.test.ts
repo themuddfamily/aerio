@@ -168,7 +168,7 @@ vi.mock('./mail/imap-client', () => ({
   ImapSmtpClient: mocks.ImapSmtpClient,
   labelsForImapFolders: vi.fn(() => [])
 }))
-vi.mock('./mail/message-security', () => ({ sanitizeMessageHtml: mocks.sanitize }))
+vi.mock('./mail/message-security', () => ({ sanitizeMessageHtmlWithReport: (html: string, remote?: boolean) => ({ html: mocks.sanitize(html, remote), remoteContent: { remoteImages: 1, trackers: [] } }) }))
 vi.mock('./mail/new-mail', () => ({ buildNewMailNotification: mocks.notification }))
 vi.mock('./mail/message-source', () => ({ parseMessageSource: mocks.source }))
 vi.mock('./mail/mime-builder', () => ({ createMime: vi.fn(() => 'mime'), createMimeBuffer: vi.fn(() => Buffer.from('mime')) }))
@@ -262,6 +262,7 @@ describe.sequential('mail worker protocol routing', () => {
     expect(mocks.db.accountUnreadCounts).toHaveBeenCalled()
     const thread = await request({ type: 'mail:thread', payload: { accountId: 'account-1', threadId: 'thread-1', allowRemoteImages: true } })
     expect(thread.result.messages[0].sanitizedHtml).toBe('safe:true:<p>raw</p>')
+    expect(thread.result.messages[0].remoteContent).toEqual({ remoteImages: 1, trackers: [] })
 
     mocks.db.getMessageRaw.mockReturnValueOnce(undefined)
     await expect(request({ type: 'mail:source', payload: { accountId: 'account-1', messageId: 'missing' } })).resolves.toMatchObject({ error: { message: 'The original message is not available offline' } })

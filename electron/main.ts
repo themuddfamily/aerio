@@ -62,6 +62,7 @@ import { senderDomainFromEmail } from '../src/lib/sender-avatar'
 import { isCompleteMailAddress } from '../src/lib/mail-address'
 import { mailPollingIntervalForWindow } from './mail/polling-policy'
 import { faviconDomainCandidates } from './mail/favicon-domains'
+import { fetchRemoteImage } from './mail/remote-image-fetch'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -776,20 +777,10 @@ function registerRemoteImageProtocol() {
       if (url.hostname !== 'fetch') return new Response('Not found', { status: 404 })
       const encoded = url.pathname.replace(/^\//, '')
       const remote = Buffer.from(encoded, 'base64url').toString('utf8')
-      const target = new URL(remote)
-      if (target.protocol !== 'https:' && target.protocol !== 'http:') return new Response('Blocked', { status: 403 })
-      if (target.hostname === 'localhost' || target.hostname.endsWith('.localhost') || target.hostname.endsWith('.local')) {
-        return new Response('Blocked', { status: 403 })
-      }
-      const addresses = await lookup(target.hostname, { all: true })
-      if (!addresses.length || addresses.some((address) => isPrivateAddress(address.address))) {
-        return new Response('Blocked', { status: 403 })
-      }
-      return await net.fetch(target.toString(), {
-        headers: {
-          'User-Agent': 'Aerio mail image proxy',
-          Accept: 'image/avif,image/webp,image/png,image/jpeg,image/gif,image/*'
-        }
+      return await fetchRemoteImage(remote, {
+        lookup: (hostname) => lookup(hostname, { all: true }),
+        isPrivateAddress,
+        fetch: (target, init) => net.fetch(target, init)
       })
     } catch {
       return new Response('Invalid image URL', { status: 400 })

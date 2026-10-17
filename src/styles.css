@@ -1885,6 +1885,45 @@ kbd {
   text-decoration: underline;
 }
 
+.tracking-protection-notice {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.tracking-protection-notice summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.tracking-protection-notice summary::-webkit-details-marker {
+  display: none;
+}
+
+.tracking-protection-notice summary > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.tracking-protection-notice summary:hover span {
+  text-decoration: underline;
+}
+
+.tracking-protection-notice p,
+.tracking-protection-notice ul {
+  margin: 4px 0 0 22px;
+}
+
+.tracking-protection-notice ul {
+  padding: 0;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
 .thread-message-content-shell {
   display: grid;
   grid-template-rows: 0fr;
