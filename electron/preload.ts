@@ -155,6 +155,11 @@ const api: AerioDesktopApi = {
       exportBackup: () => ipcRenderer.invoke('mail:templates:export'),
       importBackup: () => ipcRenderer.invoke('mail:templates:import')
     },
+    replyWatches: {
+      list: (accountIds) => ipcRenderer.invoke('mail:reply-watches:list', accountIds),
+      create: (input) => ipcRenderer.invoke('mail:reply-watches:create', input),
+      cancel: (id) => ipcRenderer.invoke('mail:reply-watches:cancel', id)
+    },
     rules: {
       list: (accountIds) => ipcRenderer.invoke('mail:rules:list', accountIds),
       save: (input) => ipcRenderer.invoke('mail:rules:save', input),

@@ -1,5 +1,5 @@
 import {
-  Archive, AtSign, CalendarClock, CheckSquare, ChevronDown, ChevronRight, Clock3, Copy, Download, Edit3, ExternalLink, FileText, Filter, FolderInput, Forward, Inbox, LoaderCircle, Mail, MailOpen,
+  Archive, AtSign, CalendarClock, CheckSquare, ChevronDown, ChevronRight, Clock3, Copy, Download, Edit3, ExternalLink, Eye, FileText, Filter, FolderInput, Forward, Inbox, LoaderCircle, Mail, MailOpen,
   MoreVertical, Paperclip, Pause, Play, Plus, RefreshCw, Reply, ReplyAll, Search, Send, Settings2,
   Star, Tag, Tags, Trash2, Undo2, UserPlus, WifiOff, X
 } from 'lucide-react'
@@ -17,6 +17,7 @@ import { mailSearchQueryError } from '../lib/mail-search-query'
 import { Bookmark } from 'lucide-react'
 import type { MailSavedSearch, MailSavedSearchInput } from '../mail-types'
 import MailSnoozeModal from '../components/MailSnoozeModal'
+import { MailReplyWatchesModal } from '../components/MailReplyWatches'
 import SenderAvatar from '../components/SenderAvatar'
 import ThreadListPreview from '../components/ThreadListPreview'
 import ThreadMessageAccordion from '../components/ThreadMessageAccordion'
@@ -110,6 +111,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [organizeMode, setOrganizeMode] = useState<'move' | 'label'>()
   const [snoozeItems, setSnoozeItems] = useState<MailThreadSummary[]>()
   const [rulesOpen, setRulesOpen] = useState(false)
+  const [replyWatchesOpen, setReplyWatchesOpen] = useState(false)
   const [sourceViewer, setSourceViewer] = useState<{ mode: 'headers' | 'source'; subject: string; content: string }>()
   const [remoteImages, setRemoteImages] = useState(false)
   const [accountSetup, setAccountSetup] = useState(false)
@@ -886,6 +888,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
         <MailSavedSearchList searches={savedSearches.searches} view={searchView} onOpen={openSavedSearch} onEdit={setSavingSearch} onReplace={(item) => void replaceSavedSearch(item)} onDelete={(item) => { if (window.confirm(`Delete the saved search “${item.name}”? Mail is not affected.`)) void savedSearches.remove(item) }} />
         <div className="mail-sidebar-footer">
           <button onClick={() => setRulesOpen(true)}><Filter size={14} /> Mail rules</button>
+          <button onClick={() => setReplyWatchesOpen(true)}><Eye size={14} /> Reply watches</button>
           <button onClick={() => void showStorage()}><Download size={14} /> Offline storage</button>
           {accounts.filter((account) => !account.archived).map((account) => <button key={account.id} title={`Settings for ${account.email}`} onClick={() => setSettingsAccount(account)} onContextMenu={(event) => showAccountMenu(event, account)}><Settings2 size={14} /> {account.email.split('@')[0]}</button>)}
         </div>
@@ -1036,6 +1039,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       {organizeMode && <MailOrganizeModal mode={organizeMode} items={checkedItems} accounts={accounts} labels={labels} onApply={applyOrganizeRequests} onClose={() => setOrganizeMode(undefined)} />}
       {snoozeItems && <MailSnoozeModal count={snoozeItems.length} onApply={(until) => applySnooze(snoozeItems, until)} onClose={() => setSnoozeItems(undefined)} />}
       {savingSearch && <MailSaveSearchModal accounts={accounts} labels={labels} initial={savingSearch} onClose={() => setSavingSearch(undefined)} onSave={async (input) => { const saved = await savedSearches.save(input); openSavedSearch(saved); onToast(`Saved “${saved.name}”`) }} />}
+      {replyWatchesOpen && <MailReplyWatchesModal accounts={accounts} onToast={onToast} onClose={() => setReplyWatchesOpen(false)} />}
       {rulesOpen && <MailRulesModal accounts={accounts} labels={labels} onToast={onToast} onClose={() => setRulesOpen(false)} />}
       {sourceViewer && <MailMessageSourceModal {...sourceViewer} onClose={() => setSourceViewer(undefined)} />}
       {messageTools.dialog}

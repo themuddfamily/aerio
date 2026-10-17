@@ -4313,3 +4313,5 @@ kbd {
 .template-editor-files small { color: var(--muted); }
 .template-editor-files > span button { display: grid; place-items: center; color: var(--muted); background: transparent; }
 .template-editor footer { justify-content: flex-end; margin: 0 -12px; }
+.reply-watch-control { display: flex; align-items: center; gap: 6px; }
+.reply-watch-control > .icon-button.active { color: var(--accent); background: var(--accent-soft); }

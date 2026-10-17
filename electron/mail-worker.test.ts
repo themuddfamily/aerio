@@ -97,6 +97,18 @@ const mocks = vi.hoisted(() => {
   method('operationAttempts', () => 0)
   method('rescheduleOperation')
   method('restoreOperationSnapshot')
+  const watch = { id: 'watch-1', accountId: 'account-1', subject: 'Proposal', recipients: ['ada@example.test'], status: 'pending', createdAt: '2026-08-08T10:00:00Z' }
+  db.replyWatches = {
+    watch,
+    list: vi.fn(() => [watch]),
+    get: vi.fn(() => watch),
+    createForDraft: vi.fn(() => watch),
+    createForMessage: vi.fn(() => ({ ...watch, status: 'watching' })),
+    cancel: vi.fn(() => true),
+    cancelForDraft: vi.fn(() => 1),
+    activateForDraft: vi.fn(),
+    process: vi.fn((): any[] => [])
+  }
 
   const gmail = {
     copyToLabel: vi.fn().mockResolvedValue(undefined),
@@ -1145,6 +1157,32 @@ describe.sequential('mail worker protocol routing', () => {
     const { createMime } = await import('./mail/mime-builder')
     // Gmail cannot request delivery receipts, so that choice is not sent.
     expect(vi.mocked(createMime).mock.calls.at(-1)?.[0].sendOptions).toEqual({ importance: 'high', requestReadReceipt: true })
+  })
+
+  it('routes reply watches and activates them with the delivered Message-ID and Gmail thread', async () => {
+    const watches = mocks.db.replyWatches
+    const event = { watch: { ...watches.watch, status: 'replied' }, reason: 'replied' }
+    watches.process.mockReturnValueOnce([event])
+    await expect(request({ type: 'reply-watches:list', payload: { accountIds: ['account-1'] } })).resolves.toMatchObject({ result: [watches.watch] })
+    await request({ type: 'reply-watches:create', payload: { accountId: 'account-1', draftId: 'draft-w', deadlineAt: '2026-09-01T00:00:00.000Z' } })
+    expect(watches.createForDraft).toHaveBeenCalledWith('account-1', 'draft-w', '2026-09-01T00:00:00.000Z')
+    // Creating a watch runs an immediate pass so existing replies notify without waiting for the timer.
+    expect(mocks.posted).toContainEqual({ kind: 'event', event: { type: 'reply-watch', payload: event } })
+    await request({ type: 'reply-watches:create', payload: { accountId: 'account-1', messageId: 'sent-1' } })
+    expect(watches.createForMessage).toHaveBeenCalledWith('account-1', 'sent-1', undefined)
+    await expect(request({ type: 'reply-watches:cancel', payload: { id: 'watch-1' } })).resolves.toMatchObject({ result: true })
+    await request({ type: 'drafts:cancel-send', payload: { id: 'draft-w' } })
+    expect(watches.cancelForDraft).toHaveBeenCalledWith('draft-w')
+
+    const row = { id: 'watched-delivery', account_id: 'account-1', thread_id: null, in_reply_to: null, references_json: '[]', to_json: '["ada@example.test"]', cc_json: '[]', bcc_json: '[]', subject: 'Proposal', body_text: 'Body', body_html: null, attachment_paths_json: '[]', gmail_draft_id: null }
+    const mime = await import('./mail/mime-builder')
+    vi.mocked(mime.createMime).mockReturnValueOnce(Buffer.from('Message-ID: <sent-id@aerio.local>\r\nSubject: Proposal\r\n\r\nBody').toString('base64url'))
+    mocks.gmail.sendMessage.mockResolvedValueOnce({ id: 'gmail-sent', threadId: 'gmail-thread' })
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.getDraft.mockReturnValue(undefined)
+    queueDeliveries([row])
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(watches.activateForDraft).toHaveBeenCalledWith('watched-delivery', expect.objectContaining({ messageIdHeader: '<sent-id@aerio.local>', threadId: 'gmail-thread' })))
   })
 
   it('shuts down cleanly', async () => {

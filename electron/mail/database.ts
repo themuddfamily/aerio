@@ -30,6 +30,7 @@ import type {
 } from '../../src/mail-types'
 import { compileMailSearchQuery } from '../../src/lib/mail-search-query'
 import { normalizeSendOptions } from '../../src/lib/mail-send-options'
+import { ReplyWatchStore } from './reply-watches'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -106,6 +107,7 @@ export class MailDatabase {
   readonly contentPath: string
   private readonly db: DatabaseSync
   private statements = new Map<string, StatementSync>()
+  readonly replyWatches: ReplyWatchStore
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -116,6 +118,7 @@ export class MailDatabase {
     this.db = new DatabaseSync(databasePath, { timeout: 5_000 })
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;')
     this.migrate()
+    this.replyWatches = new ReplyWatchStore(this.db)
   }
 
   close() {

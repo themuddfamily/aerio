@@ -30,6 +30,7 @@ import { ImapSmtpClient, labelsForImapFolders, type ImapFolder } from './mail/im
 import { MicrosoftGraphClient, MicrosoftGraphError, microsoftLabels, microsoftMessageLabels } from './mail/microsoft-client'
 import { sanitizeMessageHtmlWithReport } from './mail/message-security'
 import { buildNewMailNotification } from './mail/new-mail'
+import { messageIdFromMime } from './mail/reply-watches'
 import { parseMessageSource } from './mail/message-source'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createMime, createMimeBuffer } from './mail/mime-builder'
@@ -57,6 +58,8 @@ const nextRequestAt = new Map<string, number>()
 const draftQueues = new Map<string, Promise<unknown>>()
 const lastAutomaticSyncAt = new Map<string, number>()
 let pollingIntervalMs = BACKGROUND_MAIL_POLL_INTERVAL_MS
+let lastReplyWatchPassAt = 0
+const REPLY_WATCH_INTERVAL_MS = 15_000
 const UNDO_SEND_DELAY_MS = 10_000
 const DRAFT_CONFLICT_MESSAGE = 'This draft changed after it was opened in another mail client. Your version was not overwritten; save it as a copy to keep both versions.'
 
@@ -652,12 +655,23 @@ async function processOperations() {
   }
 }
 
+function processReplyWatches(force = false) {
+  if (!database || (!force && Date.now() - lastReplyWatchPassAt < REPLY_WATCH_INTERVAL_MS)) return
+  lastReplyWatchPassAt = Date.now()
+  try {
+    for (const event of database.replyWatches.process()) emit({ type: 'reply-watch', payload: event })
+  } catch {
+    // A failed pass leaves watches active for the next timer tick.
+  }
+}
+
 async function runOperations() {
   if (!database) return
   for (const snooze of database.releaseDueSnoozes()) {
     emit({ type: 'operation', payload: snooze.operation })
     emit({ type: 'mail-changed', payload: { accountId: snooze.accountId, threadIds: [snooze.threadId] } })
   }
+  processReplyWatches()
   if (!online) return
   for (const row of database.dueOperations()) {
     const id = String(row.id)
@@ -860,18 +874,27 @@ async function deliverDraft(input: MailDraftInput) {
     // The stored draft keeps the user's choice; only what the provider can honor is sent.
     input = { ...input, sendOptions: supportedSendOptions(input.sendOptions, provider) }
     if (row?.gmail_draft_id) await assertRemoteDraftUnchanged(input.accountId, provider, String(row.gmail_draft_id), row.remote_revision ? String(row.remote_revision) : undefined)
+    // Reply watches match on the Message-ID and provider thread of what was actually sent.
+    let sent: { messageIdHeader?: string; threadId?: string }
     if (provider === 'gmail') {
       const raw = createMime({ ...input, id: result.id }, from)
-      if (row?.gmail_draft_id) await clientFor(input.accountId).sendDraft(String(row.gmail_draft_id), raw)
-      else await clientFor(input.accountId).sendMessage(raw, input.threadId)
+      const reference = row?.gmail_draft_id
+        ? await clientFor(input.accountId).sendDraft(String(row.gmail_draft_id), raw)
+        : await clientFor(input.accountId).sendMessage(raw, input.threadId)
+      sent = { messageIdHeader: messageIdFromMime(raw), threadId: reference?.threadId }
     } else if (provider === 'microsoft') {
+      // Exchange assigns its own Message-ID; the watch adopts it from the synced Sent copy.
       await microsoftClientFor(input.accountId).send(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined, input.sendOptions)
+      sent = { threadId: input.threadId }
     } else {
       const client = await imapClientFor(input.accountId)
-      await client.send(createMimeBuffer({ ...input, id: result.id }, from, true), [...input.to, ...input.cc, ...input.bcc], input.sendOptions)
+      const mime = createMimeBuffer({ ...input, id: result.id }, from, true)
+      await client.send(mime, [...input.to, ...input.cc, ...input.bcc], input.sendOptions)
       if (row?.gmail_draft_id) await client.deleteDraft(String(row.gmail_draft_id))
+      sent = { messageIdHeader: messageIdFromMime(mime) }
     }
     result = { ...result, status: 'sent', updatedAt: new Date().toISOString() }
+    database.replyWatches.activateForDraft(result.id, { ...sent, sentAt: result.updatedAt })
     removeDraftFiles(result.id)
   } catch (error) {
     result = { ...result, status: 'failed', error: error instanceof Error ? error.message : String(error), updatedAt: new Date().toISOString() }
@@ -910,6 +933,7 @@ async function discardDraft(id: string) {
       else await (await imapClientFor(accountId)).deleteDraft(remoteId)
     }
     database.deleteDraftRecord(id)
+    database.replyWatches.cancelForDraft(id)
     removeDraftFiles(id)
     result = { ...result, status: 'discarded', updatedAt: new Date().toISOString() }
   } catch (error) {
@@ -1006,6 +1030,7 @@ function applyRulesToIncoming(records: ParsedMailMessage[]) {
 
 function emitNewMail(accountId: string, records: ParsedMailMessage[]) {
   const silenced = applyRulesToIncoming(records)
+  if (records.length) processReplyWatches(true)
   if (!database?.getAccount(accountId)?.notifications) return
   const payload = buildNewMailNotification(accountId, records.filter((record) => !silenced.has(record.id)))
   if (payload) emit({ type: 'new-mail', payload })
@@ -1153,8 +1178,22 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     return serializeDraft(id, async () => queueDraftDelivery({ ...command.payload.input, id }, command.payload.deliveryAt, 'scheduled'))
   }
   if (command.type === 'drafts:cancel-send') {
-    return serializeDraft(command.payload.id, async () => database!.cancelDraftDelivery(command.payload.id))
+    return serializeDraft(command.payload.id, async () => {
+      const result = database!.cancelDraftDelivery(command.payload.id)
+      database!.replyWatches.cancelForDraft(command.payload.id)
+      return result
+    })
   }
+  if (command.type === 'reply-watches:list') return database.replyWatches.list(command.payload.accountIds)
+  if (command.type === 'reply-watches:create') {
+    const { accountId, draftId, messageId, deadlineAt } = command.payload
+    const watch = draftId
+      ? await serializeDraft(draftId, async () => database!.replyWatches.createForDraft(accountId, draftId, deadlineAt))
+      : database.replyWatches.createForMessage(accountId, messageId!, deadlineAt)
+    processReplyWatches(true)
+    return database.replyWatches.get(watch.id) ?? watch
+  }
+  if (command.type === 'reply-watches:cancel') return database.replyWatches.cancel(command.payload.id)
   if (command.type === 'drafts:delete') {
     if (!database.getDraft(command.payload.id)) return discardDraft(command.payload.id)
     const queued = database.requestDraftDiscard(command.payload.id)

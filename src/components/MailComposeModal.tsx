@@ -7,6 +7,7 @@ import { copyText, useContextMenu } from './ContextMenu'
 import { ModalShell } from './Modal'
 import MailTemplatePicker from './MailTemplatePicker'
 import MailSendOptionsControl from './MailSendOptionsControl'
+import { ReplyWatchControl, armReplyWatch, replyWatchDeadline, type ReplyWatchSetting } from './MailReplyWatches'
 
 interface MailComposeModalProps {
   accounts: MailAccountSummary[]
@@ -80,6 +81,7 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
   const [html, setHtml] = useState(initialHtml)
   const [attachments, setAttachments] = useState<{ name: string; size: number; path: string }[]>(() => (draft?.attachmentPaths ?? []).map((path) => ({ name: fileName(path), size: 0, path })))
   const [sendOptions, setSendOptions] = useState<MailSendOptions | undefined>(draft?.sendOptions)
+  const [replyWatch, setReplyWatch] = useState<ReplyWatchSetting>({ enabled: false, deadline: '' })
   const [scheduledFor, setScheduledFor] = useState(() => localDateTimeValue(draft?.status === 'scheduled' ? draft.deliveryAt : undefined))
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'sending' | 'closing' | 'failed'>(draft?.status === 'failed' ? 'failed' : draft ? 'saved' : 'idle')
   const [saveError, setSaveError] = useState(draft?.error)
@@ -285,11 +287,16 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
       onToast('Choose a scheduled time in the future')
       return
     }
+    if (!replyWatchDeadline(replyWatch).ok) {
+      onToast('Choose a reply deadline in the future')
+      return
+    }
     setStatus('sending')
     try {
       const result = deliveryAt
         ? await window.aerio.mail.drafts.schedule({ ...input, expectedUpdatedAt: revision.current, expectedRemoteRevision: remoteRevision.current }, deliveryAt.toISOString())
         : await window.aerio.mail.drafts.send({ ...input, expectedUpdatedAt: revision.current, expectedRemoteRevision: remoteRevision.current })
+      if (result.status === 'scheduled' || result.status === 'send-pending') await armReplyWatch(accountId, result.id, replyWatch, onToast)
       if (result.status === 'scheduled') {
         onToast(`Message scheduled for ${deliveryAt!.toLocaleString()}`)
         onSent(result)
@@ -371,6 +378,7 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
           <button className="button ghost small danger-subtle" disabled={status === 'sending'} onClick={() => void discard()}><Trash2 size={15} /> Discard</button>
           <MailSendOptionsControl provider={accounts.find((account) => account.id === accountId)?.provider} value={sendOptions} disabled={status === 'sending'} onChange={setSendOptions} />
           <span className="spacer" />
+          <ReplyWatchControl value={replyWatch} onChange={setReplyWatch} />
           <label className="mail-schedule-field" title="Schedule delivery"><CalendarClock size={15} /><input aria-label="Scheduled delivery time" type="datetime-local" min={localDateTimeValue(new Date(Date.now() + 60_000).toISOString())} value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} />{scheduledFor && <button type="button" aria-label="Clear scheduled delivery" onClick={() => setScheduledFor('')}><X size={13} /></button>}</label>
           <button className="button primary" disabled={status === 'sending' || status === 'closing'} onClick={() => void send()}><Send size={16} /> {status === 'sending' ? scheduledFor ? 'Scheduling…' : 'Queuing…' : scheduledFor ? 'Schedule' : 'Send'}</button>
         </footer>

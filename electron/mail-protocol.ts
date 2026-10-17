@@ -11,6 +11,8 @@ import type {
   MailSavedSearch,
   MailSavedSearchInput,
   MailSnooze,
+  MailReplyWatch,
+  MailReplyWatchInput,
   MailMessageSource,
   MailReadReceiptPolicy,
   MailThreadDetail,
@@ -54,6 +56,9 @@ export type MailWorkerCommand =
   | { type: 'drafts:send'; payload: MailDraftInput }
   | { type: 'drafts:schedule'; payload: { input: MailDraftInput; deliveryAt: string } }
   | { type: 'drafts:cancel-send'; payload: { id: string } }
+  | { type: 'reply-watches:list'; payload: { accountIds?: string[] } }
+  | { type: 'reply-watches:create'; payload: MailReplyWatchInput }
+  | { type: 'reply-watches:cancel'; payload: { id: string } }
   | { type: 'drafts:list'; payload: { accountIds?: string[] } }
   | { type: 'drafts:get'; payload: { id: string } }
   | { type: 'drafts:delete'; payload: { id: string } }
@@ -89,6 +94,8 @@ export type MailWorkerResult =
   | MailSavedSearch
   | MailSavedSearch[]
   | MailSnooze[]
+  | MailReplyWatch
+  | MailReplyWatch[]
   | MailRecipientSuggestion[]
   | MailThreadDetail
   | MailMessageSource
