@@ -10,6 +10,7 @@ import { InterchangeStore } from './productivity/interchange-store'
 import { InvitationStore } from './productivity/invitation-store'
 import { ProductivityStore } from './productivity/store'
 import { TaskStore } from './productivity/task-store'
+import { TASK_REMINDER_SCHEMA } from './productivity/task-reminders'
 import { countRows, PROFILE_PREVIEW_LABELS, profileTableExists, type ProfileBackupLayout } from './profile-backup'
 
 export const RESTORED_SEND_HOLD_MESSAGE = 'Held after restoring a profile backup. Review this message and send it again if it is still needed.'
@@ -135,11 +136,19 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
         { label: 'Connected tasks', count: countRows(db, 'task_entities') },
         { label: PROFILE_PREVIEW_LABELS.heldTaskWrites, count: countRows(db, 'task_operations', ACTIVE_TASK_WRITE) + countRows(db, 'task_list_operations', ACTIVE_TASK_WRITE) }
       ]
+    },
+    {
+      // Delivered, snoozed, and dismissed reminders, so a restored profile does not refire them (E44).
+      file: 'task-reminders.sqlite',
+      label: 'Task reminder delivery state',
+      prepareRestore: (path) => withDatabase(path, (db) => db.exec(TASK_REMINDER_SCHEMA)),
+      summarize: (db) => [{ label: 'Task reminders awaiting dismissal', count: countRows(db, 'task_reminder_state', `status IN ('fired','snoozed')`) }]
     }
   ],
   directories: [
     { name: 'mail', label: 'Downloaded messages and draft attachments' },
     { name: 'note-attachments', label: 'Note attachments' },
+    { name: 'task-attachments', label: 'Task attachments' },
     { name: 'template-attachments', label: 'Template attachments' }
   ]
 }

@@ -6,9 +6,14 @@ import { TaskListQueue } from './task-list-queue'
 import { applyTaskFields as apply, providerTaskFields as fields } from './task-fields'
 import { validTaskNativeFields } from './task-native-validation'
 import { isDeepStrictEqual } from 'node:util'
+import { validTaskExtendedFields } from '../../src/lib/task-schedule'
+import { localOverlayFields } from '../../src/task-fields-types'
 
 const defaults = (): TaskLocalMetadata => ({ priority: 'normal', recurrence: 'none' })
 const active = new Set<TaskOperationStatus>(['queued', 'running', 'failed', 'conflict', 'review'])
+// Extended Microsoft fields whose absence is represented as an explicit clear (E44).
+const nativeClears: Record<string, unknown> = { recurrence: null, start: null, reminder: null, categories: [] }
+const nativeValue = (native: ProviderTask['native'], field: string) => native?.[field as keyof NonNullable<ProviderTask['native']>] ?? nativeClears[field]
 interface EntityRow { id: string; account_id: string; provider: TaskProvider; list_id: string; parent_id: string | null; initial_json: string; local_json: string; remote_json: string | null; present: number }
 interface OperationRow { sequence: number; payload_json: string; status: TaskOperationStatus; attempts: number; retry_at: number; error: string | null }
 
@@ -56,13 +61,45 @@ export class TaskStore {
 
   close() { this.db.close() }
 
+  /** Every local-overlay attachment path, for managed-file cleanup (E44). */
+  localAttachmentPaths(): string[] {
+    const paths: string[] = []
+    for (const row of this.db.prepare('SELECT local_json FROM task_entities').all()) {
+      const local = JSON.parse(String(row.local_json)) as TaskLocalMetadata
+      for (const attachment of local.extended?.attachments ?? []) if (attachment.path) paths.push(attachment.path)
+    }
+    for (const operation of this.operations()) for (const attachment of operation.before.local.extended?.attachments ?? []) if (attachment.path) paths.push(attachment.path)
+    return paths
+  }
+
+  /**
+   * Stores a provider task re-read after an immediate native change such as an attachment upload.
+   * Pending queued edits would otherwise be rebased silently, so the task must have none.
+   */
+  replaceRemoteTask(remote: ProviderTask) {
+    this.transaction(() => {
+      const row = this.db.prepare('SELECT id,account_id,provider,list_id FROM task_entities WHERE remote_key=?').get(remote.id)
+      if (!row || row.account_id !== remote.accountId || row.provider !== remote.provider || row.list_id !== remote.listId) throw new Error('Provider returned an unrelated task')
+      if (this.operations(String(row.id)).some((item) => active.has(item.status))) throw new Error('Wait for this task\'s pending changes to synchronize first')
+      this.db.prepare('UPDATE task_entities SET remote_json=?,initial_json=?,present=1 WHERE id=?').run(JSON.stringify(remote), JSON.stringify(fields(remote)), String(row.id))
+      const snapshot = this.providerSnapshot(remote.accountId, remote.provider)
+      snapshot.tasks = snapshot.tasks.map((task) => task.id === remote.id ? remote : task)
+      this.db.prepare('UPDATE task_provider_snapshots SET payload_json=? WHERE account_id=? AND provider=?').run(JSON.stringify(snapshot), remote.accountId, remote.provider)
+    })
+  }
+
+  /** Whether a task has unsent, running, or unresolved changes. */
+  hasPendingChanges(id: string) {
+    return this.operations(id).some((item) => active.has(item.status))
+  }
+
   cachedAccounts(): { accountId: string; provider: TaskProvider }[] {
     return this.db.prepare('SELECT account_id,provider FROM task_provider_snapshots ORDER BY rowid').all().map((row) => ({ accountId: String(row.account_id), provider: row.provider as TaskProvider }))
   }
 
   exportBackup(): TaskBackup {
     return this.transaction(() => parseTaskBackup({
-      format: 'aerio-provider-tasks', schemaVersion: 1, exportedAt: new Date().toISOString(),
+      format: 'aerio-provider-tasks', schemaVersion: 2, exportedAt: new Date().toISOString(),
       accounts: this.cachedAccounts().map((account) => ({ ...account, snapshot: this.providerSnapshot(account.accountId, account.provider) })),
       entities: (this.db.prepare('SELECT * FROM task_entities ORDER BY rowid').all() as unknown as EntityRow[]).map((row) => ({ id: row.id, accountId: row.account_id, provider: row.provider, listId: row.list_id, parentId: row.parent_id ?? undefined, fields: JSON.parse(row.initial_json), local: JSON.parse(row.local_json), remote: row.remote_json ? JSON.parse(row.remote_json) : undefined, present: Boolean(row.present) })),
       operations: this.operations(),
@@ -160,6 +197,7 @@ export class TaskStore {
 
   private validatePatch(patch: TaskFieldPatch) {
     if (!patch || Object.keys(patch).some((key) => !['title', 'notes', 'due', 'completed', 'native'].includes(key)) || (patch.native !== undefined && !validTaskNativeFields(patch.native)) || (patch.title !== undefined && (typeof patch.title !== 'string' || !patch.title.trim() || patch.title.length > 1024)) || (patch.notes !== undefined && patch.notes !== null && (typeof patch.notes !== 'string' || patch.notes.length > (patch.native?.body ? 1_000_000 : 8192))) || (patch.completed !== undefined && typeof patch.completed !== 'boolean') || (patch.due !== undefined && patch.due !== null && (typeof patch.due !== 'string' || !Number.isFinite(Date.parse(patch.due))))) throw new Error('Invalid task mutation')
+    if (patch.native?.attachments !== undefined) throw new Error('Task attachments change separately from task fields')
   }
 
   private validateProviderFields(entity: TaskEntity, patch: TaskFieldPatch, parentId = entity.parentId) {
@@ -189,7 +227,7 @@ export class TaskStore {
 
   create(accountId: string, provider: TaskProvider, listId: string, input: ProviderTaskInput, parentId?: string, local = defaults()) {
     this.validatePatch(input)
-    this.validateLocal(local)
+    this.validateLocal(local, provider)
     if (typeof input.title !== 'string' || typeof input.completed !== 'boolean') throw new Error('Invalid new task')
     const entity: TaskEntity = { id: crypto.randomUUID(), accountId, provider, listId, parentId, fields: input, local }
     this.validateProviderFields(entity, input)
@@ -259,7 +297,7 @@ export class TaskStore {
     if (!entity) throw new Error('Task not found')
     this.writable(entity)
     this.validateProviderFields(entity, patch)
-    if (local !== undefined) this.validateLocal(local)
+    if (local !== undefined) this.validateLocal(local, entity.provider)
     return this.transaction(() => {
       if (local !== undefined) { this.setLocal(id, local); entity.local = local }
       const operation = this.insert('update', entity, patch)
@@ -294,14 +332,16 @@ export class TaskStore {
     return this.transaction(() => this.insert('move', entity, {}, parentId))
   }
 
-  private validateLocal(local: TaskLocalMetadata) {
-    if (!local || Object.keys(local).some((key) => !['priority', 'recurrence', 'timedDue'].includes(key)) || !['low', 'normal', 'high'].includes(local.priority) || !['none', 'daily', 'weekly', 'monthly'].includes(local.recurrence) || (local.timedDue !== undefined && (typeof local.timedDue !== 'string' || !Number.isFinite(Date.parse(local.timedDue))))) throw new Error('Invalid local task metadata')
+  private validateLocal(local: TaskLocalMetadata, provider?: TaskProvider) {
+    // Extended fields a provider cannot store stay local; Microsoft keeps only progress locally.
+    if (local?.extended !== undefined && (!provider || !validTaskExtendedFields(local.extended, { allowed: localOverlayFields(provider) }))) throw new Error('Invalid local task fields')
+    if (!local || Object.keys(local).some((key) => !['priority', 'recurrence', 'timedDue', 'extended'].includes(key)) || !['low', 'normal', 'high'].includes(local.priority) || !['none', 'daily', 'weekly', 'monthly'].includes(local.recurrence) || (local.timedDue !== undefined && (typeof local.timedDue !== 'string' || !Number.isFinite(Date.parse(local.timedDue))))) throw new Error('Invalid local task metadata')
   }
 
   setLocal(id: string, local: TaskLocalMetadata) {
-    this.validateLocal(local)
     const row = this.row(id)
     if (!row) throw new Error('Task not found')
+    this.validateLocal(local, row.provider)
     if (row.provider === 'microsoft' && (local.recurrence !== 'none' || local.timedDue !== undefined || local.priority !== 'normal')) throw new Error('Use Microsoft native task fields for recurrence, priority and due times')
     this.db.prepare('UPDATE task_entities SET local_json=? WHERE id=?').run(JSON.stringify(local), id)
   }
@@ -411,8 +451,10 @@ export class TaskStore {
               const actual = (remote as unknown as Record<string, unknown>)[key]
               if (key === 'native') {
                 for (const [field, original] of Object.entries(value as Record<string, unknown>)) {
-                  const expected = field === 'status' && patch.completed !== undefined ? patch.completed ? 'completed' : original === 'completed' ? 'notStarted' : original : field === 'dueTimeZone' && typeof patch.due === 'string' && /(?:Z|[+-]\d{2}:\d{2})$/.test(patch.due) ? 'UTC' : original
-                  if (expected !== undefined && !isDeepStrictEqual(remote.native?.[field as keyof typeof remote.native] ?? (field === 'recurrence' ? null : undefined), expected)) throw new Error('The selected task does not match the intended native fields')
+                  const expected = field === 'status' && patch.completed !== undefined ? patch.completed ? 'completed' : original === 'completed' ? 'notStarted' : original : field === 'dueTimeZone' && typeof patch.due === 'string' && /(?:Z|[+-]\d{2}:\d{2})$/.test(patch.due) ? 'UTC' : field === 'start' && typeof original === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(original) ? `${original}T00:00:00` : field === 'start' && typeof original === 'string' && original.length === 16 ? `${original}:00` : original
+                  // A cleared start has no zone to compare.
+                  if (field === 'startTimeZone' && nativeValue(remote.native, 'start') === null) continue
+                  if (expected !== undefined && !isDeepStrictEqual(nativeValue(remote.native, field), expected)) throw new Error('The selected task does not match the intended native fields')
                 }
                 continue
               }
@@ -493,8 +535,8 @@ export class TaskStore {
           for (const field of Object.keys(operation.patch.native!)) {
             const original = operation.before.fields.native?.[field as keyof NonNullable<ProviderTaskInput['native']>]
             if (original !== undefined) (inverse.native as Record<string, unknown>)[field] = original
-            else if (field === 'recurrence') inverse.native.recurrence = null
             else if (field === 'priority') inverse.native.priority = 'normal'
+            else if (field in nativeClears) (inverse.native as Record<string, unknown>)[field] = structuredClone(nativeClears[field])
           }
         } else (inverse as Record<string, unknown>)[key] = operation.before.fields[key] ?? null
       }

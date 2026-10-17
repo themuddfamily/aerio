@@ -27,6 +27,14 @@ export interface TaskNativeFields {
   dueTimeZone?: string
   status?: 'notStarted' | 'inProgress' | 'completed' | 'waitingOnOthers' | 'deferred'
   body?: { contentType: 'text' | 'html'; content: string }
+  // Microsoft Graph startDateTime (wall clock + zone), reminderDateTime/isReminderOn (as a UTC
+  // instant), and categories (E44). null clears start/reminder. Attachments are provider metadata
+  // only; they change through TaskAttachmentApi, never through a field patch.
+  start?: string | null
+  startTimeZone?: string
+  reminder?: string | null
+  categories?: string[]
+  attachments?: import('./task-fields-types').TaskNativeAttachment[]
 }
 
 export interface ProviderTaskList {
@@ -91,12 +99,18 @@ export interface TaskProviderConnector {
   updateTask(current: ProviderTask, input: ProviderTaskInput): Promise<ProviderTask>
   deleteTask(current: ProviderTask): Promise<void>
   moveTask(current: ProviderTask, parent?: ProviderTask): Promise<ProviderTask>
+  /** Native attachments (Microsoft). Each returns the re-read task with its new revision. */
+  addAttachment?(current: ProviderTask, file: { name: string; contentType?: string; bytes: Uint8Array }): Promise<ProviderTask>
+  deleteAttachment?(current: ProviderTask, attachmentId: string): Promise<ProviderTask>
+  readAttachment?(current: ProviderTask, attachmentId: string): Promise<Uint8Array>
 }
 
 export interface TaskLocalMetadata {
   priority: 'low' | 'normal' | 'high'
   recurrence: 'none' | 'daily' | 'weekly' | 'monthly'
   timedDue?: string
+  /** Fields the provider cannot store, kept beside the cached task (E44). Labeled local-only in the UI. */
+  extended?: import('./task-fields-types').TaskExtendedFields
 }
 
 export interface TaskEntity {
@@ -207,4 +221,6 @@ export interface TaskDesktopApi {
   undo(operationId: string): Promise<TaskSnapshot>
   resolve(operationId: string, resolution: TaskResolution): Promise<TaskSnapshot>
   onChanged(callback: (snapshot: TaskSnapshot) => void): () => void
+  reminders?: import('./task-fields-types').TaskReminderApi
+  attachments?: import('./task-fields-types').TaskAttachmentApi
 }

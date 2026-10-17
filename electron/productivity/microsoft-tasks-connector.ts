@@ -5,9 +5,17 @@ import { decodeHTML, escapeText } from 'entities'
 import type { ProviderTask, ProviderTaskInput, ProviderTaskList, ProviderTaskSnapshot, TaskNativeFields, TaskProviderConnector } from '../../src/task-provider-types'
 import { ProductivityApiError, retryingJson } from './connector'
 import { validTaskNativeFields } from './task-native-validation'
+import { resolveTimeZoneName, wallTimeToUtc } from '../../src/lib/time-zones'
+import { parseTaskStart } from '../../src/lib/task-schedule'
+import type { TaskNativeAttachment } from '../../src/task-fields-types'
 
 interface GraphList { id: string; displayName?: string; isOwner?: boolean; isShared?: boolean; wellknownListName?: string; '@odata.etag'?: string }
-interface GraphTask { id: string; title?: string; status?: string; importance?: string; body?: { contentType: 'text' | 'html'; content: string }; dueDateTime?: { dateTime: string; timeZone: string } | null; recurrence?: TaskNativeFields['recurrence']; lastModifiedDateTime?: string; '@odata.etag'?: string; '@removed'?: unknown }
+interface GraphTask { id: string; title?: string; status?: string; importance?: string; body?: { contentType: 'text' | 'html'; content: string }; dueDateTime?: { dateTime: string; timeZone: string } | null; recurrence?: TaskNativeFields['recurrence']; lastModifiedDateTime?: string; '@odata.etag'?: string; '@removed'?: unknown
+  startDateTime?: { dateTime: string; timeZone: string } | null; reminderDateTime?: { dateTime: string; timeZone: string } | null; isReminderOn?: boolean; categories?: string[]; hasAttachments?: boolean }
+interface GraphAttachment { id: string; name?: string; size?: number; contentType?: string }
+/** Graph accepts taskFileAttachment bodies up to 3 MB; larger files need an upload session. */
+export const MICROSOFT_TASK_ATTACHMENT_MAX_BYTES = 3 * 1024 * 1024
+const MICROSOFT_TASK_ATTACHMENT_READ_MAX_BYTES = 25 * 1024 * 1024
 interface GraphChecklist { id: string; displayName?: string; isChecked?: boolean; createdDateTime?: string; checkedDateTime?: string; '@odata.etag'?: string }
 interface GraphPage<T> { value: T[]; '@odata.nextLink'?: string; '@odata.deltaLink'?: string }
 const base = 'https://graph.microsoft.com/v1.0/me/todo/lists'
@@ -17,6 +25,22 @@ const listVersion = (list: GraphList) => list['@odata.etag'] || fingerprint([lis
 const checklistVersion = (item: GraphChecklist) => item['@odata.etag'] || fingerprint([item.id, item.displayName ?? '', item.isChecked ?? false, item.createdDateTime ?? null, item.checkedDateTime ?? null])
 const day = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value
 const dateTime = (value: string) => /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,7})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)?$/.test(value) && day(value.slice(0, 10)) && Number.isFinite(Date.parse(value))
+/** Graph wall clocks carry seven fractional digits; the neutral start keeps whole seconds. */
+const wallClock = (value: string) => {
+  const parsed = parseTaskStart(value.slice(0, 19))
+  if (!parsed) throw new Error('Microsoft returned an invalid task start')
+  return `${value.slice(0, 10)}T${String(parsed.wall.hour).padStart(2, '0')}:${String(parsed.wall.minute).padStart(2, '0')}:${String(parsed.wall.second).padStart(2, '0')}`
+}
+const reminderInstant = (value: { dateTime: string; timeZone: string }) => {
+  if (/(?:Z|[+-]\d{2}:\d{2})$/.test(value.dateTime)) {
+    const ms = Date.parse(value.dateTime)
+    if (!Number.isFinite(ms)) throw new Error('Microsoft returned an invalid reminder')
+    return new Date(ms).toISOString()
+  }
+  const parsed = parseTaskStart(value.dateTime.slice(0, 19))
+  if (!parsed) throw new Error('Microsoft returned an invalid reminder')
+  return new Date(wallTimeToUtc(parsed.wall, resolveTimeZoneName(value.timeZone) ?? 'UTC')).toISOString()
+}
 const plainBody = (body?: GraphTask['body']) => {
   if (!body) return undefined
   if (body.contentType === 'text') return body.content
@@ -57,7 +81,7 @@ export class MicrosoftTasksConnector implements TaskProviderConnector {
         try { remote = await this.read<GraphTask>(resource) }
         catch (error) { if (error instanceof ProductivityApiError && error.status === 404) { parents.delete(id); continue }; throw error }
         if (remote.id !== changed.id) throw new Error('Microsoft returned an unrelated task')
-        parents.set(id, this.mapTask(list.remoteId, remote))
+        parents.set(id, await this.hydrate(list.remoteId, remote))
       }
       for (const parent of parents.values()) {
         tasks.push(parent)
@@ -97,7 +121,7 @@ export class MicrosoftTasksConnector implements TaskProviderConnector {
       const body = this.checklistBody(input)
       return this.mapChecklist(parent, await this.write<GraphChecklist>(`${this.taskResource(parent)}/checklistItems`, 'POST', body))
     }
-    return this.mapTask(list.remoteId, await this.write<GraphTask>(`${this.listResource(list.remoteId)}/tasks`, 'POST', this.taskBody(input)))
+    return this.hydrate(list.remoteId, await this.write<GraphTask>(`${this.listResource(list.remoteId)}/tasks`, 'POST', this.taskBody(input)))
   }
   async updateTask(current: ProviderTask, input: ProviderTaskInput) {
     this.assertTask(current)
@@ -110,7 +134,7 @@ export class MicrosoftTasksConnector implements TaskProviderConnector {
     }
     const result = await this.write<GraphTask>(this.taskResource(current), 'PATCH', body, current)
     if (result.id !== current.remoteId) throw new Error('Microsoft returned an unrelated task write result')
-    return this.mapTask(current.remoteListId, result)
+    return this.hydrate(current.remoteListId, result)
   }
   async deleteTask(current: ProviderTask) {
     this.assertTask(current)
@@ -121,6 +145,55 @@ export class MicrosoftTasksConnector implements TaskProviderConnector {
     throw new Error('Microsoft To Do does not provide a checklist reparent operation')
   }
 
+  // Native attachments (taskFileAttachment). Each write checks the cached revision first and returns
+  // the re-read task, so the caller can store its new revision without a full refresh.
+  async addAttachment(current: ProviderTask, file: { name: string; contentType?: string; bytes: Uint8Array }) {
+    this.assertAttachmentTask(current)
+    const name = typeof file.name === 'string' ? file.name.trim() : ''
+    if (!name || name.length > 255) throw new Error('Attachment names must contain 1 to 255 characters')
+    if (!(file.bytes instanceof Uint8Array) || file.bytes.byteLength > MICROSOFT_TASK_ATTACHMENT_MAX_BYTES) throw new Error('Microsoft To Do attachments added from Aerio must be 3 MB or smaller')
+    await this.assertRevision(this.taskResource(current), current)
+    await this.write<GraphAttachment>(`${this.taskResource(current)}/attachments`, 'POST', { '@odata.type': '#microsoft.graph.taskFileAttachment', name, contentType: file.contentType || 'application/octet-stream', contentBytes: Buffer.from(file.bytes).toString('base64') })
+    return this.reread(current)
+  }
+  async deleteAttachment(current: ProviderTask, attachmentId: string) {
+    this.assertAttachmentTask(current)
+    if (typeof attachmentId !== 'string' || !attachmentId || attachmentId.length > 2048) throw new Error('Choose a valid attachment')
+    await this.assertRevision(this.taskResource(current), current)
+    await this.write<void>(`${this.taskResource(current)}/attachments/${encodeURIComponent(attachmentId)}`, 'DELETE')
+    return this.reread(current)
+  }
+  async readAttachment(current: ProviderTask, attachmentId: string) {
+    if (current.accountId !== this.accountId || current.provider !== this.provider || current.kind === 'checklist' || current.id !== identity(this.accountId, 'task', current.remoteListId, current.remoteId)) throw new Error('That task has no Microsoft attachments')
+    if (typeof attachmentId !== 'string' || !attachmentId || attachmentId.length > 2048) throw new Error('Choose a valid attachment')
+    const response = await fetch(`${this.taskResource(current)}/attachments/${encodeURIComponent(attachmentId)}/$value`, { redirect: 'error', headers: { Authorization: `Bearer ${await this.token()}` } })
+    if (!response.ok) throw new ProductivityApiError(`Microsoft To Do attachment download failed (${response.status})`, this.provider, response.status)
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    if (bytes.byteLength > MICROSOFT_TASK_ATTACHMENT_READ_MAX_BYTES) throw new Error('That attachment is too large to open from Aerio')
+    return bytes
+  }
+  private assertAttachmentTask(current: ProviderTask) {
+    this.assertTask(current)
+    if (current.kind === 'checklist') throw new Error('Microsoft checklist items cannot have attachments')
+  }
+  private async reread(current: ProviderTask) {
+    const remote = await this.read<GraphTask>(this.taskResource(current))
+    if (remote.id !== current.remoteId) throw new Error('Microsoft returned an unrelated task')
+    return this.hydrate(current.remoteListId, remote)
+  }
+  private async hydrate(listId: string, remote: GraphTask) {
+    const task = this.mapTask(listId, remote)
+    if (remote.hasAttachments !== true) return task
+    const items = (await this.pages<GraphAttachment>(`${this.listResource(listId)}/tasks/${encodeURIComponent(remote.id)}/attachments`)).items
+    const attachments: TaskNativeAttachment[] = items.map((item) => {
+      this.requireId(item.id)
+      return { id: item.id, name: item.name?.trim() || 'Attachment', size: Number.isSafeInteger(item.size) && Number(item.size) >= 0 ? Number(item.size) : 0, ...(item.contentType ? { contentType: item.contentType.slice(0, 300) } : {}) }
+    })
+    const native = { ...task.native, attachments }
+    if (!validTaskNativeFields(native)) throw new Error('Microsoft returned invalid task attachments')
+    return { ...task, native }
+  }
+
   private mapList(remote: GraphList): ProviderTaskList {
     this.requireId(remote.id)
     return { id: identity(this.accountId, 'task-list', remote.id), accountId: this.accountId, provider: this.provider, remoteId: remote.id, title: remote.displayName?.trim() || '(Untitled list)', revision: listVersion(remote), revisionMode: remote['@odata.etag'] ? 'etag' : 'snapshot', readOnly: !this.writeAuthorized, manageReadOnly: !this.writeAuthorized || remote.isOwner !== true || Boolean(remote.wellknownListName && remote.wellknownListName !== 'none') }
@@ -128,6 +201,16 @@ export class MicrosoftTasksConnector implements TaskProviderConnector {
   private mapTask(listId: string, remote: GraphTask): ProviderTask {
     this.requireId(remote.id)
     const native: TaskNativeFields = { priority: (remote.importance ?? 'normal') as TaskNativeFields['priority'], status: (remote.status ?? 'notStarted') as TaskNativeFields['status'], recurrence: remote.recurrence, dueTimeZone: remote.dueDateTime?.timeZone, body: remote.body }
+    if (remote.startDateTime) {
+      if (typeof remote.startDateTime.dateTime !== 'string' || !dateTime(remote.startDateTime.dateTime) || /(?:Z|[+-]\d{2}:\d{2})$/.test(remote.startDateTime.dateTime)) throw new Error('Microsoft returned an invalid task start')
+      native.start = wallClock(remote.startDateTime.dateTime)
+      native.startTimeZone = remote.startDateTime.timeZone
+    }
+    if (remote.isReminderOn === true && remote.reminderDateTime) {
+      if (typeof remote.reminderDateTime.dateTime !== 'string' || !dateTime(remote.reminderDateTime.dateTime)) throw new Error('Microsoft returned an invalid reminder')
+      native.reminder = reminderInstant(remote.reminderDateTime)
+    }
+    if (Array.isArray(remote.categories) && remote.categories.length) native.categories = remote.categories.map((value) => typeof value === 'string' ? value.trim() : value)
     if (!validTaskNativeFields(native) || (remote.dueDateTime && !dateTime(remote.dueDateTime.dateTime))) throw new Error('Microsoft returned invalid native task details')
     return { id: identity(this.accountId, 'task', listId, remote.id), accountId: this.accountId, provider: this.provider, remoteId: remote.id, listId: identity(this.accountId, 'task-list', listId), remoteListId: listId, kind: 'task', title: remote.title?.trim() || '(Untitled task)', notes: plainBody(remote.body), due: remote.dueDateTime?.dateTime, completed: remote.status === 'completed', revision: remote['@odata.etag'], revisionMode: 'etag', updatedAt: remote.lastModifiedDateTime, native, readOnly: !this.writeAuthorized || !remote['@odata.etag'] }
   }
@@ -178,6 +261,27 @@ export class MicrosoftTasksConnector implements TaskProviderConnector {
     }
     if (input.native?.priority !== undefined && (!current || input.native.priority !== current.native?.priority)) body.importance = input.native.priority
     if (input.native?.recurrence !== undefined && (!current || !isDeepStrictEqual(input.native.recurrence, current.native?.recurrence))) body.recurrence = input.native.recurrence
+    // Extended fields (E44): send only what changed so unrelated edits preserve provider values.
+    if (input.native?.start !== undefined || input.native?.startTimeZone !== undefined) {
+      const start = input.native.start !== undefined ? input.native.start : current?.native?.start ?? null
+      const zone = input.native.startTimeZone ?? current?.native?.startTimeZone ?? 'UTC'
+      const previous = current?.native?.start ?? null
+      if (start === null) { if (previous !== null) body.startDateTime = null }
+      else {
+        const parsed = parseTaskStart(start)
+        if (!parsed) throw new Error('Microsoft start dates must be valid calendar dates')
+        const value = parsed.dateOnly ? `${start}T00:00:00` : wallClock(start)
+        if (!current || value !== previous || zone !== current.native?.startTimeZone) body.startDateTime = { dateTime: value, timeZone: zone }
+      }
+    }
+    if (input.native?.reminder !== undefined && (input.native.reminder ?? null) !== (current?.native?.reminder ?? null)) {
+      if (input.native.reminder === null) body.isReminderOn = false
+      else {
+        body.reminderDateTime = { dateTime: new Date(input.native.reminder).toISOString().slice(0, 19), timeZone: 'UTC' }
+        body.isReminderOn = true
+      }
+    }
+    if (input.native?.categories !== undefined && !isDeepStrictEqual(input.native.categories, current?.native?.categories ?? [])) body.categories = input.native.categories
     return body
   }
   private listResource(id: string) { return `${base}/${encodeURIComponent(id)}` }

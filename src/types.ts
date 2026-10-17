@@ -164,6 +164,13 @@ export interface Task {
   completed: boolean
   subtasks: { id: string; title: string; completed: boolean }[]
   recurrence?: 'none' | 'daily' | 'weekly' | 'monthly'
+  // Start, independent reminder, progress, tags and managed attachments (E44); see task-fields-types.ts.
+  start?: string
+  startTimeZone?: string
+  reminder?: string
+  percentComplete?: number
+  categories?: string[]
+  attachments?: Attachment[]
 }
 
 export interface Note {

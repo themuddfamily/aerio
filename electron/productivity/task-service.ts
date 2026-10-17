@@ -3,6 +3,7 @@ import type { ProviderTaskInput, TaskAccountState, TaskFieldPatch, TaskLocalMeta
 import { TaskStore } from './task-store'
 import { TaskSyncEngine } from './task-sync-engine'
 import type { TaskBackup } from './task-backup'
+import type { TaskReminderCandidate } from './task-reminders'
 
 interface TaskServiceOptions {
   accounts: () => Promise<MailAccountSummary[]>
@@ -204,6 +205,66 @@ export class TaskService {
       await this.dispatch()
       return this.view()
     })
+  }
+
+  /**
+   * Immediate native attachment changes (Microsoft To Do, E44). They are not queued: the account
+   * must be online and the task must have no unsent or unresolved edits, because the provider
+   * revision changes and is stored from the re-read task.
+   */
+  nativeAttachment(id: string, change: { kind: 'add'; file: { name: string; contentType?: string; bytes: Uint8Array } } | { kind: 'remove'; attachmentId: string }): Promise<TaskSnapshot> {
+    return this.serial(async () => {
+      await this.reload()
+      const { task, connector } = this.nativeAttachmentTarget(id, true)
+      if (this.store.hasPendingChanges(id)) throw new Error('Wait for this task\'s pending changes to synchronize first')
+      const result = change.kind === 'add' ? await connector.addAttachment!(task.remote!, change.file) : await connector.deleteAttachment!(task.remote!, change.attachmentId)
+      this.store.replaceRemoteTask(result)
+      this.emit()
+      return this.view()
+    })
+  }
+
+  readNativeAttachment(id: string, attachmentId: string): Promise<{ name: string; bytes: Uint8Array }> {
+    return this.serial(async () => {
+      await this.reload()
+      const { task, connector } = this.nativeAttachmentTarget(id, false)
+      const attachment = task.remote!.native?.attachments?.find((item) => item.id === attachmentId)
+      if (!attachment) throw new Error('That attachment is no longer on this task')
+      return { name: attachment.name, bytes: await connector.readAttachment!(task.remote!, attachmentId) }
+    })
+  }
+
+  private nativeAttachmentTarget(id: string, write: boolean) {
+    const task = this.store.entity(id)
+    if (!task?.remote) throw new Error('Save and synchronize this task before changing its attachments')
+    if (task.provider !== 'microsoft' || task.remote.kind === 'checklist') throw new Error('This task does not support provider attachments')
+    if (write) this.writable(task.accountId)
+    if (!this.available(task.accountId) || !this.access(task.accountId)[write ? 'write' : 'read']) throw new Error('Reconnect this account to use task attachments')
+    if (!this.options.online()) throw new Error('Task attachments need a network connection')
+    if (write && (task.remote.readOnly || task.remote.assigned)) throw new Error('This task is read-only')
+    const connector = this.options.connector(task.accountId, task.provider)
+    if (connector.provider !== task.provider || !connector.addAttachment || !connector.deleteAttachment || !connector.readAttachment) throw new Error('This task does not support provider attachments')
+    return { task, connector }
+  }
+
+  /** Local-overlay attachment paths in the connected-task store, for managed-file cleanup. */
+  referencedAttachmentPaths() { return this.store.localAttachmentPaths() }
+
+  /**
+   * Reminders for connected tasks in active accounts: Microsoft's native reminder, otherwise the
+   * local overlay. Archived and recovered caches do not remind.
+   */
+  reminderCandidates(): TaskReminderCandidate[] {
+    const candidates: TaskReminderCandidate[] = []
+    for (const account of this.store.cachedAccounts()) {
+      const known = this.accounts.find((item) => item.id === account.accountId && item.provider === account.provider)
+      if (!known || known.archived || this.disabled.has(account.accountId)) continue
+      for (const task of this.store.entities(account.accountId, account.provider)) {
+        const reminder = task.provider === 'microsoft' ? task.fields.native?.reminder : task.local.extended?.reminder
+        if (reminder) candidates.push({ source: 'connected', taskId: task.id, title: task.fields.title, reminder, completed: task.fields.completed })
+      }
+    }
+    return candidates
   }
 
   async flush() { return this.serial(async () => { await this.reload(); await this.dispatch() }) }

@@ -8,6 +8,7 @@ import { MailTemplateStore } from './mail/template-store'
 import { ProductivityStore } from './productivity/store'
 import { DavStore, RESTORED_DAV_MESSAGE, RESTORED_DAV_WRITE_MESSAGE } from './productivity/dav-store'
 import { TaskStore } from './productivity/task-store'
+import { TaskReminderService } from './productivity/task-reminders'
 import { applyPendingProfileRestore, createProfileBackup, previewProfileBackup, stageProfileRestore } from './profile-backup'
 import { PROFILE_BACKUP_LAYOUT, RESTORED_ACCOUNT_MESSAGE, RESTORED_MERGE_HOLD_MESSAGE, RESTORED_SEND_HOLD_MESSAGE } from './profile-backup-layout'
 
@@ -209,5 +210,31 @@ describe('full profile layout', () => {
       expect(restored.operations().map((operation) => [operation.status, operation.error])).toEqual([['held', RESTORED_DAV_WRITE_MESSAGE]])
     } finally { restored.close() }
     expect(readFileSync(join(profile, 'dav-credentials.dat'), 'utf8')).toBe('sealed-app-password')
+  })
+  it('backs up task attachments and reminder delivery state so restored reminders do not refire', async () => {
+    const profile = makeProfile()
+    mkdirSync(join(profile, 'task-attachments'))
+    writeFileSync(join(profile, 'task-attachments', 'brief.txt'), 'brief')
+    const candidate = { source: 'local' as const, taskId: 'task', title: 'Task', reminder: '2026-10-01T09:00:00.000Z', completed: false }
+    const notified: unknown[] = []
+    const reminders = (path = profile) => new TaskReminderService({ path: join(path, 'task-reminders.sqlite'), candidates: () => [candidate], notify: (items) => notified.push(...items), changed: () => {}, schedule: () => () => {} })
+    const live = reminders()
+    live.tick()
+    live.dismiss(live.list()[0]?.key ?? '')
+    live.close()
+    const { path } = await backupOf(profile)
+    const preview = await previewProfileBackup(path, profile, PROFILE_BACKUP_LAYOUT)
+    expect(preview.counts.find((item) => item.label === 'Task reminders awaiting dismissal')?.count).toBe(0)
+    rmSync(join(profile, 'task-attachments'), { recursive: true, force: true })
+    rmSync(join(profile, 'task-reminders.sqlite'), { force: true })
+    await stageProfileRestore({ backupPath: path, userData: profile, layout: PROFILE_BACKUP_LAYOUT })
+    expect(applyPendingProfileRestore(profile)).toMatchObject({ status: 'applied' })
+    expect(readFileSync(join(profile, 'task-attachments', 'brief.txt'), 'utf8')).toBe('brief')
+    const restored = reminders()
+    try {
+      restored.tick()
+      expect(notified).toHaveLength(1)
+      expect(restored.list()).toEqual([])
+    } finally { restored.close() }
   })
 })

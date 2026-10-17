@@ -1,5 +1,9 @@
 import { Check, Copy, Edit3, Plus, RefreshCw, Repeat2, Trash2, Undo2 } from 'lucide-react'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
+import TaskFieldsEditor from '../components/TaskFieldsEditor'
+import TaskFieldChips, { connectedTaskFields } from '../components/TaskFieldChips'
+import { TASK_FIELD_CAPABILITIES, type TaskExtendedFields } from '../task-fields-types'
+import { compactExtendedFields } from '../lib/task-schedule'
 import Modal from '../components/Modal'
 import { copyText, useContextMenu } from '../components/ContextMenu'
 import MicrosoftTaskEditor, { type ProviderTaskEditorProps } from './MicrosoftTaskEditor'
@@ -18,9 +22,11 @@ interface Props {
   setEditing(value: TaskEntity | 'new' | null): void
   onSnapshot(snapshot: TaskSnapshot): void
   onToast(message: string): void
+  /** Fired task reminders, shown above the list. */
+  reminders?: ReactNode
 }
 
-export default function ProviderTasksPanel({ snapshot, listId, query, showCompleted, setShowCompleted, editing, setEditing, onSnapshot, onToast }: Props) {
+export default function ProviderTasksPanel({ snapshot, listId, query, showCompleted, setShowCompleted, editing, setEditing, onSnapshot, onToast, reminders }: Props) {
   const { showContextMenu } = useContextMenu()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -39,7 +45,7 @@ export default function ProviderTasksPanel({ snapshot, listId, query, showComple
     while (parent && !visited.has(parent)) { visited.add(parent); count++; parent = allTasks.find((item) => item.id === parent)?.parentId }
     return Math.min(count, 8)
   }
-  const tasks = allTasks.filter((task) => (showCompleted || !task.fields.completed) && (!query || `${task.fields.title} ${task.fields.notes ?? ''}`.toLowerCase().includes(query.toLowerCase())))
+  const tasks = allTasks.filter((task) => (showCompleted || !task.fields.completed) && (!query || `${task.fields.title} ${task.fields.notes ?? ''} ${(connectedTaskFields(task).categories ?? []).join(' ')}`.toLowerCase().includes(query.toLowerCase())))
     .sort((a, b) => Number(a.fields.completed) - Number(b.fields.completed) || (a.remote?.position ?? a.id).localeCompare(b.remote?.position ?? b.id))
   const run = async (command: (api: TaskDesktopApi) => Promise<TaskSnapshot>, message?: string) => {
     if (busy) return false
@@ -62,6 +68,7 @@ export default function ProviderTasksPanel({ snapshot, listId, query, showComple
       <div className="provider-task-actions"><label className="check-label"><input type="checkbox" checked={showCompleted} onChange={(event) => setShowCompleted(event.target.checked)} /> Show completed</label>
         <button className="button ghost small" disabled={busy || account?.archived || account?.syncEnabled === false} onClick={() => void run((api) => api.sync(list.accountId))}><RefreshCw size={15} /> Sync now</button></div>
     </header>
+    {reminders}
     {error && !editing && !reviewing && <p className="provider-task-error" role="alert">{error}</p>}
     {account?.error && <p className="provider-task-notice" role="status">{account.error === 'offline' ? 'Offline. Saved changes will synchronize when you reconnect.' : account.error === 'needs-consent' ? 'Reconnect this account to grant Tasks access.' : 'Synchronization failed. Your cached tasks are available.'}</p>}
     <div className="task-list">
@@ -76,6 +83,7 @@ export default function ProviderTasksPanel({ snapshot, listId, query, showComple
           {task.fields.due && <em>Due {task.fields.due}</em>}{task.parentId && <em>Subtask of {allTasks.find((parent) => parent.id === task.parentId)?.fields.title ?? 'another task'}</em>}
           {task.local.recurrence !== 'none' && <em><Repeat2 size={13} /> {task.local.recurrence} in Aerio</em>}{statusLabel(latest(task.id)) && <em>{statusLabel(latest(task.id))}</em>}{task.remote?.readOnly && <em>Read-only</em>}
           {task.fields.native?.recurrence && <em><Repeat2 size={13} /> {task.fields.native.recurrence.pattern.type} in Microsoft</em>}{task.fields.due && task.fields.native?.dueTimeZone && <em>{task.fields.native.dueTimeZone}</em>}
+          <TaskFieldChips fields={connectedTaskFields(task)} completed={task.fields.completed} />
         </span></button><span className={`priority-dot ${task.fields.native?.priority ?? task.local.priority}`} title={`${task.fields.native?.priority ?? task.local.priority} priority`} />
       </div>)}
       {!tasks.length && <div className="empty-state"><h3>No tasks on this list</h3><p>{query ? 'Try another search.' : 'Create a task or synchronize this list.'}</p></div>}
@@ -97,9 +105,27 @@ export default function ProviderTasksPanel({ snapshot, listId, query, showComple
         const patch: Parameters<TaskDesktopApi['update']>[1] = {}
         for (const key of ['title', 'notes', 'due', 'completed'] as const) if (fields[key] !== editing.fields[key]) (patch as Record<string, unknown>)[key] = fields[key] ?? null
         if (fields.native && Object.keys(fields.native).length) patch.native = fields.native
-        return Object.keys(patch).length ? api.update(editing.id, patch) : api.snapshot()
+        // Microsoft has no percentage, so progress is a local overlay saved with (or without) field edits.
+        const localChanged = JSON.stringify(local.extended ?? null) !== JSON.stringify(editing.local.extended ?? null)
+        if (Object.keys(patch).length) return localChanged ? api.update(editing.id, patch, local) : api.update(editing.id, patch)
+        return localChanged ? api.setLocal(editing.id, local) : api.snapshot()
       }, 'Task saved')
       if (success) setEditing(null)
+    }} onNativeAttachment={editing === 'new' ? undefined : async (action) => {
+      const api = window.aerio.tasks.attachments
+      if (!api) { setError('Attachments are unavailable'); return }
+      if (action.kind === 'open') {
+        try { const result = await api.openNative(editing.id, action.id); if (result.error) setError(result.error) }
+        catch (failure) { setError(failure instanceof Error ? failure.message : 'The attachment could not be opened') }
+        return
+      }
+      let updated: TaskEntity | undefined
+      await run(async () => {
+        const next = action.kind === 'add' ? await api.uploadNative(editing.id) : await api.removeNative(editing.id, action.id)
+        if (next) updated = next.tasks.find((item) => item.id === editing.id)
+        return next ?? window.aerio.tasks.snapshot()
+      }, action.kind === 'add' ? undefined : 'Attachment removed')
+      if (updated) setEditing(updated)
     }} onMove={editing === 'new' ? undefined : async (parentId) => {
       let moved: TaskEntity | undefined
       if (await run(async (api) => {
@@ -127,6 +153,8 @@ function GoogleTaskEditor({ task, list, tasks, writable, busy, error, onClose, o
   const [priority, setPriority] = useState(task?.local.priority ?? 'normal')
   const [recurrence, setRecurrence] = useState(task?.local.recurrence ?? 'none')
   const [parentId, setParentId] = useState(task?.parentId ?? '')
+  const [extended, setExtended] = useState<TaskExtendedFields>(task?.local.extended ?? {})
+  const [fieldError, setFieldError] = useState('')
   return <Modal title={task ? 'Google task' : 'New Google task'} onClose={onClose}>
     <div className="form-stack"><p>{list.title}{!writable ? ' · Read-only' : ''}</p>{error && <p role="alert" className="provider-task-error">{error}</p>}
       <label className="field-label">Task<input autoFocus value={title} disabled={!writable || busy} maxLength={1024} onChange={(event) => setTitle(event.target.value)} /></label>
@@ -136,16 +164,24 @@ function GoogleTaskEditor({ task, list, tasks, writable, busy, error, onClose, o
         <label className="field-label">Repeat in Aerio<select value={recurrence} disabled={!writable || busy} onChange={(event) => setRecurrence(event.target.value as TaskLocalMetadata['recurrence'])}><option value="none">Never</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>
         <label className="field-label">Parent task<select value={parentId} disabled={!writable || busy} onChange={(event) => setParentId(event.target.value)}><option value="">No parent</option>{tasks.filter((item) => item.id !== task?.id && !item.remote?.readOnly && !item.remote?.assigned).map((item) => <option key={item.id} value={item.id}>{item.fields.title}</option>)}</select></label>
       </div><p className="provider-task-notice">Google stores due dates without a time. Priority and repeat settings are saved in Aerio. Repeating tasks advance by calendar days in UTC.</p>
+      {fieldError && <p role="alert" className="provider-task-error">{fieldError}</p>}
+      <TaskFieldsEditor value={extended} onChange={setExtended} support={TASK_FIELD_CAPABILITIES.gmail} provider="Google Tasks" disabled={!writable || busy} onError={setFieldError} />
       <footer className="modal-footer">{onDelete && <button className="button danger-subtle" disabled={busy} onClick={onDelete}>Delete task</button>}<span className="spacer" /><button className="button ghost" onClick={onClose}>Close</button>
         {onMove && parentId !== (task?.parentId ?? '') && <button className="button ghost" disabled={busy || !writable} onClick={() => void onMove(parentId || undefined)}>Move task</button>}
-        <button className="button primary" disabled={busy || !writable || !title.trim() || Boolean(task && parentId !== (task.parentId ?? ''))} onClick={() => void onSave({ title: title.trim(), notes: notes || undefined, due: due || undefined, completed: task?.fields.completed ?? false }, { ...task?.local, priority, recurrence }, parentId || undefined)}>Save task</button>
+        <button className="button primary" disabled={busy || !writable || !title.trim() || Boolean(task && parentId !== (task.parentId ?? ''))} onClick={() => void onSave({ title: title.trim(), notes: notes || undefined, due: due || undefined, completed: task?.fields.completed ?? false }, withExtended({ ...task?.local, priority, recurrence }, compactExtendedFields(extended)), parentId || undefined)}>Save task</button>
       </footer></div>
   </Modal>
 }
 
+/** Local metadata with the overlay set or removed, so an emptied overlay does not linger. */
+export function withExtended(local: TaskLocalMetadata, extended: TaskExtendedFields | undefined): TaskLocalMetadata {
+  const { extended: _previous, ...rest } = local
+  return extended ? { ...rest, extended } : rest
+}
+
 function TaskReview({ operation, snapshot, busy, error, writable, onClose, onResolve, onRefresh }: { operation: TaskOperation; snapshot: TaskSnapshot; busy: boolean; error: string; writable: boolean; onClose(): void; onResolve(resolution: Parameters<TaskDesktopApi['resolve']>[1]): Promise<void>; onRefresh(): void }) {
   const providerName = operation.provider === 'microsoft' ? 'Microsoft' : 'Google'
-  const nativeDescription = (value?: TaskNativeFields) => value ? [value.priority && `Priority: ${value.priority}`, value.status && `Progress: ${{ notStarted: 'Not started', inProgress: 'In progress', completed: 'Completed', waitingOnOthers: 'Waiting on others', deferred: 'Deferred' }[value.status]}`, value.dueTimeZone && `Time zone: ${value.dueTimeZone}`, value.recurrence !== undefined && (value.recurrence ? `Repeat: ${value.recurrence.pattern.type}, every ${value.recurrence.pattern.interval}${value.recurrence.pattern.daysOfWeek?.length ? ` (${value.recurrence.pattern.daysOfWeek.join(', ')})` : ''}, from ${value.recurrence.range.startDate}${value.recurrence.range.type === 'endDate' ? ` through ${value.recurrence.range.endDate}` : value.recurrence.range.type === 'numbered' ? ` for ${value.recurrence.range.numberOfOccurrences} occurrences` : ''}` : 'Repeat: Never'), value.body && 'Rich notes restored'].filter(Boolean).join(' · ') : ''
+  const nativeDescription = (value?: TaskNativeFields) => value ? [value.priority && `Priority: ${value.priority}`, value.status && `Progress: ${{ notStarted: 'Not started', inProgress: 'In progress', completed: 'Completed', waitingOnOthers: 'Waiting on others', deferred: 'Deferred' }[value.status]}`, value.dueTimeZone && `Time zone: ${value.dueTimeZone}`, value.recurrence !== undefined && (value.recurrence ? `Repeat: ${value.recurrence.pattern.type}, every ${value.recurrence.pattern.interval}${value.recurrence.pattern.daysOfWeek?.length ? ` (${value.recurrence.pattern.daysOfWeek.join(', ')})` : ''}, from ${value.recurrence.range.startDate}${value.recurrence.range.type === 'endDate' ? ` through ${value.recurrence.range.endDate}` : value.recurrence.range.type === 'numbered' ? ` for ${value.recurrence.range.numberOfOccurrences} occurrences` : ''}` : 'Repeat: Never'), value.body && 'Rich notes restored', value.start !== undefined && (value.start ? `Start: ${value.start}${value.startTimeZone ? ` (${value.startTimeZone})` : ''}` : 'Start: Cleared'), value.reminder !== undefined && (value.reminder ? `Reminder: ${new Date(value.reminder).toLocaleString()}` : 'Reminder: Off'), value.categories !== undefined && `Categories: ${value.categories.length ? value.categories.join(', ') : 'None'}`].filter(Boolean).join(' · ') : ''
   const current = snapshot.remoteTasks.find((task) => task.id === operation.base?.id)
   const candidates = snapshot.remoteTasks.filter((task) => task.accountId === operation.accountId && task.listId === operation.before.listId)
   const [candidateId, setCandidateId] = useState('')

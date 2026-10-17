@@ -12,6 +12,12 @@ import ProviderTasksPanel from './ProviderTasksPanel'
 import ProviderTaskLists from './ProviderTaskLists'
 import type { TaskEntity, TaskSnapshot } from '../task-provider-types'
 import type { MailAccountSummary } from '../mail-types'
+import TaskFieldsEditor from '../components/TaskFieldsEditor'
+import TaskFieldChips from '../components/TaskFieldChips'
+import TaskRemindersBar from '../components/TaskRemindersBar'
+import { TASK_FIELD_CAPABILITIES, type TaskExtendedFields, type TaskReminder } from '../task-fields-types'
+import { advanceExtendedFields, compactExtendedFields, localTaskExtendedFields } from '../lib/task-schedule'
+import { localTimeZone } from '../lib/time-zones'
 
 interface TasksViewProps {
   state: AppState
@@ -32,15 +38,31 @@ function nextOccurrence(task: Task, now = new Date()) {
   return undefined
 }
 
+const withoutExtended = (task: Task): Task => {
+  const { start: _start, startTimeZone: _zone, reminder: _reminder, percentComplete: _percent, categories: _categories, attachments: _attachments, ...rest } = task
+  return rest
+}
+
 export function toggleTaskWithRecurrence(task: Task, now = new Date()): Task[] {
   if (task.completed) return [{ ...task, completed: false }]
-  const completed = { ...task, completed: true }
+  // Completing a task with tracked progress records it as fully done.
+  const completed = { ...task, completed: true, ...(task.percentComplete !== undefined ? { percentComplete: 100 } : {}) }
   if (!task.recurrence || task.recurrence === 'none') return [completed]
+  const due = nextOccurrence(task, now)
+  // The next occurrence's start advances in its own zone and its reminder keeps the same wall-clock
+  // offset from the due time in this computer's zone, so daylight-saving changes do not shift it.
+  const extended = advanceExtendedFields(localTaskExtendedFields(task), {
+    repeat: task.recurrence,
+    anchor: task.due ? Date.parse(task.due) : undefined,
+    nextAnchor: task.due && due ? Date.parse(due) : undefined,
+    zone: localTimeZone()
+  })
   return [completed, {
-    ...task,
+    ...withoutExtended(task),
+    ...compactExtendedFields(extended),
     id: uid('task'),
     completed: false,
-    due: nextOccurrence(task, now),
+    due,
     subtasks: task.subtasks.map((subtask) => ({ ...subtask, id: uid('subtask'), completed: false }))
   }]
 }
@@ -104,7 +126,7 @@ export default function TasksView({ state, query, onChange, onToast, accounts = 
   const tasks = useMemo(() => state.tasks
     .filter((task) => list === 'All tasks' || task.listId === list)
     .filter((task) => showCompleted || !task.completed)
-    .filter((task) => !query || `${task.title} ${task.notes ?? ''}`.toLowerCase().includes(query.toLowerCase()))
+    .filter((task) => !query || `${task.title} ${task.notes ?? ''} ${(task.categories ?? []).join(' ')} ${(task.attachments ?? []).map((attachment) => attachment.name).join(' ')}`.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => Number(a.completed) - Number(b.completed) || (a.due ?? '9999').localeCompare(b.due ?? '9999')),
   [list, query, showCompleted, state.tasks])
 
@@ -169,6 +191,19 @@ export default function TasksView({ state, query, onChange, onToast, accounts = 
     onChange({ ...state, tasks: next })
   }
 
+  const openReminder = (reminder: TaskReminder) => {
+    if (reminder.source === 'local') {
+      const task = state.tasks.find((item) => item.id === reminder.taskId)
+      if (!task) return onToast('That task is no longer available')
+      setLocalList(task.listId); setProviderListId(undefined); setProviderEditing(null); setEditing(task)
+      return
+    }
+    const entity = provider.tasks.find((item) => item.id === reminder.taskId)
+    if (!entity) return onToast('That task is no longer available')
+    setProviderListId(entity.listId); setEditing(null); setProviderEditing(entity)
+  }
+  const reminders = <TaskRemindersBar onOpen={openReminder} onToast={onToast} />
+
   return (
     <div className="workspace">
       <aside className="context-sidebar">
@@ -206,11 +241,12 @@ export default function TasksView({ state, query, onChange, onToast, accounts = 
           <div><strong>Nice rhythm</strong><p>{state.tasks.filter((task) => task.completed).length} of {state.tasks.length} tasks complete</p></div>
         </div>
       </aside>
-      {providerListId ? <ProviderTasksPanel key={providerListId} snapshot={provider} listId={providerListId} query={query} showCompleted={showCompleted} setShowCompleted={setShowCompleted} editing={providerEditing} setEditing={setProviderEditing} onSnapshot={setProvider} onToast={onToast} /> : <section className="module-panel tasks-panel">
+      {providerListId ? <ProviderTasksPanel key={providerListId} reminders={reminders} snapshot={provider} listId={providerListId} query={query} showCompleted={showCompleted} setShowCompleted={setShowCompleted} editing={providerEditing} setEditing={setProviderEditing} onSnapshot={setProvider} onToast={onToast} /> : <section className="module-panel tasks-panel">
         <header className="module-header">
           <div><h1>{list}</h1><p>{tasks.filter((task) => !task.completed).length} still open</p></div>
           <label className="check-label"><input type="checkbox" checked={showCompleted} onChange={(event) => setShowCompleted(event.target.checked)} /> Show completed</label>
         </header>
+        {reminders}
         <div className="tasks-date-banner">
           <div><span>{format(new Date(), 'EEEE')}</span><strong>{format(new Date(), 'd')}</strong></div>
           <p><strong>{format(new Date(), 'MMMM yyyy')}</strong><span>Make a little space for what matters.</span></p>
@@ -228,6 +264,7 @@ export default function TasksView({ state, query, onChange, onToast, accounts = 
                     {task.due && <em className={overdue ? 'overdue' : ''}><CalendarClock size={13} /> {isToday(parseISO(task.due)) ? format(parseISO(task.due), 'HH:mm') : format(parseISO(task.due), 'd MMM')}</em>}
                     {task.recurrence && task.recurrence !== 'none' && <em><Repeat2 size={13} /> {task.recurrence}</em>}
                     {task.subtasks.length > 0 && <em>{task.subtasks.filter((item) => item.completed).length}/{task.subtasks.length} subtasks</em>}
+                    <TaskFieldChips fields={task} completed={task.completed} />
                   </span>
                 </button>
                 <span className={`priority-dot ${task.priority}`} title={`${task.priority} priority`} />
@@ -271,6 +308,8 @@ function TaskEditor({ task, defaultList, lists, onClose, onSave, onDelete }: { t
   const [recurrence, setRecurrence] = useState<Task['recurrence']>(task?.recurrence ?? 'none')
   const [subtasks, setSubtasks] = useState(task?.subtasks ?? [])
   const [newSubtask, setNewSubtask] = useState('')
+  const [extended, setExtended] = useState<TaskExtendedFields>(() => task ? localTaskExtendedFields(task) : {})
+  const [fieldError, setFieldError] = useState('')
   return (
     <Modal title={task ? 'Edit task' : 'New task'} onClose={onClose}>
       <div className="form-stack">
@@ -282,6 +321,8 @@ function TaskEditor({ task, defaultList, lists, onClose, onSave, onDelete }: { t
           <label className="field-label">Repeat<select value={recurrence} onChange={(e) => setRecurrence(e.target.value as Task['recurrence'])}><option value="none">Never</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>
         </div>
         <label className="field-label">Notes<textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></label>
+        {fieldError && <p role="alert" className="provider-task-error">{fieldError}</p>}
+        <TaskFieldsEditor value={extended} onChange={setExtended} support={TASK_FIELD_CAPABILITIES.local} onError={setFieldError} />
         <div className="subtask-editor">
           <span className="field-label">Subtasks</span>
           {subtasks.map((subtask) => <label key={subtask.id}><input type="checkbox" checked={subtask.completed} onChange={() => setSubtasks((items) => items.map((item) => item.id === subtask.id ? { ...item, completed: !item.completed } : item))} /><span>{subtask.title}</span><button aria-label={`Remove ${subtask.title}`} onClick={() => setSubtasks((items) => items.filter((item) => item.id !== subtask.id))}><Trash2 size={14} /></button></label>)}
@@ -297,7 +338,8 @@ function TaskEditor({ task, defaultList, lists, onClose, onSave, onDelete }: { t
           <span className="spacer" /><button className="button ghost" onClick={onClose}>Cancel</button>
           <button className="button primary" disabled={!title.trim()} onClick={() => onSave({
             id: task?.id ?? uid('task'), listId, title: title.trim(), notes,
-            due: due ? new Date(due).toISOString() : undefined, priority, completed: task?.completed ?? false, subtasks, recurrence
+            due: due ? new Date(due).toISOString() : undefined, priority, completed: task?.completed ?? false, subtasks, recurrence,
+            ...compactExtendedFields(extended)
           })}>Save task</button>
         </footer>
       </div>

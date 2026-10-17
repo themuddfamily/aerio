@@ -1,9 +1,16 @@
 import type { ProviderTask, ProviderTaskInput, ProviderTaskList, ProviderTaskSnapshot, TaskEntity, TaskFieldPatch, TaskListOperation, TaskLocalMetadata, TaskOperation, TaskProvider, TaskResolutionRecord } from '../../src/task-provider-types'
 import { validTaskNativeFields } from './task-native-validation'
+import { validTaskExtendedFields, TASK_ATTACHMENT_MAX_BYTES } from '../../src/lib/task-schedule'
+import { localOverlayFields } from '../../src/task-fields-types'
+
+/** A local-overlay attachment's bytes embedded in a connected-task backup file (schema 2). */
+export interface ArchivedTaskAttachment { id: string; name: string; size: number; mime?: string; dataBase64: string }
 
 export interface TaskBackup {
   format: 'aerio-provider-tasks'
-  schemaVersion: 1
+  // Schema 2 (E44) adds local-overlay extended fields and optional embedded attachment files.
+  // Schema 1 backups carry neither and restore unchanged.
+  schemaVersion: 1 | 2
   exportedAt: string
   accounts: { accountId: string; provider: TaskProvider; snapshot: ProviderTaskSnapshot }[]
   entities: (TaskEntity & { present: boolean })[]
@@ -11,6 +18,7 @@ export interface TaskBackup {
   occurrences: { sourceId: string; completionId: string; creationId: string }[]
   resolutions: TaskResolutionRecord[]
   listOperations?: TaskListOperation[]
+  attachments?: ArchivedTaskAttachment[]
 }
 
 const record = (value: unknown): value is Record<string, any> => Boolean(value && typeof value === 'object' && !Array.isArray(value))
@@ -22,11 +30,11 @@ const provider = (value: unknown): value is TaskProvider => value === 'gmail' ||
 const statuses = ['queued', 'running', 'succeeded', 'cancelled', 'failed', 'conflict', 'review']
 const identity = (value: any) => text(value.accountId) && provider(value.provider)
 const fields = (value: unknown): value is ProviderTaskInput => keys(value, ['title', 'notes', 'due', 'completed', 'native']) && text((value as any).title, 1024) && optionalText((value as any).notes, (value as any).native?.body ? 1_000_000 : 8192) && ((value as any).due === undefined || date((value as any).due)) && typeof (value as any).completed === 'boolean' && ((value as any).native === undefined || validTaskNativeFields((value as any).native))
-const metadata = (value: unknown): value is TaskLocalMetadata => keys(value, ['priority', 'recurrence', 'timedDue']) && ['low', 'normal', 'high'].includes((value as any).priority) && ['none', 'daily', 'weekly', 'monthly'].includes((value as any).recurrence) && ((value as any).timedDue === undefined || date((value as any).timedDue))
+const metadata = (value: unknown, owner: TaskProvider): value is TaskLocalMetadata => keys(value, ['priority', 'recurrence', 'timedDue', 'extended']) && ((value as any).extended === undefined || validTaskExtendedFields((value as any).extended, { allowed: localOverlayFields(owner) })) && ['low', 'normal', 'high'].includes((value as any).priority) && ['none', 'daily', 'weekly', 'monthly'].includes((value as any).recurrence) && ((value as any).timedDue === undefined || date((value as any).timedDue))
 const revisionMode = (value: any) => value.revisionMode === undefined || value.revisionMode === 'etag' || (value.revisionMode === 'snapshot' && typeof value.revision === 'string' && /^snapshot:[a-f0-9]{64}$/.test(value.revision))
 const list = (value: unknown): value is ProviderTaskList => keys(value, ['id', 'accountId', 'provider', 'remoteId', 'title', 'revision', 'readOnly', 'revisionMode', 'manageReadOnly']) && identity(value) && text((value as any).id) && text((value as any).remoteId) && text((value as any).title, 1024) && optionalText((value as any).revision) && typeof (value as any).readOnly === 'boolean' && revisionMode(value) && ((value as any).manageReadOnly === undefined || typeof (value as any).manageReadOnly === 'boolean')
 const remote = (value: unknown): value is ProviderTask => keys(value, ['id', 'accountId', 'provider', 'remoteId', 'listId', 'remoteListId', 'parentId', 'position', 'revision', 'updatedAt', 'title', 'notes', 'due', 'completed', 'readOnly', 'assigned', 'kind', 'remoteParentId', 'revisionMode', 'native']) && identity(value) && ['id', 'remoteId', 'listId', 'remoteListId'].every((key) => text((value as any)[key])) && ['parentId', 'remoteParentId', 'position', 'revision'].every((key) => optionalText((value as any)[key])) && ((value as any).updatedAt === undefined || date((value as any).updatedAt)) && fields({ title: (value as any).title, notes: (value as any).notes, due: (value as any).due, completed: (value as any).completed, native: (value as any).native }) && typeof (value as any).readOnly === 'boolean' && ((value as any).assigned === undefined || typeof (value as any).assigned === 'boolean') && ((value as any).kind === undefined || ['task', 'checklist'].includes((value as any).kind)) && revisionMode(value) && ((value as any).kind !== 'checklist' || (text((value as any).remoteParentId) && text((value as any).parentId) && !(value as any).native && !(value as any).due && !(value as any).notes))
-const entity = (value: unknown, stored = false): value is TaskEntity => keys(value, ['id', 'accountId', 'provider', 'listId', 'parentId', 'fields', 'local', 'remote', ...(stored ? ['present'] : [])]) && identity(value) && text((value as any).id) && text((value as any).listId) && optionalText((value as any).parentId) && fields((value as any).fields) && metadata((value as any).local) && ((value as any).remote === undefined || (remote((value as any).remote) && sameScope(value, (value as any).remote))) && (!stored || typeof (value as any).present === 'boolean')
+const entity = (value: unknown, stored = false): value is TaskEntity => keys(value, ['id', 'accountId', 'provider', 'listId', 'parentId', 'fields', 'local', 'remote', ...(stored ? ['present'] : [])]) && identity(value) && text((value as any).id) && text((value as any).listId) && optionalText((value as any).parentId) && fields((value as any).fields) && metadata((value as any).local, (value as any).provider) && ((value as any).remote === undefined || (remote((value as any).remote) && sameScope(value, (value as any).remote))) && (!stored || typeof (value as any).present === 'boolean')
 const sameScope = (left: any, right: any) => left.accountId === right.accountId && left.provider === right.provider && left.listId === right.listId
 const patch = (value: unknown): value is TaskFieldPatch => keys(value, ['title', 'notes', 'due', 'completed', 'native']) && ((value as any).title === undefined || text((value as any).title, 1024)) && ((value as any).notes === null || optionalText((value as any).notes, (value as any).native?.body ? 1_000_000 : 8192)) && ((value as any).due === undefined || (value as any).due === null || date((value as any).due)) && ((value as any).completed === undefined || typeof (value as any).completed === 'boolean') && ((value as any).native === undefined || validTaskNativeFields((value as any).native))
 const checkpointValid = (value: unknown, owner: ProviderTaskList) => {
@@ -58,9 +66,9 @@ const acyclic = <T extends { parentId?: string }>(values: Map<string, T>) => {
 /** Validate the entire reference graph before opening a restore transaction. */
 export function parseTaskBackup(value: unknown): TaskBackup {
   const invalid = () => { throw new Error('This connected-task backup is invalid or unsupported') }
-  if (!keys(value, ['format', 'schemaVersion', 'exportedAt', 'accounts', 'entities', 'operations', 'occurrences', 'resolutions', 'listOperations'])) return invalid()
+  if (!keys(value, ['format', 'schemaVersion', 'exportedAt', 'accounts', 'entities', 'operations', 'occurrences', 'resolutions', 'listOperations', 'attachments'])) return invalid()
   const backup = value as unknown as TaskBackup
-  if (backup.format !== 'aerio-provider-tasks' || backup.schemaVersion !== 1 || !date(backup.exportedAt) || !boundedArray(backup.accounts, 1000) || !boundedArray(backup.entities) || !boundedArray(backup.operations, 200_000) || !boundedArray(backup.occurrences) || !boundedArray(backup.resolutions, 200_000)) return invalid()
+  if (backup.format !== 'aerio-provider-tasks' || (backup.schemaVersion !== 1 && backup.schemaVersion !== 2) || !date(backup.exportedAt) || !boundedArray(backup.accounts, 1000) || !boundedArray(backup.entities) || !boundedArray(backup.operations, 200_000) || !boundedArray(backup.occurrences) || !boundedArray(backup.resolutions, 200_000)) return invalid()
   const groups = new Set<string>(), lists = new Map<string, ProviderTaskList>(), native = new Map<string, ProviderTask>()
   for (const account of backup.accounts) {
     if (!keys(account, ['accountId', 'provider', 'snapshot']) || !identity(account) || groups.has(groupKey(account.accountId, account.provider)) || !keys(account.snapshot, ['lists', 'tasks', 'checkpoints']) || !boundedArray(account.snapshot.lists) || !boundedArray(account.snapshot.tasks) || !record(account.snapshot.checkpoints)) return invalid()
@@ -136,6 +144,26 @@ export function parseTaskBackup(value: unknown): TaskBackup {
     }
     listSequence = item.sequence; listOperationIds.add(item.id)
   }
+  if (backup.schemaVersion === 1 && ([...backup.entities, ...backup.operations.map((item) => item.before)].some((item) => item.local.extended !== undefined) || backup.attachments !== undefined)) return invalid()
+  if (backup.attachments !== undefined && !archivedAttachmentsValid(backup)) return invalid()
   // A detached copy prevents callers changing validated data during restore.
   return structuredClone(backup)
+}
+
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+/** Embedded files must correspond one-to-one with referenced local-overlay attachments. */
+function archivedAttachmentsValid(backup: TaskBackup) {
+  return archivedAttachmentsMatch([...backup.entities, ...backup.operations.map((operation) => operation.before)].flatMap((item) => item.local.extended?.attachments ?? []), backup.attachments)
+}
+
+/** Whether archived files match a set of attachment references exactly (by id, name, size and type). */
+export function archivedAttachmentsMatch(attachments: { id: string; name: string; size: number; mime?: string }[], archived: unknown): archived is ArchivedTaskAttachment[] {
+  if (!boundedArray(archived, 5_000) || !unique(archived.map((item) => item?.id))) return false
+  const references = new Map(attachments.map((attachment) => [attachment.id, attachment]))
+  return archived.length === references.size && archived.every((item) => {
+    const reference = references.get(item?.id)
+    return keys(item, ['id', 'name', 'size', 'mime', 'dataBase64']) && Boolean(reference) && reference!.name === item.name && reference!.size === item.size && reference!.mime === item.mime &&
+      Number.isSafeInteger(item.size) && item.size >= 0 && item.size <= TASK_ATTACHMENT_MAX_BYTES && typeof item.dataBase64 === 'string' &&
+      item.dataBase64.length <= Math.ceil(TASK_ATTACHMENT_MAX_BYTES / 3) * 4 + 4 && BASE64.test(item.dataBase64)
+  })
 }
