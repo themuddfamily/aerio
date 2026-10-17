@@ -84,6 +84,17 @@ describe('SettingsModal', () => {
     expect(await screen.findByText('App lock disabled.')).toBeInTheDocument()
   })
 
+  it('opens duplicate cleanup only when the app provides it', async () => {
+    const onFindDuplicates = vi.fn()
+    const { unmount } = render(<SettingsModal preferences={preferences} onChange={vi.fn()} onClose={vi.fn()} onFindDuplicates={onFindDuplicates} />)
+    expect(screen.queryByRole('button', { name: 'Find duplicates…' })).toBeNull()
+    unmount()
+    Object.defineProperty(window, 'aerio', { configurable: true, value: { ...api, duplicates: {} } })
+    render(<SettingsModal preferences={preferences} onChange={vi.fn()} onClose={vi.fn()} onFindDuplicates={onFindDuplicates} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Find duplicates…' }))
+    expect(onFindDuplicates).toHaveBeenCalledTimes(1)
+  })
+
   it('exports and restores local Tasks, Notes, and Contacts', async () => {
     const user = userEvent.setup(), onRestored = vi.fn()
     render(<SettingsModal preferences={preferences} onChange={vi.fn()} onClose={vi.fn()} onLocalDataRestored={onRestored} />)

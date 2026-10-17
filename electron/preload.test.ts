@@ -134,6 +134,25 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:contact-history:messages', { addresses: ['ada@example.test'] })
   })
 
+  it('exposes duplicate cleanup commands with exact IPC channels', async () => {
+    const duplicates = api().duplicates
+    await duplicates.scopes('mail')
+    await duplicates.scan({ kind: 'event', calendarIds: ['calendar-1'] })
+    await duplicates.remove({ scanId: 'scan-1', groups: [{ groupId: 'group-1', keeperId: 'a', removeIds: ['b'] }] })
+    await duplicates.dismiss('scan-1', 'group-1')
+    await duplicates.dismissals()
+    await duplicates.removeDismissal('group-1')
+    await duplicates.history()
+    await duplicates.undo('entry-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('duplicates:scopes', 'mail')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('duplicates:scan', { kind: 'event', calendarIds: ['calendar-1'] })
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('duplicates:remove', { scanId: 'scan-1', groups: [{ groupId: 'group-1', keeperId: 'a', removeIds: ['b'] }] })
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('duplicates:dismiss', 'scan-1', 'group-1')
+    for (const channel of ['duplicates:dismissals', 'duplicates:history']) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('duplicates:dismissal-remove', 'group-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('duplicates:undo', 'entry-1')
+  })
+
   it('forwards and unsubscribes update, lock, window, compose, and mail events', () => {
     const update = vi.fn()
     const lock = vi.fn()

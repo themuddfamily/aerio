@@ -47,6 +47,7 @@ import { Pop3Service } from './mail/pop3-sync'
 import { pop3SmtpConfig } from './mail/pop3-settings'
 import { MailArchiveService } from './mail/mail-archive'
 import { removeArchivedMessages } from './mail/mail-archive-removal'
+import { scanMailDuplicates } from './mail/mail-duplicates'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createCalendarMimeBuffer, createMime, createMimeBuffer } from './mail/mime-builder'
 import { calendarPartsFromRaw } from './mail/invitation-parts'
@@ -878,6 +879,8 @@ async function runOperations() {
     const kind = String(row.kind) as MailActionKind
     const threadIds = JSON.parse(String(row.thread_ids_json)) as string[]
     const labelId = row.label_id ? String(row.label_id) : undefined
+    // Duplicate cleanup trashes single messages; every other operation covers whole conversations.
+    const messageIds = row.message_ids_json ? JSON.parse(String(row.message_ids_json)) as string[] : undefined
     // Local Folders, POP3 folders, and local-only actions (pins) never reach a provider.
     if (mailProviderKeepsFoldersLocally(database.getAccount(accountId)?.provider) || isLocalOnlyMailAction(kind)) {
       database.updateOperation(id, 'succeeded')
@@ -900,14 +903,16 @@ async function runOperations() {
         }, archiveRemoval)
       } else if (provider === 'gmail') {
         const client = clientFor(accountId)
-        if (kind === 'trash' || (kind === 'move' && labelId === 'TRASH')) await client.trashThreads(threadIds)
+        if (messageIds && kind === 'trash') await client.trashMessages(messageIds)
+        else if (messageIds && kind === 'untrash') await client.untrashMessages(messageIds)
+        else if (kind === 'trash' || (kind === 'move' && labelId === 'TRASH')) await client.trashThreads(threadIds)
         else if (kind === 'untrash') await client.untrashThreads(threadIds)
         else {
           const labels = labelsForAction(kind, labelId)
           await client.modifyThreads(threadIds, labels.add, labels.remove)
         }
       } else {
-        const messages = database.remoteMessagesForThreads(accountId, threadIds)
+        const messages = database.remoteMessagesForThreads(accountId, threadIds).filter((message) => !messageIds || messageIds.includes(message.id))
         if (provider === 'microsoft' && labelId && isMicrosoftInferenceLabel(labelId)) {
           // Inbox tab reassignment: Focused/Other is a message property, not a folder; removing the old value needs no call.
           if (kind === 'label') await microsoftClientFor(accountId).setInferenceClassification(messages.filter((message) => message.labelIds.includes('INBOX')).map((message) => message.id), labelId)
@@ -1820,6 +1825,15 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     const job = importService().start(command.payload)
     if (!hadLocal) emit({ type: 'accounts-changed', payload: database.listAccounts() })
     return job
+  }
+  if (command.type === 'duplicates:scan') return scanMailDuplicates(database.duplicates, database, command.payload.scopes)
+  if (command.type === 'duplicates:trash') {
+    const result = database.duplicates.trash(command.payload)
+    if (result.operation) {
+      emit({ type: 'operation', payload: result.operation })
+      emit({ type: 'mail-changed', payload: { accountId: command.payload.accountId } })
+    }
+    return result
   }
   if (command.type === 'import:list') return importService().list()
   if (command.type === 'import:pause') return importService().pause(command.payload.id)

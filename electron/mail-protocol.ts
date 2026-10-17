@@ -127,6 +127,8 @@ export type MailWorkerCommand =
   | { type: 'archive:save' | 'archive:preview'; payload: import('../src/mail-archive-types').MailArchivePolicyInput }
   | { type: 'archive:run'; payload: { accountId: string } }
   | { type: 'archive:resume' | 'archive:cancel' | 'archive:items'; payload: { jobId: string } }
+  | { type: 'duplicates:scan'; payload: { scopes: import('./mail/mail-duplicates').MailDuplicateScope[] } }
+  | { type: 'duplicates:trash'; payload: import('./mail/mail-duplicates').MailDuplicateTrashInput }
   | { type: 'network'; payload: { online: boolean } }
   | { type: 'polling'; payload: { intervalMs: number; immediate?: boolean } }
   | { type: 'pop3'; payload: import('./mail/pop3-sync').Pop3WorkerCommand }
@@ -189,6 +191,8 @@ export type MailWorkerResult =
   | import('../src/mail-archive-types').MailArchiveJob
   | import('../src/mail-archive-types').MailArchiveItem[]
   | import('./mail/inbox-category-worker').InboxCategoryResult
+  | import('./mail/mail-duplicates').MailDuplicateScan
+  | import('./mail/mail-duplicates').MailDuplicateTrashResult
 
 export interface WorkerRequest {
   kind: 'request'

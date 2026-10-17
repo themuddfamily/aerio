@@ -7,6 +7,7 @@ import { MailDatabase } from './mail/database'
 import { MailTemplateStore } from './mail/template-store'
 import { ProductivityStore } from './productivity/store'
 import { DavStore, RESTORED_DAV_MESSAGE, RESTORED_DAV_WRITE_MESSAGE } from './productivity/dav-store'
+import { DuplicateCleanupStore } from './productivity/duplicate-cleanup-store'
 import { TaskStore } from './productivity/task-store'
 import { MeetingLinkStore } from './productivity/meeting-link-store'
 import { hashMcpToken, McpAutomationStore } from './mcp/store'
@@ -58,6 +59,9 @@ function makeProfile() {
   const productivity = new ProductivityStore(join(profile, 'productivity.sqlite'))
   productivity.saveLocal({ tasks: [{ id: 'task', listId: 'Work', title: 'Task', priority: 'normal', completed: false, subtasks: [] }], notes: [], contacts: [] })
   productivity.close()
+  const duplicates = new DuplicateCleanupStore(join(profile, 'productivity.sqlite'))
+  duplicates.saveDismissal({ id: 'group-1', kind: 'task', itemIds: ['local-task:a', 'local-task:b'], titles: ['Task', 'Task'], createdAt: '2026-10-01T00:00:00.000Z' })
+  duplicates.close()
   const tasks = new TaskStore(join(profile, 'provider-tasks.sqlite'))
   const list = { id: 'account-1:list', accountId: 'account-1', provider: 'gmail' as const, remoteId: 'list', title: 'Work', readOnly: false }
   tasks.replaceProviderSnapshot('account-1', 'gmail', { lists: [list], tasks: [{ id: 'account-1:list:t', accountId: 'account-1', provider: 'gmail', remoteId: 't', listId: list.id, remoteListId: 'list', title: 'Remote', completed: false, revision: 'v1', readOnly: false }], checkpoints: { [list.id]: '2026-10-01T00:00:00Z' } })
@@ -89,7 +93,8 @@ describe('full profile layout', () => {
     const counts = Object.fromEntries(preview.counts.map((item) => [item.label, item.count]))
     expect(counts).toMatchObject({
       Preferences: 1, 'Mail accounts': 1, 'Cached messages': 1, Drafts: 4, 'Outgoing or scheduled sends': 3, 'Queued mail changes': 1, 'Mail rules': 1,
-      'Mail templates and snippets': 1, 'Local tasks': 1, 'Connected tasks': 1, 'Pending connected task changes': 1
+      'Mail templates and snippets': 1, 'Local tasks': 1, 'Connected tasks': 1, 'Pending connected task changes': 1,
+      'Duplicate cleanup history and "Not duplicates" decisions': 1
     })
     expect(preview).toMatchObject({ heldSends: 3, heldTaskWrites: 1, accountsToReauthorize: 1, trigger: 'scheduled' })
     expect(preview.warnings.join('\n')).toContain('3 outgoing or scheduled messages will be held for review')

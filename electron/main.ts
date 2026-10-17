@@ -62,6 +62,9 @@ import { registerMailFolderPreferenceHandlers } from './mail/folder-preference-i
 import { normalizeAttachmentQuery } from './mail/attachment-index'
 import { normalizeContactHistoryQuery } from './mail/contact-history'
 import { registerContactMerge } from './productivity/contact-merge-ipc'
+import { DuplicateCleanupService } from './productivity/duplicate-cleanup'
+import { DuplicateCleanupStore } from './productivity/duplicate-cleanup-store'
+import { registerDuplicateCleanup } from './productivity/duplicate-cleanup-ipc'
 import { DiagnosticLogger, type DiagnosticRecord } from './diagnostics'
 import { UpdateManager } from './update-manager'
 import { ProductivityStore } from './productivity/store'
@@ -2383,6 +2386,53 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     },
     diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
   })
+  // Duplicate cleanup (E32): removals go through the mail Trash queue, calendar deletes, and the task queue.
+  const requireInterchange = () => {
+    if (!interchangeStore) throw new Error('Calendar import and subscription storage is not ready')
+    return interchangeStore
+  }
+  const requireTasks = () => {
+    if (!taskService) throw new Error('Task storage is not ready')
+    return taskService
+  }
+  const duplicateCleanup = new DuplicateCleanupService({
+    store: new DuplicateCleanupStore(join(app.getPath('userData'), 'productivity.sqlite')),
+    accounts: () => requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' }),
+    mail: {
+      labels: (accountIds) => requireMailWorker().request<import('../src/mail-types').MailLabel[]>({ type: 'labels:list', payload: { accountIds } }),
+      scan: (scopes) => requireMailWorker().request<import('./mail/mail-duplicates').MailDuplicateScan>({ type: 'duplicates:scan', payload: { scopes } }),
+      trash: (input) => requireMailWorker().request<import('./mail/mail-duplicates').MailDuplicateTrashResult>({ type: 'duplicates:trash', payload: input }),
+      undo: (operationId) => requireMailWorker().request<boolean>({ type: 'mail:undo', payload: { operationId } })
+    },
+    calendar: {
+      synced: () => requireProductivityStore().snapshot(),
+      local: () => requireInterchange().snapshot(),
+      deleteSynced: (eventId) => deleteProductivityEvent(eventId),
+      createSynced: (event) => createProductivityEvent(event),
+      deleteLocal: (eventIds) => { for (const id of eventIds) requireInterchange().deleteEvent(id) },
+      restoreLocal: (calendarId, events) => requireInterchange().saveEvents(calendarId, events)
+    },
+    tasks: {
+      snapshot: () => requireTasks().snapshot(),
+      delete: (id) => requireTasks().delete(id),
+      undo: (operationId) => requireTasks().undo(operationId),
+      create: (accountId, listId, input, parentId, local) => requireTasks().create(accountId, listId, input, parentId, local),
+      local: () => requireProductivityStore().localSnapshot(),
+      saveLocal: (snapshot) => {
+        requireProductivityStore().saveLocal(snapshot)
+        for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local: snapshot })
+      }
+    },
+    changed: (kind) => {
+      if (kind !== 'event') return
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send('productivity:changed', { snapshot: requireProductivityStore().snapshot() })
+        if (interchangeStore) window.webContents.send('interchange:changed', interchangeStore.snapshot())
+      }
+    },
+    log: (event, details) => diagnostic({ level: 'info', component: 'app', event, details })
+  })
+  registerDuplicateCleanup(ipcMain, () => duplicateCleanup, () => appLockStatus().locked)
   registerMeetingInvitations({
     source: (accountId, messageId) => requireMailWorker().request<InvitationMessageSource>({ type: 'invitations:source', payload: { accountId, messageId } }),
     sendMail: (input) => requireMailWorker().request<void>({ type: 'invitations:send', payload: input }),

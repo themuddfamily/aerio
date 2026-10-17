@@ -288,6 +288,8 @@ export interface AerioDesktopApi {
   /** On-premises Exchange (EWS) accounts; optional so test doubles of the API stay valid. */
   exchange?: import('./exchange-types').ExchangeDesktopApi
   contactMerge?: import('./contact-merge-types').ContactMergeDesktopApi
+  /** Duplicate cleanup for mail, events, and tasks (E32). */
+  duplicates?: import('./duplicate-cleanup-types').DuplicateCleanupApi
   /** Matrix chat; the Chat module still appears only when its gate passes. */
   chat?: import('./chat-types').ChatDesktopApi
 }

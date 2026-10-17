@@ -227,6 +227,10 @@ export class GmailClient {
     return Promise.all(threadIds.map((threadId) => this.request(`/threads/${encodeURIComponent(threadId)}/untrash`, { method: 'POST', body: '{}' })))
   }
 
+  untrashMessages(messageIds: string[]) {
+    return Promise.all(messageIds.map((messageId) => this.request(`/messages/${encodeURIComponent(messageId)}/untrash`, { method: 'POST', body: '{}' })))
+  }
+
   createDraft(raw: string, threadId?: string) {
     return this.request<GmailDraftReference>('/drafts', {
       method: 'POST',

@@ -10,6 +10,7 @@ import { ExchangeStore, prepareRestoredExchangeDatabase } from './exchange/excha
 import { InterchangeStore } from './productivity/interchange-store'
 import { InvitationStore } from './productivity/invitation-store'
 import { MeetingLinkStore } from './productivity/meeting-link-store'
+import { DuplicateCleanupStore } from './productivity/duplicate-cleanup-store'
 import { ProductivityStore } from './productivity/store'
 import { TaskStore } from './productivity/task-store'
 import { TASK_REMINDER_SCHEMA } from './productivity/task-reminders'
@@ -107,7 +108,7 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
     {
       file: 'productivity.sqlite',
       label: 'Local Tasks, Notes, Contacts, local calendars, and calendar cache',
-      prepareRestore: (path) => { new ProductivityStore(path).close(); new InterchangeStore(path).close(); new InvitationStore(path).close(); new MeetingLinkStore(path).close() },
+      prepareRestore: (path) => { new ProductivityStore(path).close(); new InterchangeStore(path).close(); new InvitationStore(path).close(); new MeetingLinkStore(path).close(); new DuplicateCleanupStore(path).close() },
       summarize: (db) => {
         const module = (name: string) => {
           if (!profileTableExists(db, 'local_module_state')) return 0
@@ -116,7 +117,8 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
         }
         return [
           { label: 'Local tasks', count: module('tasks') }, { label: 'Notes', count: module('notes') }, { label: 'Local contacts', count: countRows(db, 'local_contacts') },
-          { label: 'Local calendars and subscriptions', count: countRows(db, 'interchange_calendars') }
+          { label: 'Local calendars and subscriptions', count: countRows(db, 'interchange_calendars') },
+          { label: 'Duplicate cleanup history and "Not duplicates" decisions', count: countRows(db, 'duplicate_cleanup_journal') + countRows(db, 'duplicate_dismissals') }
         ]
       }
     },
