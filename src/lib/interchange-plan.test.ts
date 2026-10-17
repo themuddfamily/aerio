@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CalendarEvent, Contact } from '../types'
-import { mergeContacts, planContactImport, planEventImport, preserveEventInterchangeFields } from './interchange-plan'
+import { mergeContacts, planContactImport, planEventImport, preserveContactInterchangeFields, preserveEventInterchangeFields } from './interchange-plan'
 import { validContactInterchangeFields, validInterchangeEvent } from './interchange-validation'
 
 const contact = (overrides: Partial<Contact>): Contact => ({ id: 'id', name: 'Name', email: '', group: 'Personal', favorite: false, color: '#000', ...overrides })
@@ -71,6 +71,22 @@ describe('preserveEventInterchangeFields', () => {
     expect(changed.recurrenceRule).toBeUndefined()
     expect(changed.recurrenceExceptions).toBeUndefined()
     expect(changed.sourceUid).toBe('u')
+  })
+})
+
+describe('preserveContactInterchangeFields', () => {
+  it('keeps imported fields and follows primary email and phone edits', () => {
+    const original = contact({
+      name: 'Ada Lovelace', email: 'ada@home.test', phone: '555 0100', nameParts: ['Lovelace', 'Ada'], birthday: '1815-12-10', sourceUid: 'u',
+      emails: [{ value: 'ada@work.test', type: 'work' }, { value: 'ada@home.test', type: 'home' }], phones: [{ value: '555 0100', type: 'cell' }],
+      addresses: [{ value: 'London' }]
+    })
+    const edited = preserveContactInterchangeFields(original, contact({ name: 'Ada King', email: 'ada@new.test' }))
+    expect(edited.emails).toEqual([{ value: 'ada@work.test', type: 'work' }, { value: 'ada@new.test', type: 'home' }])
+    expect(edited.phones).toBeUndefined()
+    expect(edited).toMatchObject({ birthday: '1815-12-10', sourceUid: 'u', addresses: [{ value: 'London' }] })
+    expect(edited.nameParts).toBeUndefined()
+    expect(preserveContactInterchangeFields(original, contact({ name: 'Ada Lovelace', email: 'ada@work.test', phone: '555 0100' })).emails).toEqual(original.emails)
   })
 })
 

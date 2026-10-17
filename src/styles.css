@@ -4154,3 +4154,92 @@ kbd {
   from { opacity: 0; transform: translateY(-3px) scale(.985); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
+
+/* Calendar and contact interchange */
+.interchange-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 4px 6px;
+}
+
+.interchange-calendar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 6px 4px 9px;
+  border-radius: 8px;
+  font-size: 11px;
+}
+
+.interchange-calendar:hover { background: var(--surface-hover); }
+.interchange-calendar .icon-button { width: 24px; height: 24px; flex: none; }
+.interchange-calendar-text { display: grid; min-width: 0; flex: 1; }
+.interchange-calendar-text strong,
+.interchange-calendar-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.interchange-calendar-text small { color: var(--muted); font-size: 9px; }
+.interchange-calendar.has-error small { color: var(--danger); white-space: normal; }
+
+.interchange-summary {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.interchange-warnings {
+  margin: 0;
+  padding: 8px 10px 8px 26px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.interchange-preview {
+  max-height: 260px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  list-style: none;
+}
+
+.interchange-preview li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.interchange-preview li:last-child { border-bottom: 0; }
+.interchange-preview li.muted { color: var(--muted); }
+.interchange-preview li > span:not([title]) { display: grid; flex: 1; min-width: 0; }
+.interchange-preview small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.interchange-preview em { color: var(--muted); font-size: 11px; font-style: normal; white-space: nowrap; }
+
+.csv-mapping {
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.csv-mapping-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(140px, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.csv-mapping-row:last-child { border-bottom: 0; }
+.csv-mapping-row.heading { position: sticky; top: 0; background: var(--surface); color: var(--muted); font-weight: 650; }
+.csv-mapping-row > span,
+.csv-mapping-row > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.csv-mapping-row > small { color: var(--muted); }

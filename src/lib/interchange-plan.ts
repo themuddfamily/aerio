@@ -172,3 +172,34 @@ export function preserveEventInterchangeFields(original: CalendarEvent | undefin
     ...(original.recurrenceExceptions?.length && !recurrenceChanged ? { recurrenceExceptions: original.recurrenceExceptions } : {})
   }
 }
+
+function replacePrimary(fields: ContactField[] | undefined, previous: string | undefined, next: string | undefined, normalize: (value: string) => string) {
+  if (!fields?.length) return undefined
+  const updated = [...fields]
+  if (next && updated.some((field) => normalize(field.value) === normalize(next))) return updated
+  const index = previous ? updated.findIndex((field) => normalize(field.value) === normalize(previous)) : -1
+  if (index >= 0) {
+    if (next) updated[index] = { ...updated[index], value: next }
+    else updated.splice(index, 1)
+  } else if (next) updated.unshift({ value: next, preferred: true })
+  return updated.length ? updated : undefined
+}
+
+// The contact editor edits only the primary values; additional imported fields are carried forward
+// and the matching entry in each list follows edits to the primary email or phone.
+export function preserveContactInterchangeFields(original: Contact | undefined, next: Contact): Contact {
+  if (!original) return next
+  const emails = replacePrimary(original.emails, original.email, next.email || undefined, normalizedEmail)
+  const phones = replacePrimary(original.phones, original.phone, next.phone, normalizedPhone)
+  return {
+    ...next,
+    ...(emails ? { emails } : {}),
+    ...(phones ? { phones } : {}),
+    ...(original.addresses?.length ? { addresses: original.addresses } : {}),
+    ...(original.urls?.length ? { urls: original.urls } : {}),
+    ...(original.nameParts?.length && original.name === next.name ? { nameParts: original.nameParts } : {}),
+    ...(original.nickname ? { nickname: original.nickname } : {}),
+    ...(original.birthday ? { birthday: original.birthday } : {}),
+    ...(original.sourceUid ? { sourceUid: original.sourceUid } : {})
+  }
+}
