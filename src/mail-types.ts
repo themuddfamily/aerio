@@ -251,6 +251,63 @@ export interface MessageToolsApi {
   translate(ref: MailMessageRef, input: { endpoint: string; apiKey?: string; target: string; source: string }): Promise<string>
 }
 
+/** Who outside the account's organization (or contacts) receives an automatic reply. */
+export type MailAutomaticReplyAudience = 'none' | 'contacts' | 'all'
+
+export interface MailAutomaticReplySettings {
+  enabled: boolean
+  /** ISO 8601 UTC instants. Omitted when the reply has no scheduled boundary. */
+  startAt?: string
+  endAt?: string
+  /** Gmail only; Microsoft replies have no separate subject. */
+  subject: string
+  /** Plain text. Gmail sends this to everyone it replies to. */
+  internalMessage: string
+  /** Plain text for people outside the organization (Microsoft only). */
+  externalMessage: string
+  externalAudience: MailAutomaticReplyAudience
+}
+
+export interface MailAutomaticReplyCapabilities {
+  subject: boolean
+  separateExternalMessage: boolean
+  audiences: MailAutomaticReplyAudience[]
+  /** Microsoft schedules need both a start and an end; Gmail accepts either boundary alone. */
+  requiresBothDates: boolean
+}
+
+export type MailAutomaticReplyPhase = 'off' | 'active' | 'scheduled' | 'ended'
+
+export interface MailAutomaticRepliesState {
+  accountId: string
+  provider: MailProviderId
+  /** False for accounts whose protocol has no provider-side automatic reply API, such as IMAP. */
+  supported: boolean
+  /** Explains an unsupported account or a missing permission. */
+  message?: string
+  canRead: boolean
+  canWrite: boolean
+  /** True when signing in again would grant the missing provider permission. */
+  needsReconnect: boolean
+  missingScopes: string[]
+  settings?: MailAutomaticReplySettings
+  capabilities?: MailAutomaticReplyCapabilities
+  phase?: MailAutomaticReplyPhase
+  /** Mailbox time zone reported by the provider, when it has one. */
+  serverTimeZone?: string
+  warnings: string[]
+  readAt?: string
+}
+
+export interface MailAutomaticRepliesApi {
+  /** Reads the active configuration from the provider; nothing is cached locally. */
+  get(accountId: string): Promise<MailAutomaticRepliesState>
+  /** Writes the configuration to the provider and returns what the provider reports back. */
+  update(accountId: string, settings: MailAutomaticReplySettings): Promise<MailAutomaticRepliesState>
+  /** Turns replies off on the provider while keeping the saved message text. */
+  disable(accountId: string): Promise<MailAutomaticRepliesState>
+}
+
 export interface MailThreadDetail {
   accountId: string
   id: string
@@ -552,6 +609,49 @@ export interface MailRuleRunResult {
   operations: number
 }
 
+/** One step of a user-defined Quick Action; label, unlabel, and move steps need an account-specific destination. */
+export interface MailQuickActionStep {
+  action: MailActionKind
+  labelId?: string
+}
+
+/** A named, ordered sequence of mail actions. Destinations require the action to be scoped to one account. */
+export interface MailQuickActionInput {
+  id?: string
+  name: string
+  accountId?: string
+  steps: MailQuickActionStep[]
+  /** Keyboard slot 1-9, bound to Ctrl/Cmd+Shift+number. */
+  shortcut?: number
+  showInToolbar: boolean
+}
+
+export interface MailQuickAction extends MailQuickActionInput {
+  id: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface MailQuickActionTarget {
+  accountId: string
+  threadIds: string[]
+}
+
+export interface MailQuickActionRunFailure {
+  accountId: string
+  threadCount: number
+  /** Zero-based step that failed; absent when the whole account group was rejected before any step ran. */
+  step?: number
+  appliedSteps: number
+  error: string
+}
+
+export interface MailQuickActionRunResult {
+  operations: PendingOperation[]
+  updatedThreads: number
+  failures: MailQuickActionRunFailure[]
+}
+
 export interface MailStorageStats {
   totalBytes: number
   freeBytes: number
@@ -582,6 +682,7 @@ export interface MailDiagnosticHealth {
 
 export interface MailDesktopApi {
   messageTools: MessageToolsApi
+  automaticReplies: MailAutomaticRepliesApi
   credentials: {
     status(): Promise<MailCredentialStatus>
     import(): Promise<MailCredentialStatus>
@@ -667,6 +768,12 @@ export interface MailDesktopApi {
     list(accountIds?: string[]): Promise<MailReplyWatch[]>
     create(input: MailReplyWatchInput): Promise<MailReplyWatch>
     cancel(id: string): Promise<boolean>
+  }
+  quickActions: {
+    list(): Promise<MailQuickAction[]>
+    save(input: MailQuickActionInput): Promise<MailQuickAction>
+    delete(id: string): Promise<void>
+    run(id: string, targets: MailQuickActionTarget[]): Promise<MailQuickActionRunResult>
   }
   onEvent(callback: (event: MailWorkerEvent) => void): () => void
 }

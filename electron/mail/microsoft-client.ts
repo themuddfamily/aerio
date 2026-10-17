@@ -47,8 +47,22 @@ export function microsoftMessageLabels(folder: GraphFolder, message: GraphMessag
   return [...new Set(labels)]
 }
 
+export interface GraphDateTimeTimeZone {
+  dateTime: string
+  timeZone: string
+}
+
+export interface GraphAutomaticRepliesSetting {
+  status?: 'disabled' | 'alwaysEnabled' | 'scheduled'
+  externalAudience?: 'none' | 'contactsOnly' | 'all'
+  internalReplyMessage?: string
+  externalReplyMessage?: string
+  scheduledStartDateTime?: GraphDateTimeTimeZone
+  scheduledEndDateTime?: GraphDateTimeTimeZone
+}
+
 export class MicrosoftGraphError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly code?: string) {
     super(message)
     this.name = 'MicrosoftGraphError'
   }
@@ -83,8 +97,8 @@ export class MicrosoftGraphClient {
   private async request<T>(path: string, init: RequestInit = {}) {
     const response = await this.response(path, init)
     if (!response.ok) {
-      const value = await response.json().catch(() => ({})) as { error?: { message?: string } }
-      throw new MicrosoftGraphError(value.error?.message ?? `Microsoft Graph request failed (${response.status})`, response.status)
+      const value = await response.json().catch(() => ({})) as { error?: { message?: string; code?: string } }
+      throw new MicrosoftGraphError(value.error?.message ?? `Microsoft Graph request failed (${response.status})`, response.status, value.error?.code)
     }
     if (response.status === 204 || response.status === 202 || response.headers.get('content-length') === '0') return undefined as T
     const text = await response.text()
@@ -242,6 +256,20 @@ export class MicrosoftGraphClient {
 
   deleteFolder(id: string) {
     return this.request<void>(`/me/mailFolders/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
+
+  /** Needs MailboxSettings.Read or MailboxSettings.ReadWrite. */
+  mailboxAutomaticReplies() {
+    return this.request<{ automaticRepliesSetting?: GraphAutomaticRepliesSetting; timeZone?: string }>('/me/mailboxSettings?$select=automaticRepliesSetting,timeZone')
+  }
+
+  /** Needs MailboxSettings.ReadWrite. */
+  async updateAutomaticReplies(setting: GraphAutomaticRepliesSetting) {
+    await this.request('/me/mailboxSettings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ automaticRepliesSetting: setting })
+    })
   }
 }
 

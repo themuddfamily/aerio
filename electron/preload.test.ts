@@ -161,6 +161,14 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:saved-searches:list')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:saved-searches:save', expect.objectContaining({ name: 'Invoices' }))
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:saved-searches:delete', 'search-1')
+    await mail.quickActions.list()
+    await mail.quickActions.save({ name: 'Triage', steps: [{ action: 'read' }], showInToolbar: true })
+    await mail.quickActions.delete('quick-1')
+    await mail.quickActions.run('quick-1', [{ accountId: 'account-1', threadIds: ['thread-1'] }])
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:list')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:save', expect.objectContaining({ name: 'Triage' }))
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:delete', 'quick-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:quick-actions:run', 'quick-1', [{ accountId: 'account-1', threadIds: ['thread-1'] }])
     await mail.templates.list('welcome')
     await mail.templates.save({ kind: 'snippet', name: 'Hi', html: 'Hi' })
     await mail.templates.delete('template-1')
@@ -205,6 +213,17 @@ describe('preload bridge', () => {
       expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel, ...args)
     }
     expect(Object.keys(ai).sort()).toEqual(['cancel', 'compose', 'configure', 'search', 'status', 'suggestReplies', 'summarize'])
+  })
+
+  it('exposes provider automatic replies with exact IPC channels', async () => {
+    const replies = api().mail.automaticReplies
+    const settings = { enabled: true, subject: 'Away', internalMessage: 'Back Monday', externalMessage: '', externalAudience: 'all' }
+    await replies.get('account-1')
+    await replies.update('account-1', settings)
+    await replies.disable('account-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:get', 'account-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:update', 'account-1', settings)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:automatic-replies:disable', 'account-1')
   })
 
   it('reports initial and changing network connectivity', async () => {

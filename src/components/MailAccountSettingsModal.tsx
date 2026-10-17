@@ -1,6 +1,7 @@
 import { RefreshCw, RotateCcw, Save, ShieldCheck } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { MailAccountSummary, ImapServerSettings } from '../mail-types'
+import MailAutomaticRepliesSection from './MailAutomaticRepliesSection'
 import Modal from './Modal'
 
 interface MailAccountSettingsModalProps {
@@ -121,6 +122,7 @@ export default function MailAccountSettingsModal({ account, onSaved, onClose, on
         <p>Inserted into new messages, replies and forwards sent from this account.</p>
         <textarea value={signature} onChange={(event) => setSignature(event.target.value)} placeholder="Your name and contact details" />
       </section>
+      <MailAutomaticRepliesSection account={account} onToast={onToast} />
       <section>
         <h3>Synchronization and alerts</h3>
         <label className="toggle-row"><span><strong>Synchronize this account</strong><small>Check for new mail in the background.</small></span><input type="checkbox" checked={syncEnabled} onChange={(event) => setSyncEnabled(event.target.checked)} /></label>

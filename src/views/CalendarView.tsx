@@ -11,6 +11,7 @@ import { uid } from '../lib/domain'
 import type { AppState, CalendarEvent } from '../types'
 import Modal from '../components/Modal'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
+import { preserveEventInterchangeFields } from '../lib/interchange-plan'
 
 type CalendarMode = 'month' | 'week' | 'day' | 'agenda'
 
@@ -25,13 +26,14 @@ interface CalendarViewProps {
   onDeleteProviderEvent(event: CalendarEvent): Promise<void>
   syncing?: boolean
   sourceMessage?: string
+  interchangePanel?: React.ReactNode
 }
 
 const eventOnDay = (event: CalendarEvent, date: Date) => isSameDay(parseISO(event.start), date)
 
 export default function CalendarView({
   state, query, onToast, writableCalendarIds,
-  onSync, onEnableEditing, onSaveProviderEvent, onDeleteProviderEvent, syncing = false, sourceMessage
+  onSync, onEnableEditing, onSaveProviderEvent, onDeleteProviderEvent, syncing = false, sourceMessage, interchangePanel
 }: CalendarViewProps) {
   const { showContextMenu } = useContextMenu()
   const [mode, setMode] = useState<CalendarMode>('month')
@@ -164,6 +166,7 @@ export default function CalendarView({
             </button>
           ))}
         </div>
+        {interchangePanel}
         <div className="up-next-card">
           <span className="eyebrow">Up next</span>
           {filtered.filter((event) => new Date(event.end) >= new Date()).slice(0, 2).map((event) => (
@@ -349,11 +352,11 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
           <span className="spacer" />
           <button className="button ghost" disabled={Boolean(busy)} onClick={onClose}>{readOnly ? 'Close' : 'Cancel'}</button>
           {!readOnly && <button className="button primary" disabled={!canSave || Boolean(busy)} title={!canSave ? 'Add a title and choose an end time after the start' : undefined} onClick={() => {
-            const next = {
+            const next = preserveEventInterchangeFields(event, {
             id: event?.id ?? uid('event'), calendarId, title: title.trim(),
             start: new Date(start).toISOString(), end: new Date(end).toISOString(), location, description, color,
             attendees: attendees.split(',').map((value) => value.trim()).filter(Boolean), reminderMinutes, recurrence
-            }
+            })
             setBusy('save')
             void Promise.resolve(onSave(next)).finally(() => setBusy(undefined))
           }}><CalendarDays size={16} /> {busy === 'save' ? 'Saving…' : 'Save event'}</button>}

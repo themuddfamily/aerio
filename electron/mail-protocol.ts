@@ -10,6 +10,10 @@ import type {
   MailRuleRunResult,
   MailSavedSearch,
   MailSavedSearchInput,
+  MailQuickAction,
+  MailQuickActionInput,
+  MailQuickActionRunResult,
+  MailQuickActionTarget,
   MailSnooze,
   MailReplyWatch,
   MailReplyWatchInput,
@@ -76,6 +80,10 @@ export type MailWorkerCommand =
   | { type: 'saved-searches:list' }
   | { type: 'saved-searches:save'; payload: MailSavedSearchInput }
   | { type: 'saved-searches:delete'; payload: { id: string } }
+  | { type: 'quick-actions:list' }
+  | { type: 'quick-actions:save'; payload: MailQuickActionInput }
+  | { type: 'quick-actions:delete'; payload: { id: string } }
+  | { type: 'quick-actions:run'; payload: { id: string; targets: MailQuickActionTarget[] } }
   | { type: 'sync:start'; payload: { accountId?: string } }
   | { type: 'sync:pause'; payload: { accountId: string } }
   | { type: 'sync:resume'; payload: { accountId: string } }
@@ -100,6 +108,9 @@ export type MailWorkerResult =
   | MailRuleRunResult
   | MailSavedSearch
   | MailSavedSearch[]
+  | MailQuickAction
+  | MailQuickAction[]
+  | MailQuickActionRunResult
   | MailSnooze[]
   | MailReplyWatch
   | MailReplyWatch[]
