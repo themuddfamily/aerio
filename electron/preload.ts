@@ -136,6 +136,38 @@ const api: AerioDesktopApi = {
     setCollectionEnabled: (collectionId, enabled) => ipcRenderer.invoke('dav:collection-enabled', collectionId, enabled),
     resolve: (reviewId, resolution) => ipcRenderer.invoke('dav:resolve', reviewId, resolution)
   },
+  // Matrix chat: display snapshots and commands only; tokens and keys never cross this bridge.
+  chat: {
+    snapshot: () => ipcRenderer.invoke('chat:snapshot'),
+    discover: (input) => ipcRenderer.invoke('chat:discover', input),
+    login: (input) => ipcRenderer.invoke('chat:login', input),
+    removeAccount: (accountId) => ipcRenderer.invoke('chat:account:remove', accountId),
+    clearHistory: (accountId) => ipcRenderer.invoke('chat:account:clear-history', accountId),
+    updatePreferences: (accountId, preferences) => ipcRenderer.invoke('chat:account:preferences', accountId, preferences),
+    timeline: (accountId, roomId) => ipcRenderer.invoke('chat:timeline', accountId, roomId),
+    loadOlder: (accountId, roomId) => ipcRenderer.invoke('chat:timeline:older', accountId, roomId),
+    search: (accountId, query) => ipcRenderer.invoke('chat:search', accountId, query),
+    send: (accountId, roomId, body, replyTo) => ipcRenderer.invoke('chat:send', accountId, roomId, body, replyTo),
+    edit: (accountId, roomId, targetId, body) => ipcRenderer.invoke('chat:edit', accountId, roomId, targetId, body),
+    redact: (accountId, roomId, targetId) => ipcRenderer.invoke('chat:redact', accountId, roomId, targetId),
+    react: (accountId, roomId, targetId, key) => ipcRenderer.invoke('chat:react', accountId, roomId, targetId, key),
+    cancelOutgoing: (outboxId) => ipcRenderer.invoke('chat:outbox:cancel', outboxId),
+    retryOutgoing: (outboxId) => ipcRenderer.invoke('chat:outbox:retry', outboxId),
+    attach: (accountId, roomId) => ipcRenderer.invoke('chat:attach', accountId, roomId),
+    saveMedia: (accountId, mediaId) => ipcRenderer.invoke('chat:media:save', accountId, mediaId),
+    markRead: (accountId, roomId) => ipcRenderer.invoke('chat:read', accountId, roomId),
+    roomAction: (accountId, roomId, action) => ipcRenderer.invoke('chat:room', accountId, roomId, action),
+    devices: (accountId) => ipcRenderer.invoke('chat:devices', accountId),
+    verifyOwnDevice: (accountId) => ipcRenderer.invoke('chat:verify-own', accountId),
+    verificationAction: (accountId, requestId, action) => ipcRenderer.invoke('chat:verification', accountId, requestId, action),
+    restoreFromRecoveryKey: (accountId, recoveryKey) => ipcRenderer.invoke('chat:recovery:restore', accountId, recoveryKey),
+    setupRecovery: (accountId) => ipcRenderer.invoke('chat:recovery:setup', accountId),
+    onEvent: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, value: import('../src/chat-types').ChatEvent) => callback(value)
+      ipcRenderer.on('chat:event', listener)
+      return () => ipcRenderer.removeListener('chat:event', listener)
+    }
+  },
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     maximize: () => ipcRenderer.invoke('window:maximize'),

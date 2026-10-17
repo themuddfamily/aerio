@@ -31,17 +31,22 @@ export const mailImportExtension = (path: string) => {
 }
 
 // Returns why a chosen file cannot be imported, or undefined when it can.
-// Outlook data files are rejected explicitly instead of failing as "not mbox".
+// Formats Aerio can't read are rejected explicitly instead of failing as "not mbox".
 export function unsupportedMailImportReason(path: string) {
   const type = mailImportExtension(path)
-  if (type === 'pst' || type === 'ost') return 'Outlook data files (.pst/.ost) cannot be imported yet. Move the folders to an IMAP account in Outlook, or convert the file to MBOX (for example with readpst), then import the MBOX files.'
   if (type === 'msg') return 'Outlook .msg files cannot be imported yet. Save the messages as .eml files, then import them.'
   if (type === 'emlx') return 'Apple Mail .emlx files cannot be imported directly. In Apple Mail choose Mailbox › Export Mailbox to create an MBOX, then import it.'
   return undefined
 }
 
-export type MailImportSourceKind = 'mbox' | 'eml'
+export type MailImportSourceKind = 'mbox' | 'eml' | 'pst'
 
-// EML files are recognised by extension; everything else that is not an
-// Outlook format is read as mbox, which validates its own From_ framing.
-export const mailImportSourceKind = (path: string): MailImportSourceKind => mailImportExtension(path) === 'eml' ? 'eml' : 'mbox'
+// EML and Outlook data files (.pst, and .ost of the same format) are
+// recognised by extension; everything else is read as mbox, which validates
+// its own From_ framing.
+export const mailImportSourceKind = (path: string): MailImportSourceKind => {
+  const type = mailImportExtension(path)
+  if (type === 'eml') return 'eml'
+  if (type === 'pst' || type === 'ost') return 'pst'
+  return 'mbox'
+}

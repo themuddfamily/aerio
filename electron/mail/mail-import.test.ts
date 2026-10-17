@@ -7,7 +7,7 @@ import type { MailImportJob, MailImportStartInput } from '../../src/mail-types'
 import { LOCAL_FOLDERS_ACCOUNT_ID } from '../../src/lib/local-folders'
 import { MailDatabase } from './database'
 import { MailImportService, planMailImport, type MailImportDeps } from './mail-import'
-import { mbox, mime, storeRawForTest } from './mail-import.fixtures'
+import { ENRON_PST, mbox, mime, OUTLOOK_OST, PDF_OST, pstHeader, storeRawForTest } from './mail-import.fixtures'
 
 const directories: string[] = []
 const open: MailDatabase[] = []
@@ -61,7 +61,7 @@ function setup(overrides: Partial<MailImportDeps> = {}) {
 }
 
 describe('planMailImport', () => {
-  it('keeps Thunderbird, Apple Mail and EML directory hierarchies and reports Outlook files', () => {
+  it('keeps Thunderbird, Apple Mail, Outlook and EML directory hierarchies and reports unsupported files', () => {
     const root = join(temp('aerio-plan-test-'), 'Archive')
     mkdirSync(join(root, 'Inbox.sbd'), { recursive: true })
     mkdirSync(join(root, 'Saved', 'Deep'), { recursive: true })
@@ -74,17 +74,26 @@ describe('planMailImport', () => {
     writeFileSync(join(root, 'Saved', 'notes.txt'), 'not mail')
     writeFileSync(join(root, 'Exported.mbox', 'mbox'), mbox([mime({ subject: 'Apple' })]))
     writeFileSync(join(root, 'Exported.mbox', 'table_of_contents'), 'binary')
-    writeFileSync(join(root, 'Old.pst'), 'PST')
+    writeFileSync(join(root, 'Old.pst'), pstHeader())
+    writeFileSync(join(root, 'Saved', 'Cache.OST'), pstHeader({ version: 36 }))
+    writeFileSync(join(root, 'Saved', 'note.msg'), 'MSG')
 
     const plan = planMailImport([root])
     expect(plan.entries.map((entry) => [entry.kind, entry.folder.join('/')])).toEqual([
       ['mbox', 'Archive/Exported'],
       ['mbox', 'Archive/Inbox'],
       ['mbox', 'Archive/Inbox/Projects'],
+      ['pst', 'Archive/Old'],
+      ['pst', 'Archive/Saved/Cache'],
       ['eml', 'Archive/Saved/Deep'],
       ['eml', 'Archive/Saved']
     ])
-    expect(plan.unsupported).toEqual([{ path: join(root, 'Old.pst'), reason: expect.stringMatching(/Outlook data files.*cannot be imported yet/) }])
+    expect(plan.unsupported).toEqual([{ path: join(root, 'Saved', 'note.msg'), reason: expect.stringMatching(/\.msg files cannot be imported yet/) }])
+
+    // An explicitly chosen file without an extension is recognised by its PST signature.
+    const bare = join(root, 'outlook-backup')
+    writeFileSync(bare, pstHeader())
+    expect(planMailImport([bare]).entries).toEqual([{ kind: 'pst', path: bare, folder: ['outlook-backup'], size: 564 }])
   })
 
   it('names loose files after the file and caps the number of sources', () => {
@@ -249,6 +258,32 @@ describe('MailImportService', () => {
     expect(context.messageCount()).toBe(5)
   })
 
+  it('retries a message whose failure was recorded just before a crash instead of counting it as a duplicate', async () => {
+    let failOnce = true
+    const context = setup({
+      store: async (accountId, message) => {
+        if (failOnce && message.raw.includes('Subject: Item 1')) {
+          failOnce = false
+          throw new Error('Disk hiccup')
+        }
+        await storeRawForTest(context.database, accountId, message)
+      }
+    })
+    const path = join(context.directory, 'Retry.mbox')
+    writeFileSync(path, mbox([0, 1, 2].map((index) => mime({ subject: `Item ${index}` }))))
+    const first = await context.run({ paths: [path] })
+    expect(first).toMatchObject({ imported: 2, failed: 1 })
+
+    const raw = new DatabaseSync(context.databasePath)
+    raw.prepare(`UPDATE mail_import_jobs SET status='running',cursor_json=?,imported=0,failed=0 WHERE id=?`).run(JSON.stringify({ entry: 0, offset: 0 }), first.id)
+    raw.close()
+    context.reopen()
+    context.service.resume(first.id)
+    await context.service.pump()
+    expect(context.database.localMail.getJob(first.id)).toMatchObject({ status: 'completed', imported: 3, failed: 0, duplicates: 0 })
+    expect(context.service.items(first.id)).toEqual([expect.objectContaining({ subject: 'Item 1', status: 'imported', reason: 'Imported when the import resumed' })])
+  })
+
   it('reports oversized and unreadable sources and pauses when the disk is nearly full', async () => {
     const context = setup({ limits: { maxMessageBytes: 400 } })
     const path = join(context.directory, 'Mixed.mbox')
@@ -309,7 +344,7 @@ describe('MailImportService', () => {
     expect(() => context.service.start({ paths: [first], duplicates: 'review', mboxVariant: 'mboxrd', parentLabelId: 'folder:nope' })).toThrow('destination folder no longer exists')
     const empty = join(context.directory, 'empty')
     mkdirSync(empty)
-    expect(() => context.service.start({ paths: [empty], duplicates: 'review', mboxVariant: 'mboxrd' })).toThrow('No MBOX or EML files')
+    expect(() => context.service.start({ paths: [empty], duplicates: 'review', mboxVariant: 'mboxrd' })).toThrow('No MBOX, EML or Outlook data files')
   })
 
   it('fails a held duplicate whose destination folder was deleted', async () => {
@@ -325,10 +360,108 @@ describe('MailImportService', () => {
     expect(context.service.items(second.id)[0]).toMatchObject({ status: 'failed', reason: 'The destination folder no longer exists' })
   })
 
-  it('explains that Outlook PST files are not supported', () => {
+})
+
+// These run against the real sample PST/OST files shipped with pst-extractor.
+describe('MailImportService with Outlook data files', () => {
+  it('imports PST and OST folders with read state, dates, bodies and attachments', async () => {
     const context = setup()
-    const path = join(context.directory, 'Outlook.pst')
-    writeFileSync(path, 'PST')
-    expect(() => context.service.start({ paths: [path], duplicates: 'review', mboxVariant: 'mboxrd' })).toThrow(/Outlook data files \(\.pst\/\.ost\) cannot be imported yet/)
+    const job = await context.run({ paths: [ENRON_PST, PDF_OST] })
+    // The OST's calendar, contact and task items are not mail and are skipped.
+    expect(job).toMatchObject({ status: 'completed', imported: 73, failed: 0, duplicates: 0, skipped: 160, processedBytes: job.totalBytes })
+    const names = context.database.listLabels([LOCAL_FOLDERS_ACCOUNT_ID]).map((label) => label.name)
+    expect(names).toEqual(expect.arrayContaining([
+      'enron', 'enron/Deleted Items', 'enron/lokay-m/MLOKAY (Non-Privileged)/Personal', 'enron/lokay-m/MLOKAY (Non-Privileged)/Sent Items',
+      'pstextractortestpdf@outlook.com/Inbox', 'pstextractortestpdf@outlook.com/Drafts', 'pstextractortestpdf@outlook.com/Sync Issues/Conflicts'
+    ]))
+    expect(names.some((name) => /Calendar|Contacts|Search/.test(name))).toBe(false)
+    expect(context.folder('enron/lokay-m/MLOKAY (Non-Privileged)')!.parentId).toBe(context.folder('enron/lokay-m')!.id)
+    expect(context.messagesIn('enron/lokay-m/MLOKAY (Non-Privileged)/Personal')).toHaveLength(47)
+
+    const [report] = context.messagesIn('enron/lokay-m/MLOKAY (Non-Privileged)/TW-Commercial Group').filter((item) => item.subject === "New OBA's")
+    expect(report).toMatchObject({ unread: false, starred: false, hasAttachments: true, lastDate: '2001-10-22T20:06:22.000Z' })
+    const message = context.database.getThread(LOCAL_FOLDERS_ACCOUNT_ID, report.id).messages[0]
+    expect(message.attachments).toHaveLength(11)
+    expect(message.attachments[0]).toMatchObject({ filename: 'OBA_27602_Citizens.doc', mimeType: 'application/msword', size: 53_760 })
+    const raw = readFileSync(context.database.getMessageRaw(LOCAL_FOLDERS_ACCOUNT_ID, message.id)!, 'utf8')
+    expect(raw).toMatch(/^Date: Mon, 22 Oct 2001 20:06:22 \+0000\r\nFrom: Lee Dennis <Dennis\.Lee@ENRON\.com>\r\n/)
+    expect(raw).toContain('Received: from NAHOU-MSMBX07V.corp.enron.com')
+
+    // Outlook's unread state is kept.
+    const pdf = context.messagesIn('pstextractortestpdf@outlook.com/Inbox')
+    expect(pdf.map((item) => [item.subject, item.unread, item.hasAttachments])).toEqual(expect.arrayContaining([['single PDF', true, true]]))
+  })
+
+  it('pauses, resumes and replays a PST import from its folder and item cursor', async () => {
+    let stored = 0
+    let pauseAt = 5
+    let jobId = ''
+    const context = setup({
+      store: async (accountId, message) => {
+        await storeRawForTest(context.database, accountId, message)
+        stored += 1
+        if (stored === pauseAt) context.service.pause(jobId)
+      }
+    })
+    jobId = context.service.start({ paths: [ENRON_PST], duplicates: 'review', mboxVariant: 'mboxrd' }).id
+    await context.service.pump()
+    const paused = context.database.localMail.getJob(jobId)!
+    expect(paused).toMatchObject({ status: 'paused', imported: 5 })
+    expect(paused.cursor).toMatchObject({ entry: 0, folder: 4, message: 4 })
+    expect(paused.processedBytes).toBeGreaterThan(0)
+    expect(paused.processedBytes).toBeLessThan(paused.totalBytes)
+
+    pauseAt = 30
+    context.service.resume(jobId)
+    await context.service.pump()
+    expect(context.database.localMail.getJob(jobId)).toMatchObject({ status: 'paused', imported: 30 })
+
+    // A crash after messages were stored but before the cursor moved.
+    const raw = new DatabaseSync(context.databasePath)
+    raw.prepare(`UPDATE mail_import_jobs SET status='running',cursor_json=?,imported=0 WHERE id=?`).run(JSON.stringify({ entry: 0, offset: 0, folder: 4, message: 2 }), jobId)
+    raw.close()
+    const reopened = context.reopen()
+    expect(reopened.localMail.getJob(jobId)?.status).toBe('interrupted')
+    pauseAt = 0
+    context.service.resume(jobId)
+    await context.service.pump()
+    // Items before the cursor are not counted again; everything after it is, once.
+    expect(reopened.localMail.getJob(jobId)).toMatchObject({ status: 'completed', imported: 71 - 1 - 2, duplicates: 0 })
+    expect(context.messageCount()).toBe(71)
+  })
+
+  it('holds re-imported Outlook messages for review and re-reads them from the file', async () => {
+    const context = setup()
+    await context.run({ paths: [PDF_OST] })
+    const second = await context.run({ paths: [PDF_OST] })
+    expect(second).toMatchObject({ imported: 0, duplicates: 2, pendingReview: 2 })
+    const items = context.service.items(second.id)
+    expect(items.map((item) => [item.subject, item.reason])).toEqual(expect.arrayContaining([['single PDF', 'An identical copy is already in Local Folders']]))
+    const resolved = await context.service.resolve(second.id, [items[0].key], 'import')
+    expect(resolved).toMatchObject({ imported: 1, pendingReview: 1 })
+    expect(context.service.items(second.id).find((item) => item.key === items[0].key)).toMatchObject({ status: 'imported', reason: 'Imported after review' })
+    await context.service.resolve(second.id, [items[1].key], 'discard')
+    expect(context.messageCount()).toBe(3)
+  })
+
+  it('reports unreadable Outlook files and oversized items while importing the rest', async () => {
+    const context = setup({ limits: { maxMessageBytes: 1024 } })
+    const damaged = join(context.directory, 'Damaged.pst')
+    const text = join(context.directory, 'notes.pst')
+    const encrypted = join(context.directory, 'Secret.pst')
+    const mailbox = join(context.directory, 'Mail.mbox')
+    writeFileSync(damaged, pstHeader())
+    writeFileSync(text, 'PST')
+    writeFileSync(encrypted, pstHeader({ encryption: 2 }))
+    writeFileSync(mailbox, mbox([mime({ subject: 'Small' })]))
+    const job = await context.run({ paths: [damaged, text, encrypted, PDF_OST, mailbox] })
+    expect(job).toMatchObject({ status: 'completed', imported: 1, failed: 5 })
+    expect(context.service.items(job.id).map((item) => [item.subject, item.reason])).toEqual([
+      ['Damaged.pst', expect.stringMatching(/isn’t an Outlook data file/)],
+      ['notes.pst', expect.stringMatching(/isn’t an Outlook data file/)],
+      ['Secret.pst', expect.stringMatching(/high encryption/)],
+      ['single PDF', 'The message is larger than the 1 KB import limit'],
+      ['Welcome to your new Outlook.com account', 'The message is larger than the 1 KB import limit']
+    ])
   })
 })

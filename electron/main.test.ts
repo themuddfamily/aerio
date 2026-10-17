@@ -264,6 +264,19 @@ const davMocks = vi.hoisted(() => ({
 vi.mock('./productivity/dav-store', () => ({ DavStore: vi.fn(function () { return davMocks.store }) }))
 vi.mock('./productivity/dav-service', () => ({ DavService: vi.fn(function () { return davMocks.service }) }))
 vi.mock('./productivity/dav-ipc', () => ({ registerDavAccounts: vi.fn(() => davMocks.ipc) }))
+const chatMocks = vi.hoisted(() => {
+  const gate = { enabled: false, preview: false, checks: [], sdkVersion: 'matrix-js-sdk 43.0.0', message: 'Chat stays unavailable until these checks pass: two-device interoperability.' }
+  const service = { timeline: vi.fn(() => ({ items: [] })), snapshot: vi.fn(() => ({ gate: { ...gate, enabled: true }, accounts: [], rooms: [], verifications: [] })) }
+  const runtime = {
+    current: undefined as undefined | typeof service,
+    service: vi.fn(() => runtime.current),
+    snapshot: vi.fn(() => ({ gate, accounts: [], rooms: [], verifications: [] })),
+    isServiceSender: vi.fn((id: number) => id === 9999),
+    lockChanged: vi.fn(), networkChanged: vi.fn(), dispose: vi.fn(async () => {})
+  }
+  return { gate, service, runtime, initializeChat: vi.fn((_options: any) => runtime) }
+})
+vi.mock('./chat/chat-main', () => ({ initializeChat: chatMocks.initializeChat }))
 const templateMocks = vi.hoisted(() => {
   const prepared = { count: 1, commit: vi.fn(), rollback: vi.fn() }
   const backup = { format: 'aerio-mail-templates', schemaVersion: 1, exportedAt: '2026-10-01T00:00:00Z', templates: [], attachments: [] }
@@ -359,6 +372,34 @@ describe.sequential('Electron main process', () => {
     expect(await invoke('tasks:export')).toEqual({})
     expect(await invoke('tasks:import')).toBeUndefined()
     mocks.setStatResult({ size: 12, isFile: () => true }); mocks.setReadResult(new Error('missing'))
+  })
+
+  it('wires Chat behind its gate with lock, network, sender and quit handling', async () => {
+    expect(mocks.protocol.registerSchemesAsPrivileged).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ scheme: 'aerio-chat-service', privileges: expect.objectContaining({ secure: true, standard: true }) })]))
+    const options = chatMocks.initializeChat.mock.calls[0][0]
+    expect(options).toMatchObject({ quietNotifications: false })
+    expect(options.isLocked()).toBe(false)
+    // Closed gate: the snapshot carries only the diagnostic and commands are refused with it.
+    expect(await invoke('chat:snapshot')).toMatchObject({ gate: { enabled: false }, accounts: [], rooms: [] })
+    expect(() => invoke('chat:timeline', 'account', 'room')).toThrow(/Chat stays unavailable/)
+    chatMocks.runtime.current = chatMocks.service
+    invoke('chat:timeline', 'account', '!room:example.org')
+    expect(chatMocks.service.timeline).toHaveBeenCalledWith('account', '!room:example.org')
+    expect(() => invoke('chat:timeline', 'account', 42)).toThrow(/Invalid chat identifier/)
+    // The hidden chat service can never drive renderer commands.
+    expect(() => mocks.ipcHandlers.get('chat:snapshot')!({ sender: { id: 9999 } })).toThrow(/not available to the chat service/)
+    invoke('app-lock:enable', 'chat lock fixture passphrase')
+    invoke('app-lock:lock')
+    expect(chatMocks.runtime.lockChanged).toHaveBeenLastCalledWith(true)
+    expect(options.isLocked()).toBe(true)
+    expect(() => invoke('chat:timeline', 'account', '!room:example.org')).toThrow(/Unlock Aerio to use Chat/)
+    invoke('app-lock:unlock', 'chat lock fixture passphrase')
+    expect(chatMocks.runtime.lockChanged).toHaveBeenLastCalledWith(false)
+    invoke('app-lock:disable', 'chat lock fixture passphrase')
+    await invoke('mail:network', false)
+    await invoke('mail:network', true)
+    expect(chatMocks.runtime.networkChanged).toHaveBeenCalledTimes(2)
+    chatMocks.runtime.current = undefined
   })
 
   it('validates and saves preferences and local productivity data', async () => {

@@ -47,7 +47,7 @@ export class FakeHomeserver {
   private readonly crossSigning = new Map<string, Record<string, unknown>>()
   private readonly txns = new Map<string, string>()
   private readonly media = new Map<string, { bytes: Buffer; type: string }>()
-  private backup?: { version: string; algorithm: unknown; auth_data: unknown; rooms: Record<string, { sessions: Record<string, unknown> }> }
+  private backup?: { version: string; algorithm: unknown; auth_data: unknown; etag: number; rooms: Record<string, { sessions: Record<string, unknown> }> }
   private readonly accountData = new Map<string, { pos: number; content: Record<string, unknown> }>()
   private waiters = new Set<() => void>()
   readonly requests: { method: string; path: string; authorization?: string; body?: string }[] = []
@@ -157,6 +157,10 @@ export class FakeHomeserver {
     return devices.get(deviceId)!
   }
 
+  private backupCount() {
+    return Object.values(this.backup?.rooms ?? {}).reduce((total, room) => total + Object.keys(room.sessions).length, 0)
+  }
+
   private sharesRoom(a: string, b: string) {
     if (a === b) return true
     for (const room of this.rooms.values()) {
@@ -201,18 +205,43 @@ export class FakeHomeserver {
     }
     if (path.includes('/account_data/')) return method === 'GET' ? { status: 404, body: { errcode: 'M_NOT_FOUND', error: 'Not found' } } : { body: {} }
     if (path.startsWith('/_matrix/client/v3/room_keys/version')) {
-      if (method === 'POST') { this.backup = { version: String(++this.counter), algorithm: body().algorithm, auth_data: body().auth_data, rooms: {} }; return { body: { version: this.backup.version } } }
-      if (method === 'PUT' && this.backup) { this.backup.auth_data = body().auth_data; return { body: {} } }
+      // POST/GET/PUT/DELETE /room_keys/version[/{version}]
+      const requested = segments[6]
+      if (method === 'POST') { this.backup = { version: String(++this.counter), algorithm: body().algorithm, auth_data: body().auth_data, rooms: {}, etag: 0 }; return { body: { version: this.backup.version } } }
+      if (!this.backup || (requested && requested !== this.backup.version)) return { status: 404, body: { errcode: 'M_NOT_FOUND', error: 'Unknown backup version' } }
+      if (method === 'PUT') { this.backup.auth_data = body().auth_data; return { body: {} } }
       if (method === 'DELETE') { this.backup = undefined; return { body: {} } }
-      return this.backup ? { body: { version: this.backup.version, algorithm: this.backup.algorithm, auth_data: this.backup.auth_data, count: 0, etag: '0' } } : { status: 404, body: { errcode: 'M_NOT_FOUND', error: 'No backup' } }
+      return { body: { version: this.backup.version, algorithm: this.backup.algorithm, auth_data: this.backup.auth_data, count: this.backupCount(), etag: String(this.backup.etag) } }
     }
     if (path.startsWith('/_matrix/client/v3/room_keys/keys')) {
-      if (!this.backup) return { status: 404, body: { errcode: 'M_NOT_FOUND', error: 'No backup' } }
-      if (method === 'PUT') {
-        for (const [room, value] of Object.entries((body().rooms ?? {}) as Record<string, { sessions: Record<string, unknown> }>)) this.backup.rooms[room] = { sessions: { ...this.backup.rooms[room]?.sessions, ...value.sessions } }
-        return { body: { etag: '1', count: Object.values(this.backup.rooms).reduce((total, room) => total + Object.keys(room.sessions).length, 0) } }
+      // /room_keys/keys[/{roomId}[/{sessionId}]]?version= with the spec's per-scope request and response shapes.
+      const version = url.searchParams.get('version')
+      if (!this.backup) return { status: 404, body: { errcode: 'M_NOT_FOUND', error: 'Unknown backup version' } }
+      if (version !== this.backup.version) {
+        return method === 'PUT'
+          ? { status: 403, body: { errcode: 'M_WRONG_ROOM_KEYS_VERSION', error: 'Wrong backup version', current_version: this.backup.version } }
+          : { status: 404, body: { errcode: 'M_NOT_FOUND', error: 'Unknown backup version' } }
       }
-      return { body: { rooms: this.backup.rooms } }
+      const [roomId, sessionId] = [segments[6], segments[7]]
+      const backup = this.backup
+      if (method === 'PUT') {
+        const input = body()
+        const rooms = sessionId ? { [roomId]: { sessions: { [sessionId]: input } } } : roomId ? { [roomId]: input } : (input.rooms ?? {})
+        for (const [room, value] of Object.entries(rooms as Record<string, { sessions?: Record<string, unknown> }>)) backup.rooms[room] = { sessions: { ...backup.rooms[room]?.sessions, ...value.sessions } }
+        backup.etag += 1
+        return { body: { etag: String(backup.etag), count: this.backupCount() } }
+      }
+      if (method === 'DELETE') {
+        if (sessionId) delete backup.rooms[roomId]?.sessions[sessionId]
+        else if (roomId) delete backup.rooms[roomId]
+        else backup.rooms = {}
+        backup.etag += 1
+        return { body: { etag: String(backup.etag), count: this.backupCount() } }
+      }
+      const notFound = { status: 404, body: { errcode: 'M_NOT_FOUND', error: 'No room_keys found' } }
+      if (sessionId) { const stored = backup.rooms[roomId]?.sessions[sessionId]; return stored ? { body: stored } : notFound }
+      if (roomId) return { body: { sessions: backup.rooms[roomId]?.sessions ?? {} } }
+      return { body: { rooms: backup.rooms } }
     }
     if (path.startsWith('/_matrix/client/v3/profile/')) return { body: {} }
     if (path === '/_matrix/client/v3/keys/changes') return { body: { changed: [], left: [] } }

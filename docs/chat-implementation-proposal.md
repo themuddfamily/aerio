@@ -2,6 +2,8 @@
 
 Assessed: 2026-10-01. Status: proposal complete; Chat remains unavailable in Aerio. This is an implementation recommendation, not a newly enabled transport or a roadmap requirement to build Chat.
 
+Implementation status (E30): the connector is built behind a closed gate; see [Matrix chat connector](chat-matrix-connector.md) for what exists, the gate checks, and the hosted interoperability evidence still required.
+
 ## Transport comparison and recommendation
 
 Recommend an independent Matrix account connector for general personal and small-team messaging. Users connect an existing homeserver account; Aerio does not operate a messaging service or turn a mail account into a chat identity. Teams and Google Chat would be independent organization-oriented adapters if added later.

@@ -43,6 +43,7 @@
     "test:tasks": "npm run build && tsx scripts/desktop-tasks-audit.mjs && tsx scripts/desktop-tasks-write-audit.mjs && tsx scripts/desktop-tasks-consent-audit.mjs && tsx scripts/desktop-microsoft-tasks-audit.mjs",
     "test:microsoft-tasks": "npm run build && tsx scripts/desktop-microsoft-tasks-audit.mjs",
     "test:imap": "npm run build:main && tsx scripts/imap-smtp-integration.mjs",
+    "test:chat": "npm run build && node scripts/desktop-chat-audit.mjs",
     "test:live": "tsx scripts/live-provider-runner.mjs",
     "test:desktop:checks": "npm run build && npm run audit:buttons && node scripts/desktop-button-audit.mjs && npm run test:context-menus && npm run audit:accessibility && node scripts/desktop-recovery-audit.mjs && node scripts/desktop-backup-audit.mjs && node scripts/desktop-app-lock-audit.mjs && node scripts/desktop-preferences-audit.mjs && tsx scripts/desktop-tasks-audit.mjs && tsx scripts/desktop-tasks-write-audit.mjs && tsx scripts/desktop-tasks-consent-audit.mjs && tsx scripts/desktop-microsoft-tasks-audit.mjs",
     "verify:release": "node scripts/verify-release.mjs",
@@ -67,6 +68,7 @@
     "nodemailer": "^10.0.13",
     "openpgp": "^6.3.2",
     "postal-mime": "^2.7.6",
+    "pst-extractor": "1.12.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "sanitize-html": "^2.18.0",
@@ -115,7 +117,9 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/pst-extractor/example/**",
+      "!node_modules/pst-extractor/junit.xml"
     ],
     "extraResources": [
       {

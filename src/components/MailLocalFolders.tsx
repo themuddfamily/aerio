@@ -152,7 +152,7 @@ function DuplicateReview({ job, onBack, onToast, onResolved }: { job: MailImport
 }
 
 /**
- * Imports MBOX and EML files into Local Folders and shows the progress,
+ * Imports MBOX, EML and Outlook PST/OST files into Local Folders and shows the progress,
  * pause/resume/cancel controls and duplicate review of every import job.
  */
 export function MailImportModal({ accounts, labels, onClose, onToast, onLocalFoldersChanged }: ImportModalProps) {
@@ -241,10 +241,10 @@ export function MailImportModal({ accounts, labels, onClose, onToast, onLocalFol
         <button className="button ghost small" disabled={busy} onClick={() => void createLocalFolders()}>Create Local Folders</button>
       </div>}
       <div className="mail-import-choose">
-        <button className="button ghost" disabled={busy} onClick={() => void choose('files')}><Upload size={15} /> Choose MBOX or EML files…</button>
+        <button className="button ghost" disabled={busy} onClick={() => void choose('files')}><Upload size={15} /> Choose MBOX, EML or PST files…</button>
         <button className="button ghost" disabled={busy} onClick={() => void choose('folder')}><FolderOpen size={15} /> Choose a folder…</button>
       </div>
-      <p className="mail-import-hint">Folders keep their structure: each mbox file and each directory becomes a folder, including Thunderbird and Apple Mail exports. Outlook PST files are not supported yet.</p>
+      <p className="mail-import-hint">Folders keep their structure: each mbox file, Outlook data file (.pst/.ost) and directory becomes a folder, including Thunderbird and Apple Mail exports and the folders inside a PST.</p>
       {chosen.paths.length > 0 && <ul className="mail-import-chosen" aria-label="Chosen for import">
         {chosen.paths.map((path) => <li key={path}><Folder size={13} /> <span title={path}>{fileName(path)}</span><button className="icon-button" aria-label={`Remove ${fileName(path)}`} onClick={() => setChosen((current) => ({ ...current, paths: current.paths.filter((item) => item !== path) }))}><X size={13} /></button></li>)}
       </ul>}

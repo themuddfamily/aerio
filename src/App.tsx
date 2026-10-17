@@ -1,6 +1,6 @@
 import {
   CalendarDays, CheckCircle2, ChevronRight, Command, ContactRound, HelpCircle, LockKeyhole, Mail,
-  Moon, NotebookPen, Plus, Search, Settings, Sparkles, Sun, UserRound, X, Zap
+  MessagesSquare, Moon, NotebookPen, Plus, Search, Settings, Sparkles, Sun, UserRound, X, Zap
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TitleBar from './components/TitleBar'
@@ -13,6 +13,8 @@ import ContactsView from './views/ContactsView'
 import TasksView from './views/TasksView'
 import NotesView from './views/NotesView'
 import ConnectedMailView from './views/ConnectedMailView'
+import ChatView, { type ChatOpenRequest } from './views/ChatView'
+import type { ChatSnapshot } from './chat-types'
 import CalendarInterchangePanel from './components/CalendarInterchangePanel'
 import ContactInterchangePanel from './components/ContactInterchangePanel'
 import type { InterchangeSnapshot } from './interchange-types'
@@ -33,6 +35,8 @@ const modules: { id: ModuleId; label: string; icon: typeof Mail; shortcut: strin
   { id: 'tasks', label: 'Tasks', icon: CheckCircle2, shortcut: '4' },
   { id: 'notes', label: 'Notes', icon: NotebookPen, shortcut: '5' }
 ]
+// Chat joins the rail only while its gate passes (docs/chat-matrix-connector.md).
+const chatModule: typeof modules[number] = { id: 'chat', label: 'Chat', icon: MessagesSquare, shortcut: '6' }
 
 const emptyProductivity: ProductivitySnapshot = { calendars: [], events: [], contacts: [], sync: [] }
 const emptyLocalModules: LocalModuleSnapshot = { tasks: [], notes: [], contacts: [] }
@@ -72,6 +76,18 @@ export default function App() {
     void window.aerio.dav?.snapshot().then(setDav).catch(() => undefined)
     return window.aerio.dav?.onChanged(setDav)
   }, [])
+  // Matrix chat: a display snapshot (gate, accounts, rooms) pushed by the main process.
+  const [chatSnapshot, setChatSnapshot] = useState<ChatSnapshot>()
+  const [chatOpenRequest, setChatOpenRequest] = useState<ChatOpenRequest>()
+  const chatAvailable = Boolean(window.aerio.chat && chatSnapshot?.gate.enabled)
+  const visibleModules = useMemo(() => chatAvailable ? [...modules, chatModule] : modules, [chatAvailable])
+  useEffect(() => window.aerio.chat?.onEvent((event) => {
+    if (event.type === 'snapshot') setChatSnapshot(event.snapshot)
+    else if (event.type === 'open-room') {
+      setActiveModule('chat')
+      setChatOpenRequest((current) => ({ id: (current?.id ?? 0) + 1, accountId: event.accountId, roomId: event.roomId }))
+    }
+  }), [])
   const persistedLocalModules = useRef<LocalModuleSnapshot | undefined>(undefined)
   const localSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const localRestoreActive = useRef(false)
@@ -119,6 +135,9 @@ export default function App() {
     }).catch(() => showToast('Local Tasks and Notes could not be opened'))
     void window.aerio.interchange?.snapshot().then(setInterchange).catch(() => {
       // Local and subscribed calendars are optional; provider data still loads without them.
+    })
+    void window.aerio.chat?.snapshot().then(setChatSnapshot).catch(() => {
+      // Chat stays hidden when its snapshot is unavailable.
     })
   }, [applyLocalSnapshot, showToast])
 
@@ -335,9 +354,9 @@ export default function App() {
         event.preventDefault()
         startCompose()
       }
-      if (modifier && ['1', '2', '3', '4', '5'].includes(event.key)) {
+      if (modifier && visibleModules.some((module) => module.shortcut === event.key)) {
         event.preventDefault()
-        setActiveModule(modules[Number(event.key) - 1].id)
+        setActiveModule(visibleModules[Number(event.key) - 1].id)
       }
       if (event.key === 'Escape') {
         setCommandsOpen(false)
@@ -355,7 +374,7 @@ export default function App() {
       window.removeEventListener('keydown', onKeyDown)
       unsubscribe()
     }
-  }, [appLock?.enabled, startCompose])
+  }, [appLock?.enabled, startCompose, visibleModules])
 
   // Saved mail Quick Actions are listed in the palette while Mail is open, so they run on the visible selection.
   useEffect(() => {
@@ -374,17 +393,17 @@ export default function App() {
     })) : []
     const quick = [
       { label: 'Compose a new message', detail: 'Ctrl N', icon: Plus, action: () => startCompose(), preserveQuery: false },
-      ...modules.map((item) => ({ label: `Open ${item.label}`, detail: `Ctrl ${item.shortcut}`, icon: item.icon, action: () => setActiveModule(item.id), preserveQuery: false })),
+      ...visibleModules.map((item) => ({ label: `Open ${item.label}`, detail: `Ctrl ${item.shortcut}`, icon: item.icon, action: () => setActiveModule(item.id), preserveQuery: false })),
       ...(appLock?.enabled ? [{ label: 'Lock Aerio', detail: 'Ctrl L', icon: LockKeyhole, action: () => { void window.aerio.appLock.lock() }, preserveQuery: false }] : []),
       { label: 'Open settings', detail: '', icon: Settings, action: () => setSettingsOpen(true), preserveQuery: false },
       ...mailQuick
     ].filter((item) => !query || item.label.toLowerCase().includes(query.toLowerCase()))
     return query.trim()
-      ? [{ label: `Search ${modules.find((item) => item.id === activeModule)?.label ?? 'Aerio'} for “${query.trim()}”`, detail: 'Enter', icon: Search, action: () => {
+      ? [{ label: `Search ${visibleModules.find((item) => item.id === activeModule)?.label ?? 'Aerio'} for “${query.trim()}”`, detail: 'Enter', icon: Search, action: () => {
         if (activeModule === 'mail') setMailSearchRequest((current) => ({ id: current.id + 1, query: query.trim() }))
       }, preserveQuery: true }, ...quick]
       : quick
-  }, [activeModule, appLock?.enabled, mailQuickActions, query, startCompose])
+  }, [activeModule, appLock?.enabled, mailQuickActions, query, startCompose, visibleModules])
 
   useEffect(() => setCommandIndex(0), [commandsOpen, query])
 
@@ -464,18 +483,20 @@ export default function App() {
           { label: 'Clear search', icon: X, disabled: !query, action: () => setQuery('') }
         ], 'Search')}>
           <Search size={16} />
-          <span>Search {modules.find((item) => item.id === activeModule)?.label.toLowerCase()} or run a command</span>
+          <span>Search {visibleModules.find((item) => item.id === activeModule)?.label.toLowerCase()} or run a command</span>
           <kbd>Ctrl K</kbd>
         </button>
       </TitleBar>
       <div className="app-frame">
         <nav className="module-rail" aria-label="Aerio modules">
           <div className="rail-modules">
-            {modules.map((module) => {
+            {visibleModules.map((module) => {
               const { id, label, icon: Icon } = module
-              const badge = unreadCount(connectedState, id)
+              const badge = id === 'chat'
+                ? (chatSnapshot?.rooms ?? []).reduce((total, room) => total + (room.membership === 'invite' ? 1 : room.membership === 'join' && !room.muted ? room.unread : 0), 0)
+                : unreadCount(connectedState, id)
               return (
-                <button key={id} className={activeModule === id ? 'active' : ''} aria-label={label} aria-current={activeModule === id ? 'page' : undefined} title={`${label} · Ctrl ${modules.find((item) => item.id === id)?.shortcut}`} onClick={() => navigate(id)} onContextMenu={(event) => showModuleMenu(event, module)}>
+                <button key={id} className={activeModule === id ? 'active' : ''} aria-label={label} aria-current={activeModule === id ? 'page' : undefined} title={`${label} · Ctrl ${module.shortcut}`} onClick={() => navigate(id)} onContextMenu={(event) => showModuleMenu(event, module)}>
                   <Icon size={21} strokeWidth={1.9} />
                   {badge > 0 && <em>{badge > 9 ? '9+' : badge}</em>}
                   <span>{label}</span>
@@ -560,6 +581,7 @@ export default function App() {
             />}
             {activeModule === 'tasks' && <TasksView state={connectedState} query={query} accounts={connectedAccounts} onChange={updateConnectedLocal} onToast={showToast} />}
             {activeModule === 'notes' && <NotesView state={connectedState} query={query} onChange={updateConnectedLocal} onToast={showToast} />}
+            {activeModule === 'chat' && chatAvailable && chatSnapshot && <ChatView chat={window.aerio.chat!} snapshot={chatSnapshot} openRequest={chatOpenRequest} onToast={showToast} />}
           </div>
         </main>
       </div>

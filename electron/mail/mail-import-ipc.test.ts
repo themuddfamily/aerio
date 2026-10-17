@@ -8,6 +8,7 @@ vi.mock('electron', () => ({
   dialog: { showOpenDialog: vi.fn() }
 }))
 import { chooseResult, registerMailImport, validateImportStart, validateLocalTransfer } from './mail-import-ipc'
+import { pstHeader } from './mail-import.fixtures'
 
 const directories: string[] = []
 afterEach(() => {
@@ -31,18 +32,30 @@ function setup(filePaths: string[]) {
 }
 
 describe('mail import IPC', () => {
-  it('only starts imports for paths chosen in the dialog and flags Outlook files', async () => {
+  it('only starts imports for paths chosen in the dialog and explains unreadable Outlook files', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'aerio-import-ipc-'))
     directories.push(directory)
     const mailbox = join(directory, 'Inbox.mbox')
     const pst = join(directory, 'Outlook.pst')
+    const ost = join(directory, 'Cache.ost')
+    const notPst = join(directory, 'Broken.pst')
+    const encrypted = join(directory, 'Secret.pst')
+    const msg = join(directory, 'Note.msg')
     writeFileSync(mailbox, 'From a Thu Oct 16 2025\n')
-    writeFileSync(pst, 'PST')
-    const context = setup([mailbox, pst, directory])
+    writeFileSync(pst, pstHeader())
+    writeFileSync(ost, pstHeader({ version: 36 }))
+    writeFileSync(notPst, 'PST')
+    writeFileSync(encrypted, pstHeader({ encryption: 2 }))
+    writeFileSync(msg, 'MSG')
+    const context = setup([mailbox, pst, ost, notPst, encrypted, msg, directory])
     await expect(context.invoke('mail:import:choose', 'disk')).rejects.toThrow('Choose files or a folder')
     const chosen = await context.invoke('mail:import:choose', 'files')
-    expect(chosen.paths).toEqual([mailbox, directory])
-    expect(chosen.unsupported).toEqual([{ path: pst, reason: expect.stringMatching(/cannot be imported yet/) }])
+    expect(chosen.paths).toEqual([mailbox, pst, ost, directory])
+    expect(chosen.unsupported).toEqual([
+      { path: notPst, reason: expect.stringMatching(/isn’t an Outlook data file/) },
+      { path: encrypted, reason: expect.stringMatching(/high encryption/) },
+      { path: msg, reason: expect.stringMatching(/\.msg files cannot be imported yet/) }
+    ])
     expect(context.showOpenDialog).toHaveBeenCalledWith(undefined, expect.objectContaining({ properties: ['openFile', 'multiSelections'] }))
 
     await expect(context.invoke('mail:import:start', { paths: [join(directory, 'other.mbox')], duplicates: 'review', mboxVariant: 'mboxrd' })).rejects.toThrow('again')

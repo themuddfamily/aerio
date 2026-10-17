@@ -115,6 +115,9 @@ import { normalizeOpenPgpOptions } from './mail/openpgp-draft-store'
 import { SmimeStore } from './mail/smime-store'
 import { assertSmimeSendable, protectOutgoingMessage, registerSmime } from './mail/smime-ipc'
 import { assertSingleProtection, normalizeSmimeOptions } from './mail/smime-draft-store'
+import { initializeChat, type ChatRuntime } from './chat/chat-main'
+import { registerChatIpc } from './chat/chat-ipc'
+import { CHAT_SERVICE_SCHEME } from './chat/service-host'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -132,7 +135,9 @@ if (!hasSingleInstanceLock) app.quit()
 if (process.platform === 'win32') app.setAppUserModelId('com.aerio.desktop')
 
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'aerio-image', privileges: { secure: true, standard: true, supportFetchAPI: true, bypassCSP: false } }
+  { scheme: 'aerio-image', privileges: { secure: true, standard: true, supportFetchAPI: true, bypassCSP: false } },
+  // The hidden chat service page needs a secure, standard origin for its encrypted IndexedDB crypto store and WASM fetch.
+  { scheme: CHAT_SERVICE_SCHEME, privileges: { secure: true, standard: true, supportFetchAPI: true, bypassCSP: false } }
 ])
 
 let mainWindow: BrowserWindow | null = null
@@ -168,6 +173,7 @@ let taskNetworkOnline = true
 let messageLocalStore: MessageLocalStore | null = null
 let mailTemplateStore: MailTemplateStore | null = null
 let profileBackups: ReturnType<typeof registerProfileBackup> | null = null
+let chatRuntime: ChatRuntime | null = null
 let readyToOpenWindows = false
 const senderFaviconCache = new Map<string, { image: Buffer | null; expiresAt: number }>()
 const senderFaviconCandidateRequests = new Map<string, Promise<Buffer | null>>()
@@ -1113,6 +1119,8 @@ function verifyAppLockPassphrase(passphrase: unknown, record = loadAppLockRecord
 function publishAppLockStatus() {
   const status = appLockStatus()
   BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('app-lock:status-changed', status))
+  // Locking clears Chat's decrypted renderer state and transient verification emoji; unlocking opens a pending notification route.
+  chatRuntime?.lockChanged(status.locked)
   return status
 }
 
@@ -2057,6 +2065,7 @@ function registerIpc() {
     taskNetworkOnline = online
     if (online) void taskService?.flush().catch(() => {})
     if (online) void davIpc?.flushNow()
+    chatRuntime?.networkChanged()
     return requireMailWorker().request({ type: 'network', payload: { online } })
   })
   ipcMain.handle('mail:attachments:list', (_event, query: unknown) =>
@@ -2115,6 +2124,24 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   taskPolling = setInterval(() => { void taskService?.poll().catch(() => {}) }, 60_000)
   taskPolling.unref()
   registerIpc()
+  // Matrix chat (E30). Its service starts only when the gate passes; IPC answers either way so the
+  // renderer can show the gate diagnostic. Chat data is kept out of profile backups.
+  chatRuntime = initializeChat({
+    isLocked: () => appLockStatus().locked,
+    notificationsEnabled: () => Boolean(loadPreferences().settings.notifications),
+    online: () => taskNetworkOnline && net.isOnline(),
+    mainWindow: () => mainWindow,
+    openMainWindow: () => openMainWindow(),
+    iconPath,
+    quietNotifications: hideTestWindows,
+    log: (event, details, error) => diagnostic({ level: error ? 'error' : 'info', component: 'provider', event, details, message: error === undefined ? undefined : error instanceof Error ? error.message : String(error) })
+  })
+  registerChatIpc(ipcMain, {
+    service: () => chatRuntime?.service(),
+    unavailable: () => chatRuntime!.snapshot(),
+    isServiceSender: (senderId) => chatRuntime?.isServiceSender(senderId) ?? false,
+    isLocked: () => appLockStatus().locked
+  })
   registerMailImport({ ipcMain, worker: requireMailWorker, localAccount: (account) => accountProviders.set(account.id, account.provider) })
   profileBackups = registerProfileBackup({
     userData: app.getPath('userData'),
@@ -2199,6 +2226,7 @@ app.on('before-quit', () => {
   stopTrayMonitor()
   if (taskPolling) clearInterval(taskPolling)
   profileBackups?.stop()
+  void chatRuntime?.dispose().catch(() => {})
   void taskService?.close().catch(() => {})
   updates?.stop()
   interchangeService?.dispose()

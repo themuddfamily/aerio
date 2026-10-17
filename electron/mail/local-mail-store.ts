@@ -41,8 +41,15 @@ export interface MailImportOptions {
 export interface MailImportCursor {
   /** Index of the plan entry being imported. */
   entry: number
-  /** Byte offset of the next mbox message in that entry (0 for EML files). */
+  /**
+   * Byte offset of the next mbox message in that entry (0 for EML files).
+   * For Outlook data files it is an estimate used only for progress.
+   */
   offset: number
+  /** Outlook data files: index of the PST folder being imported. */
+  folder?: number
+  /** Outlook data files: index of the next item in that folder. */
+  message?: number
 }
 
 export interface StoredImportJob extends MailImportJob {
@@ -57,7 +64,9 @@ export interface ImportItemInput {
   reason: string
   sourcePath: string
   sourceKind: MailImportSourceKind
+  /** mbox: offset of the message content. PST: index of the PST folder. */
   contentOffset?: number
+  /** mbox: stored length of the message. PST: index of the item in its folder. */
   storedBytes?: number
   labelIds?: string[]
   subject?: string
@@ -385,8 +394,10 @@ export class LocalMailStore {
     this.db.prepare('DELETE FROM mail_import_jobs WHERE id=?').run(id)
   }
 
-  hasItem(jobId: string, key: string) {
-    return Boolean(this.db.prepare('SELECT 1 found FROM mail_import_items WHERE job_id=? AND key=?').get(jobId, key))
+  hasItem(jobId: string, key: string, status?: MailImportItemStatus) {
+    return Boolean(status
+      ? this.db.prepare('SELECT 1 found FROM mail_import_items WHERE job_id=? AND key=? AND status=?').get(jobId, key, status)
+      : this.db.prepare('SELECT 1 found FROM mail_import_items WHERE job_id=? AND key=?').get(jobId, key))
   }
 
   addItem(jobId: string, item: ImportItemInput) {

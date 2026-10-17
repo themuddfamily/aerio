@@ -655,12 +655,13 @@ export class ChatService {
   async restoreFromRecoveryKey(accountId: string, recoveryKey: string) {
     this.requireUnlocked()
     if (typeof recoveryKey !== 'string' || recoveryKey.length > 200) throw new Error('That recovery key is not valid')
-    await this.serviceCall(accountId, { type: 'recovery-key', key: recoveryKey })
+    // Reports how many backed-up room keys were imported; it never promises that every message decrypts.
+    return this.serviceCall<{ imported: number; total: number }>(accountId, { type: 'recovery-key', key: recoveryKey })
   }
 
   async setupRecovery(accountId: string) {
     this.requireUnlocked()
-    return this.serviceCall<{ recoveryKey?: string }>(accountId, { type: 'setup-recovery' })
+    return this.serviceCall<{ recoveryKey?: string; backupComplete?: boolean }>(accountId, { type: 'setup-recovery' })
   }
 }
 
