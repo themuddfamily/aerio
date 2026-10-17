@@ -291,6 +291,8 @@ export interface AerioDesktopApi {
   exchange?: import('./exchange-types').ExchangeDesktopApi
   /** Organization directory and offline address book (E41); optional so test doubles stay valid. */
   directory?: import('./directory-types').DirectoryDesktopApi
+  /** Server-synchronized Notes (CalDAV VJOURNAL, Exchange Notes) and vNote import; optional for test doubles. */
+  serverNotes?: import('./server-notes-types').ServerNotesDesktopApi
   contactMerge?: import('./contact-merge-types').ContactMergeDesktopApi
   /** Duplicate cleanup for mail, events, and tasks (E32). */
   duplicates?: import('./duplicate-cleanup-types').DuplicateCleanupApi

@@ -70,7 +70,8 @@ export function registerExchangeAccounts(options: ExchangeIpcOptions) {
       contacts: { read: true, write: contacts > 0, detail: contacts ? `${contacts} writable contacts folder${contacts === 1 ? '' : 's'}; edits are checked against the item's ChangeKey.` : 'No writable contacts folder was found yet; synchronize to refresh.' },
       folderManagement: true,
       notes: [
-        'Free/busy lookup, tasks, notes, delegate mailboxes, and public folders are not synchronized yet. The global address list is available in Contacts › Directory and in recipient lookup.',
+        'Exchange Notes folders synchronize with Aerio Notes (title, body, categories, and attachments).',
+        'Free/busy lookup, tasks, delegate mailboxes, and public folders are not synchronized yet. The global address list is available in Contacts › Directory and in recipient lookup.',
         ...(auth === 'bearer' ? ['OAuth tokens are not refreshed by Aerio; paste a new token when this one expires.'] : []),
         ...(auth === 'basic' ? ['Basic authentication sends the password with every request over HTTPS.'] : [])
       ]

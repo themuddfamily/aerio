@@ -282,6 +282,8 @@ const exchangeMocks = vi.hoisted(() => ({
 vi.mock('./exchange/exchange-store', () => ({ ExchangeStore: vi.fn(function () { return exchangeMocks.store }) }))
 vi.mock('./exchange/exchange-productivity', () => ({ ExchangeProductivityService: vi.fn(function () { return exchangeMocks.service }) }))
 vi.mock('./exchange/exchange-ipc', () => ({ registerExchangeAccounts: vi.fn(() => exchangeMocks.ipc) }))
+const serverNotesMocks = vi.hoisted(() => ({ setup: { service: { localSaved: vi.fn() }, ipc: {}, removeAccount: vi.fn(), close: vi.fn() } }))
+vi.mock('./productivity/server-notes-setup', () => ({ setupServerNotes: vi.fn(() => serverNotesMocks.setup) }))
 const chatMocks = vi.hoisted(() => {
   const gate = { enabled: false, preview: false, checks: [], sdkVersion: 'matrix-js-sdk 43.0.0', message: 'Chat stays unavailable until these checks pass: two-device interoperability.' }
   const service = { timeline: vi.fn(() => ({ items: [] })), snapshot: vi.fn(() => ({ gate: { ...gate, enabled: true }, accounts: [], rooms: [], verifications: [] })) }
@@ -641,6 +643,8 @@ describe.sequential('Electron main process', () => {
     expect(mocks.vault.authorize).toHaveBeenCalled()
     await invoke('mail:accounts:disconnect', 'a1b2', 'archive')
     expect(mocks.store.removeAccount).toHaveBeenCalledWith('a1b2')
+    // Server-synchronized notes of the account are removed with it (docs/server-notes.md).
+    expect(serverNotesMocks.setup.removeAccount).toHaveBeenCalledWith('a1b2')
   })
 
   it('validates reconnect and IMAP settings and cleans up failed account connections', async () => {

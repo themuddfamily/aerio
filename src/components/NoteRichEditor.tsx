@@ -13,6 +13,8 @@ interface NoteRichEditorProps {
   note: Note
   onChange(change: NoteBodyChange): void
   onToast(message: string): void
+  /** Shows the body without editing (read-only server folders, notes waiting for review). */
+  readOnly?: boolean
 }
 
 const BLOCK_STYLES = [
@@ -40,7 +42,7 @@ const inlineIds = (attachments: Attachment[] | undefined) => new Set((attachment
  * every change. A plain-text note is shown converted losslessly and only gains
  * a rich body once it is edited.
  */
-export default function NoteRichEditor({ note, onChange, onToast }: NoteRichEditorProps) {
+export default function NoteRichEditor({ note, onChange, onToast, readOnly = false }: NoteRichEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null)
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
@@ -187,17 +189,18 @@ export default function NoteRichEditor({ note, onChange, onToast }: NoteRichEdit
 
   return (
     <div className="note-rich-editor">
-      <MailFormattingToolbar editorRef={editorRef} onEditorChange={handleChange} onToast={onToast} label="Note formatting">
+      {!readOnly && <MailFormattingToolbar editorRef={editorRef} onEditorChange={handleChange} onToast={onToast} label="Note formatting">
         <span className="compose-formatting-divider" aria-hidden="true" />
         <select className="compose-format-select" aria-label="Paragraph style" defaultValue="" onMouseDown={rememberSelection} onFocus={rememberSelection} onChange={(event) => { if (event.target.value) applyBlockStyle(event.target.value); event.target.value = '' }}>
           <option value="" disabled>Style</option>
           {BLOCK_STYLES.map((style) => <option key={style.value} value={style.value}>{style.label}</option>)}
         </select>
-      </MailFormattingToolbar>
+      </MailFormattingToolbar>}
       <div
         ref={editorRef}
         className="note-content-input note-rich-body"
-        contentEditable
+        contentEditable={!readOnly}
+        aria-readonly={readOnly || undefined}
         suppressContentEditableWarning
         role="textbox"
         aria-multiline="true"

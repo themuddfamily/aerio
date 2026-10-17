@@ -5130,3 +5130,31 @@ button.mail-folder-twisty:hover { background: var(--surface-hover); color: var(-
 .directory-resource-picker { display: grid; gap: 6px; }
 .directory-resource-results { display: flex; flex-wrap: wrap; gap: 6px; }
 .directory-resource-results small { color: var(--muted); }
+/* Server-synchronized Notes (docs/server-notes.md) */
+.server-notes-account { display: flex; align-items: center; gap: 5px; }
+.server-notes-account > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-notes-account .icon-button { width: 22px; height: 22px; margin-left: auto; }
+.server-notes-account .spinning { animation: server-notes-spin 0.9s linear infinite; }
+@keyframes server-notes-spin { to { transform: rotate(360deg); } }
+.server-notes-review-button { color: var(--danger); }
+.note-owner-label { display: inline-flex; align-items: center; gap: 5px; max-width: 260px; overflow: hidden; color: var(--text-soft); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.note-card-top .note-sync-synced { margin-left: 4px; color: var(--muted); }
+.note-card-top .note-sync-pending { margin-left: 4px; color: var(--accent); }
+.note-card-top .note-sync-review { margin-left: 4px; color: var(--danger); }
+.server-notes-dialog { display: grid; gap: 10px; }
+.server-notes-dialog p { margin: 0; font-size: 10.5px; }
+.server-notes-dialog [role="alert"] { color: var(--danger); }
+.server-notes-hint { color: var(--muted); }
+.server-notes-summary { font-weight: 650; }
+.vnote-preview, .server-notes-review { display: grid; gap: 6px; max-height: 320px; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.vnote-preview li { display: grid; gap: 2px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; font-size: 10.5px; }
+.vnote-preview li span { overflow: hidden; color: var(--text-soft); text-overflow: ellipsis; white-space: nowrap; }
+.vnote-preview li small { color: var(--accent); }
+.vnote-preview li.error { border-color: var(--danger); background: var(--danger-soft); }
+.vnote-preview li.error span { color: var(--danger); }
+.vnote-duplicates { display: grid; gap: 4px; margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 10.5px; }
+.server-notes-review li { display: grid; gap: 6px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.server-notes-review li header { display: flex; align-items: center; gap: 6px; }
+.server-notes-review li header svg { color: var(--danger); }
+.server-notes-review li header small { margin-left: auto; color: var(--muted); }
+.server-notes-version span { display: inline-block; min-width: 46px; margin-right: 6px; color: var(--muted); font-weight: 650; }

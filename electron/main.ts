@@ -109,6 +109,7 @@ import { ewsClientFor } from './exchange/exchange-config'
 import { DirectoryStore } from './directory/directory-store'
 import { DirectoryService } from './directory/directory-service'
 import { registerDirectory } from './directory/directory-ipc'
+import { setupServerNotes } from './productivity/server-notes-setup'
 import { carryPendingConferences } from './productivity/online-meetings'
 import { validEventConference } from '../src/lib/online-meetings'
 import { registerMailImport } from './mail/mail-import-ipc'
@@ -212,6 +213,7 @@ let exchangeIpc: ReturnType<typeof registerExchangeAccounts> | null = null
 let directoryStore: DirectoryStore | null = null
 let directoryService: DirectoryService | null = null
 let directoryIpc: ReturnType<typeof registerDirectory> | null = null
+let serverNotes: ReturnType<typeof setupServerNotes> | null = null
 let taskService: TaskService | null = null
 let taskPolling: NodeJS.Timeout | undefined
 let taskExtras: ReturnType<typeof registerTaskExtras> | null = null
@@ -1725,6 +1727,7 @@ function registerIpc() {
     store.saveLocal(next)
     cleanupRemovedNoteAttachments(previous, next)
     taskExtras?.localChanged()
+    serverNotes?.service.localSaved(next)
   })
   // Rich Notes pictures (docs/rich-notes.md): stored beside note attachments, read back for display only.
   ipcMain.handle('productivity:note-image-save', (_event, input: unknown): Attachment => {
@@ -2062,6 +2065,7 @@ function registerIpc() {
     requireProductivityStore().removeAccount(accountId)
     if (exchangeService?.hasAccount(accountId)) { exchangeService.removeAccount(accountId); exchangeIpc?.broadcast() }
     directoryService?.removeAccount(accountId)
+    serverNotes?.removeAccount(accountId)
     if (mode === 'delete') invitationStore?.removeAccount(accountId)
     accountProviders.delete(accountId)
     if (mode === 'delete') await taskService?.removeAccount(accountId)
@@ -2494,17 +2498,18 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
   })
   davStore = new DavStore(join(app.getPath('userData'), 'dav.sqlite'))
+  const davCredentials = new DavCredentialVault(join(app.getPath('userData'), 'dav-credentials.dat'), safeStorage)
   davService = new DavService({
     store: davStore,
     productivity: requireProductivityStore,
-    credentials: new DavCredentialVault(join(app.getPath('userData'), 'dav-credentials.dat'), safeStorage),
+    credentials: davCredentials,
     online: () => taskNetworkOnline && net.isOnline(),
     diagnostic: (record) => diagnostic({ ...record, component: 'provider' }),
     // CalDAV task lists appear in Tasks (E45).
     tasksChanged: (accountId) => { void taskService?.accountChanged().then(() => taskService?.sync(accountId)).catch(() => {}) },
     accountRemoved: (accountId) => { void taskService?.removeAccount(accountId).catch(() => {}) }
   })
-  davIpc = registerDavAccounts({ service: requireDavService, productivityChanged: broadcastProductivity })
+  davIpc = registerDavAccounts({ service: requireDavService, productivityChanged: broadcastProductivity, accountRemoved: (accountId) => serverNotes?.removeAccount(accountId) })
   exchangeStore = new ExchangeStore(join(app.getPath('userData'), 'exchange.sqlite'))
   exchangeService = new ExchangeProductivityService({
     store: exchangeStore,
@@ -2543,6 +2548,26 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   })
   directoryService = directory
   directoryIpc = registerDirectory({ ipcMain, service: () => directory, locked: () => appLockStatus().locked })
+  // Server-synchronized Notes (docs/server-notes.md): CalDAV VJOURNAL and Exchange Notes folders.
+  serverNotes = setupServerNotes({
+    userData: app.getPath('userData'), ipcMain, davStore: () => davStore, davCredentials, exchangeStore: () => exchangeStore,
+    exchangeEmail: (accountId) => { try { return requireVault().exchangeCredential(accountId).email } catch { return undefined } },
+    ewsClient: (accountId) => ewsClientFor(requireVault().exchangeCredential(accountId)),
+    localSnapshot: () => requireProductivityStore().localSnapshot(),
+    saveLocal: (snapshot) => {
+      requireProductivityStore().saveLocal(snapshot)
+      for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local: snapshot })
+    },
+    online: () => taskNetworkOnline && net.isOnline(), isLocked: () => applicationLocked,
+    broadcast: (snapshot) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('server-notes:changed', snapshot)),
+    chooseVNoteFile: async (event) => {
+      const owner = BrowserWindow.fromWebContents(event.sender)
+      const dialogOptions: Electron.OpenDialogOptions = { title: 'Import vNote file', filters: [{ name: 'vNote files', extensions: ['vnt'] }, { name: 'All files', extensions: ['*'] }], properties: ['openFile'] }
+      const result = owner ? await dialog.showOpenDialog(owner, dialogOptions) : await dialog.showOpenDialog(dialogOptions)
+      return result.canceled ? undefined : result.filePaths[0]
+    },
+    diagnostic: (record) => diagnostic({ ...record, component: 'provider' })
+  })
   registerRemoteImageProtocol()
   readyToOpenWindows = true
   createWindow()
@@ -2581,6 +2606,8 @@ app.on('before-quit', () => {
   davStore?.close()
   davStore = null
   exchangeIpc?.dispose()
+  serverNotes?.close()
+  serverNotes = null
   exchangeStore?.close()
   exchangeStore = null
   directoryIpc?.dispose()

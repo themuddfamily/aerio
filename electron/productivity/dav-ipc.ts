@@ -12,6 +12,8 @@ export interface DavIpcOptions {
   service(): DavService
   // Called after any change so Calendar and Contacts re-read the productivity snapshot.
   productivityChanged(): void
+  // Called after an account is removed so other caches (server-synchronized Notes) drop it too.
+  accountRemoved?(accountId: string): void
 }
 
 export function registerDavAccounts(options: DavIpcOptions) {
@@ -36,6 +38,7 @@ export function registerDavAccounts(options: DavIpcOptions) {
   ipcMain.handle('dav:account-remove', (_event, accountId: unknown) => {
     if (!validId(accountId) || !service().hasAccount(accountId)) throw new Error('That account is no longer connected')
     service().removeAccount(accountId)
+    options.accountRemoved?.(accountId)
     return broadcast()
   })
   ipcMain.handle('dav:sync', async (_event, accountId: unknown) => {

@@ -31,7 +31,8 @@ describe('DAV account IPC', () => {
     harness = await createDavHarness()
     harness.server.write(harness.work, 'a.ics', ICS('a', 'Alpha'))
     const productivityChanged = vi.fn()
-    registration = registerDavAccounts({ service: () => harness!.service, productivityChanged })
+    const accountRemoved = vi.fn()
+    registration = registerDavAccounts({ service: () => harness!.service, productivityChanged, accountRemoved })
     const added = await invoke('dav:account-add', { preset: 'generic', serverUrl: harness.server.url, username: 'ada@example.com', password: 'app-password' }) as { accounts: { id: string }[]; collections: { id: string; name: string }[] }
     expect(added.accounts).toHaveLength(1)
     expect(mocks.sent.at(-1)![0]).toBe('dav:changed')
@@ -45,6 +46,8 @@ describe('DAV account IPC', () => {
     expect(harness.productivity.snapshot().events).toEqual([])
     await registration.flushNow()
     expect((await invoke('dav:account-remove', id) as { accounts: unknown[] }).accounts).toEqual([])
+    // Server-synchronized notes of the account are removed with it.
+    expect(accountRemoved).toHaveBeenCalledWith(id)
   })
 
   it('validates arguments before calling the service', async () => {
