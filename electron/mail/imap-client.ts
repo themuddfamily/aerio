@@ -274,7 +274,8 @@ export class ImapSmtpClient {
     })
   }
 
-  async send(raw: Buffer, recipients: string[], options?: MailSendOptions) {
+  /** `envelopeFrom` lets an alias identity use its own SMTP sender; the server decides whether it is allowed. */
+  async send(raw: Buffer, recipients: string[], options?: MailSendOptions, envelopeFrom = this.config.email) {
     const transport = nodemailer.createTransport({
       host: this.config.smtpHost,
       port: this.config.smtpPort,
@@ -285,8 +286,8 @@ export class ImapSmtpClient {
       connectionTimeout: 30_000
     })
     // Nodemailer only adds DSN parameters when the SMTP server advertises DSN.
-    const dsn = options?.requestDeliveryReceipt ? { return: 'headers' as const, notify: ['success', 'failure', 'delay'] as ('success' | 'failure' | 'delay')[], recipient: this.config.email } : undefined
-    await transport.sendMail({ envelope: { from: this.config.email, to: recipients }, raw, ...(dsn ? { dsn } : {}) })
+    const dsn = options?.requestDeliveryReceipt ? { return: 'headers' as const, notify: ['success', 'failure', 'delay'] as ('success' | 'failure' | 'delay')[], recipient: envelopeFrom } : undefined
+    await transport.sendMail({ envelope: { from: envelopeFrom, to: recipients }, raw, ...(dsn ? { dsn } : {}) })
   }
 }
 

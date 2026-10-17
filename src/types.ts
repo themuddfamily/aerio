@@ -44,7 +44,16 @@ export interface CalendarEvent {
   recurrenceExceptions?: string[]
   recurrenceId?: string
   sourceUid?: string
+  // Series identity (E24). `seriesId` names the series master an occurrence belongs to: the provider's
+  // master id (Google recurringEventId, Microsoft seriesMasterId) for synced instances, or the local
+  // master event id for local overrides. `originalStart` is the occurrence's unmodified start.
+  seriesId?: string
+  originalStart?: string
+  // Set only on occurrences generated in the view by the recurrence expander; never persisted.
+  occurrenceOf?: string
 }
+
+export type RecurrenceEditScope = 'occurrence' | 'following' | 'series'
 
 export interface ContactField {
   value: string
@@ -75,6 +84,27 @@ export interface Contact {
   nickname?: string
   birthday?: string
   sourceUid?: string
+  // Every group or category the contact belongs to; `group` stays the primary one shown in lists.
+  groups?: string[]
+  // A small data: URL image (PNG, JPEG, GIF, or WebP); see src/lib/contact-fields.ts for bounds.
+  photo?: string
+}
+
+// An explicit distribution list. Members reference a contact by id when picked from the address
+// book and always carry the address used at the time, so a list survives contact deletion and can
+// include people who are not saved contacts.
+export interface ContactListMember {
+  contactId?: string
+  email: string
+  name?: string
+}
+
+export interface ContactList {
+  id: string
+  name: string
+  members: ContactListMember[]
+  notes?: string
+  source: 'local'
 }
 
 export interface Task {
@@ -178,11 +208,13 @@ export interface AerioDesktopApi {
   notify(title: string, body: string): Promise<void>
   appLock: AppLockControls
   updates: AppUpdateControls
+  profileBackup: import('./profile-backup-types').ProfileBackupApi
   productivity: import('./productivity-types').ProductivityDesktopApi
   tasks: import('./task-provider-types').TaskDesktopApi
   window: WindowControls
   onWindowState(callback: (maximized: boolean) => void): () => void
   onComposeCommand(callback: () => void): () => void
   mail: import('./mail-types').MailDesktopApi
+  ai: import('./ai-assistant-types').AiAssistantApi
   interchange: import('./interchange-types').InterchangeDesktopApi
 }

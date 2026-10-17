@@ -141,7 +141,7 @@ export async function verifyPlatformArtifacts({ directory = 'release', platform,
   await artifact(`${resources}/build/trayTemplate.png`)
   await artifact(`${resources}/build/trayTemplate@2x.png`)
   const archive = await artifact(`${resources}/app.asar`)
-  for (const entry of ['package.json', 'dist/index.html', 'dist-electron/main/main.js', 'dist-electron/main/mail-worker.js', 'dist-electron/preload/preload.cjs']) {
+  for (const entry of ['package.json', 'dist/index.html', 'dist-electron/main/main.js', 'dist-electron/main/mail-worker.js', 'dist-electron/main/attachment-extract-worker.js', 'dist-electron/preload/preload.cjs']) {
     const details = asar.statFile(archive.path, join(...entry.split('/')), false)
     if (!details.size || details.unpacked || details.link) throw new Error(`Invalid packaged application resource: ${entry}`)
   }

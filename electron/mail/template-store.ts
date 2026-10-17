@@ -3,6 +3,7 @@ import { basename, extname, isAbsolute, join, relative, resolve } from 'node:pat
 import { DatabaseSync } from 'node:sqlite'
 import { decodeHTML } from 'entities'
 import sanitizeHtml from 'sanitize-html'
+import { sanitizeStyle } from '../../src/lib/mail-rich-text'
 import type { MailTemplate, MailTemplateAttachment, MailTemplateInput, MailTemplateKind } from '../../src/mail-template-types'
 
 export const MAX_MAIL_TEMPLATES = 5_000
@@ -47,7 +48,7 @@ interface TemplateRow {
   last_used_at: string | null
 }
 
-/** Composer-safe HTML: formatting, links, lists, tables, and inline/HTTPS images only. */
+/** Composer-safe HTML: formatting, safe inline styles, links, lists, tables, and inline/HTTPS images only. */
 export function sanitizeTemplateHtml(html: string) {
   return sanitizeHtml(html, {
     allowedTags: [
@@ -56,6 +57,7 @@ export function sanitizeTemplateHtml(html: string) {
       'td', 'tfoot', 'th', 'thead', 'tr', 'u', 'ul'
     ],
     allowedAttributes: {
+      '*': ['style'],
       a: ['href'],
       img: ['src', 'alt', 'width', 'height'],
       font: ['color', 'face', 'size'],
@@ -66,15 +68,22 @@ export function sanitizeTemplateHtml(html: string) {
     allowedSchemesByTag: { img: ['https', 'data'] },
     allowProtocolRelative: false,
     disallowedTagsMode: 'discard',
+    // Styles follow the same CSS allowlist as outgoing mail, so signatures keep their colors and table borders.
+    parseStyleAttributes: false,
     // Relative URLs have no meaning in a sent message, so only absolute safe URLs survive.
     transformTags: {
-      a: (tagName, attribs) => {
-        const { href, ...rest } = attribs
-        return { tagName, attribs: href && /^(?:https?:\/\/|mailto:)/i.test(href) ? { ...rest, href } : rest }
-      },
-      img: (tagName, attribs) => {
-        const { src, ...rest } = attribs
-        return { tagName, attribs: src && /^(?:https:\/\/|data:image\/)/i.test(src) ? { ...rest, src } : rest }
+      '*': (tagName, attribs) => {
+        const { href, src, style, ...rest } = attribs
+        const safeStyle = style ? sanitizeStyle(style) : ''
+        return {
+          tagName,
+          attribs: {
+            ...rest,
+            ...(safeStyle ? { style: safeStyle } : {}),
+            ...(tagName === 'a' && href && /^(?:https?:\/\/|mailto:)/i.test(href) ? { href } : {}),
+            ...(tagName === 'img' && src && /^(?:https:\/\/|data:image\/)/i.test(src) ? { src } : {})
+          }
+        }
       }
     }
   }).trim()

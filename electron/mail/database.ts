@@ -1,6 +1,7 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { MailIdentityStore } from './identity-store'
 import type {
   ApplyMailActionInput,
   MailAccountSummary,
@@ -12,6 +13,7 @@ import type {
   MailLabel,
   MailRule,
   MailRuleInput,
+  MailRuleTrigger,
   MailSavedSearch,
   MailSavedSearchInput,
   MailQuickAction,
@@ -34,6 +36,9 @@ import type {
 import { compileMailSearchQuery } from '../../src/lib/mail-search-query'
 import { normalizeSendOptions } from '../../src/lib/mail-send-options'
 import { ReplyWatchStore } from './reply-watches'
+import { RuleRunLedger, readRawHeaders } from './rule-ledger'
+import { mailRuleMatches as evaluateMailRule, mailRuleNeedsHeaders, mailRuleTrigger, type MailRuleMessage } from '../../src/lib/mail-rules'
+import { AttachmentTextStore } from './attachment-text-store'
 import { listAttachmentPage } from './attachment-index'
 import { LocalMailStore } from './local-mail-store'
 
@@ -84,36 +89,19 @@ const sendOptionsJson = (value: MailDraftInput['sendOptions']) => {
 const draftSendOptions = (row: DatabaseRow) => normalizeSendOptions(json<unknown>(row.send_options_json ? String(row.send_options_json) : undefined, undefined))
 const containsPattern = (value: string) => `%${value.trim().replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`
 
-type MailRuleMessage = Pick<ParsedMailMessage, 'accountId' | 'threadId' | 'fromName' | 'fromEmail' | 'to' | 'cc' | 'subject' | 'text'>
-
-export function mailRuleMatches(rule: MailRuleInput, message: MailRuleMessage) {
-  const values: Record<MailRuleInput['conditions'][number]['field'], string> = {
-    from: `${message.fromName} ${message.fromEmail}`,
-    to: [...message.to, ...message.cc].join(' '),
-    subject: message.subject,
-    body: message.text
-  }
-  const matches = rule.conditions.map((condition) => {
-    const haystack = values[condition.field].trim().toLocaleLowerCase()
-    const needle = condition.value.trim().toLocaleLowerCase()
-    if (!needle) return false
-    if (condition.operator === 'equals') {
-      const exactValues = condition.field === 'from' ? [message.fromEmail, message.fromName, values.from] : [haystack]
-      return exactValues.some((value) => value.trim().toLocaleLowerCase() === needle)
-    }
-    if (condition.operator === 'starts-with') return haystack.startsWith(needle)
-    if (condition.operator === 'ends-with') return haystack.endsWith(needle)
-    return haystack.includes(needle)
-  })
-  return matches.length > 0 && (rule.match === 'all' ? matches.every(Boolean) : matches.some(Boolean))
+export function mailRuleMatches(rule: Pick<MailRuleInput, 'match' | 'conditions' | 'exceptions'> & Partial<MailRuleInput>, message: MailRuleMessage, now = Date.now()) {
+  return evaluateMailRule(rule, message, now)
 }
 
 export class MailDatabase {
   readonly contentPath: string
   private readonly db: DatabaseSync
+  readonly identities: MailIdentityStore
   private statements = new Map<string, StatementSync>()
   readonly replyWatches: ReplyWatchStore
   readonly localMail: LocalMailStore
+  readonly ruleLedger: RuleRunLedger
+  readonly attachmentText: AttachmentTextStore
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -124,8 +112,11 @@ export class MailDatabase {
     this.db = new DatabaseSync(databasePath, { timeout: 5_000 })
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;')
     this.migrate()
+    this.identities = new MailIdentityStore(this.db)
     this.replyWatches = new ReplyWatchStore(this.db)
     this.localMail = new LocalMailStore(this.db, this)
+    this.ruleLedger = new RuleRunLedger(this.db)
+    this.attachmentText = new AttachmentTextStore(this.db)
   }
 
   close() {
@@ -428,6 +419,13 @@ export class MailDatabase {
         PRIMARY KEY (account_id, message_id)
       );
     `)
+    // Advanced rules (exceptions, outgoing trigger, server execution) default
+    // to the original incoming, locally executed behavior.
+    const ruleColumns = new Set((this.db.prepare('PRAGMA table_info(mail_rules)').all() as { name: string }[]).map((column) => column.name))
+    if (!ruleColumns.has('exceptions_json')) this.db.exec(`ALTER TABLE mail_rules ADD COLUMN exceptions_json TEXT NOT NULL DEFAULT '[]'`)
+    if (!ruleColumns.has('trigger_mode')) this.db.exec(`ALTER TABLE mail_rules ADD COLUMN trigger_mode TEXT NOT NULL DEFAULT 'incoming'`)
+    if (!ruleColumns.has('execution')) this.db.exec(`ALTER TABLE mail_rules ADD COLUMN execution TEXT NOT NULL DEFAULT 'local'`)
+    if (!ruleColumns.has('server_rule_id')) this.db.exec('ALTER TABLE mail_rules ADD COLUMN server_rule_id TEXT')
     const labelColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_labels)').all() as { name: string }[]).map((column) => column.name))
     if (!labelColumns.has('parent_id')) this.db.exec('ALTER TABLE gmail_labels ADD COLUMN parent_id TEXT')
     // Journal for provider folder/label changes so an interrupted request can
@@ -521,6 +519,7 @@ export class MailDatabase {
     const rawRows = this.stmt('SELECT raw_path FROM gmail_messages WHERE account_id=?').all(accountId) as DatabaseRow[]
     this.transaction(() => {
       this.stmt('DELETE FROM gmail_fts WHERE account_id=?').run(accountId)
+      this.attachmentText.deleteAccount(accountId)
       this.stmt('DELETE FROM gmail_accounts WHERE id=?').run(accountId)
     })
     for (const row of rawRows) {
@@ -727,9 +726,11 @@ export class MailDatabase {
       for (const attachment of message.attachments) {
         insertAttachment.run(message.accountId, message.id, attachment.id, attachment.filename, attachment.mimeType, attachment.size, attachment.contentId ?? null)
       }
+      // Keep extracted text for attachments that are unchanged, so a re-download doesn't re-extract them.
+      this.attachmentText.prune(message.accountId, message.id)
       this.stmt('DELETE FROM gmail_fts WHERE account_id=? AND message_id=?').run(message.accountId, message.id)
       this.stmt('INSERT INTO gmail_fts(account_id,message_id,thread_id,subject,sender,recipients,body,attachment_names) VALUES(?,?,?,?,?,?,?,?)')
-        .run(message.accountId, message.id, message.threadId, message.subject, `${message.fromName} ${message.fromEmail}`, [...message.to, ...message.cc].join(' '), message.text, message.attachments.map((item) => item.filename).join(' '))
+        .run(message.accountId, message.id, message.threadId, message.subject, `${message.fromName} ${message.fromEmail}`, [...message.to, ...message.cc].join(' '), message.text, this.attachmentText.searchValue(message.accountId, message.id))
       const upsertRecipient = this.stmt(`INSERT INTO gmail_recipients(account_id,email,name,last_used_at) VALUES(?,?,?,?)
         ON CONFLICT(account_id,email) DO UPDATE SET name=COALESCE(excluded.name,gmail_recipients.name),last_used_at=MAX(gmail_recipients.last_used_at,excluded.last_used_at)`)
       const recipients = [{ name: message.fromName || undefined, email: message.fromEmail.toLowerCase() }, ...[...message.to, ...message.cc].map(addressParts)]
@@ -792,6 +793,7 @@ export class MailDatabase {
     }
     this.transaction(() => {
       this.stmt('DELETE FROM gmail_fts WHERE account_id=? AND message_id=?').run(accountId, messageId)
+      this.attachmentText.deleteMessage(accountId, messageId)
       this.stmt('DELETE FROM gmail_sync_items WHERE account_id=? AND message_id=?').run(accountId, messageId)
       this.stmt('DELETE FROM gmail_messages WHERE account_id=? AND id=?').run(accountId, messageId)
     })
@@ -1039,7 +1041,8 @@ export class MailDatabase {
         filename: String(item.filename),
         mimeType: String(item.mime_type),
         size: Number(item.size),
-        contentId: item.content_id ? String(item.content_id) : undefined
+        contentId: item.content_id ? String(item.content_id) : undefined,
+        textIndex: this.attachmentText.textIndex(accountId, String(row.id), String(item.id), Number(item.size))
       }))
     }))
     return { accountId, id: threadId, subject: messages.at(-1)?.subject ?? '(No subject)', messages }
@@ -1200,6 +1203,7 @@ export class MailDatabase {
       input.subject, input.text, input.html ?? null, JSON.stringify(input.attachmentPaths), status, deliveryAt ?? null, result.error ?? null, updatedAt,
       sendOptionsJson(input.sendOptions)
     )
+    this.identities.saveDraftSender(id, input)
     const stored = this.getDraft(id)
     return {
       id,
@@ -1234,6 +1238,7 @@ export class MailDatabase {
       text: String(row.body_text),
       html: row.body_html ? String(row.body_html) : undefined,
       attachmentPaths: json<string[]>(String(row.attachment_paths_json), []),
+      ...this.identities.draftSender(String(row.id)),
       ...(sendOptions ? { sendOptions } : {}),
       status: String(row.status) as MailDraftRecord['status'],
       updatedAt: String(row.updated_at),
@@ -1350,6 +1355,10 @@ export class MailDatabase {
       match: String(row.match_mode) as MailRule['match'],
       conditions: json<MailRule['conditions']>(String(row.conditions_json), []),
       actions: json<MailRule['actions']>(String(row.actions_json), []),
+      exceptions: json<MailRule['conditions']>(row.exceptions_json ? String(row.exceptions_json) : undefined, []),
+      trigger: row.trigger_mode === 'outgoing' ? 'outgoing' : 'incoming',
+      execution: row.execution === 'server' ? 'server' : 'local',
+      ...(row.server_rule_id ? { serverRuleId: String(row.server_rule_id) } : {}),
       matchCount: Number(row.match_count),
       lastMatchedAt: row.last_matched_at ? String(row.last_matched_at) : undefined,
       createdAt: String(row.created_at),
@@ -1373,10 +1382,13 @@ export class MailDatabase {
     if (!this.getAccount(input.accountId)) throw new Error('Account not found')
     const id = input.id ?? crypto.randomUUID()
     const timestamp = nowIso()
-    this.stmt(`INSERT INTO mail_rules(id,account_id,name,enabled,match_mode,conditions_json,actions_json,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id,name=excluded.name,enabled=excluded.enabled,
-      match_mode=excluded.match_mode,conditions_json=excluded.conditions_json,actions_json=excluded.actions_json,updated_at=excluded.updated_at`)
-      .run(id, input.accountId, input.name, input.enabled ? 1 : 0, input.match, JSON.stringify(input.conditions), JSON.stringify(input.actions), timestamp, timestamp)
+    const execution = input.execution === 'server' && input.serverRuleId ? 'server' : 'local'
+    this.stmt(`INSERT INTO mail_rules(id,account_id,name,enabled,match_mode,conditions_json,actions_json,exceptions_json,trigger_mode,execution,server_rule_id,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id,name=excluded.name,enabled=excluded.enabled,
+      match_mode=excluded.match_mode,conditions_json=excluded.conditions_json,actions_json=excluded.actions_json,exceptions_json=excluded.exceptions_json,
+      trigger_mode=excluded.trigger_mode,execution=excluded.execution,server_rule_id=excluded.server_rule_id,updated_at=excluded.updated_at`)
+      .run(id, input.accountId, input.name, input.enabled ? 1 : 0, input.match, JSON.stringify(input.conditions), JSON.stringify(input.actions),
+        JSON.stringify(input.exceptions ?? []), mailRuleTrigger(input), execution, input.serverRuleId ?? null, timestamp, timestamp)
     return this.getRule(id)!
   }
 
@@ -1462,26 +1474,43 @@ export class MailDatabase {
     this.stmt('DELETE FROM mail_quick_actions WHERE id=?').run(id)
   }
 
-  matchingRulesForMessage(message: MailRuleMessage) {
-    return this.listRules([message.accountId]).filter((rule) => rule.enabled && mailRuleMatches(rule, message))
+  /** Enabled, locally executed rules for the trigger that match; server-executed rules run only on the provider. */
+  matchingRulesForMessage(message: MailRuleMessage & { rawPath?: string }, trigger: MailRuleTrigger = 'incoming') {
+    const rules = this.listRules([message.accountId]).filter((rule) => rule.enabled && rule.execution !== 'server' && mailRuleTrigger(rule) === trigger)
+    if (!message.headers && message.rawPath && rules.some(mailRuleNeedsHeaders)) message = { ...message, headers: readRawHeaders(message.rawPath) }
+    return rules.filter((rule) => mailRuleMatches(rule, message))
   }
 
+  /** Whether any enabled local rule would run for this account and trigger. */
+  hasLocalRules(accountId: string, trigger: MailRuleTrigger) {
+    return this.listRules([accountId]).some((rule) => rule.enabled && rule.execution !== 'server' && mailRuleTrigger(rule) === trigger)
+  }
+
+  /** Conversations whose newest message matches; incoming rules look in the Inbox, outgoing rules in Sent. */
   matchingThreadIdsForRule(rule: MailRule) {
-    const rows = this.stmt(`SELECT m.* FROM gmail_messages m JOIN (
+    const folder = mailRuleTrigger(rule) === 'outgoing' ? 'SENT' : 'INBOX'
+    const rows = this.stmt(`SELECT m.*,(SELECT COUNT(*) FROM gmail_attachments a WHERE a.account_id=m.account_id AND a.message_id=m.id) attachment_count
+      FROM gmail_messages m JOIN (
       SELECT account_id,thread_id,MAX(internal_date) internal_date FROM gmail_messages WHERE account_id=? GROUP BY account_id,thread_id
     ) newest ON newest.account_id=m.account_id AND newest.thread_id=m.thread_id AND newest.internal_date=m.internal_date
       WHERE m.account_id=? AND EXISTS(SELECT 1 FROM gmail_messages inbox,json_each(inbox.label_ids_json)
-        WHERE inbox.account_id=m.account_id AND inbox.thread_id=m.thread_id AND value='INBOX')`).all(rule.accountId, rule.accountId) as DatabaseRow[]
+        WHERE inbox.account_id=m.account_id AND inbox.thread_id=m.thread_id AND value=?)`).all(rule.accountId, rule.accountId, folder) as DatabaseRow[]
+    const needsHeaders = mailRuleNeedsHeaders(rule)
+    const now = Date.now()
     return [...new Set(rows.filter((row) => mailRuleMatches(rule, {
       accountId: rule.accountId,
-      threadId: String(row.thread_id),
       fromName: String(row.from_name),
       fromEmail: String(row.from_email),
       to: json<string[]>(String(row.to_json), []),
       cc: json<string[]>(String(row.cc_json), []),
       subject: String(row.subject),
-      text: String(row.body_text)
-    })).map((row) => String(row.thread_id)))]
+      text: String(row.body_text),
+      labelIds: json<string[]>(String(row.label_ids_json), []),
+      sizeEstimate: Number(row.size_estimate),
+      internalDate: String(row.internal_date),
+      attachmentCount: Number(row.attachment_count),
+      headers: needsHeaders ? readRawHeaders(String(row.raw_path)) : undefined
+    }, now)).map((row) => String(row.thread_id)))]
   }
 
   recordRuleMatch(id: string, count = 1) {

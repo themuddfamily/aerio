@@ -17,9 +17,12 @@ import { isLocalFoldersAccount } from '../lib/local-folders'
 import { HardDrive, Import as ImportIcon } from 'lucide-react'
 import MailSearchFiltersPanel from '../components/MailSearchFiltersPanel'
 import { MailSavedSearchList, MailSaveSearchModal, savedSearchFromView, useMailSavedSearches, type MailSearchView } from '../components/MailSavedSearches'
+import { attachmentSearchStatus } from '../lib/mail-attachment-text'
 import { savedSearchMatchesView } from '../lib/mail-saved-search'
 import { mailSearchQueryError } from '../lib/mail-search-query'
-import { Bookmark, Zap } from 'lucide-react'
+import { Bookmark, Sparkles, Zap } from 'lucide-react'
+import MailAiSearchDialog from '../components/MailAiSearchDialog'
+import { aiFeatureAvailable, useAiAssistantStatus } from '../lib/use-ai-assistant'
 import { MailQuickActionButtons, MailQuickActionsModal, useMailQuickActions } from '../components/MailQuickActions'
 import { quickActionShortcutLabel, quickActionShortcutSlot, quickActionTargets, summarizeQuickActionRun } from '../lib/mail-quick-actions'
 import type { MailQuickAction, MailSavedSearch, MailSavedSearchInput } from '../mail-types'
@@ -107,7 +110,9 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [thread, setThread] = useState<MailThreadDetail>()
   const [expandedMessageId, setExpandedMessageId] = useState<string>()
   const expansion = useThreadExpansion(thread, expandedMessageId, setExpandedMessageId)
-  const messageTools = useMailMessageTools({ accounts, onToast, collapseAll: expansion.collapseAll, expandAll: expansion.expandAll, onUpdated: (message, local) => setThread((current) => current && ({ ...current, messages: current.messages.map((item) => item.id === message.id ? { ...item, local } : item) })) })
+  const messageTools = useMailMessageTools({ accounts, onToast, collapseAll: expansion.collapseAll, expandAll: expansion.expandAll, onUpdated: (message, local) => setThread((current) => current && ({ ...current, messages: current.messages.map((item) => item.id === message.id ? { ...item, local } : item) })), onReplyWithText: (message, text) => { const reply = replyThreadFor(message); if (reply) setCompose({ reply, initialBody: text }) } })
+  const aiStatus = useAiAssistantStatus()
+  const [aiSearchOpen, setAiSearchOpen] = useState(false)
   const [threadLoading, setThreadLoading] = useState(false)
   const [expandedListThreadKey, setExpandedListThreadKey] = useState<string>()
   const [listThreadDetails, setListThreadDetails] = useState<Record<string, MailThreadDetail>>({})
@@ -116,7 +121,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadMoreError, setLoadMoreError] = useState(false)
-  const [compose, setCompose] = useState<{ draft?: MailDraftRecord; reply?: MailThreadDetail; replyAll?: boolean; forward?: boolean; initialTo?: string }>()
+  const [compose, setCompose] = useState<{ draft?: MailDraftRecord; reply?: MailThreadDetail; replyAll?: boolean; forward?: boolean; initialTo?: string; initialBody?: string }>()
   const [pending, setPending] = useState<PendingOperation[]>([])
   const [pendingSend, setPendingSend] = useState<MailDraftResult>()
   const [checkedKeys, setCheckedKeys] = useState<Set<string>>(new Set())
@@ -1003,6 +1008,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
             <input ref={searchInputRef} aria-label="Search mail" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search offline mail…" />
             {(search || activeSearchFilterCount > 0) && <button className="mail-search-clear" aria-label="Clear mail search" title="Clear search and filters" onClick={() => { setSearch(''); setSearchFilters({}); setSearchFiltersOpen(false) }}><X size={14} /></button>}
             {(search.trim() || activeSearchFilterCount > 0) && <button className={`mail-search-clear mail-search-save ${activeSavedSearch ? 'active' : ''}`} aria-label={activeSavedSearch ? `Saved as ${activeSavedSearch.name}` : 'Save search'} title={activeSavedSearch ? `Saved as “${activeSavedSearch.name}”` : 'Save this search to the sidebar'} disabled={Boolean(searchError)} onClick={() => setSavingSearch(activeSavedSearch ?? savedSearchFromView(searchView, search.trim().slice(0, 100)))}><Bookmark size={14} fill={activeSavedSearch ? 'currentColor' : 'none'} /></button>}
+            {aiFeatureAvailable(aiStatus, 'search') && <button className="mail-search-clear mail-search-ai" aria-label="Ask AI to search" title="Describe what you're looking for and review the search before it runs" onClick={() => setAiSearchOpen(true)}><Sparkles size={14} /></button>}
             <button className={`mail-search-filter-button ${activeSearchFilterCount ? 'active' : ''}`} aria-expanded={searchFiltersOpen} aria-haspopup="dialog" title="Advanced search filters" onClick={() => setSearchFiltersOpen((open) => !open)}><Filter size={14} /><span>{activeSearchFilterCount || 'Filters'}</span></button>
           </div>
           {searchError && <p className="mail-search-error" role="alert">{searchError}</p>}
@@ -1123,7 +1129,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
               onMoreActions={(event) => showProviderMessageMenu(event, message)}
               onContextMenu={(event) => showProviderMessageMenu(event, message)}
             >
-              {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} onContextMenu={(event) => showAttachmentMenu(event, message, attachment)}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{formatFileSize(attachment.size)}</small></span><button className="icon-button" title="Open" onClick={() => void openAttachment(message, attachment)}><Download size={16} /></button><button className="button ghost small" onClick={() => void saveAttachment(message, attachment)}>Save as</button></div>)}</div>}
+              {message.attachments.length > 0 && <div className="reader-attachments"><h3>{message.attachments.length} attachment{message.attachments.length === 1 ? '' : 's'}</h3>{message.attachments.map((attachment) => <div className="attachment-card" key={attachment.id} title={attachmentSearchStatus(attachment.textIndex)?.label} onContextMenu={(event) => showAttachmentMenu(event, message, attachment)}><span className="file-icon">{attachment.filename.split('.').pop()?.slice(0, 4).toUpperCase()}</span><span><strong>{attachment.filename}</strong><small>{[formatFileSize(attachment.size), attachmentSearchStatus(attachment.textIndex)?.notice].filter(Boolean).join(' · ')}</small></span><button className="icon-button" title="Open" onClick={() => void openAttachment(message, attachment)}><Download size={16} /></button><button className="button ghost small" onClick={() => void saveAttachment(message, attachment)}>Save as</button></div>)}</div>}
             </ThreadMessageAccordion>)}
             {!selectedAccount?.archived && !isLocalFoldersAccount(selectedAccount) && <div className="quick-actions"><button className="button ghost" onClick={() => setCompose({ reply: thread })}><Reply size={16} /> Reply</button><button className="button ghost" onClick={() => setCompose({ reply: thread, replyAll: true })}><ReplyAll size={16} /> Reply all</button></div>}
           </article>
@@ -1132,7 +1138,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
 
       {pending.length > 0 && <div className="undo-toast"><span>{pending.length > 1 ? `${pending.length} mail changes queued` : 'Mail change queued'}</span><button onClick={() => void undo()}><Undo2 size={15} /> Undo</button><button onClick={() => setPending([])}>Dismiss</button></div>}
       {pendingSend && <div className="undo-toast send-undo-toast"><span>Message will send shortly</span><button onClick={() => void undoSend()}><Undo2 size={15} /> Undo Send</button><button onClick={() => setPendingSend(undefined)}>Dismiss</button></div>}
-      {compose && <MailComposeModal accounts={sendableAccounts} draft={compose.draft} replyTo={compose.reply} replyAll={compose.replyAll} forward={compose.forward} initialTo={compose.initialTo} onClose={() => { setCompose(undefined); if (folder === 'drafts' || folder === 'scheduled') void loadDrafts() }} onSent={(result) => { if (result.status === 'send-pending') setPendingSend(result); void loadPage(); void loadDrafts() }} onToast={onToast} />}
+      {aiSearchOpen && aiStatus && <MailAiSearchDialog status={aiStatus} onRun={(query) => { setSearch(query); setSearchFiltersOpen(false) }} onClose={() => setAiSearchOpen(false)} />}
+      {compose && <MailComposeModal accounts={sendableAccounts} draft={compose.draft} replyTo={compose.reply} replyAll={compose.replyAll} forward={compose.forward} initialTo={compose.initialTo} initialBody={compose.initialBody} onClose={() => { setCompose(undefined); if (folder === 'drafts' || folder === 'scheduled') void loadDrafts() }} onSent={(result) => { if (result.status === 'send-pending') setPendingSend(result); void loadPage(); void loadDrafts() }} onToast={onToast} />}
       {accountSetup && <MailAccountSetupModal onClose={() => setAccountSetup(false)} onConnected={accountConnected} onToast={onToast} />}
       {settingsAccount && <MailAccountSettingsModal account={settingsAccount} onSaved={(updated) => { setAccounts((items) => items.map((item) => item.id === updated.id ? updated : item)); setSettingsAccount(updated) }} onClose={() => setSettingsAccount(undefined)} onToast={onToast} />}
       {organizeMode && <MailOrganizeModal mode={organizeMode} items={checkedItems} accounts={accounts} labels={labels} onApply={applyOrganizeRequests} onClose={() => setOrganizeMode(undefined)} />}

@@ -49,7 +49,7 @@ Single-message **Save as .eml** export and read-only disconnected-account archiv
 
 ## Storage and backup
 
-Local Folders messages live in the normal mail store (`aerio.sqlite` and `mail/local-folders/`), alongside synchronized mail. Unlike provider mail, they **cannot be downloaded again**. The Settings local-data backup doesn't include mail, so keep the original archive files, or back up Aerio's application-data directory, if the imported mail matters.
+Local Folders messages live in the normal mail store (`aerio.sqlite` and `mail/local-folders/`), alongside synchronized mail. Unlike provider mail, they **cannot be downloaded again**. The Settings full-profile backup covers them, because it copies `aerio.sqlite` and the `mail` directory. After a restore, Local Folders stay ready instead of asking to reauthorize. The JSON local-data backup (Contacts, Tasks, Notes) doesn't include any mail.
 
 ## Implementation
 

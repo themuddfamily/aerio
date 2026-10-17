@@ -253,6 +253,11 @@ export class GmailClient {
     })
   }
 
+  /** Send-as aliases; readable with the gmail.modify scope Aerio already holds. */
+  listSendAs() {
+    return this.request<{ sendAs?: import('./sender-identity').GmailSendAs[] }>('/settings/sendAs')
+  }
+
   /** Readable with gmail.modify; writing needs the gmail.settings.basic scope. */
   getVacationSettings() {
     return this.request<GmailVacationSettings>('/settings/vacation')

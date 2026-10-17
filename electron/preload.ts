@@ -31,6 +31,15 @@ const api: AerioDesktopApi = {
       return () => ipcRenderer.removeListener('app:update:status-changed', listener)
     }
   },
+  profileBackup: {
+    status: () => ipcRenderer.invoke('profile-backup:status'),
+    saveSchedule: (schedule) => ipcRenderer.invoke('profile-backup:schedule', schedule),
+    chooseDirectory: () => ipcRenderer.invoke('profile-backup:choose-directory'),
+    backupNow: () => ipcRenderer.invoke('profile-backup:backup-now'),
+    preview: (path) => ipcRenderer.invoke('profile-backup:preview', path),
+    restore: (path) => ipcRenderer.invoke('profile-backup:restore', path),
+    dismissRestoreOutcome: () => ipcRenderer.invoke('profile-backup:dismiss-restore')
+  },
   tasks: {
     createList: (accountId, title) => ipcRenderer.invoke('tasks:list:create', accountId, title),
     renameList: (listId, title) => ipcRenderer.invoke('tasks:list:rename', listId, title),
@@ -62,11 +71,15 @@ const api: AerioDesktopApi = {
     snapshot: () => ipcRenderer.invoke('productivity:snapshot'),
     sync: (accountId) => ipcRenderer.invoke('productivity:sync', accountId),
     createEvent: (event) => ipcRenderer.invoke('productivity:event-create', event),
-    updateEvent: (event) => ipcRenderer.invoke('productivity:event-update', event),
-    deleteEvent: (eventId) => ipcRenderer.invoke('productivity:event-delete', eventId),
+    updateEvent: (event, scope) => scope ? ipcRenderer.invoke('productivity:event-update', event, scope) : ipcRenderer.invoke('productivity:event-update', event),
+    deleteEvent: (eventId, scope) => scope ? ipcRenderer.invoke('productivity:event-delete', eventId, scope) : ipcRenderer.invoke('productivity:event-delete', eventId),
     createContact: (accountId, contact) => ipcRenderer.invoke('productivity:contact-create', accountId, contact),
     updateContact: (contact) => ipcRenderer.invoke('productivity:contact-update', contact),
     deleteContact: (contactId) => ipcRenderer.invoke('productivity:contact-delete', contactId),
+    createContactGroup: (accountId, name) => ipcRenderer.invoke('productivity:contact-group-create', accountId, name),
+    renameContactGroup: (groupId, name) => ipcRenderer.invoke('productivity:contact-group-rename', groupId, name),
+    deleteContactGroup: (groupId) => ipcRenderer.invoke('productivity:contact-group-delete', groupId),
+    updateContactGroupMembers: (groupId, add, remove) => ipcRenderer.invoke('productivity:contact-group-members', groupId, add, remove),
     chooseNoteAttachments: () => ipcRenderer.invoke('productivity:note-attachments-choose'),
     openNoteAttachment: (path) => ipcRenderer.invoke('productivity:note-attachment-open', path),
     localSnapshot: () => ipcRenderer.invoke('productivity:local-snapshot'),
@@ -109,6 +122,15 @@ const api: AerioDesktopApi = {
     ipcRenderer.on('command:compose', listener)
     return () => ipcRenderer.removeListener('command:compose', listener)
   },
+  ai: {
+    status: () => ipcRenderer.invoke('ai:status'),
+    configure: (input) => ipcRenderer.invoke('ai:configure', input),
+    summarize: (requestId, ref) => ipcRenderer.invoke('ai:summarize', requestId, ref),
+    suggestReplies: (requestId, ref) => ipcRenderer.invoke('ai:replies', requestId, ref),
+    compose: (requestId, input) => ipcRenderer.invoke('ai:compose', requestId, input),
+    search: (requestId, request) => ipcRenderer.invoke('ai:search', requestId, request),
+    cancel: (requestId) => ipcRenderer.invoke('ai:cancel', requestId)
+  },
   mail: {
     messageTools: {
       updateLocal: (ref, updates) => ipcRenderer.invoke('mail:message:local', ref, updates),
@@ -127,6 +149,21 @@ const api: AerioDesktopApi = {
       get: (accountId) => ipcRenderer.invoke('mail:automatic-replies:get', accountId),
       update: (accountId, settings) => ipcRenderer.invoke('mail:automatic-replies:update', accountId, settings),
       disable: (accountId) => ipcRenderer.invoke('mail:automatic-replies:disable', accountId)
+    },
+    cloudAttachments: {
+      status: (accountId) => ipcRenderer.invoke('mail:cloud:status', accountId),
+      connect: (accountId) => ipcRenderer.invoke('mail:cloud:connect', accountId),
+      upload: (uploadId, accountId, path, share) => ipcRenderer.invoke('mail:cloud:upload', uploadId, accountId, path, share),
+      cancel: (uploadId) => ipcRenderer.invoke('mail:cloud:cancel', uploadId),
+      pending: (accountId) => ipcRenderer.invoke('mail:cloud:pending', accountId),
+      resume: (uploadId) => ipcRenderer.invoke('mail:cloud:resume', uploadId),
+      discard: (uploadId) => ipcRenderer.invoke('mail:cloud:discard', uploadId),
+      verify: (accountId, urls) => ipcRenderer.invoke('mail:cloud:verify', accountId, urls),
+      onProgress: (callback) => {
+        const listener = (_event: Electron.IpcRendererEvent, value: import('../src/cloud-attachment-types').CloudUploadProgress) => callback(value)
+        ipcRenderer.on('mail:cloud:progress', listener)
+        return () => ipcRenderer.removeListener('mail:cloud:progress', listener)
+      }
     },
     credentials: {
       status: () => ipcRenderer.invoke('gmail:credentials:status'),
@@ -178,6 +215,17 @@ const api: AerioDesktopApi = {
       exportBackup: () => ipcRenderer.invoke('mail:templates:export'),
       importBackup: () => ipcRenderer.invoke('mail:templates:import')
     },
+    identities: {
+      list: (accountIds) => ipcRenderer.invoke('mail:identities:list', accountIds),
+      save: (input) => ipcRenderer.invoke('mail:identities:save', input),
+      delete: (id) => ipcRenderer.invoke('mail:identities:delete', id),
+      refresh: (accountId) => ipcRenderer.invoke('mail:identities:refresh', accountId),
+      signatures: {
+        list: () => ipcRenderer.invoke('mail:signatures:list'),
+        save: (input) => ipcRenderer.invoke('mail:signatures:save', input),
+        delete: (id) => ipcRenderer.invoke('mail:signatures:delete', id)
+      }
+    },
     replyWatches: {
       list: (accountIds) => ipcRenderer.invoke('mail:reply-watches:list', accountIds),
       create: (input) => ipcRenderer.invoke('mail:reply-watches:create', input),
@@ -194,6 +242,13 @@ const api: AerioDesktopApi = {
       save: (input) => ipcRenderer.invoke('mail:rules:save', input),
       delete: (id) => ipcRenderer.invoke('mail:rules:delete', id),
       run: (id) => ipcRenderer.invoke('mail:rules:run', id)
+    },
+    serverRules: {
+      capabilities: (accountId) => ipcRenderer.invoke('mail:server-rules:capabilities', accountId),
+      list: (accountId) => ipcRenderer.invoke('mail:server-rules:list', accountId),
+      upload: (ruleId) => ipcRenderer.invoke('mail:server-rules:upload', ruleId),
+      delete: (accountId, serverRuleId) => ipcRenderer.invoke('mail:server-rules:delete', accountId, serverRuleId),
+      setEnabled: (accountId, serverRuleId, enabled) => ipcRenderer.invoke('mail:server-rules:set-enabled', accountId, serverRuleId, enabled)
     },
     savedSearches: {
       list: () => ipcRenderer.invoke('mail:saved-searches:list'),

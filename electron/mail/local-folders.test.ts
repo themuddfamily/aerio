@@ -32,7 +32,7 @@ function setup() {
     imap: async () => { throw new Error('No provider calls for Local Folders') }
   })
   const store = vi.fn((accountId: string, message: Parameters<typeof storeRawForTest>[2]) => storeRawForTest(database, accountId, message))
-  return { database, local, manager, store }
+  return { database, local, manager, store, directory }
 }
 
 async function seedGmail(database: MailDatabase, messages: { id: string; threadId: string; raw: Buffer; labels: string[] }[]) {
@@ -48,6 +48,15 @@ describe('Local Folders account', () => {
     expect(local).toMatchObject({ id: LOCAL_FOLDERS_ACCOUNT_ID, provider: 'local', archived: false, syncEnabled: false, status: 'ready' })
     expect(database.localMail.ensureAccount()).toEqual(local)
     expect(database.listAccounts().filter((account) => account.provider === 'local')).toHaveLength(1)
+  })
+
+  it('stays ready after a profile restore marks accounts for reauthorization', () => {
+    const { database, directory } = setup()
+    database.setAccountStatus(LOCAL_FOLDERS_ACCOUNT_ID, 'needs-auth', 'Sign in again')
+    database.close()
+    const reopened = new MailDatabase(join(directory, 'aerio.sqlite'), join(directory, 'mail'))
+    open.push(reopened)
+    expect(reopened.getAccount(LOCAL_FOLDERS_ACCOUNT_ID)).toMatchObject({ status: 'ready', error: undefined })
   })
 
   it('creates, renames, nests and deletes folders offline through the folder manager', async () => {

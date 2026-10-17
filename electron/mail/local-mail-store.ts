@@ -137,6 +137,9 @@ export class LocalMailStore {
       );
       CREATE INDEX IF NOT EXISTS mail_import_items_status ON mail_import_items(job_id, status);
     `)
+    // Local Folders never authenticate; a restored profile backup marks every
+    // live account as needing sign-in, which does not apply here.
+    this.db.prepare(`UPDATE gmail_accounts SET status='ready',error=NULL WHERE provider='local' AND status<>'ready'`).run()
     // An import cut off by a crash or quit resumes from its saved cursor when
     // the user chooses Resume; nothing restarts behind their back.
     this.db.prepare(`UPDATE mail_import_jobs SET status='interrupted',error='Aerio closed while this import was running. Resume to continue where it stopped.',updated_at=? WHERE status='running'`).run(nowIso())

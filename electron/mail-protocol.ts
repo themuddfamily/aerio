@@ -35,6 +35,7 @@ import type {
   PendingOperation,
   SyncProgress
 } from '../src/mail-types'
+import type { MailSenderIdentity, MailSenderIdentityInput, MailSignature, MailSignatureInput } from '../src/mail-identity-types'
 
 export type MailWorkerCommand =
   | { type: 'initialize'; payload: { databasePath: string; contentPath: string } }
@@ -77,6 +78,13 @@ export type MailWorkerCommand =
   | { type: 'rules:save'; payload: MailRuleInput }
   | { type: 'rules:delete'; payload: { id: string } }
   | { type: 'rules:run'; payload: { id: string } }
+  | { type: 'identities:list'; payload: { accountIds?: string[] } }
+  | { type: 'identities:save'; payload: MailSenderIdentityInput }
+  | { type: 'identities:delete'; payload: { id: string } }
+  | { type: 'identities:refresh'; payload: { accountId: string } }
+  | { type: 'signatures:list' }
+  | { type: 'signatures:save'; payload: MailSignatureInput }
+  | { type: 'signatures:delete'; payload: { id: string } }
   | { type: 'saved-searches:list' }
   | { type: 'saved-searches:save'; payload: MailSavedSearchInput }
   | { type: 'saved-searches:delete'; payload: { id: string } }
@@ -115,6 +123,10 @@ export type MailWorkerResult =
   | MailRuleRunResult
   | MailSavedSearch
   | MailSavedSearch[]
+  | MailSenderIdentity
+  | MailSenderIdentity[]
+  | MailSignature
+  | MailSignature[]
   | MailQuickAction
   | MailQuickAction[]
   | MailQuickActionRunResult
