@@ -200,6 +200,11 @@ export class MicrosoftGraphClient {
   deleteDraft(id: string) {
     return this.request<void>(`/me/messages/${encodeURIComponent(id)}`, { method: 'DELETE' })
   }
+
+  /** The mailbox's SMTP proxy addresses (aliases), readable with User.Read. */
+  senderAddresses() {
+    return this.request<import('./sender-identity').MicrosoftUserAddresses>('/me?$select=mail,proxyAddresses')
+  }
 }
 
 export function microsoftLabels(accountId: string, folders: GraphFolder[]): MailLabel[] {

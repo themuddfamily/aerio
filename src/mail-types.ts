@@ -301,6 +301,9 @@ export interface MailDraftInput {
   text: string
   html?: string
   attachmentPaths: string[]
+  /** Sender identity (alias) id; omitted means the account's primary address. */
+  fromIdentityId?: string
+  replyTo?: string[]
 }
 
 export interface MailRecipientSuggestion {
@@ -471,6 +474,7 @@ export interface MailDesktopApi {
     export(): Promise<{ savedPath?: string }>
   }
   templates: import('./mail-template-types').MailTemplatesApi
+  identities: import('./mail-identity-types').MailIdentitiesApi
   rules: {
     list(accountIds?: string[]): Promise<MailRule[]>
     save(input: MailRuleInput): Promise<MailRule>

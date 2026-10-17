@@ -167,6 +167,13 @@ describe('preload bridge', () => {
     await mail.templates.use('template-1')
     await mail.templates.exportBackup()
     await mail.templates.importBackup()
+    await mail.identities.list(['account-1'])
+    await mail.identities.save({ accountId: 'account-1', email: 'alias@example.com', name: 'Alias' })
+    await mail.identities.delete('alias')
+    await mail.identities.refresh('account-1')
+    await mail.identities.signatures.list()
+    await mail.identities.signatures.save({ name: 'Work', html: '<b>Work</b>' })
+    await mail.identities.signatures.delete('signature')
     await mail.sync.start('account-1')
     await mail.sync.pause('account-1')
     await mail.sync.resume('account-1')
@@ -183,7 +190,8 @@ describe('preload bridge', () => {
       'gmail:credentials:status', 'mail:credentials:microsoft-configure', 'mail:providers:presets',
       'mail:accounts:connect-imap', 'mail:accounts:imap-update', 'mail:threads:list', 'mail:folders:unread-counts', 'mail:accounts:unread-counts', 'mail:message:source',
       'mail:drafts:schedule', 'mail:rules:run', 'mail:sync:rebuild', 'mail:attachment:save', 'mail:diagnostics:export',
-      'mail:templates:list', 'mail:templates:save', 'mail:templates:delete', 'mail:templates:use', 'mail:templates:export', 'mail:templates:import'
+      'mail:templates:list', 'mail:templates:save', 'mail:templates:delete', 'mail:templates:use', 'mail:templates:export', 'mail:templates:import',
+      'mail:identities:list', 'mail:identities:save', 'mail:identities:delete', 'mail:identities:refresh', 'mail:signatures:list', 'mail:signatures:save', 'mail:signatures:delete'
     ]) expect(channels).toContain(expected)
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:snooze', 'account-1', ['thread-1'], '2026-08-09T10:00:00Z')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:attachment:open', 'account-1', 'message-1', 'attachment-1', 'file.txt')

@@ -55,5 +55,8 @@ describe('outgoing MIME builder', () => {
     expect(raw).toContain('Bcc: hidden@example.com')
     expect(raw).toContain('In-Reply-To: <parent@example.com>')
     expect(raw).toContain('References: <one@example.com> <two@example.com>')
+    expect(raw).not.toMatch(/^Reply-To:/m)
+    expect(createMimeBuffer({ ...input(), replyTo: ['Desk <desk@example.com>', 'b@example.com\r\nBcc: x@example.com'] }).toString())
+      .toContain('Reply-To: Desk <desk@example.com>, b@example.com Bcc: x@example.com\r\n')
   })
 })

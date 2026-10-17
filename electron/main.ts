@@ -59,6 +59,7 @@ import { MessageLocalStore } from './mail/message-local-store'
 import { registerMessageTools } from './mail/message-tools'
 import { MailTemplateStore, parseMailTemplateBackup, type MailTemplateBackup } from './mail/template-store'
 import { registerMailTemplates } from './mail/template-tools'
+import { registerMailIdentities, validateDraftSender } from './mail/identity-ipc'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
@@ -226,6 +227,7 @@ function validateDraft(input: MailDraftInput, forSend = false) {
   if (typeof input.subject !== 'string' || input.subject.length > 998) throw new Error('The subject is too long')
   if (typeof input.text !== 'string' || (input.html !== undefined && typeof input.html !== 'string') || input.text.length > 20_000_000 || (input.html?.length ?? 0) > 20_000_000) throw new Error('The message body is too large')
   if (input.attachmentPaths.length > 50) throw new Error('A message cannot contain more than 50 attachments')
+  validateDraftSender(input, forSend)
   if (input.attachmentPaths.some((path) => typeof path !== 'string' || !approvedAttachmentPaths.has(path))) {
     throw new Error('A draft referenced a file that was not selected through Aerio')
   }
@@ -1239,6 +1241,7 @@ function registerIpc() {
     if (!mailTemplateStore) throw new Error('Template storage is not ready')
     return mailTemplateStore
   }, approveAttachment: (path) => approvedAttachmentPaths.add(path) })
+  registerMailIdentities({ worker: requireMailWorker })
   registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
   } })

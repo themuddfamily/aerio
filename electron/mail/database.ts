@@ -1,6 +1,7 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { MailIdentityStore } from './identity-store'
 import type {
   ApplyMailActionInput,
   MailAccountSummary,
@@ -99,6 +100,7 @@ export function mailRuleMatches(rule: MailRuleInput, message: MailRuleMessage) {
 export class MailDatabase {
   readonly contentPath: string
   private readonly db: DatabaseSync
+  readonly identities: MailIdentityStore
   private statements = new Map<string, StatementSync>()
 
   constructor(databasePath: string, contentPath: string) {
@@ -110,6 +112,7 @@ export class MailDatabase {
     this.db = new DatabaseSync(databasePath, { timeout: 5_000 })
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;')
     this.migrate()
+    this.identities = new MailIdentityStore(this.db)
   }
 
   close() {
@@ -1138,6 +1141,7 @@ export class MailDatabase {
       JSON.stringify(input.references ?? []), JSON.stringify(input.to), JSON.stringify(input.cc), JSON.stringify(input.bcc),
       input.subject, input.text, input.html ?? null, JSON.stringify(input.attachmentPaths), status, deliveryAt ?? null, result.error ?? null, updatedAt
     )
+    this.identities.saveDraftSender(id, input)
     const stored = this.getDraft(id)
     return {
       id,
@@ -1171,6 +1175,7 @@ export class MailDatabase {
       text: String(row.body_text),
       html: row.body_html ? String(row.body_html) : undefined,
       attachmentPaths: json<string[]>(String(row.attachment_paths_json), []),
+      ...this.identities.draftSender(String(row.id)),
       status: String(row.status) as MailDraftRecord['status'],
       updatedAt: String(row.updated_at),
       deliveryAt: row.delivery_at ? String(row.delivery_at) : undefined,

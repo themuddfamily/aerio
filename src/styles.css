@@ -4268,3 +4268,20 @@ kbd {
 .template-editor-files small { color: var(--muted); }
 .template-editor-files > span button { display: grid; place-items: center; color: var(--muted); background: transparent; }
 .template-editor footer { justify-content: flex-end; margin: 0 -12px; }
+
+/* Sender identities and signatures (E02) */
+.compose-signature-select { max-width: 160px; height: 27px; margin-left: 4px; padding: 0 6px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--surface); font-size: 10.5px; }
+.sender-identity { display: grid; gap: 7px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); }
+.sender-identity-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 9px; }
+.sender-identity-head small { color: var(--muted); font-size: 9.5px; }
+.sender-default { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: 10px; }
+.sender-identity-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 7px; }
+.sender-identity .settings-actions { margin: 0; }
+.sender-identity .settings-actions:empty { display: none; }
+.sender-identity-add { display: flex; flex-wrap: wrap; gap: 7px; }
+.sender-identity-add input { flex: 1 1 160px; min-width: 0; height: 30px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: var(--surface-2); }
+.signature-item { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-radius: 8px; background: var(--surface-2); }
+.signature-item > span { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.signature-item small { overflow: hidden; color: var(--muted); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.signature-editor { display: grid; gap: 8px; }
+.signature-editor-body { min-height: 96px; max-height: 260px; overflow-y: auto; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 8px; outline: 0; color: var(--text); background: var(--surface-2); }

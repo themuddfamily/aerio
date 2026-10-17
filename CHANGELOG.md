@@ -5,6 +5,7 @@
 ### Added
 
 - QuickText snippets and whole-message mail templates with subject, sanitized HTML, and managed attachments; search, edit, and insert them from the composer without losing the editor selection, and back them up with local data or as a standalone template file.
+- Sender identities: Gmail send-as aliases and Microsoft mailbox aliases are discovered automatically, IMAP and shared-mailbox addresses can be added manually, and each identity has a Reply-To, a default flag, and separate HTML signatures for new messages and replies. The composer swaps only the marked signature block when From changes, drafts keep their identity and Reply-To, and provider send-as refusals keep the message as a failed draft with a clear explanation.
 
 ## 0.5.0 — 2026-08-08
 

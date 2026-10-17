@@ -193,6 +193,11 @@ export class GmailClient {
     })
   }
 
+  /** Send-as aliases; readable with the gmail.modify scope Aerio already holds. */
+  listSendAs() {
+    return this.request<{ sendAs?: import('./sender-identity').GmailSendAs[] }>('/settings/sendAs')
+  }
+
   sendMessage(raw: string, threadId?: string) {
     return this.request<GmailMessageReference>('/messages/send', {
       method: 'POST',

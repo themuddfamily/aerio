@@ -33,6 +33,7 @@ import { buildNewMailNotification } from './mail/new-mail'
 import { parseMessageSource } from './mail/message-source'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createMime, createMimeBuffer } from './mail/mime-builder'
+import { describeSenderRejection, parseGmailSendAs, parseMicrosoftProxyAddresses, resolveDraftSender } from './mail/sender-identity'
 import {
   BACKGROUND_MAIL_POLL_INTERVAL_MS,
   clampMailPollingInterval,
@@ -757,8 +758,26 @@ function draftInputFromRow(row: Record<string, string | number | bigint | null>)
     subject: String(row.subject),
     text: String(row.body_text),
     html: row.body_html ? String(row.body_html) : undefined,
-    attachmentPaths: JSON.parse(String(row.attachment_paths_json))
+    attachmentPaths: JSON.parse(String(row.attachment_paths_json)),
+    ...database!.identities.draftSender(String(row.id))
   }
+}
+
+/** Resolves the draft's From identity; strict mode (delivery) refuses unauthorized aliases. */
+function senderFor(input: MailDraftInput, strict: boolean) {
+  const account = database!.getAccount(input.accountId)
+  if (!account) return undefined
+  const identity = input.fromIdentityId ? database!.identities.get(input.fromIdentityId) : undefined
+  return resolveDraftSender(account, identity, input, strict)
+}
+
+async function refreshIdentities(accountId: string) {
+  const account = database!.getAccount(accountId)
+  if (!account) throw new Error('Account not found')
+  if (account.provider === 'gmail') return database!.identities.replaceProviderIdentities(account, 'gmail', parseGmailSendAs(await clientFor(accountId).listSendAs()))
+  if (account.provider === 'microsoft') return database!.identities.replaceProviderIdentities(account, 'microsoft', parseMicrosoftProxyAddresses(await microsoftClientFor(accountId).senderAddresses(), account.email))
+  database!.identities.markRefreshed(accountId)
+  return database!.identities.list([account])
 }
 
 async function assertRemoteDraftUnchanged(accountId: string, provider: MailAccountSummary['provider'], remoteId?: string, expectedRevision?: string) {
@@ -786,8 +805,7 @@ async function saveDraft(input: MailDraftInput) {
   try {
     const row = database.getDraft(result.id)
     const provider = database.getAccount(input.accountId)?.provider ?? 'gmail'
-    const account = database.getAccount(input.accountId)
-    const from = account ? `${account.displayName} <${account.email}>` : undefined
+    const from = senderFor(input, false)?.from
     let remoteId: string
     let remoteRevision: string | undefined
     if (provider === 'gmail') {
@@ -822,11 +840,12 @@ async function deliverDraft(input: MailDraftInput) {
   input = stageDraftAttachments(input)
   let result = database.saveDraft(input, { status: online ? 'syncing' : 'queued' })
   if (!online) return result
+  const provider = database.getAccount(input.accountId)?.provider ?? 'gmail'
+  let sender: ReturnType<typeof senderFor>
   try {
     const row = database.getDraft(result.id)
-    const provider = database.getAccount(input.accountId)?.provider ?? 'gmail'
-    const account = database.getAccount(input.accountId)
-    const from = account ? `${account.displayName} <${account.email}>` : undefined
+    sender = senderFor(input, true)
+    const from = sender?.from
     if (row?.gmail_draft_id) await assertRemoteDraftUnchanged(input.accountId, provider, String(row.gmail_draft_id), row.remote_revision ? String(row.remote_revision) : undefined)
     if (provider === 'gmail') {
       const raw = createMime({ ...input, id: result.id }, from)
@@ -836,13 +855,17 @@ async function deliverDraft(input: MailDraftInput) {
       await microsoftClientFor(input.accountId).send(createMimeBuffer({ ...input, id: result.id }, from), row?.gmail_draft_id ? String(row.gmail_draft_id) : undefined)
     } else {
       const client = await imapClientFor(input.accountId)
-      await client.send(createMimeBuffer({ ...input, id: result.id }, from, true), [...input.to, ...input.cc, ...input.bcc])
+      const recipients = [...input.to, ...input.cc, ...input.bcc]
+      const raw = createMimeBuffer({ ...input, id: result.id }, from, true)
+      // An alias also becomes the SMTP envelope sender; the server decides whether it is allowed.
+      await (sender?.identity ? client.send(raw, recipients, sender.identity.email) : client.send(raw, recipients))
       if (row?.gmail_draft_id) await client.deleteDraft(String(row.gmail_draft_id))
     }
     result = { ...result, status: 'sent', updatedAt: new Date().toISOString() }
     removeDraftFiles(result.id)
   } catch (error) {
-    result = { ...result, status: 'failed', error: error instanceof Error ? error.message : String(error), updatedAt: new Date().toISOString() }
+    const rejected = sender ? describeSenderRejection(error, provider, sender) : undefined
+    result = { ...result, status: 'failed', error: rejected?.message ?? (error instanceof Error ? error.message : String(error)), updatedAt: new Date().toISOString() }
   }
   database.updateDraftResult(result.id, result)
   emit({ type: 'draft-delivery', payload: result })
@@ -1134,6 +1157,27 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     database.recordRuleMatch(rule.id, threadIds.length)
     return { matched: threadIds.length, operations }
   }
+  if (command.type === 'identities:list') {
+    const accounts = database.listAccounts()
+    const selected = command.payload.accountIds?.length ? accounts.filter((account) => command.payload.accountIds!.includes(account.id)) : accounts
+    // Provider aliases are discovered once automatically; later changes need an explicit refresh.
+    for (const account of selected) {
+      if (online && !account.archived && (account.provider === 'gmail' || account.provider === 'microsoft') && !database.identities.refreshedAt(account.id)) {
+        try { await refreshIdentities(account.id) } catch { /* Discovery is best effort; manual refresh reports the error. */ }
+      }
+    }
+    return database.identities.list(accounts, command.payload.accountIds)
+  }
+  if (command.type === 'identities:save') {
+    const account = database.getAccount(command.payload.accountId)
+    if (!account) throw new Error('Account not found')
+    return database.identities.save(account, command.payload)
+  }
+  if (command.type === 'identities:delete') return database.identities.delete(command.payload.id)
+  if (command.type === 'identities:refresh') return refreshIdentities(command.payload.accountId)
+  if (command.type === 'signatures:list') return database.identities.listSignatures()
+  if (command.type === 'signatures:save') return database.identities.saveSignature(command.payload)
+  if (command.type === 'signatures:delete') return database.identities.deleteSignature(command.payload.id)
   if (command.type === 'saved-searches:list') return database.listSavedSearches()
   if (command.type === 'saved-searches:save') return database.saveSavedSearch(command.payload)
   if (command.type === 'saved-searches:delete') return database.deleteSavedSearch(command.payload.id)

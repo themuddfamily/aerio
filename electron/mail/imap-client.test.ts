@@ -365,5 +365,7 @@ describe('IMAP and SMTP connections', () => {
     expect(transport.sendMail).toHaveBeenCalledWith({
       envelope: { from: config.email, to: ['one@example.test', 'two@example.test'] }, raw
     })
+    await new ImapSmtpClient(config).send(raw, ['one@example.test'], 'alias@example.test')
+    expect(transport.sendMail).toHaveBeenLastCalledWith({ envelope: { from: 'alias@example.test', to: ['one@example.test'] }, raw })
   })
 })

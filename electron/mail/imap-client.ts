@@ -207,7 +207,8 @@ export class ImapSmtpClient {
     })
   }
 
-  async send(raw: Buffer, recipients: string[]) {
+  /** `envelopeFrom` lets an alias identity use its own SMTP sender; the server decides whether it is allowed. */
+  async send(raw: Buffer, recipients: string[], envelopeFrom = this.config.email) {
     const transport = nodemailer.createTransport({
       host: this.config.smtpHost,
       port: this.config.smtpPort,
@@ -217,7 +218,7 @@ export class ImapSmtpClient {
       tls: { rejectUnauthorized: !this.config.allowInvalidCertificates },
       connectionTimeout: 30_000
     })
-    await transport.sendMail({ envelope: { from: this.config.email, to: recipients }, raw })
+    await transport.sendMail({ envelope: { from: envelopeFrom, to: recipients }, raw })
   }
 }
 

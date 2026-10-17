@@ -97,11 +97,17 @@ const mocks = vi.hoisted(() => {
   method('operationAttempts', () => 0)
   method('rescheduleOperation')
   method('restoreOperationSnapshot')
+  db.identities = {
+    draftSender: vi.fn(() => ({})), get: vi.fn(() => undefined), list: vi.fn(() => [{ id: 'account-1:primary' }]), save: vi.fn((_account: any, input: any) => ({ ...input, id: input.id ?? 'alias' })),
+    delete: vi.fn(), listSignatures: vi.fn(() => []), saveSignature: vi.fn((input: any) => ({ ...input, id: 'signature' })), deleteSignature: vi.fn(),
+    replaceProviderIdentities: vi.fn((_account: any, source: string, items: any[]) => items.map((item) => ({ ...item, source }))), markRefreshed: vi.fn(), refreshedAt: vi.fn((): string | undefined => undefined)
+  }
 
   const gmail = {
     copyToLabel: vi.fn().mockResolvedValue(undefined),
     getAccessToken: undefined as undefined | ((id: string) => Promise<string>),
     getProfile: vi.fn().mockResolvedValue({ emailAddress: 'person@example.test', historyId: '1' }),
+    listSendAs: vi.fn().mockResolvedValue({ sendAs: [{ sendAsEmail: 'person@example.test', isPrimary: true }, { sendAsEmail: 'alias@example.test', verificationStatus: 'accepted' }] }),
     createDraft: vi.fn().mockResolvedValue({ id: 'remote-draft', message: { id: 'gmail-revision-2' } }),
     updateDraft: vi.fn().mockResolvedValue({ id: 'remote-draft', message: { id: 'gmail-revision-2' } }),
     draftRevision: vi.fn().mockResolvedValue('gmail-revision-1'),
@@ -118,6 +124,7 @@ const mocks = vi.hoisted(() => {
     getAccessToken: undefined as undefined | (() => Promise<string>),
     listFolders: vi.fn().mockResolvedValue([]), applyAction: vi.fn().mockResolvedValue(undefined),
     saveDraft: vi.fn().mockResolvedValue({ id: 'remote-draft', revision: 'microsoft-revision-2' }),
+    senderAddresses: vi.fn().mockResolvedValue({ proxyAddresses: ['SMTP:person@example.test', 'smtp:alias@example.test'] }),
     draftRevision: vi.fn().mockResolvedValue('microsoft-revision-1'), deleteDraft: vi.fn().mockResolvedValue(undefined), send: vi.fn().mockResolvedValue(undefined),
     delta: vi.fn().mockResolvedValue({ messages: [], deltaLink: 'delta' }), messageRaw: vi.fn().mockResolvedValue(Buffer.from('raw'))
   }
@@ -1120,6 +1127,79 @@ describe.sequential('mail worker protocol routing', () => {
     const staged = await request({ type: 'drafts:stage-message-attachments', payload: { draftId: 'base64-stage', accountId: 'account-1', messageId: 'message' } })
     expect(staged.result[0]).toMatchObject({ name: 'base64.txt', size: 5 })
     mocks.setCredential({ type: 'oauth', accessToken: 'token' })
+  })
+
+  it('routes sender identities and signatures, discovering provider aliases once', async () => {
+    const identities = mocks.db.identities
+    mocks.db.listAccounts.mockReturnValue([mocks.account, { ...mocks.account, id: 'microsoft-1', provider: 'microsoft', email: 'person@example.test' }, { ...mocks.account, id: 'imap-1', provider: 'imap' }])
+    mocks.db.getAccount.mockImplementation((id: string) => id === 'microsoft-1'
+      ? { ...mocks.account, id, provider: 'microsoft' }
+      : id === 'imap-1' ? { ...mocks.account, id, provider: 'imap' } : id === 'account-1' ? mocks.account : undefined)
+    await request({ type: 'network', payload: { online: true } })
+    mocks.microsoft.senderAddresses.mockRejectedValueOnce(new Error('Graph offline'))
+    await expect(request({ type: 'identities:list', payload: {} })).resolves.toMatchObject({ result: [{ id: 'account-1:primary' }] })
+    expect(identities.replaceProviderIdentities).toHaveBeenCalledWith(mocks.account, 'gmail', [
+      expect.objectContaining({ email: 'person@example.test', status: 'verified' }), expect.objectContaining({ email: 'alias@example.test', status: 'verified' })
+    ])
+    expect(mocks.microsoft.senderAddresses).toHaveBeenCalledTimes(1)
+    identities.refreshedAt.mockReturnValue('2026-10-01T00:00:00Z')
+    mocks.gmail.listSendAs.mockClear()
+    await request({ type: 'identities:list', payload: { accountIds: ['account-1'] } })
+    expect(mocks.gmail.listSendAs).not.toHaveBeenCalled()
+    expect(identities.list).toHaveBeenLastCalledWith(expect.any(Array), ['account-1'])
+
+    await expect(request({ type: 'identities:refresh', payload: { accountId: 'microsoft-1' } })).resolves.toMatchObject({ result: [{ email: 'alias@example.test', source: 'microsoft' }] })
+    await request({ type: 'identities:refresh', payload: { accountId: 'imap-1' } })
+    expect(identities.markRefreshed).toHaveBeenCalledWith('imap-1')
+    await expect(request({ type: 'identities:refresh', payload: { accountId: 'missing' } })).resolves.toMatchObject({ error: { message: 'Account not found' } })
+    await expect(request({ type: 'identities:save', payload: { accountId: 'account-1', email: 'x@example.test', name: 'X' } })).resolves.toMatchObject({ result: { id: 'alias' } })
+    await expect(request({ type: 'identities:save', payload: { accountId: 'missing', email: 'x@example.test', name: 'X' } })).resolves.toMatchObject({ error: { message: 'Account not found' } })
+    await request({ type: 'identities:delete', payload: { id: 'alias' } })
+    expect(identities.delete).toHaveBeenCalledWith('alias')
+    await expect(request({ type: 'signatures:list' })).resolves.toMatchObject({ result: [] })
+    await expect(request({ type: 'signatures:save', payload: { name: 'Work', html: '<b>x</b>' } })).resolves.toMatchObject({ result: { id: 'signature' } })
+    await request({ type: 'signatures:delete', payload: { id: 'signature' } })
+    expect(identities.deleteSignature).toHaveBeenCalledWith('signature')
+    mocks.db.listAccounts.mockReturnValue([mocks.account])
+    identities.refreshedAt.mockReturnValue(undefined)
+  })
+
+  it('sends from an alias, keeps the draft on send-as rejection, and refuses unauthorized Gmail aliases', async () => {
+    const identities = mocks.db.identities
+    const alias = { id: 'alias', accountId: 'account-1', email: 'alias@example.test', name: 'Alias', replyTo: [], source: 'manual', status: 'unverified', isDefault: false }
+    identities.get.mockImplementation((id: string) => id === 'alias' ? alias : undefined)
+    identities.draftSender.mockReturnValue({ fromIdentityId: 'alias' })
+    const row = (id: string) => ({ id, account_id: 'account-1', thread_id: null, in_reply_to: null, references_json: '[]', to_json: '["ada@example.test"]', cc_json: '[]', bcc_json: '[]', subject: id, body_text: 'Body', body_html: null, attachment_paths_json: '[]', gmail_draft_id: null })
+    const { createMimeBuffer, createMime } = await import('./mail/mime-builder')
+
+    mocks.setCredential({ type: 'imap', config: { email: 'imap@example.test' } })
+    mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'imap' })
+    mocks.db.getDraft.mockReturnValue(undefined)
+    mocks.imap.send.mockClear()
+    queueDeliveries([row('alias-imap')])
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(mocks.imap.send).toHaveBeenCalledWith(expect.any(Buffer), ['ada@example.test'], 'alias@example.test'))
+    expect(createMimeBuffer).toHaveBeenCalledWith(expect.objectContaining({ id: 'alias-imap', fromIdentityId: 'alias' }), 'Alias <alias@example.test>', true)
+
+    mocks.imap.send.mockRejectedValueOnce(Object.assign(new Error('553 5.7.1 Sender address rejected: not owned by user'), { responseCode: 553 }))
+    queueDeliveries([row('alias-rejected')])
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(mocks.db.updateDraftResult).toHaveBeenCalledWith('alias-rejected', expect.objectContaining({ status: 'failed', error: expect.stringMatching(/refused to send as alias@example.test.*kept as a draft/) })))
+    expect(mocks.db.deleteDraftRecord).not.toHaveBeenCalledWith('alias-rejected')
+
+    mocks.setCredential({ type: 'oauth', accessToken: 'token' })
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.gmail.sendMessage.mockClear()
+    queueDeliveries([row('gmail-unauthorized')])
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(mocks.db.updateDraftResult).toHaveBeenCalledWith('gmail-unauthorized', expect.objectContaining({ status: 'failed', error: expect.stringMatching(/Gmail has not authorized alias@example.test/) })))
+    expect(mocks.gmail.sendMessage).not.toHaveBeenCalled()
+
+    // Draft saves still sync with the alias as From even before Gmail authorizes it.
+    await request({ type: 'drafts:save', payload: { id: 'alias-save', accountId: 'account-1', to: ['ada@example.test'], cc: [], bcc: [], subject: 'S', text: 'B', attachmentPaths: [], fromIdentityId: 'alias' } })
+    expect(createMime).toHaveBeenLastCalledWith(expect.objectContaining({ fromIdentityId: 'alias' }), 'Alias <alias@example.test>')
+    identities.get.mockImplementation(() => undefined)
+    identities.draftSender.mockReturnValue({})
   })
 
   it('shuts down cleanly', async () => {
