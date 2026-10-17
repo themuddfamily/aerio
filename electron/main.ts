@@ -79,6 +79,8 @@ import { registerMailMerge } from './mail/mail-merge-ipc'
 import { AutomaticRepliesService, registerAutomaticReplies } from './mail/automatic-replies'
 import { AvailabilityService, registerAvailability } from './productivity/availability'
 import { CloudAttachmentService, CloudAttachmentStateStore, registerCloudAttachments } from './mail/cloud-attachments'
+import { LinkedCloudStorageService, registerCloudStorage } from './mail/cloud-linked-storage'
+import { CloudStorageAccountStore } from './mail/cloud-storage-accounts'
 import { assertSecureCredentialStorage } from './mail/secure-storage'
 import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
@@ -125,7 +127,8 @@ const builtInOAuthClients = parseOAuthEnvironment({
     ? import.meta.env.MAIN_VITE_GOOGLE_CLIENT_ID || DEFAULT_GOOGLE_CLIENT_ID
     : undefined,
   googleClientSecret: builtInGoogleClientSecret,
-  microsoftClientId: import.meta.env.MAIN_VITE_MICROSOFT_CLIENT_ID || DEFAULT_MICROSOFT_CLIENT_ID
+  microsoftClientId: import.meta.env.MAIN_VITE_MICROSOFT_CLIENT_ID || DEFAULT_MICROSOFT_CLIENT_ID,
+  dropboxAppKey: import.meta.env.MAIN_VITE_DROPBOX_APP_KEY
 })
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -1497,6 +1500,20 @@ function registerIpc() {
     grantedScopes: (accountId, provider) => requireVault().grantedScopes(accountId, provider)
   })
   registerAvailability(ipcMain, () => availability)
+  // Upload session URLs are short-lived capabilities; keep them encrypted at rest.
+  const cloudState = new CloudAttachmentStateStore(join(app.getPath('userData'), 'cloud-uploads.dat'), {
+    encode: (value) => { assertSecureCredentialStorage(safeStorage); return safeStorage.encryptString(value).toString('base64') },
+    decode: (value) => { assertSecureCredentialStorage(safeStorage); return safeStorage.decryptString(Buffer.from(value, 'base64')) }
+  })
+  // Dropbox, ownCloud and Nextcloud (E46): secrets in OS secure storage like DAV app passwords.
+  const linkedCloudStorage = new LinkedCloudStorageService({
+    accounts: new CloudStorageAccountStore(join(app.getPath('userData'), 'cloud-storage-accounts.json'), new DavCredentialVault(join(app.getPath('userData'), 'cloud-storage-credentials.dat'), safeStorage)),
+    state: cloudState,
+    isApprovedPath: (path) => approvedAttachmentPaths.has(path),
+    openExternal: (url) => shell.openExternal(url),
+    builtInDropboxAppKey: builtInOAuthClients.dropboxAppKey
+  })
+  registerCloudStorage(ipcMain, () => linkedCloudStorage, () => appLockStatus().locked)
   const cloudAttachments = new CloudAttachmentService({
     account: async (accountId) => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId),
     googleToken: (accountId) => requireVault().accessToken(accountId),
@@ -1508,11 +1525,8 @@ function registerIpc() {
       else await requireVault().authorizeMicrosoft(expected, { additionalScopes: scopes })
     },
     isApprovedPath: (path) => approvedAttachmentPaths.has(path),
-    // Upload session URLs are short-lived capabilities; keep them encrypted at rest.
-    state: new CloudAttachmentStateStore(join(app.getPath('userData'), 'cloud-uploads.dat'), {
-      encode: (value) => { assertSecureCredentialStorage(safeStorage); return safeStorage.encryptString(value).toString('base64') },
-      decode: (value) => { assertSecureCredentialStorage(safeStorage); return safeStorage.decryptString(Buffer.from(value, 'base64')) }
-    })
+    state: cloudState,
+    linked: linkedCloudStorage
   })
   registerCloudAttachments(ipcMain, () => cloudAttachments)
   ipcMain.handle('preferences:load', () => loadPreferences())

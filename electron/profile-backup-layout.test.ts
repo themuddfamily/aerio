@@ -210,4 +210,11 @@ describe('full profile layout', () => {
     } finally { restored.close() }
     expect(readFileSync(join(profile, 'dav-credentials.dat'), 'utf8')).toBe('sealed-app-password')
   })
+
+  it('leaves connected cloud storage accounts, their secrets and upload sessions out of backups', async () => {
+    const profile = makeProfile()
+    for (const name of ['cloud-storage-accounts.json', 'cloud-storage-credentials.dat', 'cloud-uploads.dat']) writeFileSync(join(profile, name), 'device-only')
+    const { path } = await backupOf(profile)
+    for (const name of ['cloud-storage-accounts.json', 'cloud-storage-credentials.dat', 'cloud-uploads.dat']) expect(existsSync(join(path, 'data', name))).toBe(false)
+  })
 })

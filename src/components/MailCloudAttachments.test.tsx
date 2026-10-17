@@ -3,7 +3,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { CloudAttachmentStatus, CloudSharedLink, CloudUploadResult } from '../cloud-attachment-types'
+import type { CloudAttachmentStatus, CloudSharedLink, CloudStorageAccount, CloudStorageSnapshot, CloudUploadResult } from '../cloud-attachment-types'
 import type { MailAccountSummary, MailDraftResult } from '../mail-types'
 import { ContextMenuProvider } from './ContextMenu'
 import MailComposeModal from './MailComposeModal'
@@ -32,8 +32,14 @@ const cloud = {
   resume: vi.fn(async (uploadId: string): Promise<CloudUploadResult> => ({ status: 'shared', uploadId, link: link({ name: 'resumed.zip' }) })),
   discard: vi.fn(async () => undefined),
   verify: vi.fn(async () => [] as Awaited<ReturnType<typeof window.aerio.mail.cloudAttachments.verify>>),
-  onProgress: vi.fn((callback: (value: unknown) => void) => { progressListener = callback; return () => { progressListener = undefined } })
+  onProgress: vi.fn((callback: (value: unknown) => void) => { progressListener = callback; return () => { progressListener = undefined } }),
+  storage: { snapshot: vi.fn(async (): Promise<CloudStorageSnapshot> => ({ accounts: [], dropboxConfigured: false, dropboxBuiltIn: false })) }
 }
+const nextcloud = (overrides: Partial<CloudStorageAccount> = {}): CloudStorageAccount => ({
+  id: 'nextcloud-1', provider: 'nextcloud', name: 'Nextcloud · Ada', username: 'ada', serverUrl: 'https://cloud.example.test/', status: 'ready', connectedAt: '2026-10-01T00:00:00Z',
+  capabilities: { audiences: ['anyone'], password: 'enforced', expiry: 'enforced', maxExpiryDays: 7, edit: 'unavailable', resumableUpload: true, notes: ['The server requires a password on every public link.'] },
+  ...overrides
+})
 const api = {
   chooseAttachments: vi.fn(async () => [{ id: 'file', name: 'video.mp4', size: 30 * 1024 * 1024, path: 'C:\\files\\video.mp4', mime: 'mp4' }]),
   mail: {
@@ -59,12 +65,60 @@ beforeEach(() => {
   cloud.status.mockResolvedValue(status())
   cloud.pending.mockResolvedValue([])
   cloud.verify.mockResolvedValue([])
+  cloud.storage.snapshot.mockResolvedValue({ accounts: [], dropboxConfigured: false, dropboxBuiltIn: false })
 })
 
 describe('MailCloudAttachments in the composer', () => {
-  it('offers cloud links only for Gmail and Microsoft accounts', () => {
+  it('points IMAP accounts without storage to Settings', async () => {
+    cloud.status.mockResolvedValue(status({ mailProvider: 'imap', provider: undefined, supported: false, connected: false, audiences: [], message: 'This account has no storage of its own.' }))
+    const user = userEvent.setup()
     renderCompose('imap')
-    expect(screen.queryByTitle('Share a file as a cloud link')).toBeNull()
+    await user.click(screen.getByTitle('Share a file as a cloud link'))
+    expect(await screen.findByText(/no storage of its own\. Connect one in Settings → Cloud storage accounts/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Upload and insert link' })).toBeNull()
+  })
+
+  it('shares from a connected Nextcloud account with the password and expiry the server enforces', async () => {
+    cloud.status.mockResolvedValue(status({ mailProvider: 'imap', provider: undefined, supported: false, connected: false, audiences: [] }))
+    cloud.storage.snapshot.mockResolvedValue({ accounts: [nextcloud()], dropboxConfigured: false, dropboxBuiltIn: false })
+    const user = userEvent.setup()
+    renderCompose('imap')
+    await user.click(screen.getByTitle('Share a file as a cloud link'))
+    expect(await screen.findByText('Share from Nextcloud · Ada')).toBeInTheDocument()
+    const capabilities = screen.getByLabelText('Nextcloud · Ada sharing capabilities')
+    expect(capabilities.textContent).toContain('Link passwordRequired')
+    expect(capabilities.textContent).toContain('Expiry dateRequired (at most 7 days)')
+    expect(capabilities.textContent).toContain('EditingView only')
+    expect(screen.queryByRole('option', { name: 'Can edit' })).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Choose file…' }))
+    expect(screen.getByText('Nextcloud · Ada requires a link password.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Upload and insert link' })).toBeDisabled()
+    await user.type(screen.getByLabelText(/Link password/), 's3cret')
+    expect(screen.getByText('Nextcloud · Ada requires an expiry date.')).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/Expires on/), '2099-01-02')
+    expect(screen.getByText(/Anyone with the link can view, with a password until 2099-01-02/)).toBeInTheDocument()
+    cloud.upload.mockImplementationOnce(async (uploadId) => ({ status: 'shared', uploadId, link: link({ provider: 'nextcloud', storageAccountId: 'nextcloud-1', url: 'https://cloud.example.test/s/abc', scopeLabel: 'Anyone with the link can view, with a password until 2099-01-02' }) }))
+    await user.click(screen.getByRole('button', { name: 'Upload and insert link' }))
+    expect(cloud.upload).toHaveBeenCalledWith(expect.any(String), 'account', 'C:\\files\\video.mp4', { audience: 'anyone', role: 'view', password: 's3cret', expiresOn: '2099-01-02' }, 'nextcloud-1')
+    await waitFor(() => expect(editor().textContent).toContain('(Nextcloud, 30.0 MB · Anyone with the link can view, with a password until 2099-01-02)'))
+  })
+
+  it('lets Gmail accounts choose between Google Drive and a connected Dropbox', async () => {
+    const dropbox = nextcloud({ id: 'dropbox-1', provider: 'dropbox', name: 'Dropbox · ada@example.test', serverUrl: undefined,
+      capabilities: { audiences: ['anyone', 'members'], password: 'unavailable', expiry: 'unavailable', edit: 'unavailable', resumableUpload: true, notes: [] } })
+    cloud.storage.snapshot.mockResolvedValue({ accounts: [dropbox], dropboxConfigured: true, dropboxBuiltIn: true })
+    const user = userEvent.setup()
+    renderCompose()
+    await user.click(screen.getByTitle('Share a file as a cloud link'))
+    expect(await screen.findByLabelText('Only the message recipients')).toBeInTheDocument()
+    await user.selectOptions(screen.getByLabelText('Store in'), 'dropbox-1')
+    expect(screen.queryByLabelText('Only the message recipients')).toBeNull()
+    expect(screen.getByLabelText('Only people who already have access')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/Link password/)).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Choose file…' }))
+    await user.click(screen.getByLabelText('Only people who already have access'))
+    await user.click(screen.getByRole('button', { name: 'Upload and insert link' }))
+    expect(cloud.upload).toHaveBeenCalledWith(expect.any(String), 'account', 'C:\\files\\video.mp4', { audience: 'members', role: 'view' }, 'dropbox-1')
   })
 
   it('asks for the storage permission only after the user opts in', async () => {

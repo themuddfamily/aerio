@@ -365,7 +365,16 @@ describe('preload bridge', () => {
       ['mail:cloud:pending', ['account-1'], () => cloud.pending('account-1')],
       ['mail:cloud:resume', ['upload-1'], () => cloud.resume('upload-1')],
       ['mail:cloud:discard', ['upload-1'], () => cloud.discard('upload-1')],
-      ['mail:cloud:verify', ['account-1', ['https://x.test']], () => cloud.verify('account-1', ['https://x.test'])]
+      ['mail:cloud:verify', ['account-1', ['https://x.test']], () => cloud.verify('account-1', ['https://x.test'])],
+      ['mail:cloud:upload', ['upload-2', 'account-1', 'C:\\file.pdf', share, 'nextcloud-1'], () => cloud.upload('upload-2', 'account-1', 'C:\\file.pdf', share, 'nextcloud-1')],
+      ['mail:cloud:storage:snapshot', [], () => cloud.storage.snapshot()],
+      ['mail:cloud:storage:configure-dropbox', ['appkey123'], () => cloud.storage.configureDropbox('appkey123')],
+      ['mail:cloud:storage:connect-dropbox', [], () => cloud.storage.connectDropbox()],
+      ['mail:cloud:storage:connect-server', [{ provider: 'nextcloud', serverUrl: 'https://c.test', username: 'a', password: 'p' }], () => cloud.storage.connectServer({ provider: 'nextcloud', serverUrl: 'https://c.test', username: 'a', password: 'p' })],
+      ['mail:cloud:storage:refresh', ['nextcloud-1'], () => cloud.storage.refresh('nextcloud-1')],
+      ['mail:cloud:storage:disconnect', ['nextcloud-1'], () => cloud.storage.disconnect('nextcloud-1')],
+      ['mail:cloud:storage:links', ['nextcloud-1'], () => cloud.storage.links('nextcloud-1')],
+      ['mail:cloud:storage:revoke', ['https://c.test/s/x'], () => cloud.storage.revoke('https://c.test/s/x')]
     ]
     for (const [channel, args, call] of calls) {
       await call()

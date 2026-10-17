@@ -2,7 +2,20 @@
 
 import { describe, expect, it } from 'vitest'
 import { createMimeBuffer } from '../../electron/mail/mime-builder'
-import { attachmentBytes, cloudLinkHtml, cloudLinkUrls, shareScopeLabel } from './cloud-attachments'
+import { attachmentBytes, cloudAudienceLabel, cloudCapabilityRows, cloudLinkHtml, cloudLinkUrls, cloudProviderName, shareScopeLabel } from './cloud-attachments'
+
+describe('connected storage labels', () => {
+  it('names Dropbox, ownCloud and Nextcloud and describes passwords, expiry and team audiences', () => {
+    expect(shareScopeLabel('nextcloud', { audience: 'anyone', role: 'view', password: 'x', expiresOn: '2026-11-01' })).toBe('Anyone with the link can view, with a password until 2026-11-01')
+    expect(shareScopeLabel('dropbox', { audience: 'organization', role: 'view' })).toBe('People in your Dropbox team with the link can view')
+    expect(shareScopeLabel('dropbox', { audience: 'members', role: 'view' })).toBe('Only people who already have access in Dropbox can view')
+    expect(cloudAudienceLabel('dropbox', 'organization')).toBe('People in your Dropbox team')
+    expect(cloudAudienceLabel('onedrive', 'organization')).toBe('People in my organization')
+    expect(cloudProviderName('owncloud')).toBe('ownCloud')
+    expect(cloudCapabilityRows({ audiences: ['anyone'], password: 'enforced', expiry: 'enforced', maxExpiryDays: 7, edit: 'available', resumableUpload: false, notes: [] }).map((row) => row.value))
+      .toEqual(['Required', 'Required (at most 7 days)', 'Allowed', 'Single request'])
+  })
+})
 
 const link = {
   provider: 'onedrive' as const, accountId: 'a', fileId: 'f', name: 'Q3 <draft>.xlsx', size: 2048, url: 'https://1drv.example.test/s!a?x=1&y="2"',

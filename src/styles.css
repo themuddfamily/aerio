@@ -4648,6 +4648,18 @@ kbd {
 .cloud-attach-summary { color: var(--muted); }
 .cloud-attach-progress progress { flex: 1; min-width: 120px; }
 .cloud-attach-error { color: var(--danger); }
+.cloud-attach-target { display: inline-flex; align-items: center; gap: 6px; }
+.cloud-capabilities { display: grid; gap: 4px; font-size: 12px; }
+.cloud-capabilities dl { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; }
+.cloud-capabilities dl div { display: inline-flex; gap: 4px; }
+.cloud-capabilities dt { color: var(--muted); }
+.cloud-capabilities dd { margin: 0; }
+.cloud-capabilities [data-state="enforced"] dd { font-weight: 600; }
+.cloud-capabilities [data-state="unavailable"] dd { color: var(--muted); }
+.cloud-capabilities ul { margin: 0; padding-left: 16px; color: var(--muted); }
+.cloud-storage-links { display: grid; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
+.cloud-storage-links li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
+.cloud-storage-links li span { display: grid; }
 /* Recurrence and time zones (E24) */
 .recurrence-field { display: flex; flex-direction: column; gap: 8px; }
 .recurrence-custom { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
