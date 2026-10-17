@@ -74,6 +74,24 @@ const api: AerioDesktopApi = {
     exportLocalData: () => ipcRenderer.invoke('productivity:local-export'),
     importLocalData: () => ipcRenderer.invoke('productivity:local-import')
   },
+  interchange: {
+    snapshot: () => ipcRenderer.invoke('interchange:snapshot'),
+    onChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, snapshot: import('../src/interchange-types').InterchangeSnapshot) => callback(snapshot)
+      ipcRenderer.on('interchange:changed', listener)
+      return () => ipcRenderer.removeListener('interchange:changed', listener)
+    },
+    chooseCalendarFile: () => ipcRenderer.invoke('interchange:calendar-file-choose'),
+    chooseContactsFile: () => ipcRenderer.invoke('interchange:contacts-file-choose'),
+    exportCalendar: (calendarIds) => ipcRenderer.invoke('interchange:calendar-export', calendarIds),
+    exportContacts: (contactIds, format) => ipcRenderer.invoke('interchange:contacts-export', contactIds, format),
+    saveLocalEvents: (target, events) => ipcRenderer.invoke('interchange:local-events-save', target, events),
+    saveLocalEvent: (event) => ipcRenderer.invoke('interchange:local-event-save', event),
+    deleteLocalEvent: (eventId) => ipcRenderer.invoke('interchange:local-event-delete', eventId),
+    subscribe: (input) => ipcRenderer.invoke('interchange:subscribe', input),
+    refresh: (calendarId) => ipcRenderer.invoke('interchange:refresh', calendarId),
+    removeCalendar: (calendarId) => ipcRenderer.invoke('interchange:calendar-remove', calendarId)
+  },
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     maximize: () => ipcRenderer.invoke('window:maximize'),
