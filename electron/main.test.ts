@@ -757,6 +757,22 @@ describe.sequential('Electron main process', () => {
     expect(() => invoke('productivity:event-create', { title: '' })).toThrow(/valid event/)
   })
 
+  it('validates and routes saved mail searches', async () => {
+    await invoke('mail:saved-searches:list')
+    await invoke('mail:saved-searches:save', { name: ' Invoices ', query: ' invoice -paid ', folder: 'all', accountId: 'a1b2', filters: { unread: true, from: ' ' } })
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'saved-searches:list' })
+    expect(mocks.worker.request).toHaveBeenCalledWith({
+      type: 'saved-searches:save', payload: { name: 'Invoices', query: 'invoice -paid', folder: 'all', accountId: 'a1b2', filters: { unread: true } }
+    })
+    expect(() => invoke('mail:saved-searches:save', { name: 'Broken', query: 'invoice AND', folder: 'all', filters: {} })).toThrow(/after AND/)
+    expect(() => invoke('mail:saved-searches:save', { name: '', query: 'invoice', folder: 'all', filters: {} })).toThrow(/name/)
+    expect(() => invoke('mail:saved-searches:save', { name: 'Bad folder', query: 'invoice', folder: 'nope', filters: {} })).toThrow(/mailbox/)
+    expect(() => invoke('mail:saved-searches:save', { name: 'Bad filter', query: 'invoice', folder: 'all', filters: { sql: '1=1' } })).toThrow(/filters/)
+    expect(() => invoke('mail:saved-searches:delete', '')).toThrow(/saved search id/)
+    await invoke('mail:saved-searches:delete', 'search-1')
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'saved-searches:delete', payload: { id: 'search-1' } })
+  })
+
   it('creates, updates, and deletes writable Google calendar events', async () => {
     const calendar = { id: 'calendar', accountId: 'abcdef', provider: 'gmail', remoteId: 'remote-calendar', name: 'Work', canWrite: true }
     const input = {

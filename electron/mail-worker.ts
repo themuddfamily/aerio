@@ -1134,6 +1134,9 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     database.recordRuleMatch(rule.id, threadIds.length)
     return { matched: threadIds.length, operations }
   }
+  if (command.type === 'saved-searches:list') return database.listSavedSearches()
+  if (command.type === 'saved-searches:save') return database.saveSavedSearch(command.payload)
+  if (command.type === 'saved-searches:delete') return database.deleteSavedSearch(command.payload.id)
   if (command.type === 'sync:start') {
     const accounts = command.payload.accountId
       ? database.listAccounts().filter((item) => item.id === command.payload.accountId)

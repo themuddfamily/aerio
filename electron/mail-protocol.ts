@@ -8,6 +8,8 @@ import type {
   MailRule,
   MailRuleInput,
   MailRuleRunResult,
+  MailSavedSearch,
+  MailSavedSearchInput,
   MailSnooze,
   MailMessageSource,
   MailThreadDetail,
@@ -57,6 +59,9 @@ export type MailWorkerCommand =
   | { type: 'rules:save'; payload: MailRuleInput }
   | { type: 'rules:delete'; payload: { id: string } }
   | { type: 'rules:run'; payload: { id: string } }
+  | { type: 'saved-searches:list' }
+  | { type: 'saved-searches:save'; payload: MailSavedSearchInput }
+  | { type: 'saved-searches:delete'; payload: { id: string } }
   | { type: 'sync:start'; payload: { accountId?: string } }
   | { type: 'sync:pause'; payload: { accountId: string } }
   | { type: 'sync:resume'; payload: { accountId: string } }
@@ -78,6 +83,8 @@ export type MailWorkerResult =
   | MailRule
   | MailRule[]
   | MailRuleRunResult
+  | MailSavedSearch
+  | MailSavedSearch[]
   | MailSnooze[]
   | MailRecipientSuggestion[]
   | MailThreadDetail

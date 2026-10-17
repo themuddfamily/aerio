@@ -3,7 +3,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { MailAccountSummary, MailDraftRecord, MailPage, MailThreadDetail, SyncProgress } from '../mail-types'
+import type { MailAccountSummary, MailDraftRecord, MailPage, MailSavedSearch, MailThreadDetail, SyncProgress } from '../mail-types'
 import { ContextMenuProvider } from '../components/ContextMenu'
 import ConnectedMailView from './ConnectedMailView'
 import { formatMailDateHeading } from '../lib/mail-date'
@@ -70,6 +70,11 @@ const api = {
     drafts: { list: vi.fn(async () => [localDraft, scheduledDraft]), delete: vi.fn(async () => ({ id: 'draft-1', status: 'discarded', updatedAt: new Date().toISOString() })), cancelSend: vi.fn(async (id: string) => ({ id, status: 'local', updatedAt: new Date().toISOString() })), get: vi.fn(async () => scheduledDraft) },
     attachments: { open: vi.fn(async () => ({})), save: vi.fn(async () => ({ savedPath: 'C:\\saved\\report.pdf' })) },
     storage: vi.fn(async () => ({ totalBytes: 2048, freeBytes: 4096, accounts: [] })),
+    savedSearches: {
+      list: vi.fn(async (): Promise<MailSavedSearch[]> => []),
+      save: vi.fn(async (input: any): Promise<MailSavedSearch> => ({ ...input, id: input.id ?? 'saved-new', createdAt: '2026-08-08T10:00:00Z', updatedAt: '2026-08-08T10:00:00Z' })),
+      delete: vi.fn(async () => undefined)
+    },
     onEvent: vi.fn((callback: (event: any) => void) => { emitMail = callback; return vi.fn() })
   },
   window: { openMessage: vi.fn(async () => undefined) }
@@ -120,6 +125,8 @@ beforeEach(() => {
   api.mail.attachments.save.mockResolvedValue({ savedPath: 'C:\\saved\\report.pdf' })
   api.mail.storage.mockResolvedValue({ totalBytes: 2048, freeBytes: 4096, accounts: [] })
   api.window.openMessage.mockResolvedValue(undefined)
+  api.mail.savedSearches.list.mockResolvedValue([])
+  api.mail.savedSearches.delete.mockResolvedValue(undefined)
 })
 
 describe('ConnectedMailView', () => {
@@ -160,6 +167,40 @@ describe('ConnectedMailView', () => {
     await user.click(screen.getByRole('button', { name: 'Clear mail search' }))
     expect(screen.getByLabelText('Search mail')).toHaveValue('')
     await user.click(screen.getByRole('button', { name: /All accounts/ }))
+  })
+
+  it('shows query validation inline without listing, and saves, opens, and deletes saved searches', async () => {
+    const user = userEvent.setup()
+    const saved: MailSavedSearch = { id: 'saved-1', name: 'Unpaid invoices', query: 'invoice -paid', folder: 'all', accountId: 'account', filters: { unread: true }, createdAt: '2026-08-08T10:00:00Z', updatedAt: '2026-08-08T10:00:00Z' }
+    api.mail.savedSearches.list.mockResolvedValue([saved])
+    renderMail(); await screen.findByText('Launch & plans')
+    const sidebar = within(document.querySelector('.context-sidebar')!)
+    await user.click(await sidebar.findByRole('button', { name: 'Unpaid invoices' }))
+    await waitFor(() => expect(api.mail.mail.list).toHaveBeenCalledWith(expect.objectContaining({ folder: 'all', accountIds: ['account'], search: 'invoice -paid', filters: { unread: true } })))
+    expect(screen.getByLabelText('Search mail')).toHaveValue('invoice -paid')
+    expect(sidebar.getByRole('button', { name: 'Unpaid invoices' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Saved as Unpaid invoices' })).toBeInTheDocument()
+
+    api.mail.mail.list.mockClear()
+    await user.type(screen.getByLabelText('Search mail'), ' AND')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Add a search term after AND')
+    expect(api.mail.mail.list).not.toHaveBeenCalledWith(expect.objectContaining({ search: 'invoice -paid AND' }))
+    expect(screen.getByRole('button', { name: 'Save search' })).toBeDisabled()
+    expect(sidebar.getByRole('button', { name: 'Unpaid invoices' })).toHaveAttribute('aria-pressed', 'false')
+
+    await user.clear(screen.getByLabelText('Search mail'))
+    await user.type(screen.getByLabelText('Search mail'), 'from:ada "launch plan"')
+    await user.click(screen.getByRole('button', { name: 'Save search' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save search/ })
+    await user.clear(within(dialog).getByLabelText('Name')); await user.type(within(dialog).getByLabelText('Name'), 'Ada launch')
+    await user.click(within(dialog).getByRole('button', { name: 'Save search' }))
+    await waitFor(() => expect(api.mail.savedSearches.save).toHaveBeenCalledWith({ name: 'Ada launch', query: 'from:ada "launch plan"', folder: 'all', accountId: 'account', filters: { unread: true } }))
+    expect(await sidebar.findByRole('button', { name: 'Ada launch' })).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.contextMenu(sidebar.getByRole('button', { name: 'Unpaid invoices' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete saved search' }))
+    await waitFor(() => expect(api.mail.savedSearches.delete).toHaveBeenCalledWith('saved-1'))
+    await waitFor(() => expect(sidebar.queryByRole('button', { name: 'Unpaid invoices' })).not.toBeInTheDocument())
   })
 
   it('selects conversations with Ctrl-click without opening them and supports range and keyboard selection', async () => {

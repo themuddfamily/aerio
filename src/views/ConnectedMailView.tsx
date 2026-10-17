@@ -11,6 +11,11 @@ import MailOrganizeModal from '../components/MailOrganizeModal'
 import MailMessageSourceModal from '../components/MailMessageSourceModal'
 import MailRulesModal from '../components/MailRulesModal'
 import MailSearchFiltersPanel from '../components/MailSearchFiltersPanel'
+import { MailSavedSearchList, MailSaveSearchModal, savedSearchFromView, useMailSavedSearches, type MailSearchView } from '../components/MailSavedSearches'
+import { savedSearchMatchesView } from '../lib/mail-saved-search'
+import { mailSearchQueryError } from '../lib/mail-search-query'
+import { Bookmark } from 'lucide-react'
+import type { MailSavedSearch, MailSavedSearchInput } from '../mail-types'
 import MailSnoozeModal from '../components/MailSnoozeModal'
 import SenderAvatar from '../components/SenderAvatar'
 import ThreadListPreview from '../components/ThreadListPreview'
@@ -83,6 +88,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [search, setSearch] = useState('')
   const [searchFilters, setSearchFilters] = useState<MailSearchFilters>({})
   const [searchFiltersOpen, setSearchFiltersOpen] = useState(false)
+  const savedSearches = useMailSavedSearches(onToast)
+  const [savingSearch, setSavingSearch] = useState<MailSavedSearchInput>()
   const [selectedKey, setSelectedKey] = useState('')
   const [thread, setThread] = useState<MailThreadDetail>()
   const [expandedMessageId, setExpandedMessageId] = useState<string>()
@@ -122,6 +129,9 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const selectedLabels = selected ? visibleMailLabels(selected.accountId, selected.labelIds, labels) : []
   const checkedItems = useMemo(() => page.items.filter((item) => checkedKeys.has(`${item.accountId}:${item.id}`)), [checkedKeys, page.items])
   const activeSearchFilterCount = Object.values(searchFilters).filter((value) => value !== undefined && value !== '').length
+  const searchError = useMemo(() => mailSearchQueryError(search), [search])
+  const searchView: MailSearchView = { accountId, folder, labelId, query: search, filters: searchFilters }
+  const activeSavedSearch = savedSearches.searches.find((item) => savedSearchMatchesView(item, searchView))
 
   useEffect(() => {
     if (!searchRequest.id) return
@@ -192,7 +202,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     loadingMoreRef.current = false
     setLoadingMore(false)
     setLoadMoreError(false)
-    if (!accounts.length) {
+    // An invalid search shows its validation message instead of stale or unfiltered results.
+    if (!accounts.length || searchError) {
       setPage(emptyPage)
       return
     }
@@ -209,7 +220,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     } finally {
       if (request === pageRequest.current) setLoading(false)
     }
-  }, [accounts.length, onToast, requestMailPage])
+  }, [accounts.length, onToast, requestMailPage, searchError])
 
   const loadMore = useCallback(async () => {
     const cursor = page.nextCursor
@@ -556,6 +567,24 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     setLabelId(undefined)
   }
 
+  function openSavedSearch(item: MailSavedSearch) {
+    setAccountId(item.accountId && accounts.some((account) => account.id === item.accountId) ? item.accountId : 'all')
+    setFolder(item.folder)
+    setLabelId(item.labelId)
+    setSearch(item.query)
+    setSearchFilters(item.filters)
+    setSearchFiltersOpen(false)
+  }
+
+  async function replaceSavedSearch(item: MailSavedSearch) {
+    try {
+      await savedSearches.save(savedSearchFromView(searchView, item.name, item.id))
+      onToast(`Updated “${item.name}”`)
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'The saved search could not be updated')
+    }
+  }
+
   function toggleLabel(label: MailLabel) {
     const selected = accountId === label.accountId && labelId === label.id
     setAccountId(label.accountId)
@@ -854,6 +883,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
             { label: 'New message', icon: Plus, separatorBefore: true, disabled: !accounts.some((account) => account.id === label.accountId && !account.archived), action: () => setCompose({}) },
             { label: 'Check account for mail', icon: RefreshCw, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => startSync(label.accountId) }
           ], label.name)}><Tag size={15} /><span>{label.name}</span></button> })}</div>}
+        <MailSavedSearchList searches={savedSearches.searches} view={searchView} onOpen={openSavedSearch} onEdit={setSavingSearch} onReplace={(item) => void replaceSavedSearch(item)} onDelete={(item) => { if (window.confirm(`Delete the saved search “${item.name}”? Mail is not affected.`)) void savedSearches.remove(item) }} />
         <div className="mail-sidebar-footer">
           <button onClick={() => setRulesOpen(true)}><Filter size={14} /> Mail rules</button>
           <button onClick={() => void showStorage()}><Download size={14} /> Offline storage</button>
@@ -873,8 +903,10 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
             <Search size={15} />
             <input ref={searchInputRef} aria-label="Search mail" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search offline mail…" />
             {(search || activeSearchFilterCount > 0) && <button className="mail-search-clear" aria-label="Clear mail search" title="Clear search and filters" onClick={() => { setSearch(''); setSearchFilters({}); setSearchFiltersOpen(false) }}><X size={14} /></button>}
+            {(search.trim() || activeSearchFilterCount > 0) && <button className={`mail-search-clear mail-search-save ${activeSavedSearch ? 'active' : ''}`} aria-label={activeSavedSearch ? `Saved as ${activeSavedSearch.name}` : 'Save search'} title={activeSavedSearch ? `Saved as “${activeSavedSearch.name}”` : 'Save this search to the sidebar'} disabled={Boolean(searchError)} onClick={() => setSavingSearch(activeSavedSearch ?? savedSearchFromView(searchView, search.trim().slice(0, 100)))}><Bookmark size={14} fill={activeSavedSearch ? 'currentColor' : 'none'} /></button>}
             <button className={`mail-search-filter-button ${activeSearchFilterCount ? 'active' : ''}`} aria-expanded={searchFiltersOpen} aria-haspopup="dialog" title="Advanced search filters" onClick={() => setSearchFiltersOpen((open) => !open)}><Filter size={14} /><span>{activeSearchFilterCount || 'Filters'}</span></button>
           </div>
+          {searchError && <p className="mail-search-error" role="alert">{searchError}</p>}
           {searchFiltersOpen && <MailSearchFiltersPanel value={searchFilters} onApply={(next) => { setSearchFilters(next); setSearchFiltersOpen(false) }} onClose={() => setSearchFiltersOpen(false)} />}
         </div>
         {checkedItems.length > 0 && <div className="bulk-mail-toolbar">
@@ -1003,6 +1035,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       {settingsAccount && <MailAccountSettingsModal account={settingsAccount} onSaved={(updated) => { setAccounts((items) => items.map((item) => item.id === updated.id ? updated : item)); setSettingsAccount(updated) }} onClose={() => setSettingsAccount(undefined)} onToast={onToast} />}
       {organizeMode && <MailOrganizeModal mode={organizeMode} items={checkedItems} accounts={accounts} labels={labels} onApply={applyOrganizeRequests} onClose={() => setOrganizeMode(undefined)} />}
       {snoozeItems && <MailSnoozeModal count={snoozeItems.length} onApply={(until) => applySnooze(snoozeItems, until)} onClose={() => setSnoozeItems(undefined)} />}
+      {savingSearch && <MailSaveSearchModal accounts={accounts} labels={labels} initial={savingSearch} onClose={() => setSavingSearch(undefined)} onSave={async (input) => { const saved = await savedSearches.save(input); openSavedSearch(saved); onToast(`Saved “${saved.name}”`) }} />}
       {rulesOpen && <MailRulesModal accounts={accounts} labels={labels} onToast={onToast} onClose={() => setRulesOpen(false)} />}
       {sourceViewer && <MailMessageSourceModal {...sourceViewer} onClose={() => setSourceViewer(undefined)} />}
       {messageTools.dialog}

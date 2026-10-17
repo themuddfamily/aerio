@@ -242,6 +242,23 @@ export interface MailQuery {
   pageSize?: number
 }
 
+/** A named search scoped to an account (or all accounts), mailbox, and optional label. */
+export interface MailSavedSearchInput {
+  id?: string
+  name: string
+  query: string
+  accountId?: string
+  folder: MailFolder
+  labelId?: string
+  filters: MailSearchFilters
+}
+
+export interface MailSavedSearch extends MailSavedSearchInput {
+  id: string
+  createdAt: string
+  updatedAt: string
+}
+
 export type MailFolderUnreadCounts = Record<MailFolder, number>
 export type MailAccountUnreadCounts = Record<string, number>
 
@@ -458,6 +475,11 @@ export interface MailDesktopApi {
     save(input: MailRuleInput): Promise<MailRule>
     delete(id: string): Promise<void>
     run(id: string): Promise<MailRuleRunResult>
+  }
+  savedSearches: {
+    list(): Promise<MailSavedSearch[]>
+    save(input: MailSavedSearchInput): Promise<MailSavedSearch>
+    delete(id: string): Promise<void>
   }
   onEvent(callback: (event: MailWorkerEvent) => void): () => void
 }
