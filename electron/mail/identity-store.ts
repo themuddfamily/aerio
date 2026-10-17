@@ -94,6 +94,9 @@ export class MailIdentityStore {
         refreshed_at TEXT NOT NULL
       );
     `)
+    // Send as / send on behalf of a shared or delegated mailbox (E40); existing rows are plain aliases.
+    const columns = new Set((this.db.prepare('PRAGMA table_info(mail_sender_identities)').all() as { name: string }[]).map((column) => column.name))
+    if (!columns.has('delegation')) this.db.exec('ALTER TABLE mail_sender_identities ADD COLUMN delegation TEXT')
   }
 
   private identity(row: Row): MailSenderIdentity {
@@ -108,6 +111,7 @@ export class MailIdentityStore {
       isDefault: Boolean(row.is_default),
       ...(row.new_signature_id ? { newSignatureId: String(row.new_signature_id) } : {}),
       ...(row.reply_signature_id ? { replySignatureId: String(row.reply_signature_id) } : {}),
+      ...(row.delegation === 'send-as' || row.delegation === 'send-on-behalf' ? { delegation: row.delegation } : {}),
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at)
     }
@@ -172,6 +176,11 @@ export class MailIdentityStore {
     const newSignatureId = signatureId(input.newSignatureId, existing?.newSignatureId)
     const replySignatureId = signatureId(input.replySignatureId, existing?.replySignatureId)
     const replyTo = input.replyTo === undefined ? existing?.replyTo ?? [] : normalizeReplyTo(input.replyTo)
+    if (input.delegation !== undefined && input.delegation !== null && input.delegation !== 'send-as' && input.delegation !== 'send-on-behalf') throw new Error('Choose send as or send on behalf')
+    if (input.delegation && ((existing && existing.source !== 'manual') || (account.provider !== 'exchange' && account.provider !== 'microsoft'))) {
+      throw new Error('Send as and send on behalf are available for added addresses of Exchange and Microsoft 365 accounts')
+    }
+    const delegation = input.delegation === undefined ? existing?.delegation : input.delegation ?? undefined
     const timestamp = nowIso()
     const id = existing?.id ?? crypto.randomUUID()
     // The primary display name is the account's sender name, edited in account settings.
@@ -180,12 +189,12 @@ export class MailIdentityStore {
     try {
       if (input.isDefault) this.db.prepare('UPDATE mail_sender_identities SET is_default=0 WHERE account_id=?').run(account.id)
       this.db.prepare(`
-        INSERT INTO mail_sender_identities(id,account_id,email,name,reply_to_json,source,status,is_default,new_signature_id,reply_signature_id,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO mail_sender_identities(id,account_id,email,name,reply_to_json,source,status,is_default,new_signature_id,reply_signature_id,delegation,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET email=excluded.email,name=excluded.name,reply_to_json=excluded.reply_to_json,is_default=excluded.is_default,
-          new_signature_id=excluded.new_signature_id,reply_signature_id=excluded.reply_signature_id,updated_at=excluded.updated_at
+          new_signature_id=excluded.new_signature_id,reply_signature_id=excluded.reply_signature_id,delegation=excluded.delegation,updated_at=excluded.updated_at
       `).run(id, account.id, email, name, JSON.stringify(replyTo), existing?.source ?? 'manual', existing?.status ?? 'unverified',
-        input.isDefault ? 1 : existing?.isDefault && input.isDefault !== false ? 1 : 0, newSignatureId ?? null, replySignatureId ?? null, existing?.createdAt ?? timestamp, timestamp)
+        input.isDefault ? 1 : existing?.isDefault && input.isDefault !== false ? 1 : 0, newSignatureId ?? null, replySignatureId ?? null, delegation ?? null, existing?.createdAt ?? timestamp, timestamp)
       if (!this.db.prepare('SELECT 1 FROM mail_sender_identities WHERE account_id=? AND is_default=1').get(account.id)) {
         this.db.prepare('UPDATE mail_sender_identities SET is_default=1 WHERE id=?').run(primaryIdentityId(account.id))
       }

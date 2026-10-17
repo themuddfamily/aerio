@@ -63,6 +63,8 @@ import { supportedSendOptions } from '../src/lib/mail-send-options'
 import { isLocalOnlyMailAction } from '../src/lib/mail-pins'
 import { handleMailFolderPreferenceCommand, type MailFolderPreferenceCommand } from './mail/folder-preferences'
 import { categoryHintFromHeaders, handleInboxCategoryCommand, isInboxCategoryCommand } from './mail/inbox-category-worker'
+import { isMailboxOwnerCommand, MailboxOwnerService } from './mail/mailbox-owner-worker'
+import { PRIMARY_MAILBOX_OWNER } from '../src/mailbox-owner-types'
 import { isMicrosoftInferenceLabel } from '../src/lib/mail-categories'
 import type { MailMergeJobInput } from '../src/mail-merge-types'
 import type { MailCategoryId } from '../src/mail-category-types'
@@ -232,6 +234,32 @@ async function exchangeClientFor(accountId: string) {
   const client = ewsClientFor(credential.config)
   exchangeClients.set(accountId, { key, client })
   return client
+}
+
+// Shared/delegated mailboxes and public folders (E40) synchronize after the account's own mailbox.
+let mailboxOwnerInstance: MailboxOwnerService | undefined
+function mailboxOwners() {
+  if (!database) throw new Error('Database is not initialized')
+  if (!mailboxOwnerInstance) {
+    mailboxOwnerInstance = new MailboxOwnerService({
+      database,
+      exchangeClient: exchangeClientFor,
+      exchangeConfig: async (accountId) => {
+        const credential = await getCredential(accountId)
+        if (credential.type !== 'exchange') throw new Error('The Exchange account does not have server credentials')
+        return credential.config
+      },
+      microsoftClient: (accountId, mailbox) => mailbox ? new MicrosoftGraphClient(async () => {
+        const credential = await getCredential(accountId)
+        if (credential.type !== 'oauth') throw new Error('The Microsoft account does not have OAuth credentials')
+        return credential.accessToken
+      }, { mailbox }) : microsoftClientFor(accountId),
+      store: (accountId, message) => parseRawAndStore(accountId, message),
+      emit,
+      checkpoint: (accountId) => assertCanSync(accountId)
+    })
+  }
+  return mailboxOwnerInstance
 }
 
 let folderManagerInstance: MailFolderManager | undefined
@@ -909,8 +937,8 @@ async function syncAccount(accountId: string, forceFull = false) {
     if (database.offline) offline().expire()
     if (forceFull) database.resetInventory(accountId)
     if (provider === 'pop3') await syncPop3Account(accountId)
-    else if (provider === 'microsoft') await syncMicrosoftAccount(accountId)
-    else if (provider === 'exchange') await syncExchangeAccount(accountId)
+    else if (provider === 'microsoft') { await syncMicrosoftAccount(accountId); await mailboxOwners().syncAccount(accountId) }
+    else if (provider === 'exchange') { await syncExchangeAccount(accountId); await mailboxOwners().syncAccount(accountId) }
     else if (provider && provider !== 'gmail') await syncImapAccount(accountId)
     else if (forceFull || !database.getAccountHistory(accountId)) await downloadInventory(accountId)
     else await incrementalSync(accountId)
@@ -1000,7 +1028,16 @@ async function runOperations() {
     try {
       const provider = database.getAccount(accountId)?.provider ?? 'gmail'
       const archiveRemoval = database.archive.removalFor(row)
-      if (archiveRemoval) {
+      // Actions on a shared mailbox or public folder go to that owner, with its rights enforced (E40).
+      const ownerId = provider === 'exchange' || provider === 'microsoft' ? mailboxOwners().operationOwner(row) : PRIMARY_MAILBOX_OWNER
+      if (ownerId !== PRIMARY_MAILBOX_OWNER) {
+        const outcome = await mailboxOwners().runOperation(row)
+        if (outcome.status !== 'succeeded') {
+          emit({ type: 'operation', payload: { id, accountId, kind, status: outcome.status === 'held' ? 'queued' : 'failed', error: outcome.error } })
+          emit({ type: 'mail-changed', payload: { accountId, threadIds } })
+          continue
+        }
+      } else if (archiveRemoval) {
         // Automatic archiving removes exactly the archived messages, never whole conversations.
         await removeArchivedMessages({
           provider,
@@ -1231,6 +1268,12 @@ async function saveDraft(input: MailDraftInput) {
  */
 async function transmitMessage(input: MailDraftInput, provider: MailAccountSummary['provider'], sender: ReturnType<typeof senderFor>, remoteDraftId?: string): Promise<{ messageIdHeader?: string; threadId?: string }> {
   const from = sender?.from
+  if ((provider === 'exchange' || provider === 'microsoft') && sender?.identity?.delegation) {
+    // Send as / send on behalf of a shared or delegated mailbox (E40).
+    const mime = await protectOutgoing(createMimeBuffer(input, from), input, from)
+    await mailboxOwners().sendDelegated(database!.getAccount(input.accountId)!, sender.identity, mime, input.sendOptions, remoteDraftId)
+    return { messageIdHeader: messageIdFromMime(mime), threadId: input.threadId }
+  }
   if (provider === 'gmail') {
     const raw = protectionRequested(input) ? (await protectOutgoing(createMimeBuffer(input, from), input, from)).toString('base64url') : createMime(input, from)
     const reference = remoteDraftId
@@ -1578,6 +1621,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     offlineCommandsInstance = undefined
     // A download cut off by a crash leaves only a temporary file; the message stays queued and downloads again (E36).
     if (database.offline) removePartialDownloads(contentPath)
+    mailboxOwnerInstance = undefined
     // Imports that were queued (not running) when Aerio closed continue now;
     // interrupted ones wait for the user to resume them.
     if (database.localMail?.nextQueuedJob()) void importService().pump()
@@ -1667,6 +1711,9 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     if (!target) throw new Error('The destination folder no longer exists')
     const message = database.remoteMessagesForThreads(accountId, [threadId]).find((item) => item.id === messageId)
     if (!message) throw new Error('Message not found in this conversation')
+    if (destination.startsWith('owner:') || [...database.mailboxOwners.ownersOfThreads(accountId, [threadId])].some((owner) => owner !== PRIMARY_MAILBOX_OWNER)) {
+      throw new Error('Copying between a shared mailbox or public folder and your own mailbox is not supported. Forward the message instead.')
+    }
     if (account.provider === 'gmail') {
       if (target.type !== 'user' && target.id !== 'INBOX') throw new Error('Choose Inbox or a user label as the copy destination')
       await clientFor(accountId).copyToLabel(messageId, destination)
@@ -1731,7 +1778,10 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     return parseMessageSource(readFileSync(rawPath))
   }
   if (command.type === 'mail:action') {
-    const operation = database.applyLocalAction(command.payload)
+    // Read-only shared folders and removed mailboxes are refused here with an explanation (E40).
+    const plan = mailboxOwners().planAction(command.payload)
+    const operation = database.applyLocalAction(plan.input)
+    if (plan.ownerId !== PRIMARY_MAILBOX_OWNER) database.mailboxOwners.tagOperation(operation.id, plan.ownerId)
     emit({ type: 'operation', payload: operation })
     emit({ type: 'mail-changed', payload: { accountId: command.payload.accountId, threadIds: command.payload.threadIds } })
     return operation
@@ -1826,6 +1876,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     return result
   }
   if (isInboxCategoryCommand(command)) return handleInboxCategoryCommand(database, command, emit)
+  if (isMailboxOwnerCommand(command)) return mailboxOwners().handle(command)
   if (command.type === 'rules:list') return database.listRules(command.payload.accountIds)
   if (command.type === 'rules:save') return database.saveRule(command.payload)
   if (command.type === 'rules:delete') return database.deleteRule(command.payload.id)
@@ -2016,6 +2067,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     importServiceInstance = undefined
     pop3ServiceInstance = undefined
     offlineCommandsInstance = undefined
+    mailboxOwnerInstance = undefined
     return
   }
 }

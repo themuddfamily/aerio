@@ -141,6 +141,7 @@ export type MailWorkerCommand =
   | { type: 'pop3'; payload: import('./mail/pop3-sync').Pop3WorkerCommand }
   | { type: 'shutdown' }
   | import('./mail/inbox-category-worker').InboxCategoryCommand
+  | import('./mail/mailbox-owner-worker').MailboxOwnerCommand
 
 export type MailWorkerResult =
   | void
@@ -206,6 +207,7 @@ export type MailWorkerResult =
   | import('./mail/inbox-category-worker').InboxCategoryResult
   | import('./mail/mail-duplicates').MailDuplicateScan
   | import('./mail/mail-duplicates').MailDuplicateTrashResult
+  | import('./mail/mailbox-owner-worker').MailboxOwnerResult
 
 export interface WorkerRequest {
   kind: 'request'

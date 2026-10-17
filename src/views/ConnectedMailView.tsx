@@ -4,6 +4,7 @@ import {
   Star, Tag, Tags, Trash2, Undo2, UserPlus, Users, WifiOff, X
 } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { mailboxRestriction } from '../lib/mailbox-owners'
 import MailComposeModal from '../components/MailComposeModal'
 import MailAccountSetupModal from '../components/MailAccountSetupModal'
 import MailAccountSettingsModal from '../components/MailAccountSettingsModal'
@@ -180,6 +181,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null)
   const selected = page.items.find((item) => `${item.accountId}:${item.id}` === selectedKey)
   const selectedAccount = accounts.find((item) => item.id === selected?.accountId)
+  // Read-only shared folders and removed mailboxes (E40); the worker refuses these changes too.
+  const selectedRestriction = selected ? mailboxRestriction(labels, selected.accountId, selected.labelIds) : undefined
   const selectedLabels = selected ? visibleMailLabels(selected.accountId, selected.labelIds, labels) : []
   const checkedItems = useMemo(() => page.items.filter((item) => checkedKeys.has(`${item.accountId}:${item.id}`)), [checkedKeys, page.items])
   const activeSearchFilterCount = Object.values(searchFilters).filter((value) => value !== undefined && value !== '').length
@@ -861,6 +864,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const summaryMenu = (item: MailThreadSummary): ContextMenuItem[] => {
     const account = accounts.find((candidate) => candidate.id === item.accountId)
     const readOnly = Boolean(account?.archived)
+    const changeLocked = readOnly || Boolean(mailboxRestriction(labels, item.accountId, item.labelIds))
     const inInbox = item.labelIds.includes('INBOX')
     const inSpam = item.labelIds.includes('SPAM')
     return [
@@ -869,18 +873,18 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       { label: 'Reply', icon: Reply, shortcut: keyLabel('mail.reply'), separatorBefore: true, disabled: readOnly || item.draft, action: () => composeFromSummary(item) },
       { label: 'Reply all', icon: ReplyAll, shortcut: keyLabel('mail.replyAll'), disabled: readOnly || item.draft, action: () => composeFromSummary(item, false, true) },
       { label: 'Forward', icon: Forward, shortcut: keyLabel('mail.forward'), disabled: readOnly, action: () => composeFromSummary(item, true) },
-      { label: item.unread ? 'Mark as read' : 'Mark as unread', icon: item.unread ? MailOpen : Mail, shortcut: keyLabel(item.unread ? 'mail.markRead' : 'mail.markUnread'), separatorBefore: true, disabled: readOnly, action: () => applyAction(item.unread ? 'read' : 'unread', item.accountId, [item.id]) },
-      { label: item.starred ? 'Remove star' : 'Add star', icon: Star, shortcut: keyLabel('mail.toggleStar'), checked: item.starred, disabled: readOnly, action: () => applyAction(item.starred ? 'unstar' : 'star', item.accountId, [item.id]) },
+      { label: item.unread ? 'Mark as read' : 'Mark as unread', icon: item.unread ? MailOpen : Mail, shortcut: keyLabel(item.unread ? 'mail.markRead' : 'mail.markUnread'), separatorBefore: true, disabled: changeLocked, action: () => applyAction(item.unread ? 'read' : 'unread', item.accountId, [item.id]) },
+      { label: item.starred ? 'Remove star' : 'Add star', icon: Star, shortcut: keyLabel('mail.toggleStar'), checked: item.starred, disabled: changeLocked, action: () => applyAction(item.starred ? 'unstar' : 'star', item.accountId, [item.id]) },
       { label: item.pinned ? 'Unpin conversation' : 'Pin to top', icon: item.pinned ? PinOff : Pin, checked: Boolean(item.pinned), action: () => togglePin(checkedKeys.has(`${item.accountId}:${item.id}`) ? checkedItems : [item], item.pinned ? 'unpin' : 'pin') },
       ...(inboxCategories.config ? [{ label: 'Move to inbox tab…', icon: Layers, action: () => setCategoryItems(checkedKeys.has(`${item.accountId}:${item.id}`) ? checkedItems : [item]) }] : []),
-      { label: item.important ? 'Mark as not important' : 'Mark as important', icon: Tag, checked: item.important, disabled: readOnly, action: () => applyAction(item.important ? 'unimportant' : 'important', item.accountId, [item.id]) },
-      ...(!item.trashed ? [{ label: inInbox ? 'Archive' : 'Move to inbox', icon: inInbox ? Archive : Inbox, shortcut: inInbox ? keyLabel('mail.archive') : undefined, separatorBefore: true, disabled: readOnly, action: () => applyAction(inInbox ? 'archive' : inSpam ? 'move' : 'unarchive', item.accountId, [item.id], true, inSpam ? 'INBOX' : undefined) }] satisfies ContextMenuItem[] : []),
-      { label: 'Move to…', icon: FolderInput, disabled: readOnly, action: () => { setCheckedKeys(new Set([`${item.accountId}:${item.id}`])); setOrganizeMode('move') } },
+      { label: item.important ? 'Mark as not important' : 'Mark as important', icon: Tag, checked: item.important, disabled: changeLocked, action: () => applyAction(item.important ? 'unimportant' : 'important', item.accountId, [item.id]) },
+      ...(!item.trashed ? [{ label: inInbox ? 'Archive' : 'Move to inbox', icon: inInbox ? Archive : Inbox, shortcut: inInbox ? keyLabel('mail.archive') : undefined, separatorBefore: true, disabled: changeLocked, action: () => applyAction(inInbox ? 'archive' : inSpam ? 'move' : 'unarchive', item.accountId, [item.id], true, inSpam ? 'INBOX' : undefined) }] satisfies ContextMenuItem[] : []),
+      { label: 'Move to…', icon: FolderInput, disabled: changeLocked, action: () => { setCheckedKeys(new Set([`${item.accountId}:${item.id}`])); setOrganizeMode('move') } },
       { label: 'Manage labels…', icon: Tags, disabled: readOnly || accounts.find((account) => account.id === item.accountId)?.provider !== 'gmail', action: () => { setCheckedKeys(new Set([`${item.accountId}:${item.id}`])); setOrganizeMode('label') } },
-      { label: item.snoozedUntil ? 'Return to Inbox now' : 'Snooze…', icon: Clock3, disabled: readOnly, action: () => item.snoozedUntil ? unsnooze(item) : setSnoozeItems([item]) },
-      { label: item.trashed ? 'Restore from Trash' : 'Move to Trash', icon: Trash2, shortcut: item.trashed ? undefined : keyLabel('mail.trash'), danger: !item.trashed, disabled: readOnly, action: () => applyAction(item.trashed ? 'untrash' : 'trash', item.accountId, [item.id]) },
+      { label: item.snoozedUntil ? 'Return to Inbox now' : 'Snooze…', icon: Clock3, disabled: changeLocked, action: () => item.snoozedUntil ? unsnooze(item) : setSnoozeItems([item]) },
+      { label: item.trashed ? 'Restore from Trash' : 'Move to Trash', icon: Trash2, shortcut: item.trashed ? undefined : keyLabel('mail.trash'), danger: !item.trashed, disabled: changeLocked, action: () => applyAction(item.trashed ? 'untrash' : 'trash', item.accountId, [item.id]) },
       ...quickActions.quickActions.map((quickAction, index): ContextMenuItem => ({
-        label: `Quick action: ${quickAction.name}`, icon: Zap, separatorBefore: index === 0, disabled: readOnly,
+        label: `Quick action: ${quickAction.name}`, icon: Zap, separatorBefore: index === 0, disabled: changeLocked,
         shortcut: quickAction.shortcut ? keyLabel(quickActionCommandId(quickAction.shortcut)) : undefined,
         action: () => runQuickAction(quickAction, checkedKeys.has(`${item.accountId}:${item.id}`) ? checkedItems : [item])
       })),
@@ -908,6 +912,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     const message = thread.messages.find((item) => item.id === expandedMessageId) ?? thread.messages.at(-1)
     if (!message) return
     const readOnly = Boolean(selectedAccount?.archived)
+    const changeLocked = readOnly || Boolean(selectedRestriction)
     const canManageLabels = selectedAccount?.provider === 'gmail' && !readOnly
     const selectForOrganizing = (mode: 'move' | 'label') => {
       setCheckedKeys(new Set([`${selected.accountId}:${selected.id}`]))
@@ -917,10 +922,10 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       { label: 'Open in new window', icon: ExternalLink, action: () => openMessageWindow(selected, message.id) },
       { label: 'Reply all', icon: ReplyAll, shortcut: keyLabel('mail.replyAll'), disabled: readOnly, action: () => setCompose({ reply: thread, replyAll: true }) },
       { label: 'Forward', icon: Forward, shortcut: keyLabel('mail.forward'), disabled: readOnly, action: () => setCompose({ reply: thread, forward: true }) },
-      { label: selected.important ? 'Mark as not important' : 'Mark as important', icon: Tag, checked: selected.important, separatorBefore: true, disabled: readOnly, action: () => applyAction(selected.important ? 'unimportant' : 'important', selected.accountId, [selected.id]) },
-      { label: 'Move to…', icon: FolderInput, disabled: readOnly, action: () => selectForOrganizing('move') },
+      { label: selected.important ? 'Mark as not important' : 'Mark as important', icon: Tag, checked: selected.important, separatorBefore: true, disabled: changeLocked, action: () => applyAction(selected.important ? 'unimportant' : 'important', selected.accountId, [selected.id]) },
+      { label: 'Move to…', icon: FolderInput, disabled: changeLocked, action: () => selectForOrganizing('move') },
       { label: 'Manage tags / labels…', icon: Tags, disabled: !canManageLabels, action: () => selectForOrganizing('label') },
-      { label: selected.snoozedUntil ? 'Return to Inbox now' : 'Snooze…', icon: Clock3, disabled: readOnly, action: () => selected.snoozedUntil ? unsnooze(selected) : setSnoozeItems([selected]) },
+      { label: selected.snoozedUntil ? 'Return to Inbox now' : 'Snooze…', icon: Clock3, disabled: changeLocked, action: () => selected.snoozedUntil ? unsnooze(selected) : setSnoozeItems([selected]) },
       { label: 'View message headers', icon: AtSign, separatorBefore: true, action: () => viewMessageData(message, 'headers') },
       { label: 'View message source', icon: FileText, action: () => viewMessageData(message, 'source') },
       { label: 'Copy subject', icon: Copy, separatorBefore: true, action: () => copyText(selected.subject) },
@@ -1203,17 +1208,18 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
 
       <section className="reader-panel">
         {selected && thread ? <>
+          {selectedRestriction && <p className="mailbox-readonly-banner" role="status">{selectedRestriction}</p>}
           <div className="reader-toolbar">
             <div className="reader-toolbar-primary">
               <button className="reader-toolbar-action" disabled={selectedAccount?.archived || isLocalFoldersAccount(selectedAccount)} title="Reply" onClick={() => setCompose({ reply: thread })}><Reply size={17} /><span>Reply</span></button>
               <button className="reader-toolbar-action" disabled={selectedAccount?.archived || isLocalFoldersAccount(selectedAccount)} title="Reply all" onClick={() => setCompose({ reply: thread, replyAll: true })}><ReplyAll size={17} /><span>Reply all</span></button>
-              <button className="reader-toolbar-action" disabled={selectedAccount?.archived} title={selected.unread ? 'Mark read' : 'Mark unread'} onClick={() => void applyAction(selected.unread ? 'read' : 'unread')}>{selected.unread ? <MailOpen size={17} /> : <Mail size={17} />}<span>{selected.unread ? 'Read' : 'Unread'}</span></button>
-              <button className="reader-toolbar-action" disabled={selectedAccount?.archived || selected.trashed} title={selected.labelIds.includes('INBOX') ? 'Archive' : 'Move to inbox'} onClick={() => void applyAction(selected.labelIds.includes('INBOX') ? 'archive' : selected.labelIds.includes('SPAM') ? 'move' : 'unarchive', undefined, undefined, true, selected.labelIds.includes('SPAM') ? 'INBOX' : undefined)}>{selected.labelIds.includes('INBOX') ? <Archive size={17} /> : <Inbox size={17} />}<span>{selected.labelIds.includes('INBOX') ? 'Archive' : 'Inbox'}</span></button>
-              <button className="reader-toolbar-action" disabled={selectedAccount?.archived} title={selected.trashed ? 'Restore from Trash' : 'Move to Trash'} onClick={() => void applyAction(selected.trashed ? 'untrash' : 'trash')}>{selected.trashed ? <Undo2 size={17} /> : <Trash2 size={17} />}<span>{selected.trashed ? 'Restore' : 'Trash'}</span></button>
+              <button className="reader-toolbar-action" disabled={selectedAccount?.archived || Boolean(selectedRestriction)} title={selected.unread ? 'Mark read' : 'Mark unread'} onClick={() => void applyAction(selected.unread ? 'read' : 'unread')}>{selected.unread ? <MailOpen size={17} /> : <Mail size={17} />}<span>{selected.unread ? 'Read' : 'Unread'}</span></button>
+              <button className="reader-toolbar-action" disabled={selectedAccount?.archived || selected.trashed || Boolean(selectedRestriction)} title={selected.labelIds.includes('INBOX') ? 'Archive' : 'Move to inbox'} onClick={() => void applyAction(selected.labelIds.includes('INBOX') ? 'archive' : selected.labelIds.includes('SPAM') ? 'move' : 'unarchive', undefined, undefined, true, selected.labelIds.includes('SPAM') ? 'INBOX' : undefined)}>{selected.labelIds.includes('INBOX') ? <Archive size={17} /> : <Inbox size={17} />}<span>{selected.labelIds.includes('INBOX') ? 'Archive' : 'Inbox'}</span></button>
+              <button className="reader-toolbar-action" disabled={selectedAccount?.archived || Boolean(selectedRestriction)} title={selected.trashed ? 'Restore from Trash' : 'Move to Trash'} onClick={() => void applyAction(selected.trashed ? 'untrash' : 'trash')}>{selected.trashed ? <Undo2 size={17} /> : <Trash2 size={17} />}<span>{selected.trashed ? 'Restore' : 'Trash'}</span></button>
               <span className="toolbar-divider" />
-              <button className={`reader-toolbar-action ${selected.starred ? 'active' : ''}`} disabled={selectedAccount?.archived} title={selected.starred ? 'Unstar' : 'Star'} onClick={() => void applyAction(selected.starred ? 'unstar' : 'star')}><Star size={17} fill={selected.starred ? 'currentColor' : 'none'} /><span>{selected.starred ? 'Unstar' : 'Star'}</span></button>
+              <button className={`reader-toolbar-action ${selected.starred ? 'active' : ''}`} disabled={selectedAccount?.archived || Boolean(selectedRestriction)} title={selected.starred ? 'Unstar' : 'Star'} onClick={() => void applyAction(selected.starred ? 'unstar' : 'star')}><Star size={17} fill={selected.starred ? 'currentColor' : 'none'} /><span>{selected.starred ? 'Unstar' : 'Star'}</span></button>
               <button className={`reader-toolbar-action ${selected.pinned ? 'active' : ''}`} title={selected.pinned ? 'Unpin conversation' : 'Pin to top'} onClick={() => void togglePin([selected], selected.pinned ? 'unpin' : 'pin')}>{selected.pinned ? <PinOff size={17} /> : <Pin size={17} />}<span>{selected.pinned ? 'Unpin' : 'Pin'}</span></button>
-              <MailQuickActionButtons quickActions={quickActions.quickActions} disabled={selectedAccount?.archived} className="reader-toolbar-action" onRun={(quickAction) => void runQuickAction(quickAction, [selected])} />
+              <MailQuickActionButtons quickActions={quickActions.quickActions} disabled={selectedAccount?.archived || Boolean(selectedRestriction)} className="reader-toolbar-action" onRun={(quickAction) => void runQuickAction(quickAction, [selected])} />
             </div>
             <div className="reader-toolbar-secondary">
               <button className="icon-button" aria-label="More message actions" title="More" onClick={showReaderMoreMenu}><MoreVertical size={18} /></button>

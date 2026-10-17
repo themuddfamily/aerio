@@ -447,6 +447,8 @@ export interface MailLabel {
   type: 'system' | 'user'
   color?: string
   parentId?: string
+  /** Set for folders of a shared/delegated mailbox or public folders (E40). */
+  owner?: import('./mailbox-owner-types').MailLabelOwner
 }
 
 export interface MailFolderCapabilities {

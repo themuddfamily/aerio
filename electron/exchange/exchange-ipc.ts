@@ -71,7 +71,7 @@ export function registerExchangeAccounts(options: ExchangeIpcOptions) {
       folderManagement: true,
       notes: [
         'Exchange Notes folders synchronize with Aerio Notes (title, body, categories, and attachments).',
-        'Free/busy lookup, tasks, delegate mailboxes, and public folders are not synchronized yet. The global address list is available in Contacts › Directory and in recipient lookup.',
+        'Free/busy lookup and tasks are not synchronized yet. The global address list is available in Contacts › Directory and in recipient lookup. Shared and delegated mailboxes, delegates, and public folders are under Shared mailboxes & public folders.',
         ...(auth === 'bearer' ? ['OAuth tokens are not refreshed by Aerio; paste a new token when this one expires.'] : []),
         ...(auth === 'basic' ? ['Basic authentication sends the password with every request over HTTPS.'] : [])
       ]

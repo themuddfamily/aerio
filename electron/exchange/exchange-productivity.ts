@@ -13,6 +13,7 @@ import {
   mapContact, modifiedOccurrenceIds, type ExchangeFolderRef
 } from './ews-items'
 import { attr, t } from './ews-xml'
+import { findItems } from './ews-shared-mailbox'
 import type { ExchangeAccountRecord, ExchangeFolderRecord, ExchangeItemRecord, ExchangeOperationRecord, ExchangeStore } from './exchange-store'
 
 // Exchange Calendar and Contacts through the normalized productivity store (provider 'exchange').
@@ -41,6 +42,8 @@ export interface ExchangeProductivityOptions {
   now?(): Date
   changed?(): void
   pageSize?: number
+  /** Calendars/contacts of attached shared or delegated mailboxes and subscribed public folders (E40). */
+  sharedFolders?(accountId: string): Promise<import('../mail/mailbox-owner-worker').OwnerProductivityFolder[]>
   diagnostic?(record: { level: 'info' | 'warn' | 'error'; event: string; accountId?: string; message?: string; details?: Record<string, unknown> }): void
 }
 
@@ -70,6 +73,8 @@ export function generatedOccurrence(eventId: string) {
 
 export class ExchangeProductivityService {
   private readonly locks = new Map<string, Promise<unknown>>()
+  /** Public folder routing headers by FolderId (refreshed with the folder list). */
+  private readonly folderHeaders = new Map<string, Record<string, string>>()
 
   constructor(private readonly options: ExchangeProductivityOptions) {}
 
@@ -174,7 +179,9 @@ export class ExchangeProductivityService {
       let pulled = 0
       for (const folder of this.store.folders(accountId)) {
         try {
-          pulled += await this.pullFolder(client, folder)
+          const headers = this.folderHeaders.get(folder.folderId)
+          // Public folders cannot be synchronized incrementally; they are listed and compared by ChangeKey.
+          pulled += headers ? await this.listFolder(client.withHttpHeaders(headers), folder) : await this.pullFolder(client, folder)
         } catch (error) {
           if (isAuth(error) || error instanceof EwsNetworkError) throw error
           this.store.saveFolder({ ...this.store.folder(folder.key) ?? folder, error: message(error, 'This folder could not be synchronized') })
@@ -211,15 +218,30 @@ export class ExchangeProductivityService {
       if (isAuth(error) || error instanceof EwsNetworkError) throw error
       // Listing subfolders is optional; the default calendar and contacts still synchronize.
     }
+    // Other mailboxes' folders (E40): a failure for one of them never stops the account's own sync.
+    const shared = new Map<string, { name: string; readOnly: boolean }>()
+    let sharedFolders: import('../mail/mailbox-owner-worker').OwnerProductivityFolder[] = []
+    try { sharedFolders = await this.options.sharedFolders?.(accountId) ?? [] } catch { sharedFolders = [] }
+    for (const entry of sharedFolders) {
+      try {
+        const [folder] = await (entry.headers ? client.withHttpHeaders(entry.headers) : client).getFolders([entry.ref])
+        if (!folder || folder instanceof EwsError || found.has(folder.id) || folder.canRead === false) continue
+        found.set(folder.id, { folder, kind: entry.kind, primary: false })
+        shared.set(folder.id, { name: entry.name, readOnly: Boolean(entry.readOnly) })
+        if (entry.headers) this.folderHeaders.set(folder.id, entry.headers)
+      } catch (error) {
+        if (isAuth(error) || error instanceof EwsNetworkError) throw error
+      }
+    }
     const existing = new Map(this.store.folders(accountId).map((folder) => [folder.folderId, folder]))
     let index = existing.size
     for (const { folder, kind, primary } of found.values()) {
       const previous = existing.get(folder.id)
       this.store.saveFolder({
         key: previous?.key ?? folderKey(accountId, folder.id), accountId, folderId: folder.id, kind,
-        name: folder.displayName || (kind === 'calendar' ? 'Calendar' : 'Contacts'),
+        name: shared.get(folder.id)?.name ?? (folder.displayName || (kind === 'calendar' ? 'Calendar' : 'Contacts')),
         color: previous?.color ?? COLORS[index++ % COLORS.length],
-        canWrite: folder.canCreateContents !== false && folder.canModify !== false, primary,
+        canWrite: !shared.get(folder.id)?.readOnly && folder.canCreateContents !== false && folder.canModify !== false, primary,
         ...(previous?.syncState ? { syncState: previous.syncState } : {}),
         ...(previous?.lastSyncedAt ? { lastSyncedAt: previous.lastSyncedAt } : {})
       })
@@ -276,6 +298,25 @@ export class ExchangeProductivityService {
       }
     }
     return { ...base, kind: 'event', events, changeKeys }
+  }
+
+  /** FindItem listing of a public folder (E40): new or changed ChangeKeys are read, vanished items removed. */
+  private async listFolder(client: EwsClient, folder: ExchangeFolderRecord) {
+    const listed = new Map<string, string | undefined>()
+    for (const item of await findItems(client, { id: folder.folderId, distinguished: false }, [])) {
+      const id = t(item, 'ItemId')
+      if (id?.attributes.Id) listed.set(id.attributes.Id, id.attributes.ChangeKey)
+    }
+    const cached = new Map(this.store.items(folder.key).map((item) => [item.itemId, item.changeKey]))
+    const changed = [...listed].filter(([id, changeKey]) => !cached.has(id) || cached.get(id) !== changeKey).map(([id]) => id)
+    const removed = [...cached.keys()].filter((id) => !listed.has(id))
+    const { records, missing } = await this.readItems(client, folder, changed)
+    this.store.transaction(() => {
+      for (const record of records) this.store.saveItem(record)
+      for (const id of [...removed, ...missing]) this.store.removeItem(folder.accountId, id)
+      this.store.saveFolder({ ...folder, lastSyncedAt: this.now().toISOString(), error: undefined })
+    })
+    return records.length + removed.length + missing.length
   }
 
   private async pullFolder(client: EwsClient, initial: ExchangeFolderRecord) {

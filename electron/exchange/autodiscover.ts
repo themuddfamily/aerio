@@ -41,8 +41,11 @@ export function decodeServerVersion(hex: string | undefined) {
   return `${(value >>> 22) & 0x3f}.${(value >>> 16) & 0x3f}.${value & 0x7fff}`
 }
 
+/** An AlternativeMailbox entry (delegate or shared/team mailboxes the user was granted, E40). */
+export interface PoxAlternativeMailbox { type: string; displayName: string; smtpAddress: string; ownerSmtpAddress?: string }
+
 export type PoxResult =
-  | { action: 'settings'; ewsUrl?: string; serverVersion?: string; displayName?: string }
+  | { action: 'settings'; ewsUrl?: string; serverVersion?: string; displayName?: string; alternativeMailboxes?: PoxAlternativeMailbox[]; publicFolderMailbox?: string }
   | { action: 'redirectAddr'; address: string }
   | { action: 'redirectUrl'; url: string }
   | { action: 'error'; message: string }
@@ -72,8 +75,17 @@ export function parsePoxResponse(xml: string): PoxResult {
   const chosen = byType('EXCH') ?? byType('EXPR') ?? protocols.find((protocol) => elementText(find(protocol, 'EwsUrl')))
   const versionSource = protocols.find((protocol) => elementText(find(protocol, 'ServerVersion')))
   const displayName = elementText(childElement(find(response, 'User'), RESPONSE_SCHEMA, 'DisplayName') ?? find(find(response, 'User'), 'DisplayName'))
+  const alternativeMailboxes = findAll(account, 'AlternativeMailbox').flatMap((entry): PoxAlternativeMailbox[] => {
+    const smtpAddress = elementText(find(entry, 'SmtpAddress'))
+    if (!smtpAddress) return []
+    const owner = elementText(find(entry, 'OwnerSmtpAddress'))
+    return [{ type: elementText(find(entry, 'Type')) ?? '', displayName: elementText(find(entry, 'DisplayName')) || smtpAddress, smtpAddress, ...(owner ? { ownerSmtpAddress: owner } : {}) }]
+  })
+  const publicFolderMailbox = elementText(find(find(account, 'PublicFolderInformation'), 'SmtpAddress'))
   return {
     action: 'settings',
+    ...(alternativeMailboxes.length ? { alternativeMailboxes } : {}),
+    ...(publicFolderMailbox ? { publicFolderMailbox } : {}),
     ...(chosen ? { ewsUrl: elementText(find(chosen, 'EwsUrl')) } : {}),
     ...(versionSource ? { serverVersion: decodeServerVersion(elementText(find(versionSource, 'ServerVersion'))) } : {}),
     ...(displayName ? { displayName } : {})

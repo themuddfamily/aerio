@@ -293,6 +293,8 @@ export interface AerioDesktopApi {
   directory?: import('./directory-types').DirectoryDesktopApi
   /** Server-synchronized Notes (CalDAV VJOURNAL, Exchange Notes) and vNote import; optional for test doubles. */
   serverNotes?: import('./server-notes-types').ServerNotesDesktopApi
+  /** Shared/delegated mailboxes, delegates, and public folders (E40). */
+  mailboxOwners?: import('./mailbox-owner-types').MailboxOwnersApi
   contactMerge?: import('./contact-merge-types').ContactMergeDesktopApi
   /** Duplicate cleanup for mail, events, and tasks (E32). */
   duplicates?: import('./duplicate-cleanup-types').DuplicateCleanupApi

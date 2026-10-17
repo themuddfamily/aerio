@@ -51,6 +51,8 @@ export interface EwsFolder {
   canCreateContents?: boolean
   canModify?: boolean
   canDelete?: boolean
+  /** EffectiveRights Read (false for folders that are visible but not readable). */
+  canRead?: boolean
 }
 
 export type EwsItemChange =
@@ -75,6 +77,8 @@ export interface EwsClientOptions {
   sleep?(ms: number): Promise<void>
   /** Extra SOAP headers for every request, e.g. ExchangeImpersonation. */
   headers?: string
+  /** Extra HTTP headers for every request, e.g. X-AnchorMailbox and X-PublicFolderMailbox for public folders. */
+  httpHeaders?: Record<string, string>
 }
 
 export interface ItemShapeOptions {
@@ -114,7 +118,7 @@ export function parseFolder(element: XmlElement, distinguished?: string): EwsFol
     ...(tNumber(element, 'ChildFolderCount') !== undefined ? { childFolderCount: tNumber(element, 'ChildFolderCount') } : {}),
     ...(tNumber(element, 'UnreadCount') !== undefined ? { unreadCount: tNumber(element, 'UnreadCount') } : {}),
     ...(distinguished ? { distinguished } : {}),
-    ...(rights ? { canCreateContents: tBool(rights, 'CreateContents') ?? true, canModify: tBool(rights, 'Modify') ?? true, canDelete: tBool(rights, 'Delete') ?? true } : {})
+    ...(rights ? { canCreateContents: tBool(rights, 'CreateContents') ?? true, canModify: tBool(rights, 'Modify') ?? true, canDelete: tBool(rights, 'Delete') ?? true, canRead: tBool(rights, 'Read') ?? true } : {})
   }
 }
 
@@ -153,15 +157,32 @@ export class EwsClient {
   close() { this.transport.close() }
 
   /**
+   * A client for the same connection that adds HTTP headers to every request, such as the
+   * X-AnchorMailbox/X-PublicFolderMailbox routing headers Exchange 2013+ needs for public folders.
+   */
+  withHttpHeaders(httpHeaders: Record<string, string>) {
+    const derived = new EwsClient({ ...this.options, transport: this.transport, httpHeaders: { ...this.options.httpHeaders, ...httpHeaders } })
+    return derived
+  }
+
+  /**
    * Sends one EWS operation. Returns its response messages; item-level errors are left to the
    * caller. SOAP faults and transport failures throw.
    */
   async call(operation: string, body: string, envelope: EnvelopeOptions = {}): Promise<EwsResponseMessage[]> {
+    return (await this.callWithResponse(operation, body, envelope)).messages
+  }
+
+  /**
+   * Like `call`, also returning the operation's response element, for operations that report
+   * results outside ResponseMessages (GetDelegate's DeliverMeetingRequests, top-level ResponseCode).
+   */
+  async callWithResponse(operation: string, body: string, envelope: EnvelopeOptions = {}): Promise<{ response?: XmlElement; messages: EwsResponseMessage[] }> {
     const xml = soapEnvelope(body, { ...envelope, headers: `${this.options.headers ?? ''}${envelope.headers ?? ''}` || undefined })
     for (let attempt = 0; ; attempt++) {
       let result: HttpResult
       try {
-        result = await this.transport.post(xml, { SOAPAction: `"http://schemas.microsoft.com/exchange/services/2006/messages/${operation}"` })
+        result = await this.transport.post(xml, { ...this.options.httpHeaders, SOAPAction: `"http://schemas.microsoft.com/exchange/services/2006/messages/${operation}"` })
       } catch (error) {
         if (error instanceof EwsNetworkError && attempt < 2) { await this.sleep(1_000 * (attempt + 1)); continue }
         throw error
@@ -188,7 +209,7 @@ export class EwsClient {
       const messages = responseMessages(parsed.body, operation)
       const busy = messages.find((message) => message.code === 'ErrorServerBusy')
       if (busy && attempt < 4) { await this.sleep(Math.min(60_000, busy.backOffMs ?? 2_000 * 2 ** attempt)); continue }
-      return messages
+      return { response: m(parsed.body, `${operation}Response`), messages }
     }
   }
 

@@ -141,6 +141,30 @@ Use account aliases starting with `directory-m365-`, `directory-workspace-`, or 
 
 No organization directory results have been recorded yet.
 
+## Shared mailboxes, delegation, and public folders coverage
+
+[Shared mailboxes, delegation, and public folders](shared-mailboxes-delegation.md) (E40) need test mailboxes that grant the test user Full Access, Reviewer-only delegate access, Send As, and Send on Behalf, plus a public folder hierarchy with a read-only and a writable mail folder and a calendar folder.
+
+| ID | Scenario | Pass criteria |
+| --- | --- | --- |
+| `SHARE-RO-01` | Read-only versus writable shares | A Full Access mailbox shows **Can edit** and accepts read/flag/move/trash into its own Deleted Items; a Reviewer delegate mailbox shows **Read-only**, its actions are disabled, and a forced change is refused and rolled back with an explanation. |
+| `SHARE-REVOKE-01` | Revoked access | Removing the permission (or deleting the mailbox) marks the mailbox **Access removed** on the next sync, holds queued changes for review, keeps the cache readable, and **Remove** deletes the local copy only. |
+| `SHARE-SEND-01` | Send as versus send on behalf | Send as arrives with From = the shared mailbox; send on behalf arrives as "Delegate on behalf of Owner"; the copy is in the owner's Sent Items where permitted; a missing permission keeps the draft with the ErrorSendAsDenied explanation. |
+| `SHARE-ISOLATION-01` | Owner isolation | Two mailboxes with an Inbox of the same name keep separate folders, counts, and caches; synchronizing or rebuilding the own mailbox leaves the shared caches intact. |
+| `SHARE-PARTIAL-01` | Partial failures | A folder without read permission is marked **No access** while the rest of the mailbox and other mailboxes keep synchronizing. |
+| `SHARE-DISCOVER-01` | Discovery | **Find my mailboxes** lists automapped delegate and shared mailboxes from Autodiscover AlternativeMailbox entries (Exchange). |
+| `SHARE-DELEGATE-01` | Delegate management | Adding, updating, and removing a delegate with folder permission levels, meeting-copy and private-item options, and meeting request delivery matches what Outlook shows (Exchange). |
+| `SHARE-PF-01` | Public folders | The public folder tree is browsable through the hierarchy mailbox; a subscribed read-only and writable mail folder and a calendar folder appear with the right access (Exchange). |
+
+| Account | SHARE-RO-01 | SHARE-REVOKE-01 | SHARE-SEND-01 | SHARE-ISOLATION-01 | SHARE-PARTIAL-01 | SHARE-DISCOVER-01 | SHARE-DELEGATE-01 | SHARE-PF-01 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| exchange-2016 | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta |
+| exchange-2019 | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta |
+| exchange-se | Beta | Beta | Beta | Beta | Beta | Beta | Beta | Beta |
+| microsoft-365 | Beta | Beta | Beta | Beta | Beta | N/A: Graph cannot list shared mailboxes | N/A: no Graph delegate API | N/A: no Graph public folders |
+
+No shared mailbox, delegation, or public folder results have been recorded yet; these rows stay Beta until dated Pass evidence exists.
+
 ## Execution log
 
 Copy this row for every run. A failure remains a release blocker until its linked issue is fixed and the scenario is rerun.
