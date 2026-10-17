@@ -22,7 +22,10 @@ import { MailSavedSearchList, MailSaveSearchModal, savedSearchFromView, useMailS
 import { attachmentSearchStatus } from '../lib/mail-attachment-text'
 import { savedSearchMatchesView } from '../lib/mail-saved-search'
 import { mailSearchQueryError } from '../lib/mail-search-query'
-import { Bookmark, Sparkles, Zap } from 'lucide-react'
+import { Bookmark, Layers, Sparkles, Zap } from 'lucide-react'
+import InboxCategoryTabs, { useInboxCategories } from '../components/InboxCategoryTabs'
+import MailCategoryAssignModal from '../components/MailCategoryAssignModal'
+import type { MailCategoryId } from '../mail-category-types'
 import MailAiSearchDialog from '../components/MailAiSearchDialog'
 import { aiFeatureAvailable, useAiAssistantStatus } from '../lib/use-ai-assistant'
 import { MailQuickActionButtons, MailQuickActionsModal, useMailQuickActions } from '../components/MailQuickActions'
@@ -107,6 +110,12 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const folderPrefs = useMailFolderPreferences(onToast)
   const [folderDisplay, setFolderDisplay] = useState<{ label: MailLabel; focusAlias?: boolean }>()
   const [accountId, setAccountId] = useState<string>('all')
+  // Inbox category tabs (E33) only split the Inbox; pinned conversations still list first within a tab.
+  const inboxCategories = useInboxCategories(onToast, accountId)
+  const [inboxTab, setInboxTab] = useState<MailCategoryId>('primary')
+  const [categoryItems, setCategoryItems] = useState<MailThreadSummary[]>()
+  const inboxTabsShown = folder === 'inbox' && !labelId && inboxCategories.active
+  const activeInboxTab: MailCategoryId = inboxTabsShown && inboxCategories.tabs.some((tab) => tab.id === inboxTab) ? inboxTab : 'primary'
   const [search, setSearch] = useState('')
   const [searchFilters, setSearchFilters] = useState<MailSearchFilters>({})
   const [searchFiltersOpen, setSearchFiltersOpen] = useState(false)
@@ -233,9 +242,10 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     labelId,
     search: search.trim() || undefined,
     filters: activeSearchFilterCount ? searchFilters : undefined,
+    category: inboxTabsShown ? activeInboxTab : undefined,
     cursor,
     pageSize: 50
-  }), [accountId, folder, labelId, search, searchFilters, activeSearchFilterCount])
+  }), [accountId, folder, labelId, search, searchFilters, activeSearchFilterCount, inboxTabsShown, activeInboxTab])
 
   const loadPage = useCallback(async () => {
     const request = ++pageRequest.current
@@ -357,7 +367,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     return () => clearTimeout(timer)
   }, [pendingSend])
 
-  useEffect(() => setCheckedKeys(new Set()), [accountId, folder, labelId, search, searchFilters])
+  useEffect(() => setCheckedKeys(new Set()), [accountId, folder, labelId, search, searchFilters, activeInboxTab])
 
   useEffect(() => {
     if (!searchFiltersOpen) return
@@ -849,6 +859,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       { label: item.unread ? 'Mark as read' : 'Mark as unread', icon: item.unread ? MailOpen : Mail, shortcut: keyLabel(item.unread ? 'mail.markRead' : 'mail.markUnread'), separatorBefore: true, disabled: readOnly, action: () => applyAction(item.unread ? 'read' : 'unread', item.accountId, [item.id]) },
       { label: item.starred ? 'Remove star' : 'Add star', icon: Star, shortcut: keyLabel('mail.toggleStar'), checked: item.starred, disabled: readOnly, action: () => applyAction(item.starred ? 'unstar' : 'star', item.accountId, [item.id]) },
       { label: item.pinned ? 'Unpin conversation' : 'Pin to top', icon: item.pinned ? PinOff : Pin, checked: Boolean(item.pinned), action: () => togglePin(checkedKeys.has(`${item.accountId}:${item.id}`) ? checkedItems : [item], item.pinned ? 'unpin' : 'pin') },
+      ...(inboxCategories.config ? [{ label: 'Move to inbox tab…', icon: Layers, action: () => setCategoryItems(checkedKeys.has(`${item.accountId}:${item.id}`) ? checkedItems : [item]) }] : []),
       { label: item.important ? 'Mark as not important' : 'Mark as important', icon: Tag, checked: item.important, disabled: readOnly, action: () => applyAction(item.important ? 'unimportant' : 'important', item.accountId, [item.id]) },
       ...(!item.trashed ? [{ label: inInbox ? 'Archive' : 'Move to inbox', icon: inInbox ? Archive : Inbox, shortcut: inInbox ? keyLabel('mail.archive') : undefined, separatorBefore: true, disabled: readOnly, action: () => applyAction(inInbox ? 'archive' : inSpam ? 'move' : 'unarchive', item.accountId, [item.id], true, inSpam ? 'INBOX' : undefined) }] satisfies ContextMenuItem[] : []),
       { label: 'Move to…', icon: FolderInput, disabled: readOnly, action: () => { setCheckedKeys(new Set([`${item.accountId}:${item.id}`])); setOrganizeMode('move') } },
@@ -1083,6 +1094,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           {searchError && <p className="mail-search-error" role="alert">{searchError}</p>}
           {searchFiltersOpen && <MailSearchFiltersPanel value={searchFilters} onApply={(next) => { setSearchFilters(next); setSearchFiltersOpen(false) }} onClose={() => setSearchFiltersOpen(false)} />}
         </div>
+        {inboxTabsShown && <InboxCategoryTabs tabs={inboxCategories.tabs} selected={activeInboxTab} counts={inboxCategories.counts} onSelect={setInboxTab} />}
         {checkedItems.length > 0 && <div className="bulk-mail-toolbar">
           <button className="icon-button" title="Clear selection" onClick={() => setCheckedKeys(new Set())}><X size={16} /></button>
           <strong>{checkedItems.length.toLocaleString()} selected</strong>
@@ -1094,6 +1106,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           <button className="button ghost small" onClick={() => folder === 'snoozed' ? void unsnoozeMany(checkedItems) : setSnoozeItems(checkedItems)}>{folder === 'snoozed' ? <Inbox size={15} /> : <Clock3 size={15} />} {folder === 'snoozed' ? 'Return now' : 'Snooze'}</button>
           <button className="button ghost small" onClick={() => setOrganizeMode('move')}><FolderInput size={15} /> Move</button>
           <button className="button ghost small" onClick={() => setOrganizeMode('label')}><Tags size={15} /> Labels</button>
+          {inboxCategories.config && <button className="button ghost small" onClick={() => setCategoryItems(checkedItems)}><Layers size={15} /> Tab</button>}
           {localAccount && checkedItems.some((item) => item.accountId !== localAccount.id) && <button className="button ghost small" onClick={() => setLocalTransferOpen(true)}><HardDrive size={15} /> Local Folders</button>}
           <MailQuickActionButtons quickActions={quickActions.quickActions} className="button ghost small" onRun={(quickAction) => void runQuickAction(quickAction, checkedItems)} />
           <span className="spacer" />
@@ -1108,7 +1121,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
             { label: 'Offline storage', icon: Download, separatorBefore: true, action: showStorage }
           ], `${account.email} sync`)}><span><strong>{account?.email ?? 'Mail'}</strong><small>{item.message ?? item.phase} · {item.completed.toLocaleString()}/{item.total.toLocaleString()}</small></span><progress max={Math.max(item.total, 1)} value={item.completed} /><button className="icon-button" disabled={!account} aria-label={item.phase === 'paused' ? 'Resume sync' : 'Pause sync'} onClick={() => account && void toggleSync(account, item.phase === 'paused')}>{item.phase === 'paused' ? <Play size={14} /> : <Pause size={14} />}</button><em>{percent}%</em></div>
         })}
-        <div className="message-list" ref={messageListRef} onContextMenu={(event) => showContextMenu(event, [
+        <div className="message-list" id="mail-message-list" role={inboxTabsShown ? 'tabpanel' : undefined} aria-labelledby={inboxTabsShown ? `inbox-tab-${activeInboxTab.replace(':', '-')}` : undefined} ref={messageListRef} onContextMenu={(event) => showContextMenu(event, [
           { label: 'New message', icon: Plus, disabled: !sendableAccounts.length, action: () => setCompose({}) },
           { label: 'Check for mail', icon: RefreshCw, separatorBefore: true, disabled: syncUnavailable, action: () => startSync(accountId === 'all' ? undefined : accountId) },
           { label: 'Mark visible conversations as read', icon: MailOpen, disabled: !page.items.some((item) => item.unread), action: markVisibleRead }
@@ -1215,6 +1228,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       {accountSetup && <MailAccountSetupModal onClose={() => setAccountSetup(false)} onConnected={accountConnected} onToast={onToast} />}
       {settingsAccount && <MailAccountSettingsModal account={settingsAccount} onSaved={(updated) => { setAccounts((items) => items.map((item) => item.id === updated.id ? updated : item)); setSettingsAccount(updated) }} onClose={() => setSettingsAccount(undefined)} onToast={onToast} />}
       {organizeMode && <MailOrganizeModal mode={organizeMode} items={checkedItems} accounts={accounts} labels={labels} onApply={applyOrganizeRequests} onClose={() => setOrganizeMode(undefined)} />}
+      {categoryItems && inboxCategories.config && <MailCategoryAssignModal items={categoryItems} config={inboxCategories.config} accounts={accounts} onClose={() => setCategoryItems(undefined)} onError={onToast} onDone={(message) => { onToast(message); if (categoryItems === checkedItems) setCheckedKeys(new Set()); void loadPage(); void inboxCategories.reload() }} />}
       {snoozeItems && <MailSnoozeModal count={snoozeItems.length} onApply={(until) => applySnooze(snoozeItems, until)} onClose={() => setSnoozeItems(undefined)} />}
       {savingSearch && <MailSaveSearchModal accounts={accounts} labels={labels} initial={savingSearch} onClose={() => setSavingSearch(undefined)} onSave={async (input) => { const saved = await savedSearches.save(input); openSavedSearch(saved); onToast(`Saved “${saved.name}”`) }} />}
       {replyWatchesOpen && <MailReplyWatchesModal accounts={accounts} onToast={onToast} onClose={() => setReplyWatchesOpen(false)} />}

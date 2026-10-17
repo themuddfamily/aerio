@@ -349,6 +349,15 @@ const api: AerioDesktopApi = {
       snooze: (accountId, threadIds, until) => ipcRenderer.invoke('mail:snooze', accountId, threadIds, until),
       unsnooze: (accountId, threadIds) => ipcRenderer.invoke('mail:unsnooze', accountId, threadIds)
     },
+    categories: {
+      tabs: () => ipcRenderer.invoke('mail:categories:tabs'),
+      saveTabs: (config) => ipcRenderer.invoke('mail:categories:save-tabs', config),
+      counts: (accountIds) => ipcRenderer.invoke('mail:categories:counts', accountIds),
+      assign: (input) => ipcRenderer.invoke('mail:categories:assign', input),
+      rules: () => ipcRenderer.invoke('mail:categories:rules'),
+      saveRule: (input) => ipcRenderer.invoke('mail:categories:save-rule', input),
+      deleteRule: (id) => ipcRenderer.invoke('mail:categories:delete-rule', id)
+    },
     drafts: {
       list: (accountIds) => ipcRenderer.invoke('mail:drafts:list', accountIds),
       get: (id) => ipcRenderer.invoke('mail:drafts:get', id),

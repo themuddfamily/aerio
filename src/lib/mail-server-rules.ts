@@ -1,6 +1,7 @@
 import type { MailServerRuleIssue, MailServerRuleMapping } from '../mail-server-rule-types'
 import type { MailLabel, MailProviderId, MailRuleAction, MailRuleCondition, MailRuleConditionField, MailRuleInput } from '../mail-types'
 import { mailRuleTrigger } from './mail-rules'
+import { GMAIL_CATEGORY_LABELS, isBuiltInCategory } from './mail-categories'
 
 // Translating local rules to provider rules. Local rules can express more
 // than either provider, so every condition, exception, and action is checked
@@ -78,11 +79,11 @@ const issue = (part: MailServerRuleIssue['part'], level: MailServerRuleIssue['le
 
 const FIELD_NAMES: Record<MailRuleConditionField, string> = {
   from: 'From', to: 'To or Cc', cc: 'Cc', subject: 'Subject', body: 'Message body', header: 'Header',
-  'has-attachment': 'Has attachments', size: 'Size', age: 'Age', importance: 'Importance', label: 'Folder or label'
+  'has-attachment': 'Has attachments', size: 'Size', age: 'Age', importance: 'Importance', label: 'Folder or label', category: 'Inbox category'
 }
 
 const ACTION_NAMES: Record<MailRuleAction['action'], string> = {
-  archive: 'Archive', read: 'Mark as read', star: 'Add star', important: 'Mark important', trash: 'Move to Trash', label: 'Apply label', move: 'Move'
+  archive: 'Archive', read: 'Mark as read', star: 'Add star', important: 'Mark important', trash: 'Move to Trash', label: 'Apply label', move: 'Move', 'set-category': 'Set inbox category'
 }
 
 // ---------------------------------------------------------------- Gmail
@@ -136,6 +137,11 @@ function gmailConditionTerms(condition: MailRuleCondition): GmailConditionTerm {
       return unsupported('Server rules run when mail arrives, so they can’t check a message’s age')
     case 'label':
       return unsupported('Gmail filters run before a message has labels, so they can’t check one')
+    case 'category':
+      // Gmail's own categories can be searched; custom tabs only exist in Aerio.
+      return isBuiltInCategory(value)
+        ? approximate([`category:${value}`], 'Gmail checks its own category, which can differ from Aerio’s sender rules and reassignments')
+        : unsupported('Custom inbox tabs only exist in Aerio')
     default:
       return unsupported('This condition has no Gmail filter equivalent')
   }
@@ -148,6 +154,7 @@ function gmailGroup(terms: string[][], mode: 'all' | 'any') {
 }
 
 function gmailAction(action: MailRuleAction): { add: string[]; remove: string[] } | string {
+  if (action.action === 'set-category') return isBuiltInCategory(action.category) ? { add: [GMAIL_CATEGORY_LABELS[action.category]], remove: [] } : 'Custom inbox tabs only exist in Aerio'
   if (action.action === 'archive') return { add: [], remove: ['INBOX'] }
   if (action.action === 'read') return { add: [], remove: ['UNREAD'] }
   if (action.action === 'star') return { add: ['STARRED'], remove: [] }
@@ -236,6 +243,7 @@ function microsoftPredicate(condition: MailRuleCondition): MicrosoftConditionPre
     case 'importance': return { predicate: { key: 'importance', scalar: value } }
     case 'age': return unsupported('Server rules run when mail arrives, so they can’t check a message’s age')
     case 'label': return unsupported('Outlook rules run on the Inbox, so they can’t check another folder')
+    case 'category': return unsupported('Outlook rules can’t check Aerio’s inbox category')
     default: return unsupported('This condition has no Outlook rule equivalent')
   }
 }
@@ -292,6 +300,7 @@ export function microsoftRuleForRule(rule: MailRuleInput): { messageRule?: Micro
       if (actions.moveToFolder) issues.push(issue('action', 'unsupported', 'Outlook rules can move a message to only one folder', index))
       actions.delete = true
     } else if (action.action === 'star') issues.push(issue('action', 'unsupported', 'Outlook rules can’t flag messages', index))
+    else if (action.action === 'set-category') issues.push(issue('action', 'unsupported', 'Outlook rules can’t set Aerio’s inbox category', index))
     else if (action.labelId?.startsWith('category:')) actions.assignCategories = [...(actions.assignCategories ?? []), action.labelId.slice(9)]
     else if (action.labelId?.startsWith('folder:')) setMove(action.labelId.slice(7), index)
     else issues.push(issue('action', 'unsupported', 'Choose an Outlook folder or category for this action', index))

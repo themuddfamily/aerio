@@ -131,6 +131,7 @@ export type MailWorkerCommand =
   | { type: 'polling'; payload: { intervalMs: number; immediate?: boolean } }
   | { type: 'pop3'; payload: import('./mail/pop3-sync').Pop3WorkerCommand }
   | { type: 'shutdown' }
+  | import('./mail/inbox-category-worker').InboxCategoryCommand
 
 export type MailWorkerResult =
   | void
@@ -187,6 +188,7 @@ export type MailWorkerResult =
   | import('../src/mail-archive-types').MailArchivePreview
   | import('../src/mail-archive-types').MailArchiveJob
   | import('../src/mail-archive-types').MailArchiveItem[]
+  | import('./mail/inbox-category-worker').InboxCategoryResult
 
 export interface WorkerRequest {
   kind: 'request'

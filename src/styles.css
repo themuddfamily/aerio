@@ -5016,3 +5016,19 @@ button.mail-folder-twisty:hover { background: var(--surface-hover); color: var(-
 .mail-archive-history > li > span:first-child { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .mail-archive-history small { color: var(--muted); font-size: 9.5px; }
 .mail-archive-job-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Inbox category tabs (E33) */
+.inbox-category-tabs { flex: 0 0 auto; display: flex; gap: 2px; padding: 0 8px; overflow-x: auto; border-bottom: 1px solid var(--line); background: var(--surface); }
+.inbox-category-tab { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 9px 10px 8px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-soft); font-size: 11px; font-weight: 600; cursor: pointer; }
+.inbox-category-tab:hover { color: var(--text); background: var(--surface-hover); }
+.inbox-category-tab.active { color: var(--accent-text); border-bottom-color: var(--accent); }
+.inbox-category-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.inbox-category-count { min-width: 18px; padding: 1px 5px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); font-size: 9px; text-align: center; }
+.inbox-category-choices { display: grid; gap: 6px; margin: 0 0 12px; padding: 0; border: 0; }
+.inbox-category-choices legend { margin-bottom: 4px; font-weight: 600; }
+.inbox-category-choices .radio-row { display: flex; align-items: baseline; gap: 8px; }
+.inbox-category-choices small { color: var(--muted); }
+.inbox-tab-editor, .inbox-rule-list { display: grid; gap: 6px; margin: 8px 0; padding: 0; list-style: none; }
+.inbox-tab-editor li, .inbox-rule-list li, .inbox-rule-add { display: flex; align-items: center; gap: 6px; }
+.inbox-tab-editor input:not([type="checkbox"]), .inbox-rule-add input { flex: 1 1 auto; min-width: 0; }
+.inbox-rule-list li > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }

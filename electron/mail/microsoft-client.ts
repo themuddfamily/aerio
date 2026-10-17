@@ -1,5 +1,6 @@
 import type { MailLabel, MailActionKind, MailSendOptions } from '../../src/mail-types'
 import { normalizeSendOptions } from '../../src/lib/mail-send-options'
+import { MICROSOFT_FOCUSED_LABEL, MICROSOFT_OTHER_LABEL } from '../../src/lib/mail-categories'
 
 interface GraphPage<T> {
   value: T[]
@@ -27,6 +28,8 @@ export interface GraphMessage {
   flag?: { flagStatus?: string }
   isDraft?: boolean
   categories?: string[]
+  /** Focused Inbox classification; only meaningful for Inbox messages. */
+  inferenceClassification?: 'focused' | 'other'
   '@removed'?: { reason?: string }
 }
 
@@ -34,7 +37,12 @@ export function microsoftMessageLabels(folder: GraphFolder, message: GraphMessag
   const value = folder.displayName.toLowerCase()
   const special = folder.specialUse
   const labels = ['folder:' + folder.id]
-  if (special === 'inbox' || value === 'inbox') labels.push('INBOX')
+  if (special === 'inbox' || value === 'inbox') {
+    labels.push('INBOX')
+    // Recorded as Aerio-only labels so the inbox tabs can map Focused/Other (E33).
+    if (message.inferenceClassification === 'focused') labels.push(MICROSOFT_FOCUSED_LABEL)
+    if (message.inferenceClassification === 'other') labels.push(MICROSOFT_OTHER_LABEL)
+  }
   if (special === 'sentitems' || value.includes('sent')) labels.push('SENT')
   if (special === 'drafts' || value.includes('draft') || message.isDraft) labels.push('DRAFT')
   if (special === 'junkemail' || value.includes('junk') || value.includes('spam')) labels.push('SPAM')
@@ -139,7 +147,7 @@ export class MicrosoftGraphClient {
 
   async delta(folderId: string, deltaLink?: string) {
     const messages: GraphMessage[] = []
-    let next: string | undefined = deltaLink ?? `/me/mailFolders/${encodeURIComponent(folderId)}/messages/delta?$select=id,conversationId,parentFolderId,receivedDateTime,sentDateTime,isRead,importance,flag,isDraft,categories&$top=100`
+    let next: string | undefined = deltaLink ?? `/me/mailFolders/${encodeURIComponent(folderId)}/messages/delta?$select=id,conversationId,parentFolderId,receivedDateTime,sentDateTime,isRead,importance,flag,isDraft,categories,inferenceClassification&$top=100`
     let checkpoint: string | undefined
     while (next) {
       const page: GraphPage<GraphMessage> = await this.request(next)
@@ -191,6 +199,14 @@ export class MicrosoftGraphClient {
       } catch (error) {
         if (!(error instanceof MicrosoftGraphError && error.status === 404)) throw error
       }
+    }
+  }
+
+  /** Moves Inbox messages between Focused (Primary tab) and Other (every other tab). */
+  async setInferenceClassification(ids: string[], label: string) {
+    const inferenceClassification = label === MICROSOFT_OTHER_LABEL ? 'other' : 'focused'
+    for (const id of ids) {
+      await this.request(`/me/messages/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ inferenceClassification }) })
     }
   }
 

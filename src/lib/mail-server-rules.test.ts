@@ -89,6 +89,21 @@ describe('Gmail filter mapping', () => {
   })
 })
 
+describe('inbox category rule mapping', () => {
+  it('maps built-in categories to Gmail category search and labels, and keeps custom tabs and Outlook local', () => {
+    const categoryRule = rule({ conditions: [{ field: 'category', operator: 'is', value: 'promotions' }], actions: [{ action: 'set-category', category: 'updates' }] })
+    const gmail = gmailFilterForRule(categoryRule)
+    expect(gmail.mapping.supported).toBe(true)
+    expect(gmail.filter).toEqual({ criteria: { query: 'category:promotions' }, action: { addLabelIds: ['CATEGORY_UPDATES'] } })
+    expect(gmail.mapping.issues).toEqual([expect.objectContaining({ part: 'condition', level: 'approximate' })])
+    const custom = gmailFilterForRule(rule({ conditions: [{ field: 'category', operator: 'is', value: 'custom:x' }], actions: [{ action: 'set-category', category: 'custom:x' }] }))
+    expect(blocking(custom.mapping)).toEqual(['condition0', 'action0', 'rule'])
+    const outlook = microsoftRuleForRule(categoryRule)
+    expect(outlook.messageRule).toBeUndefined()
+    expect(blocking(outlook.mapping)).toEqual(['condition0', 'rule', 'action0'])
+  })
+})
+
 describe('Microsoft rule mapping', () => {
   it('maps predicates, exceptions, and actions', () => {
     const { messageRule, mapping } = microsoftRuleForRule(rule({

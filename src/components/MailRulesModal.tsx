@@ -4,6 +4,8 @@ import type { MailAccountSummary, MailLabel, MailRule, MailRuleAction, MailRuleC
 import type { MailServerRule, MailServerRuleCapabilities } from '../mail-server-rule-types'
 import { MAIL_RULE_FIELDS, defaultMailRuleCondition, mailRuleField } from '../lib/mail-rules'
 import { mapMailRuleToServer } from '../lib/mail-server-rules'
+import { defaultInboxTabs } from '../lib/mail-categories'
+import type { MailInboxTab } from '../mail-category-types'
 import Modal from './Modal'
 
 interface MailRulesModalProps {
@@ -35,11 +37,12 @@ function changeConditionField(condition: MailRuleCondition, field: MailRuleCondi
   return defaultMailRuleCondition(field)
 }
 
-function ConditionRow({ condition, index, kind, destinations, onChange, onRemove, removable }: {
+function ConditionRow({ condition, index, kind, destinations, categories, onChange, onRemove, removable }: {
   condition: MailRuleCondition
   index: number
   kind: 'Condition' | 'Exception'
   destinations: MailLabel[]
+  categories: MailInboxTab[]
   onChange(condition: MailRuleCondition): void
   onRemove(): void
   removable: boolean
@@ -50,6 +53,7 @@ function ConditionRow({ condition, index, kind, destinations, onChange, onRemove
     const update = (next: string) => onChange({ ...condition, value: next })
     if (definition.value === 'yes-no') return <select aria-label={`${name} value`} value={condition.value} onChange={(event) => update(event.target.value)}><option value="yes">Yes</option><option value="no">No</option></select>
     if (definition.value === 'importance') return <select aria-label={`${name} value`} value={condition.value} onChange={(event) => update(event.target.value)}><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select>
+    if (definition.value === 'category') return <select aria-label={`${name} value`} value={condition.value} onChange={(event) => update(event.target.value)}>{categories.map((tab) => <option key={tab.id} value={tab.id}>{tab.name}</option>)}</select>
     if (definition.value === 'label') return <select aria-label={`${name} value`} value={condition.value} onChange={(event) => update(event.target.value)}><option value="">Choose folder or label…</option>{destinations.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}</select>
     if (definition.value === 'kilobytes' || definition.value === 'days') return <input aria-label={`${name} value`} type="number" min="0" step="1" value={condition.value} onChange={(event) => update(event.target.value)} placeholder={definition.value === 'days' ? 'Days' : 'Kilobytes'} />
     return <input aria-label={`${name} value`} value={condition.value} onChange={(event) => update(event.target.value)} placeholder="Text to match" />
@@ -73,6 +77,13 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
   const [loading, setLoading] = useState(true)
   const [capabilities, setCapabilities] = useState<Record<string, MailServerRuleCapabilities>>({})
   const [serverView, setServerView] = useState<{ accountId: string; rules?: MailServerRule[]; error?: string } | undefined>()
+  const [categories, setCategories] = useState<MailInboxTab[]>(() => defaultInboxTabs().tabs)
+
+  useEffect(() => {
+    let active = true
+    void window.aerio?.mail?.categories?.tabs().then((config) => { if (active) setCategories(config.tabs) }).catch(() => undefined)
+    return () => { active = false }
+  }, [])
 
   const load = async () => {
     try {
@@ -305,17 +316,17 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
         </div>
         <label className="field"><span>Apply to</span><select aria-label="Apply to" value={editing.trigger ?? 'incoming'} disabled={editing.execution === 'server'} onChange={(event) => setEditing({ ...editing, trigger: event.target.value as MailRuleInput['trigger'] })}><option value="incoming">New mail I receive</option><option value="outgoing">Mail I send</option></select></label>
         <section><header><span><strong>When a message matches</strong><small>Use {editing.match === 'all' ? 'every' : 'at least one'} condition</small></span><select value={editing.match} onChange={(event) => setEditing({ ...editing, match: event.target.value as 'all' | 'any' })}><option value="all">All conditions</option><option value="any">Any condition</option></select></header>
-          {editing.conditions.map((condition, index) => <ConditionRow key={index} kind="Condition" index={index} condition={condition} destinations={conditionLabels} removable={editing.conditions.length > 1}
+          {editing.conditions.map((condition, index) => <ConditionRow key={index} kind="Condition" index={index} condition={condition} destinations={conditionLabels} categories={categories} removable={editing.conditions.length > 1}
             onChange={(next) => updateCondition(index, next)} onRemove={() => setEditing({ ...editing, conditions: editing.conditions.filter((_, itemIndex) => itemIndex !== index) })} />)}
           <button className="text-button rule-add" disabled={editing.conditions.length >= 10} onClick={() => setEditing({ ...editing, conditions: [...editing.conditions, newCondition()] })}><Plus size={14} /> Add condition</button>
         </section>
         <section><header><span><strong>Except if</strong><small>Skip the rule when any of these match</small></span></header>
-          {(editing.exceptions ?? []).map((condition, index) => <ConditionRow key={index} kind="Exception" index={index} condition={condition} destinations={conditionLabels} removable
+          {(editing.exceptions ?? []).map((condition, index) => <ConditionRow key={index} kind="Exception" index={index} condition={condition} destinations={conditionLabels} categories={categories} removable
             onChange={(next) => updateException(index, next)} onRemove={() => setEditing({ ...editing, exceptions: (editing.exceptions ?? []).filter((_, itemIndex) => itemIndex !== index) })} />)}
           <button className="text-button rule-add" disabled={(editing.exceptions ?? []).length >= 10} onClick={() => setEditing({ ...editing, exceptions: [...(editing.exceptions ?? []), newCondition()] })}><Plus size={14} /> Add exception</button>
         </section>
         <section><header><span><strong>Then do this</strong><small>Actions run in the order shown</small></span></header>
-          {editing.actions.map((action, index) => <div className="rule-row action" key={index}><select aria-label={`Action ${index + 1}`} value={action.action} onChange={(event) => updateAction(index, { action: event.target.value as MailRuleAction['action'], labelId: undefined })}><option value="archive">Archive</option><option value="read">Mark as read</option><option value="star">Add star</option><option value="important">Mark important</option><option value="trash">Move to Trash</option><option value="label">Apply label</option><option value="move">Move to folder or label</option></select>{(action.action === 'label' || action.action === 'move') && <select aria-label={`Action ${index + 1} destination`} value={action.labelId ?? ''} onChange={(event) => updateAction(index, { labelId: event.target.value })}><option value="">Choose destination…</option>{destinations.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}</select>}<span className="spacer" /><button className="icon-button" aria-label={`Remove action ${index + 1}`} disabled={editing.actions.length === 1} onClick={() => setEditing({ ...editing, actions: editing.actions.filter((_, itemIndex) => itemIndex !== index) })}><X size={14} /></button></div>)}
+          {editing.actions.map((action, index) => <div className="rule-row action" key={index}><select aria-label={`Action ${index + 1}`} value={action.action} onChange={(event) => { const next = event.target.value as MailRuleAction['action']; updateAction(index, { action: next, labelId: undefined, category: next === 'set-category' ? 'primary' : undefined }) }}><option value="archive">Archive</option><option value="read">Mark as read</option><option value="star">Add star</option><option value="important">Mark important</option><option value="trash">Move to Trash</option><option value="label">Apply label</option><option value="move">Move to folder or label</option><option value="set-category">Set inbox category</option></select>{action.action === 'set-category' && <select aria-label={`Action ${index + 1} inbox category`} value={action.category ?? 'primary'} onChange={(event) => updateAction(index, { category: event.target.value })}>{categories.map((tab) => <option key={tab.id} value={tab.id}>{tab.name}</option>)}</select>}{(action.action === 'label' || action.action === 'move') && <select aria-label={`Action ${index + 1} destination`} value={action.labelId ?? ''} onChange={(event) => updateAction(index, { labelId: event.target.value })}><option value="">Choose destination…</option>{destinations.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}</select>}<span className="spacer" /><button className="icon-button" aria-label={`Remove action ${index + 1}`} disabled={editing.actions.length === 1} onClick={() => setEditing({ ...editing, actions: editing.actions.filter((_, itemIndex) => itemIndex !== index) })}><X size={14} /></button></div>)}
           <button className="text-button rule-add" disabled={editing.actions.length >= 10} onClick={() => setEditing({ ...editing, actions: [...editing.actions, newAction()] })}><Plus size={14} /> Add action</button>
         </section>
         {serverMapping && <section className="rule-server" aria-label="Server compatibility"><header><span><strong>{editing.execution === 'server' ? 'Runs on the server' : 'Server compatibility'}</strong>

@@ -86,7 +86,9 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
         { label: 'Unfinished mail merges', count: countRows(db, 'mail_merge_jobs', MAIL_MERGE_ACTIVE) },
         // POP3 UIDL checkpoints: a restored account does not download these messages again.
         { label: 'POP3 download checkpoints', count: countRows(db, 'pop3_uidls') },
-        { label: 'Automatic archive policies', count: countRows(db, 'mail_archive_policies', 'enabled=1') }
+        { label: 'Automatic archive policies', count: countRows(db, 'mail_archive_policies', 'enabled=1') },
+        { label: 'Inbox classification rules', count: countRows(db, 'mail_category_rules') },
+        { label: 'Conversations moved between inbox tabs', count: countRows(db, 'mail_category_overrides') }
       ]
     },
     {

@@ -872,6 +872,54 @@ describe('ConnectedMailView', () => {
     expect(await within(dialog).findByText('Apply label: Project → Mark as read')).toBeInTheDocument()
   })
 
+  it('splits only the Inbox into category tabs with unread counts, keyboard switching, and reassignment', async () => {
+    const user = userEvent.setup()
+    const tabsConfig = { tabs: [
+      { id: 'primary', name: 'Primary', enabled: true, builtIn: true }, { id: 'social', name: 'Social', enabled: true, builtIn: true },
+      { id: 'promotions', name: 'Deals', enabled: true, builtIn: true }, { id: 'updates', name: 'Updates', enabled: false, builtIn: true }, { id: 'forums', name: 'Forums', enabled: false, builtIn: true }
+    ] }
+    const categories = {
+      tabs: vi.fn(async () => tabsConfig), saveTabs: vi.fn(), rules: vi.fn(async () => []), saveRule: vi.fn(), deleteRule: vi.fn(),
+      counts: vi.fn(async () => ({ primary: { unread: 2, total: 3 }, social: { unread: 0, total: 1 }, promotions: { unread: 5, total: 8 } })),
+      assign: vi.fn(async () => ({ updated: 1, providerOperations: 2 }))
+    }
+    pageResult = { items: [summary({ pinned: true, pinnedAt: '2026-08-09T00:00:00Z', category: 'primary', categorySource: 'heuristic' }), summary({ id: 'thread-2', subject: 'Second conversation', category: 'primary' })], total: 2 }
+    ;(api.mail as any).categories = categories
+    try {
+      const onToast = renderMail()
+      const tablist = await screen.findByRole('tablist', { name: 'Inbox categories' })
+      expect(within(tablist).getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Primary2', 'Social', 'Deals5'])
+      await waitFor(() => expect(api.mail.mail.list).toHaveBeenLastCalledWith(expect.objectContaining({ folder: 'inbox', category: 'primary' })))
+      expect(categories.counts).toHaveBeenCalledWith(undefined)
+      expect(document.getElementById('mail-message-list')).toHaveAttribute('role', 'tabpanel')
+      // Pinned conversations still lead the tab's list.
+      expect(screen.getAllByRole('heading', { level: 2 })[0]).toHaveTextContent('Pinned')
+
+      await user.click(within(tablist).getByRole('tab', { name: /Social/ }))
+      await waitFor(() => expect(api.mail.mail.list).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'social' })))
+      fireEvent.keyDown(window, { key: 'ArrowRight', altKey: true })
+      await waitFor(() => expect(api.mail.mail.list).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'promotions' })))
+      fireEvent.keyDown(within(tablist).getByRole('tab', { name: /Deals/ }), { key: 'Home' })
+      await waitFor(() => expect(api.mail.mail.list).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'primary' })))
+
+      fireEvent.contextMenu(screen.getByText('Second conversation').closest('.message-row')!)
+      await user.click(await screen.findByRole('menuitem', { name: 'Move to inbox tab…' }))
+      const dialog = await screen.findByRole('dialog', { name: /Move to inbox tab/ })
+      await user.click(within(dialog).getByRole('radio', { name: 'Deals' }))
+      categories.counts.mockClear()
+      await user.click(within(dialog).getByRole('button', { name: 'Move' }))
+      await waitFor(() => expect(categories.assign).toHaveBeenCalledWith({ accountId: 'account', threadIds: ['thread-2'], category: 'promotions' }))
+      expect(onToast).toHaveBeenCalledWith('Moved to Deals and updated on the server')
+      // Counts reload after a reassignment, and tabs disappear outside the Inbox.
+      await waitFor(() => expect(categories.counts).toHaveBeenCalled())
+      await user.click(screen.getByRole('button', { name: 'Starred 1 unread conversation' }))
+      await waitFor(() => expect(screen.queryByRole('tablist', { name: 'Inbox categories' })).toBeNull())
+      expect(api.mail.mail.list).toHaveBeenLastCalledWith(expect.objectContaining({ folder: 'starred', category: undefined }))
+    } finally {
+      delete (api.mail as any).categories
+    }
+  })
+
   it('pins and unpins from the context menu, bulk toolbar, reader, and palette, under a Pinned heading with undo', async () => {
     const user = userEvent.setup()
     pageResult = { items: [summary({ pinned: true, pinnedAt: '2026-08-09T00:00:00Z' }), summary({ id: 'thread-2', subject: 'Second conversation', participants: ['Grace'], lastDate: '2026-08-07T10:00:00Z', unread: false, starred: false, labelIds: ['INBOX'], messageCount: 1 })], total: 2 }
