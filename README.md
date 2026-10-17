@@ -18,6 +18,7 @@ Remaining release work and optional future features are tracked in [ROADMAP.md](
 - Editable provider drafts with idle autosave, rich-text composition, recipient suggestions, signatures, forwarding attachments, scheduled delivery, ten-second Undo Send, SMTP delivery, and an offline Outbox
 - Persistent snooze/remind-later with automatic Inbox restoration, plus account-specific rules for sender, recipient, subject, and body filtering
 - Per-account identity, synchronization, notification, OAuth, IMAP/SMTP, connection-test, and local-rebuild settings
+- Provider-side Gmail and Microsoft automatic replies (out of office) with schedules, audiences, read-back of the server state, and a reconnect path for missing permissions ([automatic replies](docs/automatic-replies.md))
 - Privacy-redacted diagnostics, storage-integrity checks, and native new-mail notifications that open the relevant conversation
 - Sanitized HTML; scripts and unsafe links are removed, remote images are blocked by default, and suspected tracking pixels stay blocked with an explanation even after remote images are permitted ([tracking protection](docs/tracking-protection.md))
 - Dedicated message windows for provider mail; double-click a conversation to open or focus its window
@@ -45,7 +46,7 @@ Official builds use Aerio's built-in registration: choose Gmail and select **Con
 4. Put its `client_id` and `client_secret` into `.env.local` as `MAIN_VITE_GOOGLE_CLIENT_ID` and `MAIN_VITE_GOOGLE_CLIENT_SECRET`, then rebuild Aerio. Both values must belong to the same registration.
 5. Choose Gmail and select **Connect Gmail**. Your normal browser completes Google sign-in and returns to Aerio through a temporary `127.0.0.1` callback.
 
-Aerio requests Gmail modify access, read-only Calendar-list access, Google Calendar event read/write access, Contacts read/write access, and Tasks read/write access. It does not request permission to create or share calendars or permanently delete Gmail messages. Existing accounts connected by an older Aerio build can use **Enable editing** in Calendar/Contacts, **Connect Google Tasks** in Tasks, or **Account settings → Reconnect** to approve added scopes.
+Aerio requests Gmail modify access, Gmail basic-settings access (for automatic replies), read-only Calendar-list access, Google Calendar event read/write access, Contacts read/write access, and Tasks read/write access. It does not request permission to create or share calendars or permanently delete Gmail messages. Existing accounts connected by an older Aerio build can use **Enable editing** in Calendar/Contacts, **Connect Google Tasks** in Tasks, or **Account settings → Reconnect** to approve added scopes.
 
 The first download is quota-bound. A mailbox with 100,000 messages can take roughly seven hours or more, depending on message size, retries, and Google’s per-user quota. Progress is persistent; quitting, losing connectivity, or pausing does not discard completed work.
 
@@ -55,7 +56,7 @@ Official builds use Aerio's built-in public-client registration: choose Microsof
 
 1. Create an app registration in [Microsoft Entra](https://entra.microsoft.com/).
 2. Enable public client flows and add the **Mobile and desktop applications** redirect URI `http://localhost`.
-3. Set `MAIN_VITE_MICROSOFT_CLIENT_ID` to the new Application (client) ID and rebuild, then choose Microsoft and sign in. The browser requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite`, `Contacts.ReadWrite`, and `Tasks.ReadWrite` access. Existing connections can reconnect to grant added permissions; Tasks offers **Connect Microsoft To Do**. Background token refresh renews the existing grant without requesting new Tasks consent.
+3. Set `MAIN_VITE_MICROSOFT_CLIENT_ID` to the new Application (client) ID and rebuild, then choose Microsoft and sign in. The browser requests delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `MailboxSettings.ReadWrite`, `Calendars.ReadWrite`, `Contacts.ReadWrite`, and `Tasks.ReadWrite` access. Existing connections can reconnect to grant added permissions; Tasks offers **Connect Microsoft To Do**. Background token refresh renews the existing grant without requesting new Tasks or mailbox-settings consent.
 
 Aerio includes its Microsoft public-client application ID by default, because desktop application IDs are public identifiers rather than secrets. `MAIN_VITE_MICROSOFT_CLIENT_ID` can override it for a separate development registration.
 
