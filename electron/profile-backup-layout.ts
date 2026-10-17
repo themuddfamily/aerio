@@ -76,6 +76,7 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
         { label: 'Quick actions', count: countRows(db, 'mail_quick_actions') },
         { label: 'Saved searches', count: countRows(db, 'mail_saved_searches') },
         { label: 'Reply watches', count: countRows(db, 'mail_reply_watches', `status='pending'`) },
+        { label: 'Pinned conversations', count: countRows(db, 'mail_pins') },
         { label: 'Unfinished mail merges', count: countRows(db, 'mail_merge_jobs', MAIL_MERGE_ACTIVE) }
       ]
     },

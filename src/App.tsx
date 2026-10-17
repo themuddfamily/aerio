@@ -1,6 +1,6 @@
 import {
   CalendarDays, CheckCircle2, ChevronRight, Command, ContactRound, HelpCircle, LockKeyhole, Mail,
-  MessagesSquare, Moon, NotebookPen, Plus, Search, Settings, Sparkles, Sun, UserRound, X, Zap
+  MessagesSquare, Moon, NotebookPen, Pin, PinOff, Plus, Search, Settings, Sparkles, Sun, UserRound, X, Zap
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TitleBar from './components/TitleBar'
@@ -64,6 +64,7 @@ export default function App() {
   const [mailSearchRequest, setMailSearchRequest] = useState({ id: 0, query: '' })
   const [mailQuickActions, setMailQuickActions] = useState<MailQuickAction[]>([])
   const [mailQuickActionRequest, setMailQuickActionRequest] = useState({ id: 0, quickActionId: '' })
+  const [mailPinRequest, setMailPinRequest] = useState<{ id: number; action: 'pin' | 'unpin' }>({ id: 0, action: 'pin' })
   const [connectedAccounts, setConnectedAccounts] = useState<MailAccountSummary[]>([])
   const [productivity, setProductivity] = useState<ProductivitySnapshot>(emptyProductivity)
   const [localModules, setLocalModules] = useState<LocalModuleSnapshot>(emptyLocalModules)
@@ -391,11 +392,16 @@ export default function App() {
       label: `Run quick action: ${item.name}`, detail: item.shortcut ? quickActionShortcutLabel(item.shortcut).replaceAll('+', ' ') : '', icon: Zap,
       action: () => setMailQuickActionRequest((current) => ({ id: current.id + 1, quickActionId: item.id })), preserveQuery: false
     })) : []
+    const mailPins = activeModule === 'mail' ? (['pin', 'unpin'] as const).map((action) => ({
+      label: action === 'pin' ? 'Pin selected conversations to the top' : 'Unpin selected conversations', detail: '', icon: action === 'pin' ? Pin : PinOff,
+      action: () => setMailPinRequest((current) => ({ id: current.id + 1, action })), preserveQuery: false
+    })) : []
     const quick = [
       { label: 'Compose a new message', detail: 'Ctrl N', icon: Plus, action: () => startCompose(), preserveQuery: false },
       ...visibleModules.map((item) => ({ label: `Open ${item.label}`, detail: `Ctrl ${item.shortcut}`, icon: item.icon, action: () => setActiveModule(item.id), preserveQuery: false })),
       ...(appLock?.enabled ? [{ label: 'Lock Aerio', detail: 'Ctrl L', icon: LockKeyhole, action: () => { void window.aerio.appLock.lock() }, preserveQuery: false }] : []),
       { label: 'Open settings', detail: '', icon: Settings, action: () => setSettingsOpen(true), preserveQuery: false },
+      ...mailPins,
       ...mailQuick
     ].filter((item) => !query || item.label.toLowerCase().includes(query.toLowerCase()))
     return query.trim()
@@ -526,7 +532,7 @@ export default function App() {
             </button>
           </header>
           <div className="module-content">
-            {activeModule === 'mail' && <ConnectedMailView onToast={showToast} composeRequest={composeRequest} searchRequest={mailSearchRequest} quickActionRequest={mailQuickActionRequest} />}
+            {activeModule === 'mail' && <ConnectedMailView onToast={showToast} composeRequest={composeRequest} searchRequest={mailSearchRequest} quickActionRequest={mailQuickActionRequest} pinRequest={mailPinRequest} />}
             {activeModule === 'calendar' && <CalendarView
               state={connectedState}
               query={query}

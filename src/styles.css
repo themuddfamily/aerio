@@ -763,6 +763,13 @@ kbd {
   display: inline-block;
 }
 
+.mail-pinned-group span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+}
+
 .message-row {
   position: relative;
   width: 100%;
