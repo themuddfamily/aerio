@@ -160,16 +160,23 @@ export function planEventImport(incoming: CalendarEvent[], existing: CalendarEve
 // drops values the user has visibly replaced (a new repeat choice or edited times).
 export function preserveEventInterchangeFields(original: CalendarEvent | undefined, next: CalendarEvent): CalendarEvent {
   if (!original) return next
+  // Fields the editor sets explicitly (all-day, zone, and the full repeat rule since E24) win over the original.
+  const explicit = (key: keyof CalendarEvent) => Object.prototype.hasOwnProperty.call(next, key)
   const timesChanged = instant(original.start) !== instant(next.start) || instant(original.end) !== instant(next.end)
-  const recurrenceChanged = (original.recurrence ?? 'none') !== (next.recurrence ?? 'none')
+  const recurrenceChanged = explicit('recurrenceRule')
+    ? !next.recurrenceRule
+    : (original.recurrence ?? 'none') !== (next.recurrence ?? 'none')
   return {
     ...next,
-    ...(original.timeZone ? { timeZone: original.timeZone } : {}),
+    ...(original.timeZone && !explicit('timeZone') ? { timeZone: original.timeZone } : {}),
     ...(original.sourceUid ? { sourceUid: original.sourceUid } : {}),
     ...(original.recurrenceId ? { recurrenceId: original.recurrenceId } : {}),
-    ...(original.allDay && !timesChanged ? { allDay: true, start: original.start, end: original.end } : {}),
-    ...(original.recurrenceRule && !recurrenceChanged ? { recurrenceRule: original.recurrenceRule } : {}),
-    ...(original.recurrenceExceptions?.length && !recurrenceChanged ? { recurrenceExceptions: original.recurrenceExceptions } : {})
+    ...(original.seriesId && !explicit('seriesId') ? { seriesId: original.seriesId } : {}),
+    ...(original.originalStart && !explicit('originalStart') ? { originalStart: original.originalStart } : {}),
+    ...(original.occurrenceOf ? { occurrenceOf: original.occurrenceOf } : {}),
+    ...(original.allDay && !timesChanged && !explicit('allDay') ? { allDay: true, start: original.start, end: original.end } : {}),
+    ...(original.recurrenceRule && !recurrenceChanged && !explicit('recurrenceRule') ? { recurrenceRule: original.recurrenceRule } : {}),
+    ...(original.recurrenceExceptions?.length && !recurrenceChanged && !explicit('recurrenceExceptions') ? { recurrenceExceptions: original.recurrenceExceptions } : {})
   }
 }
 

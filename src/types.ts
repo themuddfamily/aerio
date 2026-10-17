@@ -44,7 +44,16 @@ export interface CalendarEvent {
   recurrenceExceptions?: string[]
   recurrenceId?: string
   sourceUid?: string
+  // Series identity (E24). `seriesId` names the series master an occurrence belongs to: the provider's
+  // master id (Google recurringEventId, Microsoft seriesMasterId) for synced instances, or the local
+  // master event id for local overrides. `originalStart` is the occurrence's unmodified start.
+  seriesId?: string
+  originalStart?: string
+  // Set only on occurrences generated in the view by the recurrence expander; never persisted.
+  occurrenceOf?: string
 }
+
+export type RecurrenceEditScope = 'occurrence' | 'following' | 'series'
 
 export interface ContactField {
   value: string

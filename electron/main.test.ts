@@ -132,6 +132,8 @@ const mocks = vi.hoisted(() => {
     createEvent: vi.fn(async (_calendar: any, input: any) => ({ ...input, accountId: 'a1b2', provider: 'gmail', remoteId: 'remote', readOnly: false })),
     updateEvent: vi.fn(async (_calendar: any, _current: any, input: any) => ({ ...input, accountId: 'a1b2', provider: 'gmail', remoteId: 'remote', readOnly: false })),
     deleteEvent: vi.fn(async () => undefined),
+    updateEventSeries: vi.fn(async () => undefined),
+    deleteEventSeries: vi.fn(async () => undefined),
     createContact: vi.fn(async (input: any) => ({ ...input, id: 'a1b2:google-contact:people/new', accountId: 'a1b2', provider: 'gmail', remoteId: 'people/new', readOnly: false })),
     updateContact: vi.fn(async (_current: any, input: any) => ({ ...input, accountId: 'a1b2', provider: 'gmail', remoteId: 'people/existing', readOnly: false })),
     deleteContact: vi.fn(async () => undefined)
@@ -863,6 +865,28 @@ describe.sequential('Electron main process', () => {
     await expect(invoke('productivity:event-delete', 'event')).resolves.toBeDefined()
     expect(mocks.google.deleteEvent).toHaveBeenCalled()
     expect(() => invoke('productivity:event-delete', '')).toThrow(/valid event/)
+  })
+
+  it('routes series-wide and this-and-following calendar writes to the series master', async () => {
+    const calendar = { id: 'calendar', accountId: 'abcdef', provider: 'gmail', remoteId: 'remote-calendar', name: 'Work', canWrite: true }
+    const input = {
+      id: 'instance', calendarId: 'calendar', title: 'Standup', start: '2026-08-10T09:00:00Z', end: '2026-08-10T09:30:00Z',
+      color: '#6558e8', attendees: [], reminderMinutes: 15, recurrence: 'none', seriesId: 'series', originalStart: '2026-08-10T09:00:00Z', timeZone: 'Europe/London'
+    }
+    const current = { ...input, accountId: 'abcdef', provider: 'gmail', remoteId: 'series_20260810', readOnly: false }
+    mocks.setStoreSnapshot({ calendars: [calendar], events: [current], contacts: [], sync: [] })
+    await expect(invoke('productivity:event-update', { ...input, title: 'Renamed' }, 'series')).resolves.toBeDefined()
+    expect(mocks.google.updateEventSeries).toHaveBeenCalledWith(calendar, current, expect.objectContaining({ title: 'Renamed' }), 'series')
+    // The write is followed by a refresh, which replaces the stored events.
+    mocks.setStoreSnapshot({ calendars: [calendar], events: [current], contacts: [], sync: [] })
+    await expect(invoke('productivity:event-delete', 'instance', 'following')).resolves.toBeDefined()
+    expect(mocks.google.deleteEventSeries).toHaveBeenCalledWith(calendar, current, 'following')
+    mocks.setStoreSnapshot({ calendars: [calendar], events: [current], contacts: [], sync: [] })
+    await expect(invoke('productivity:event-update', input, 'occurrence')).resolves.toBeDefined()
+    expect(mocks.google.updateEvent).toHaveBeenCalledWith(calendar, current, expect.objectContaining({ id: 'instance' }))
+    expect(() => invoke('productivity:event-update', input, 'everything')).toThrow(/which events/)
+    expect(() => invoke('productivity:event-delete', 'instance', 'everything')).toThrow(/which events/)
+    expect(() => invoke('productivity:event-update', { ...input, occurrenceOf: 'master' })).toThrow(/valid event/)
   })
 
   it('rejects unavailable, read-only, moved, and unsupported calendar writes', async () => {

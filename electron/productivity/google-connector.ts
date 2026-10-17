@@ -1,6 +1,10 @@
 import type { CalendarEvent, Contact } from '../../src/types'
 import type { ProviderProductivityData, ProviderProductivitySyncResult, SyncedCalendar, SyncedCalendarEvent, SyncedContact } from '../../src/productivity-types'
 import { ProductivityApiError, retryingJson, type ProductivityConnector } from './connector'
+import { eventRecurrenceRule, formatRecurrenceRule, isAllDayEvent, occurrenceKey, occurrencesBefore, parseRecurrenceRule, untilBefore } from '../../src/lib/recurrence'
+import { shiftSeriesTiming } from '../../src/lib/recurrence-edit'
+import { googleRecurrenceRule, replaceGoogleRecurrenceRule } from '../../src/lib/provider-recurrence'
+import { isIanaTimeZone, resolveTimeZoneName, wallTimeInZone } from '../../src/lib/time-zones'
 
 interface GooglePage<T> { items?: T[]; connections?: T[]; nextPageToken?: string; nextSyncToken?: string }
 interface GoogleCalendar { id: string; summary?: string; backgroundColor?: string; primary?: boolean; accessRole?: string }
@@ -10,11 +14,13 @@ interface GoogleEvent {
   summary?: string
   description?: string
   location?: string
-  start?: { dateTime?: string; date?: string }
-  end?: { dateTime?: string; date?: string }
+  start?: { dateTime?: string; date?: string; timeZone?: string }
+  end?: { dateTime?: string; date?: string; timeZone?: string }
   attendees?: { email?: string }[]
   reminders?: { useDefault?: boolean; overrides?: { minutes?: number }[] }
   recurrence?: string[]
+  recurringEventId?: string
+  originalStartTime?: { dateTime?: string; date?: string; timeZone?: string }
 }
 interface GooglePerson {
   resourceName: string
@@ -48,20 +54,49 @@ const recurrence = (rules?: string[]) => {
   return frequency === 'daily' || frequency === 'weekly' || frequency === 'monthly' ? frequency : 'none'
 }
 
-export const googleEventBody = (event: CalendarEvent) => {
-  const repeat = event.recurrence ?? 'none'
+const pad = (value: number) => String(value).padStart(2, '0')
+const compactUtc = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+
+// Google RRULE plus EXDATE lines for an Aerio series; EXDATEs use the event's zone like DTSTART does.
+function googleRecurrenceLines(event: CalendarEvent) {
+  const rule = eventRecurrenceRule(event)
+  if (!rule) return undefined
+  const lines = [`RRULE:${formatRecurrenceRule(rule)}`]
+  const exceptions = event.recurrenceExceptions ?? []
+  const dates = exceptions.filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
+  const times = exceptions.filter((value) => !/^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)))
+  if (dates.length) lines.push(`EXDATE;VALUE=DATE:${dates.map((value) => value.replace(/-/g, '')).join(',')}`)
+  if (times.length) {
+    const zone = event.timeZone && isIanaTimeZone(event.timeZone) ? event.timeZone : undefined
+    lines.push(zone
+      ? `EXDATE;TZID=${zone}:${times.map((value) => {
+        const wall = wallTimeInZone(Date.parse(value), zone)
+        return `${wall.year}${pad(wall.month)}${pad(wall.day)}T${pad(wall.hour)}${pad(wall.minute)}${pad(wall.second)}`
+      }).join(',')}`
+      : `EXDATE:${times.map((value) => compactUtc(Date.parse(value))).join(',')}`)
+  }
+  return lines
+}
+
+// `instance` writes a single occurrence (or a master without touching its rule): Google rejects or would
+// replace `recurrence` there, so it is omitted.
+export const googleEventBody = (event: CalendarEvent, options: { instance?: boolean } = {}) => {
+  const allDay = isAllDayEvent(event)
+  const recurrence = options.instance || event.seriesId ? undefined : googleRecurrenceLines(event)
+  // Recurring timed events need a named zone so occurrences keep their local time across DST.
+  const timeZone = allDay ? undefined : event.timeZone && isIanaTimeZone(event.timeZone) ? event.timeZone : recurrence ? 'UTC' : undefined
   return {
     summary: event.title,
     description: event.description || undefined,
     location: event.location || undefined,
-    start: { dateTime: event.start },
-    end: { dateTime: event.end },
+    start: allDay ? { date: event.start.slice(0, 10) } : { dateTime: event.start, timeZone },
+    end: allDay ? { date: event.end.slice(0, 10) } : { dateTime: event.end, timeZone },
     attendees: event.attendees.map((email) => ({ email })),
     reminders: {
       useDefault: false,
       overrides: [{ method: 'popup', minutes: event.reminderMinutes }]
     },
-    recurrence: repeat === 'none' ? undefined : [`RRULE:FREQ=${repeat.toUpperCase()}`]
+    recurrence
   }
 }
 
@@ -84,9 +119,18 @@ export function mapGoogleEvent(accountId: string, calendar: SyncedCalendar, even
     attendees: (event.attendees ?? []).flatMap((attendee) => attendee.email ? [attendee.email] : []),
     reminderMinutes: event.reminders?.overrides?.[0]?.minutes ?? 30,
     recurrence: recurrence(event.recurrence),
-    readOnly: !calendar.canWrite
+    readOnly: !calendar.canWrite,
+    ...(event.start?.date ? { allDay: true } : {}),
+    ...(resolveTimeZoneName(event.start?.timeZone) ? { timeZone: resolveTimeZoneName(event.start?.timeZone) } : {}),
+    ...(googleRecurrenceRule(event.recurrence) ? { recurrenceRule: googleRecurrenceRule(event.recurrence) } : {}),
+    ...(event.recurringEventId ? { seriesId: event.recurringEventId } : {}),
+    ...(event.originalStartTime?.dateTime ?? event.originalStartTime?.date ? { originalStart: event.originalStartTime?.dateTime ?? event.originalStartTime?.date } : {})
   }
 }
+
+// Synced feeds use singleEvents=true, so a stored series master (returned by a write) is replaced by its
+// instances on the next sync instead of being kept alongside them.
+const isStoredMaster = (event: SyncedCalendarEvent) => Boolean(event.recurrenceRule && !event.seriesId)
 
 export function mapGoogleContact(accountId: string, person: GooglePerson, readOnly = false): SyncedContact | undefined {
   const name = person.names?.[0]?.displayName?.trim()
@@ -162,7 +206,7 @@ export class GoogleProductivityConnector implements ProductivityConnector {
         query.set('timeMax', to.toISOString())
       }
       const delta = await this.pagesWithCheckpoint<GoogleEvent>(`${this.eventsUrl(calendar)}?${query}`, 'items')
-      const current = syncToken ? new Map(previous.filter((event) => event.calendarId === calendar.id).map((event) => [event.id, event])) : new Map<string, SyncedCalendarEvent>()
+      const current = syncToken ? new Map(previous.filter((event) => event.calendarId === calendar.id && !isStoredMaster(event)).map((event) => [event.id, event])) : new Map<string, SyncedCalendarEvent>()
       for (const event of delta.items) {
         const id = `${this.accountId}:google-event:${calendar.remoteId}:${event.id}`
         const mapped = mapGoogleEvent(this.accountId, calendar, event)
@@ -219,9 +263,57 @@ export class GoogleProductivityConnector implements ProductivityConnector {
     const remote = await retryingJson<GoogleEvent>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(current.remoteId)}`, this.token, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(googleEventBody(event))
+      body: JSON.stringify(googleEventBody(event, { instance: Boolean(current.seriesId) }))
     })
     return this.mapWrittenEvent(calendar, remote)
+  }
+
+  // Applies an occurrence edit to the whole series, or splits the series at the occurrence ("this and
+  // following"): the master's RRULE ends before it and a new series starts from the edited occurrence.
+  async updateEventSeries(calendar: SyncedCalendar, current: SyncedCalendarEvent, event: CalendarEvent, scope: 'following' | 'series') {
+    this.assertWritable(calendar)
+    const { master, timing, split } = await this.seriesMaster(calendar, current)
+    if (scope === 'following' && occurrenceKey(split) !== occurrenceKey(timing.start)) {
+      const rule = parseRecurrenceRule(googleRecurrenceRule(master.recurrence))
+      if (!rule) throw new Error('Google did not return this series’ repeat rule; synchronize and try again')
+      const remaining = rule.count !== undefined ? Math.max(1, rule.count - occurrencesBefore({ ...timing, recurrenceRule: formatRecurrenceRule(rule) } as CalendarEvent, split)) : undefined
+      await this.patchMaster(calendar, master, { recurrence: replaceGoogleRecurrenceRule(master.recurrence, formatRecurrenceRule({ ...rule, count: undefined, until: untilBefore(split, isAllDayEvent(timing as CalendarEvent)) })) })
+      const successor = { ...event, seriesId: undefined, originalStart: undefined, recurrenceExceptions: undefined, recurrenceRule: formatRecurrenceRule({ ...rule, count: remaining }) }
+      await retryingJson<GoogleEvent>(this.provider, this.eventsUrl(calendar), this.token, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(googleEventBody(successor))
+      })
+      return
+    }
+    const shifted = shiftSeriesTiming(timing, split, event)
+    await this.patchMaster(calendar, master, googleEventBody({ ...event, ...shifted, seriesId: undefined }, { instance: true }))
+  }
+
+  async deleteEventSeries(calendar: SyncedCalendar, current: SyncedCalendarEvent, scope: 'following' | 'series') {
+    this.assertWritable(calendar)
+    const { master, timing, split } = await this.seriesMaster(calendar, current)
+    if (scope === 'following' && occurrenceKey(split) !== occurrenceKey(timing.start)) {
+      const rule = parseRecurrenceRule(googleRecurrenceRule(master.recurrence))
+      if (!rule) throw new Error('Google did not return this series’ repeat rule; synchronize and try again')
+      await this.patchMaster(calendar, master, { recurrence: replaceGoogleRecurrenceRule(master.recurrence, formatRecurrenceRule({ ...rule, count: undefined, until: untilBefore(split, isAllDayEvent(timing as CalendarEvent)) })) })
+      return
+    }
+    await retryingJson<void>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(master.id)}`, this.token, { method: 'DELETE' })
+  }
+
+  private async seriesMaster(calendar: SyncedCalendar, current: SyncedCalendarEvent) {
+    if (!current.seriesId) throw new Error('This event is not part of a repeating series')
+    const master = await retryingJson<GoogleEvent>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(current.seriesId)}`, this.token)
+    const start = master.start?.dateTime ?? master.start?.date
+    const end = master.end?.dateTime ?? master.end?.date
+    if (!start || !end) throw new Error('Google did not return valid series details')
+    const timing = { start, end, ...(master.start?.date ? { allDay: true } : {}), timeZone: resolveTimeZoneName(master.start?.timeZone) }
+    return { master, timing, split: current.originalStart ?? current.start }
+  }
+
+  private async patchMaster(calendar: SyncedCalendar, master: GoogleEvent, body: object) {
+    await retryingJson<GoogleEvent>(this.provider, `${this.eventsUrl(calendar)}/${encodeURIComponent(master.id)}`, this.token, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    })
   }
 
   async deleteEvent(calendar: SyncedCalendar, event: SyncedCalendarEvent) {

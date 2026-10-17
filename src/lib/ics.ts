@@ -442,7 +442,9 @@ export function serializeIcs(events: CalendarEvent[], options: IcsSerializeOptio
   for (const event of events) {
     const allDay = isAllDay(event)
     const zone = allDay ? undefined : event.timeZone
-    lines.push('BEGIN:VEVENT', `UID:${escapeText(event.sourceUid ?? `${event.id}@aerio.local`)}`, `DTSTAMP:${stamp}`)
+    // Local overrides without a source UID share their series master's generated UID.
+    const uid = event.sourceUid ?? `${event.recurrenceId && event.seriesId ? event.seriesId : event.id}@aerio.local`
+    lines.push('BEGIN:VEVENT', `UID:${escapeText(uid)}`, `DTSTAMP:${stamp}`)
     lines.push(dateProperty('DTSTART', event.start, allDay, zone), dateProperty('DTEND', event.end, allDay, zone))
     if (event.recurrenceId) lines.push(dateProperty('RECURRENCE-ID', event.recurrenceId, DATE_ONLY.test(event.recurrenceId), zone))
     lines.push(`SUMMARY:${escapeText(event.title)}`)

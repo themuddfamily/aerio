@@ -26,6 +26,7 @@ Remaining release work and optional future features are tracked in [ROADMAP.md](
 - Dedicated message windows for provider mail; double-click a conversation to open or focus its window
 - Read-only local archive or complete local deletion when disconnecting an account
 - Google and Microsoft Calendar synchronization with event creation, editing, deletion, recurrence, and configurable reminders
+- Full repeat rules (intervals, weekdays, nth weekdays, yearly, end dates/counts), named time zones, all-day events, and this event / this and following / all events edits and deletes, plus a secondary time zone in week and day views; see [calendar recurrence and time zones](docs/calendar-recurrence-time-zones.md)
 - Writable Google and Microsoft provider Contacts plus editable local Contacts, with portable backup and restore for local Contacts, Tasks, Notes, and managed note attachments
 - Google Tasks and Microsoft To Do lists/tasks with durable offline changes, conflict review, undo, native/local recurrence mapping, and separate connected-task backup/restore; see [provider task integration](docs/task-provider-integration.md)
 - Optional local passphrase privacy lock at launch, when Aerio is sent to the tray, or on demand

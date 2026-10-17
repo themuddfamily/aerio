@@ -4,6 +4,7 @@
 
 ### Added
 
+- Calendar recurrence and time zones: every occurrence of a repeating local or imported event appears in month, week, day, and agenda views; a repeat editor covers intervals, weekdays, nth/last weekdays, yearly rules, and end dates or counts; rules Aerio cannot edit are kept read-only rather than dropped. Saving or deleting a repeating event asks for this event, this and following events, or all events, on local calendars, Google (recurringEventId/originalStartTime), and Microsoft (seriesMasterId/patternedRecurrence). Events keep named time zones and all-day dates, and week and day views can show a secondary time zone.
 - QuickText snippets and whole-message mail templates with subject, sanitized HTML, and managed attachments; search, edit, and insert them from the composer without losing the editor selection, and back them up with local data or as a standalone template file.
 - Watch for replies: turn it on in the composer or from a sent message’s menu, with an optional deadline. Aerio matches replies by Message-ID references and the provider thread for the sending account, notifies from the background or tray when a recipient answers or the deadline passes without a reply, and lists active and past watches under Mail › Reply watches, where they can be cancelled.
 

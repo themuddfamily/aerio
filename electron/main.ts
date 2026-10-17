@@ -10,7 +10,7 @@ import { createDefaultPreferences, defaultSettings } from '../src/preferences'
 import { setLinuxLoginItem } from './linux-login'
 import { linuxTrayHostAvailable } from './tray-availability'
 import { applicationMenuTemplate, registerMacLoginItem } from './mac-integration'
-import type { AppPreferences, Attachment, CalendarEvent, Contact, MessageWindowRequest, ModuleId, Settings } from '../src/types'
+import type { AppPreferences, Attachment, CalendarEvent, Contact, MessageWindowRequest, ModuleId, RecurrenceEditScope, Settings } from '../src/types'
 import type {
   ApplyMailActionInput,
   MailAccountSummary,
@@ -72,7 +72,7 @@ import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import { InterchangeStore } from './productivity/interchange-store'
 import { registerCalendarContactInterchange } from './productivity/interchange-ipc'
-import { validContactInterchangeFields } from '../src/lib/interchange-validation'
+import { validContactInterchangeFields, validEventInterchangeFields } from '../src/lib/interchange-validation'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
 import { senderDomainFromEmail } from '../src/lib/sender-avatar'
 import { isCompleteMailAddress } from '../src/lib/mail-address'
@@ -504,7 +504,8 @@ function validCalendarEvent(value: unknown): value is CalendarEvent {
   if (event.description !== undefined && !validText(event.description, 100_000)) return false
   if (!validText(event.color, 100) || !Array.isArray(event.attendees) || event.attendees.length > 1_000 || !event.attendees.every((item) => validText(item, 500))) return false
   if (!Number.isInteger(event.reminderMinutes) || Number(event.reminderMinutes) < 0 || Number(event.reminderMinutes) > 40_320) return false
-  return event.recurrence === undefined || event.recurrence === 'none' || event.recurrence === 'daily' || event.recurrence === 'weekly' || event.recurrence === 'monthly'
+  if (!(event.recurrence === undefined || event.recurrence === 'none' || event.recurrence === 'daily' || event.recurrence === 'weekly' || event.recurrence === 'monthly')) return false
+  return validEventInterchangeFields(event)
 }
 
 function validContact(value: unknown): value is Contact {
@@ -555,6 +556,8 @@ function writableCalendarConnector(calendar: import('../src/productivity-types')
   return calendar.provider === 'gmail' ? googleCalendarConnector(calendar.accountId) : microsoftCalendarConnector(calendar.accountId)
 }
 
+const validEventScope = (value: unknown): value is RecurrenceEditScope => value === undefined || value === 'occurrence' || value === 'following' || value === 'series'
+
 async function createProductivityEvent(input: CalendarEvent) {
   const store = requireProductivityStore()
   const calendar = store.snapshot().calendars.find((item) => item.id === input.calendarId)
@@ -564,10 +567,36 @@ async function createProductivityEvent(input: CalendarEvent) {
   store.upsertEvent(saved)
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { snapshot: store.snapshot() })
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-created', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })
+  // A new series is stored as its master; synchronizing replaces it with the provider's occurrences.
+  if (saved.recurrenceRule && !saved.seriesId) return syncProductivity(calendar.accountId).catch(() => store.snapshot())
   return store.snapshot()
 }
 
-async function updateProductivityEvent(input: CalendarEvent) {
+// Series-wide and "this and following" writes go to the provider's series master, then the calendar is
+// synchronized so every affected occurrence is refreshed.
+async function writeProductivitySeries(eventId: string, scope: 'following' | 'series', input?: CalendarEvent) {
+  const store = requireProductivityStore()
+  const snapshot = store.snapshot()
+  const current = snapshot.events.find((item) => item.id === eventId)
+  if (!current) throw new Error('That event is no longer available')
+  if (current.readOnly) throw new Error(input ? 'This event cannot be edited' : 'This event cannot be deleted')
+  if (!current.seriesId) throw new Error('This event is not part of a repeating series')
+  const calendar = snapshot.calendars.find((item) => item.id === current.calendarId)
+  if (!calendar) throw new Error('That calendar is no longer available')
+  if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
+  if (current.provider !== calendar.provider || current.accountId !== calendar.accountId) throw new Error('The event’s calendar connection changed; synchronize before editing')
+  const connector = writableCalendarConnector(calendar)
+  if (input) await connector.updateEventSeries(calendar, current, input, scope)
+  else await connector.deleteEventSeries(calendar, current, scope)
+  diagnostic({ level: 'info', component: 'provider', event: input ? 'calendar-series-updated' : 'calendar-series-deleted', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id, scope } })
+  // A failed refresh is recorded on the account's sync state; the write itself already succeeded.
+  return syncProductivity(calendar.accountId).catch(() => store.snapshot())
+}
+
+async function updateProductivityEvent(input: CalendarEvent, scope?: RecurrenceEditScope) {
+  if (scope === 'following' || scope === 'series') {
+    if (requireProductivityStore().snapshot().events.find((item) => item.id === input.id)?.seriesId) return writeProductivitySeries(input.id, scope, input)
+  }
   const store = requireProductivityStore()
   const snapshot = store.snapshot()
   const current = snapshot.events.find((item) => item.id === input.id)
@@ -584,7 +613,10 @@ async function updateProductivityEvent(input: CalendarEvent) {
   return store.snapshot()
 }
 
-async function deleteProductivityEvent(eventId: string) {
+async function deleteProductivityEvent(eventId: string, scope?: RecurrenceEditScope) {
+  if (scope === 'following' || scope === 'series') {
+    if (requireProductivityStore().snapshot().events.find((item) => item.id === eventId)?.seriesId) return writeProductivitySeries(eventId, scope)
+  }
   const store = requireProductivityStore()
   const snapshot = store.snapshot()
   const current = snapshot.events.find((item) => item.id === eventId)
@@ -1434,13 +1466,15 @@ function registerIpc() {
     if (!validCalendarEvent(input)) throw new Error('Enter valid event details')
     return createProductivityEvent(input)
   })
-  ipcMain.handle('productivity:event-update', (_event, input: unknown) => {
+  ipcMain.handle('productivity:event-update', (_event, input: unknown, scope?: unknown) => {
     if (!validCalendarEvent(input)) throw new Error('Enter valid event details')
-    return updateProductivityEvent(input)
+    if (!validEventScope(scope)) throw new Error('Choose which events to change')
+    return updateProductivityEvent(input, scope)
   })
-  ipcMain.handle('productivity:event-delete', (_event, eventId: unknown) => {
+  ipcMain.handle('productivity:event-delete', (_event, eventId: unknown, scope?: unknown) => {
     if (typeof eventId !== 'string' || !eventId || eventId.length > 500) throw new Error('Choose a valid event')
-    return deleteProductivityEvent(eventId)
+    if (!validEventScope(scope)) throw new Error('Choose which events to delete')
+    return deleteProductivityEvent(eventId, scope)
   })
   ipcMain.handle('productivity:contact-create', (_event, accountId: unknown, input: unknown) => {
     if (typeof accountId !== 'string' || !accountId || accountId.length > 200) throw new Error('Choose a valid provider account')

@@ -1,4 +1,4 @@
-import type { Attachment, CalendarEvent, Contact, Note, Task } from './types'
+import type { Attachment, CalendarEvent, Contact, Note, RecurrenceEditScope, Task } from './types'
 
 export type ProductivityProvider = 'gmail' | 'microsoft'
 export type ProductivityModule = 'calendar' | 'contacts'
@@ -77,8 +77,8 @@ export interface ProductivityDesktopApi {
   snapshot(): Promise<ProductivitySnapshot>
   sync(accountId: string): Promise<ProductivitySnapshot>
   createEvent(event: CalendarEvent): Promise<ProductivitySnapshot>
-  updateEvent(event: CalendarEvent): Promise<ProductivitySnapshot>
-  deleteEvent(eventId: string): Promise<ProductivitySnapshot>
+  updateEvent(event: CalendarEvent, scope?: RecurrenceEditScope): Promise<ProductivitySnapshot>
+  deleteEvent(eventId: string, scope?: RecurrenceEditScope): Promise<ProductivitySnapshot>
   createContact(accountId: string, contact: Contact): Promise<ProductivityContactWriteResult>
   updateContact(contact: Contact): Promise<ProductivityContactWriteResult>
   deleteContact(contactId: string): Promise<ProductivitySnapshot>

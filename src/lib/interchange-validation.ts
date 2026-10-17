@@ -24,6 +24,7 @@ export function validContactInterchangeFields(contact: Partial<Contact>) {
 export function validEventInterchangeFields(event: Partial<CalendarEvent>) {
   return (event.allDay === undefined || typeof event.allDay === 'boolean') && optionalText(event.timeZone, 200) &&
     optionalText(event.recurrenceRule, 1_000) && optionalText(event.recurrenceId, 100) && optionalText(event.sourceUid, 1_000) &&
+    optionalText(event.seriesId, 1_000) && optionalText(event.originalStart, 100) && event.occurrenceOf === undefined &&
     (event.recurrenceExceptions === undefined || (Array.isArray(event.recurrenceExceptions) && event.recurrenceExceptions.length <= 5_000 &&
       event.recurrenceExceptions.every((value) => text(value, 100) && Number.isFinite(Date.parse(value)))))
 }

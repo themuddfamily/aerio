@@ -4441,3 +4441,24 @@ kbd {
 .csv-mapping-row > span,
 .csv-mapping-row > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .csv-mapping-row > small { color: var(--muted); }
+
+/* Recurrence and time zones (E24) */
+.recurrence-field { display: flex; flex-direction: column; gap: 8px; }
+.recurrence-custom { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.recurrence-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.recurrence-weekdays { display: flex; flex-wrap: wrap; gap: 6px; }
+.recurrence-weekdays button { min-width: 32px; height: 28px; border: 1px solid var(--line); border-radius: 8px; color: var(--text-soft); background: var(--surface); font-size: 10px; }
+.recurrence-weekdays button.active { color: white; border-color: var(--accent); background: var(--accent); }
+.recurrence-summary, .recurrence-note { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.recurrence-scope { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.recurrence-scope p { margin: 0; color: var(--text-soft); font-size: 11px; }
+.recurrence-scope-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.event-all-day { align-self: end; min-height: 34px; }
+.calendar-zone-group { display: flex; flex-direction: column; gap: 6px; }
+.calendar-zone-group select { width: 100%; }
+.calendar-event .repeat-icon { margin-right: 3px; vertical-align: -1px; color: var(--muted); }
+.time-zone-labels { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 2px; padding-right: 9px; color: var(--muted); font-size: 8px; }
+.time-row > time .secondary-time { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; opacity: 0.8; }
+.all-day-row { min-height: 0; }
+.all-day-row .time-slot { padding-block: 2px; }
+.time-event.all-day-event { min-height: 0; }
