@@ -31,6 +31,15 @@ const api: AerioDesktopApi = {
       return () => ipcRenderer.removeListener('app:update:status-changed', listener)
     }
   },
+  profileBackup: {
+    status: () => ipcRenderer.invoke('profile-backup:status'),
+    saveSchedule: (schedule) => ipcRenderer.invoke('profile-backup:schedule', schedule),
+    chooseDirectory: () => ipcRenderer.invoke('profile-backup:choose-directory'),
+    backupNow: () => ipcRenderer.invoke('profile-backup:backup-now'),
+    preview: (path) => ipcRenderer.invoke('profile-backup:preview', path),
+    restore: (path) => ipcRenderer.invoke('profile-backup:restore', path),
+    dismissRestoreOutcome: () => ipcRenderer.invoke('profile-backup:dismiss-restore')
+  },
   tasks: {
     createList: (accountId, title) => ipcRenderer.invoke('tasks:list:create', accountId, title),
     renameList: (listId, title) => ipcRenderer.invoke('tasks:list:rename', listId, title),

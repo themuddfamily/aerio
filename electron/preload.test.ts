@@ -84,6 +84,23 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('window:open-message', { accountId: 'account-1', messageId: 'message-1' })
   })
 
+  it('exposes full-profile backup commands with exact IPC channels', async () => {
+    const schedule = { enabled: true, intervalHours: 24, keep: 7, directory: 'C:\Backups' }
+    await api().profileBackup.status()
+    await api().profileBackup.saveSchedule(schedule)
+    await api().profileBackup.chooseDirectory()
+    await api().profileBackup.backupNow()
+    await api().profileBackup.preview()
+    await api().profileBackup.preview('C:\Backups\aerio-profile-1')
+    await api().profileBackup.restore('C:\Backups\aerio-profile-1')
+    await api().profileBackup.dismissRestoreOutcome()
+    for (const channel of ['profile-backup:status', 'profile-backup:choose-directory', 'profile-backup:backup-now', 'profile-backup:dismiss-restore']) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('profile-backup:schedule', schedule)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('profile-backup:preview', undefined)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('profile-backup:preview', 'C:\Backups\aerio-profile-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('profile-backup:restore', 'C:\Backups\aerio-profile-1')
+  })
+
   it('forwards and unsubscribes update, lock, window, compose, and mail events', () => {
     const update = vi.fn()
     const lock = vi.fn()

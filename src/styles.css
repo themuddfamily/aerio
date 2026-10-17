@@ -3077,6 +3077,18 @@ kbd {
 .settings-content > small { display: block; margin-top: 5px; color: var(--muted); font-size: 9.5px; }
 .settings-content > small.diagnostic-result { color: var(--success); }
 .settings-content > small.diagnostic-error { color: var(--danger); }
+.profile-backup-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-top: 8px; }
+.settings-content > small[title] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-backup-list { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.profile-backup-list > li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.profile-backup-list > li > span { min-width: 0; display: flex; flex-direction: column; }
+.profile-backup-list small { color: var(--muted); font-size: 9.5px; }
+.profile-restore-preview, .profile-restore-outcome { display: grid; gap: 6px; margin-top: 10px; padding: 10px 11px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-2); }
+.profile-restore-preview ul { margin: 0; padding-left: 18px; font-size: 10px; }
+.profile-restore-preview small { color: var(--muted); font-size: 9.5px; }
+.profile-restore-warnings { color: var(--muted); }
+.profile-restore-outcome { justify-items: start; font-size: 10px; }
+.profile-restore-outcome.rolled-back { border-color: var(--danger); }
 
 .organize-mail { max-height: 420px; display: grid; gap: 10px; padding: 16px 20px; overflow-y: auto; }
 .organize-mail > section { display: grid; gap: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }

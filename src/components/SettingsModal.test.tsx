@@ -39,7 +39,8 @@ const api = {
     exportLocalData: vi.fn(async (): Promise<{ savedPath?: string }> => ({ savedPath: 'backup.json' })),
     importLocalData: vi.fn(async () => ({ tasks: [{ id: 'task' }], notes: [{ id: 'note' }], contacts: [{ id: 'contact' }] }))
   },
-  mail: { diagnostics: { health: vi.fn(async () => health), export: vi.fn(async (): Promise<{ savedPath?: string }> => ({ savedPath: 'diagnostics.json' })) } }
+  mail: { diagnostics: { health: vi.fn(async () => health), export: vi.fn(async (): Promise<{ savedPath?: string }> => ({ savedPath: 'diagnostics.json' })) } },
+  profileBackup: { status: vi.fn(async () => ({ schedule: { enabled: false, intervalHours: 24, keep: 7, directory: 'C:\Backups' }, running: false, backups: [] })) }
 }
 
 beforeEach(() => {
@@ -104,7 +105,7 @@ describe('SettingsModal', () => {
     await user.click(screen.getByLabelText(/Keep scheduling active/))
     await user.click(screen.getByLabelText(/Start Aerio when you sign in/))
     await user.click(screen.getByLabelText(/Desktop notifications/))
-    await user.selectOptions(screen.getByRole('combobox'), 'notes')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Open Aerio to' }), 'notes')
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ settings: expect.objectContaining({ theme: 'dark' }) }))
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ settings: expect.objectContaining({ density: 'compact' }) }))
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ settings: expect.objectContaining({ closeToTray: false }) }))
