@@ -51,7 +51,7 @@ export class MailFolderManager {
     const account = this.database.getAccount(accountId)
     if (!account) throw new Error('Account not found')
     if (account.archived) throw new Error('Reconnect this account before changing its folders')
-    if (!this.deps.online()) throw new Error('Folder changes require an internet connection. Nothing was changed.')
+    if (!this.deps.online() && account.provider !== 'local') throw new Error('Folder changes require an internet connection. Nothing was changed.')
     return account
   }
 
@@ -66,6 +66,8 @@ export class MailFolderManager {
   async refresh(accountId: string): Promise<MailLabel[]> {
     const provider = this.database.getAccount(accountId)?.provider
     if (!provider) return []
+    // Local Folders have no server: the stored list is the folder list.
+    if (provider === 'local') return this.database.listLabels([accountId])
     let labels: MailLabel[]
     if (provider === 'gmail') labels = await this.deps.gmail(accountId).listLabels()
     else if (provider === 'microsoft') labels = microsoftLabels(accountId, await this.deps.microsoft(accountId).listFolders())
@@ -126,6 +128,7 @@ export class MailFolderManager {
 
   async create(input: CreateMailFolderInput): Promise<MailFolderMutationResult> {
     const account = this.account(input.accountId)
+    if (account.provider === 'local') return this.database.localMail.createFolder(input)
     const capabilities = mailFolderCapabilities(account.provider)
     if (!capabilities.canCreate) throw new Error('This provider does not allow creating folders')
     const name = input.name.trim()
@@ -147,6 +150,7 @@ export class MailFolderManager {
 
   async update(input: UpdateMailFolderInput): Promise<MailFolderMutationResult> {
     const account = this.account(input.accountId)
+    if (account.provider === 'local') return this.database.localMail.updateFolder(input)
     const capabilities = mailFolderCapabilities(account.provider)
     const { label, labels } = this.label(input.accountId, input.labelId)
     const currentName = mailFolderLeafName(label, labels)
@@ -212,6 +216,7 @@ export class MailFolderManager {
 
   async delete(input: DeleteMailFolderInput): Promise<MailFolderMutationResult> {
     const account = this.account(input.accountId)
+    if (account.provider === 'local') return this.database.localMail.deleteFolder(input)
     if (!mailFolderCapabilities(account.provider).canDelete) throw new Error('This provider does not allow deleting folders')
     const { label, labels } = this.label(input.accountId, input.labelId)
     if (mailFolderDescendants(label, labels).length) throw new Error('Delete or move this folder’s subfolders first')

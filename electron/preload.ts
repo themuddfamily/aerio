@@ -71,17 +71,22 @@ const api: AerioDesktopApi = {
     snapshot: () => ipcRenderer.invoke('productivity:snapshot'),
     sync: (accountId) => ipcRenderer.invoke('productivity:sync', accountId),
     createEvent: (event) => ipcRenderer.invoke('productivity:event-create', event),
-    updateEvent: (event) => ipcRenderer.invoke('productivity:event-update', event),
-    deleteEvent: (eventId) => ipcRenderer.invoke('productivity:event-delete', eventId),
+    updateEvent: (event, scope) => scope ? ipcRenderer.invoke('productivity:event-update', event, scope) : ipcRenderer.invoke('productivity:event-update', event),
+    deleteEvent: (eventId, scope) => scope ? ipcRenderer.invoke('productivity:event-delete', eventId, scope) : ipcRenderer.invoke('productivity:event-delete', eventId),
     createContact: (accountId, contact) => ipcRenderer.invoke('productivity:contact-create', accountId, contact),
     updateContact: (contact) => ipcRenderer.invoke('productivity:contact-update', contact),
     deleteContact: (contactId) => ipcRenderer.invoke('productivity:contact-delete', contactId),
+    createContactGroup: (accountId, name) => ipcRenderer.invoke('productivity:contact-group-create', accountId, name),
+    renameContactGroup: (groupId, name) => ipcRenderer.invoke('productivity:contact-group-rename', groupId, name),
+    deleteContactGroup: (groupId) => ipcRenderer.invoke('productivity:contact-group-delete', groupId),
+    updateContactGroupMembers: (groupId, add, remove) => ipcRenderer.invoke('productivity:contact-group-members', groupId, add, remove),
     chooseNoteAttachments: () => ipcRenderer.invoke('productivity:note-attachments-choose'),
     openNoteAttachment: (path) => ipcRenderer.invoke('productivity:note-attachment-open', path),
     localSnapshot: () => ipcRenderer.invoke('productivity:local-snapshot'),
     saveLocal: (snapshot) => ipcRenderer.invoke('productivity:local-save', snapshot),
     exportLocalData: () => ipcRenderer.invoke('productivity:local-export'),
-    importLocalData: () => ipcRenderer.invoke('productivity:local-import')
+    importLocalData: () => ipcRenderer.invoke('productivity:local-import'),
+    availability: (request) => ipcRenderer.invoke('productivity:availability', request)
   },
   interchange: {
     snapshot: () => ipcRenderer.invoke('interchange:snapshot'),
@@ -127,6 +132,22 @@ const api: AerioDesktopApi = {
     search: (requestId, request) => ipcRenderer.invoke('ai:search', requestId, request),
     cancel: (requestId) => ipcRenderer.invoke('ai:cancel', requestId)
   },
+  openPgp: {
+    status: () => ipcRenderer.invoke('openpgp:status'),
+    generate: (input) => ipcRenderer.invoke('openpgp:generate', input),
+    importText: (armored, passphrase) => ipcRenderer.invoke('openpgp:import-text', armored, passphrase),
+    importFile: (passphrase) => ipcRenderer.invoke('openpgp:import-file', passphrase),
+    exportPublic: (fingerprint) => ipcRenderer.invoke('openpgp:export-public', fingerprint),
+    exportPrivate: (fingerprint, passphrase) => ipcRenderer.invoke('openpgp:export-private', fingerprint, passphrase),
+    delete: (fingerprint) => ipcRenderer.invoke('openpgp:delete', fingerprint),
+    setVerification: (fingerprint, state) => ipcRenderer.invoke('openpgp:verification', fingerprint, state),
+    unlock: (fingerprint, passphrase) => ipcRenderer.invoke('openpgp:unlock', fingerprint, passphrase),
+    forgetPassphrases: () => ipcRenderer.invoke('openpgp:forget'),
+    preflight: (input) => ipcRenderer.invoke('openpgp:preflight', input),
+    inspect: (ref) => ipcRenderer.invoke('openpgp:inspect', ref),
+    decrypt: (ref, passphrase) => ipcRenderer.invoke('openpgp:decrypt', ref, passphrase),
+    saveAttachment: (ref, index) => ipcRenderer.invoke('openpgp:save-attachment', ref, index)
+  },
   mail: {
     messageTools: {
       updateLocal: (ref, updates) => ipcRenderer.invoke('mail:message:local', ref, updates),
@@ -145,6 +166,21 @@ const api: AerioDesktopApi = {
       get: (accountId) => ipcRenderer.invoke('mail:automatic-replies:get', accountId),
       update: (accountId, settings) => ipcRenderer.invoke('mail:automatic-replies:update', accountId, settings),
       disable: (accountId) => ipcRenderer.invoke('mail:automatic-replies:disable', accountId)
+    },
+    cloudAttachments: {
+      status: (accountId) => ipcRenderer.invoke('mail:cloud:status', accountId),
+      connect: (accountId) => ipcRenderer.invoke('mail:cloud:connect', accountId),
+      upload: (uploadId, accountId, path, share) => ipcRenderer.invoke('mail:cloud:upload', uploadId, accountId, path, share),
+      cancel: (uploadId) => ipcRenderer.invoke('mail:cloud:cancel', uploadId),
+      pending: (accountId) => ipcRenderer.invoke('mail:cloud:pending', accountId),
+      resume: (uploadId) => ipcRenderer.invoke('mail:cloud:resume', uploadId),
+      discard: (uploadId) => ipcRenderer.invoke('mail:cloud:discard', uploadId),
+      verify: (accountId, urls) => ipcRenderer.invoke('mail:cloud:verify', accountId, urls),
+      onProgress: (callback) => {
+        const listener = (_event: Electron.IpcRendererEvent, value: import('../src/cloud-attachment-types').CloudUploadProgress) => callback(value)
+        ipcRenderer.on('mail:cloud:progress', listener)
+        return () => ipcRenderer.removeListener('mail:cloud:progress', listener)
+      }
     },
     credentials: {
       status: () => ipcRenderer.invoke('gmail:credentials:status'),
@@ -255,6 +291,19 @@ const api: AerioDesktopApi = {
       save: (input) => ipcRenderer.invoke('mail:quick-actions:save', input),
       delete: (id) => ipcRenderer.invoke('mail:quick-actions:delete', id),
       run: (id, targets) => ipcRenderer.invoke('mail:quick-actions:run', id, targets)
+    },
+    imports: {
+      ensureLocalFolders: () => ipcRenderer.invoke('mail:local:ensure'),
+      choose: (kind) => ipcRenderer.invoke('mail:import:choose', kind),
+      start: (input) => ipcRenderer.invoke('mail:import:start', input),
+      list: () => ipcRenderer.invoke('mail:import:list'),
+      pause: (id) => ipcRenderer.invoke('mail:import:pause', id),
+      resume: (id) => ipcRenderer.invoke('mail:import:resume', id),
+      cancel: (id) => ipcRenderer.invoke('mail:import:cancel', id),
+      dismiss: (id) => ipcRenderer.invoke('mail:import:dismiss', id),
+      items: (jobId) => ipcRenderer.invoke('mail:import:items', jobId),
+      resolve: (jobId, keys, decision) => ipcRenderer.invoke('mail:import:resolve', jobId, keys, decision),
+      transfer: (input) => ipcRenderer.invoke('mail:local:transfer', input)
     },
     sync: {
       start: (accountId) => ipcRenderer.invoke('mail:sync:start', accountId),

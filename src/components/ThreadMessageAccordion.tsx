@@ -4,6 +4,7 @@ import type { MailMessageDetail } from '../mail-types'
 import { formatMailArrival, formatMailArrivalTooltip } from '../lib/mail-date'
 import MailReceiptNotice from './MailReceiptNotice'
 import MessageHtml from './MessageHtml'
+import OpenPgpMessageNotice from './OpenPgpMessageNotice'
 import SenderAvatar from './SenderAvatar'
 import TrackingProtectionNotice from './TrackingProtectionNotice'
 
@@ -66,6 +67,7 @@ export default function ThreadMessageAccordion({
           </div>}
           {expanded && <TrackingProtectionNotice report={message.remoteContent} remoteImagesPermitted={!onLoadRemoteImages} />}
           {expanded && <MailReceiptNotice accountId={message.accountId} messageId={message.id} />}
+          {expanded && <OpenPgpMessageNotice message={message} />}
           {message.sanitizedHtml && message.local?.format !== 'plain'
             ? <MessageHtml className="message-body mail-html" html={message.sanitizedHtml} />
             : <div className="message-body mail-text">{message.text}</div>}

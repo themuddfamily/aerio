@@ -73,4 +73,29 @@ describe('outgoing MIME builder', () => {
     // Without a known sender there is nowhere safe to return a receipt.
     expect(createMimeBuffer({ ...input(), sendOptions: { requestReadReceipt: true } }).toString()).not.toContain('Disposition-Notification-To')
   })
+  it('sends inline images as multipart/related Content-ID parts beside a plain-text alternative and regular attachments', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'aerio-mime-test-'))
+    directories.push(directory)
+    const path = join(directory, '0-1234567890-notes.txt')
+    writeFileSync(path, 'attached')
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    const raw = createMimeBuffer({
+      ...input([path]), text: 'Plain body\n-- \nAda',
+      html: `<p style="color: #c0392b">Rich</p><img src="data:image/png;base64,${png}" alt="Chart" data-aerio-cid="chart-1@aerio.local">` +
+        '<table style="border-collapse: collapse"><tbody><tr><td style="border: 1px solid #ccc">Cell</td></tr></tbody></table><div data-aerio-signature="sig">-- <br><b>Ada</b></div>'
+    }, 'sender@example.com', true)
+    const source = raw.toString()
+    expect(source).toMatch(/Content-Type: multipart\/alternative[\s\S]*Content-Type: text\/plain[\s\S]*Content-Type: multipart\/related; type="text\/html"[\s\S]*Content-Type: text\/html[\s\S]*Content-ID: <chart-1@aerio\.local>\r\nContent-Disposition: inline; filename="image-1.png"/)
+    const parsed = await PostalMime.parse(raw)
+    expect(parsed.text).toContain('Plain body')
+    expect(parsed.html).toContain('<img src="cid:chart-1@aerio.local" alt="Chart" />')
+    expect(parsed.html).toContain('<td style="border: 1px solid #ccc">Cell</td>')
+    expect(parsed.html).toContain('<p style="color: #c0392b">Rich</p>')
+    expect(parsed.html).toContain('<div data-aerio-signature="sig">-- <br /><b>Ada</b></div>')
+    const inline = parsed.attachments.find((item) => item.contentId === '<chart-1@aerio.local>')
+    expect(inline).toMatchObject({ mimeType: 'image/png', disposition: 'inline', related: true })
+    const bytes = inline!.content instanceof ArrayBuffer ? new Uint8Array(inline!.content) : inline!.content
+    expect(Buffer.from(bytes).toString('base64')).toBe(png)
+    expect(parsed.attachments.find((item) => item.filename === 'notes.txt')?.disposition).toBe('attachment')
+  })
 })

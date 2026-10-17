@@ -60,6 +60,7 @@ function makeProfile() {
   tasks.update(tasks.entities('account-1', 'gmail')[0].id, { title: 'Changed offline' })
   tasks.close()
   writeFileSync(join(profile, 'oauth-vault.dat'), 'encrypted-refresh-token')
+  writeFileSync(join(profile, 'openpgp-keyring.dat'), 'wrapped-openpgp-keys')
   return profile
 }
 
@@ -71,6 +72,7 @@ describe('full profile layout', () => {
     const { path } = await backupOf(profile)
     expect(readFileSync(join(path, 'data', 'aerio-state.sqlite')).includes('old-verifier-value')).toBe(false)
     expect(existsSync(join(path, 'data', 'oauth-vault.dat'))).toBe(false)
+    expect(existsSync(join(path, 'data', 'openpgp-keyring.dat'))).toBe(false)
     const preview = await previewProfileBackup(path, profile, PROFILE_BACKUP_LAYOUT)
     const counts = Object.fromEntries(preview.counts.map((item) => [item.label, item.count]))
     expect(counts).toMatchObject({
@@ -113,6 +115,7 @@ describe('full profile layout', () => {
     expect(tasks.operations().map((operation) => [operation.status, operation.error])).toEqual([['review', 'restored-write']])
     tasks.close()
     expect(readFileSync(join(profile, 'oauth-vault.dat'), 'utf8')).toBe('encrypted-refresh-token')
+    expect(readFileSync(join(profile, 'openpgp-keyring.dat'), 'utf8')).toBe('wrapped-openpgp-keys')
   })
 
   it('holds every unsent recipient of an unfinished mail merge for review after a restore', async () => {
