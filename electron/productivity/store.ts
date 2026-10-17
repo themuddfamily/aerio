@@ -5,8 +5,11 @@ import type {
 } from '../../src/productivity-types'
 import type { LocalModuleSnapshot } from '../../src/productivity-types'
 import type { ContactList } from '../../src/types'
+import type { ContactAssociation, ContactMergeEntry } from '../../src/contact-merge-types'
 
 interface PayloadRow { payload_json: string }
+
+export const CONTACT_MERGE_JOURNAL_LIMIT = 100
 interface SyncRow { account_id: string; module: ProductivityModule; phase: 'idle' | 'syncing' | 'ready' | 'error'; last_synced_at: string | null; error: string | null }
 
 export class ProductivityStore {
@@ -79,6 +82,20 @@ export class ProductivityStore {
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_productivity_contact_groups_account ON productivity_contact_groups(account_id);
+      CREATE TABLE IF NOT EXISTS contact_merge_journal (
+        id TEXT PRIMARY KEY,
+        account_id TEXT,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_contact_merge_journal_created ON contact_merge_journal(created_at DESC);
+      CREATE TABLE IF NOT EXISTS contact_associations (
+        id TEXT PRIMARY KEY,
+        first_owner TEXT NOT NULL,
+        second_owner TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
     `)
   }
 
@@ -97,9 +114,11 @@ export class ProductivityStore {
   removeAccount(accountId: string) {
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      for (const table of ['productivity_calendars', 'productivity_events', 'productivity_contacts', 'productivity_contact_groups', 'productivity_sync_state', 'productivity_sync_checkpoints']) {
+      for (const table of ['productivity_calendars', 'productivity_events', 'productivity_contacts', 'productivity_contact_groups', 'productivity_sync_state', 'productivity_sync_checkpoints', 'contact_merge_journal']) {
         this.db.prepare(`DELETE FROM ${table} WHERE account_id=?`).run(accountId)
       }
+      // Links and dismissals that involve the removed account's contacts go with it.
+      this.db.prepare('DELETE FROM contact_associations WHERE first_owner=? OR second_owner=?').run(accountId, accountId)
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -254,6 +273,41 @@ export class ProductivityStore {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  // The contact merge undo journal keeps the most recent entries only.
+  saveContactMerge(entry: ContactMergeEntry, keep = CONTACT_MERGE_JOURNAL_LIMIT) {
+    this.db.prepare(`
+      INSERT INTO contact_merge_journal(id,account_id,payload_json,created_at) VALUES(?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id,payload_json=excluded.payload_json
+    `).run(entry.id, entry.accountId ?? null, JSON.stringify(entry), entry.createdAt)
+    this.db.prepare('DELETE FROM contact_merge_journal WHERE id NOT IN (SELECT id FROM contact_merge_journal ORDER BY created_at DESC, id DESC LIMIT ?)').run(keep)
+  }
+
+  contactMerge(id: string) {
+    const row = this.db.prepare('SELECT payload_json FROM contact_merge_journal WHERE id=?').get(id) as unknown as PayloadRow | undefined
+    return row ? JSON.parse(row.payload_json) as ContactMergeEntry : undefined
+  }
+
+  contactMerges(): ContactMergeEntry[] {
+    return (this.db.prepare('SELECT payload_json FROM contact_merge_journal ORDER BY created_at DESC, id DESC').all() as unknown as PayloadRow[])
+      .map((row) => JSON.parse(row.payload_json) as ContactMergeEntry)
+  }
+
+  contactAssociations(): ContactAssociation[] {
+    return (this.db.prepare('SELECT payload_json FROM contact_associations ORDER BY created_at, id').all() as unknown as PayloadRow[])
+      .map((row) => JSON.parse(row.payload_json) as ContactAssociation)
+  }
+
+  saveContactAssociation(association: ContactAssociation) {
+    this.db.prepare(`
+      INSERT INTO contact_associations(id,first_owner,second_owner,payload_json,created_at) VALUES(?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET first_owner=excluded.first_owner,second_owner=excluded.second_owner,payload_json=excluded.payload_json
+    `).run(association.id, association.owners[0], association.owners[1], JSON.stringify(association), association.createdAt)
+  }
+
+  deleteContactAssociation(id: string) {
+    this.db.prepare('DELETE FROM contact_associations WHERE id=?').run(id)
   }
 
   private setState(accountId: string, module: ProductivityModule, phase: 'syncing' | 'ready' | 'error', error?: string, lastSyncedAt?: string) {

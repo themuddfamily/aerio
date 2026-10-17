@@ -240,4 +240,5 @@ export interface AerioDesktopApi {
   openPgp?: import('./openpgp-types').OpenPgpApi
   interchange: import('./interchange-types').InterchangeDesktopApi
   dav: import('./dav-types').DavDesktopApi
+  contactMerge?: import('./contact-merge-types').ContactMergeDesktopApi
 }

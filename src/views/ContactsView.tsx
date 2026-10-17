@@ -1,8 +1,9 @@
-import { Building2, Cake, Copy, Edit3, Globe, Mail, MapPin, Phone, Plus, RefreshCw, Search, Star, Trash2, Users, UsersRound } from 'lucide-react'
+import { Building2, Cake, Copy, Edit3, GitMerge, Globe, HardDrive, Link2, Mail, MapPin, Phone, Plus, RefreshCw, Search, Star, Trash2, Users, UsersRound } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
-import type { AppState, Contact, ContactField } from '../types'
-import type { SyncedContact } from '../productivity-types'
+import type { AppState, Contact, ContactField, MessageWindowRequest } from '../types'
+import type { ProductivitySnapshot, SyncedContact } from '../productivity-types'
+import type { ContactMergeDesktopApi } from '../contact-merge-types'
 import Modal from '../components/Modal'
 import { ContactFieldList, ContactPhotoPicker } from '../components/ContactFieldsEditor'
 import { ContactListEditor, ContactListsSidebar, deleteRecipientList, saveRecipientList, type ContactListActions } from '../components/ContactListsPanel'
@@ -10,6 +11,10 @@ import { uid } from '../lib/domain'
 import { preserveContactInterchangeFields } from '../lib/interchange-plan'
 import { ADDRESS_TYPES, contactEmailAddresses, contactGroupNames, editableFields, EMAIL_TYPES, isContactBirthday, PHONE_TYPES, withContactFields } from '../lib/contact-fields'
 import { buildRecipientLists, formatRecipient, listContactIds, recipientListLabel, recipientListPreview, type RecipientList } from '../lib/distribution-lists'
+import { contactPairKey, linkedContactIds, type DuplicateCandidate } from '../lib/contact-duplicates'
+import { ContactDuplicatesModal, ContactMergePreview } from '../components/ContactMergePanel'
+import ContactHistoryPanel, { type ContactHistoryMailApi } from '../components/ContactHistoryPanel'
+import { useContactMerge } from '../components/use-contact-merge'
 
 interface ContactsViewProps {
   state: AppState
@@ -27,6 +32,12 @@ interface ContactsViewProps {
   interchangePanel?: React.ReactNode
   // Distribution lists: local lists and provider group management. Omitted in read-only embeddings.
   listActions?: Omit<ContactListActions, 'saveProviderContact'>
+  // Duplicate detection, merge with undo, and cross-account links (E28). Omitted in read-only embeddings.
+  mergeApi?: ContactMergeDesktopApi
+  onProviderSnapshot?(snapshot: ProductivitySnapshot): void
+  // Communication history read from the offline mail cache.
+  historyMail?: ContactHistoryMailApi
+  onOpenMessage?(request: MessageWindowRequest): void
 }
 
 const isSyncedContact = (contact: Contact): contact is SyncedContact =>
@@ -41,7 +52,8 @@ function ContactAvatar({ contact, className }: { contact: Contact; className: st
 
 export default function ContactsView({
   state, query, onCompose, onToast, onSync, onEnableEditing, onLocalContactsChange,
-  onSaveProviderContact, onDeleteProviderContact, providerAccounts = [], syncing = false, sourceMessage, interchangePanel, listActions
+  onSaveProviderContact, onDeleteProviderContact, providerAccounts = [], syncing = false, sourceMessage, interchangePanel, listActions,
+  mergeApi, onProviderSnapshot, historyMail, onOpenMessage
 }: ContactsViewProps) {
   const { showContextMenu } = useContextMenu()
   const [group, setGroup] = useState('All contacts')
@@ -61,6 +73,29 @@ export default function ContactsView({
   const localContacts = state.contacts.filter((contact) => contact.source === 'local')
   const actions: ContactListActions | undefined = listActions && { ...listActions, saveProviderContact: onSaveProviderContact }
   const selectedLists = selected ? lists.filter((list) => listContactIds(list, [selected]).size) : []
+  const [duplicatesOpen, setDuplicatesOpen] = useState(false)
+  const [reviewing, setReviewing] = useState<DuplicateCandidate>()
+  const merging = useContactMerge({
+    api: mergeApi, contacts: state.contacts, localLists: listActions?.localLists ?? [],
+    onLocalContactsChange, onLocalListsChange: listActions?.onLocalListsChange, onProviderSnapshot
+  })
+  // Where a record lives decides what can be done with it: merged within one owner, linked across owners.
+  const ownerLabel = (contact: Contact) => {
+    if (!isSyncedContact(contact)) return 'Local contacts on this PC'
+    const account = providerAccounts.find((item) => item.id === contact.accountId)
+    return `${account?.email ?? 'Disconnected account'} · ${contact.provider === 'gmail' ? 'Google' : 'Microsoft'}`
+  }
+  // Linked contacts of removed accounts are no longer in the address book and drop out here.
+  const linked = selected ? [...linkedContactIds(selected.id, merging.associations)].flatMap((id) => state.contacts.filter((contact) => contact.id === id)) : []
+  const historyAddresses = selected ? [...new Map([selected, ...linked].flatMap(contactEmailAddresses).map((address) => [address.toLowerCase(), address])).values()] : []
+  const report = async (action: () => Promise<unknown>, success: string, failure: string) => {
+    try {
+      await action()
+      onToast(success)
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : failure)
+    }
+  }
 
   const saveContact = async (contact: Contact, accountId?: string) => {
     try {
@@ -136,6 +171,7 @@ export default function ContactsView({
         <button className="compose-button" onClick={() => setEditing('new')}><Plus size={18} /> New contact</button>
         <button className="button ghost small sidebar-sync" title="Synchronize provider contacts" disabled={syncing} onClick={() => void onSync()}><RefreshCw className={syncing ? 'spin' : undefined} size={15} /> {syncing ? 'Syncing…' : 'Sync now'}</button>
         {providerAccounts.length > 0 && <button className="button ghost small sidebar-sync" title="Reconnect an account with permission to edit provider contacts" disabled={syncing} onClick={() => void onEnableEditing?.()}><Edit3 size={15} /> Enable editing</button>}
+        {merging.available && <button className="button ghost small sidebar-sync" title="Review possible duplicate contacts" onClick={() => setDuplicatesOpen(true)}><GitMerge size={15} /> Find duplicates</button>}
         <p className="provider-source-note" aria-live="polite">{sourceMessage}</p>
         <div className="sidebar-group">
           <span className="sidebar-label">Contacts</span>
@@ -214,12 +250,21 @@ export default function ContactsView({
                 ))}
                 {selected.birthday && <div><dt><Cake size={15} /> Birthday</dt><dd>{selected.birthday}</dd></div>}
                 {selectedLists.length > 0 && <div><dt><UsersRound size={15} /> Lists</dt><dd>{selectedLists.map((list) => list.name).join(', ')}</dd></div>}
+                {merging.available && <div><dt><HardDrive size={15} /> Stored in</dt><dd>{ownerLabel(selected)}</dd></div>}
+                {linked.length > 0 && <div><dt><Link2 size={15} /> Linked</dt><dd className="linked-contacts">{linked.map((contact) => {
+                  const association = merging.associations.find((item) => item.kind === 'link' && item.id === contactPairKey(selected.id, contact.id))
+                  return <span key={contact.id}>
+                    <button className="text-button" onClick={() => setSelectedId(contact.id)}>{contact.name}</button> <small>({ownerLabel(contact)})</small>
+                    {association && <button className="text-button" aria-label={`Unlink ${contact.name}`} onClick={() => void report(() => merging.removeAssociation(association.id), 'Contacts unlinked', 'The link could not be removed')}>Unlink</button>}
+                  </span>
+                })}</dd></div>}
               </dl>
             </section>
             <section className="detail-card" onContextMenu={(event) => { if (!window.getSelection()?.toString()) showContextMenu(event, [{ label: 'Copy notes', icon: Copy, disabled: !selected.notes, action: () => copyText(selected.notes!) }], 'Contact notes') }}>
               <h3>Notes</h3><p>{selected.notes || 'No notes supplied by the provider.'}</p>
             </section>
           </div>
+          {historyMail && onOpenMessage && <ContactHistoryPanel addresses={historyAddresses} mail={historyMail} onOpenMessage={onOpenMessage} onToast={onToast} />}
         </> : <div className="empty-state grow"><Users size={32} /><h3>Select a contact</h3></div>}
       </section>
       {editing && <ContactEditor
@@ -229,6 +274,33 @@ export default function ContactsView({
         onSave={saveContact}
         onDelete={editing === 'new' ? undefined : () => void deleteContact(editing)}
         onToast={onToast}
+      />}
+      {duplicatesOpen && !reviewing && <ContactDuplicatesModal
+        contacts={state.contacts}
+        associations={merging.associations}
+        merges={merging.merges}
+        ownerLabel={ownerLabel}
+        onReview={setReviewing}
+        onLink={(candidate) => report(() => merging.associate('link', candidate.first, candidate.second), 'Contacts linked. Their messages appear together in the history.', 'The contacts could not be linked')}
+        onDismiss={(candidate) => report(() => merging.associate('dismissed', candidate.first, candidate.second), 'This pair will not be suggested again', 'The suggestion could not be dismissed')}
+        onUndo={(entry) => report(() => merging.undo(entry), 'Merge undone', 'The merge could not be undone')}
+        onClose={() => setDuplicatesOpen(false)}
+      />}
+      {reviewing && <ContactMergePreview
+        first={reviewing.first}
+        second={reviewing.second}
+        ownerLabel={ownerLabel}
+        onClose={() => setReviewing(undefined)}
+        onMerge={async (survivor, other, choices) => {
+          try {
+            const entry = await merging.merge(survivor, other, choices)
+            setReviewing(undefined)
+            setSelectedId(survivor.id)
+            onToast(entry?.warnings?.length ? `Contacts merged. ${entry.warnings[0]}` : entry ? 'Contacts merged. Undo it from Find duplicates.' : 'Contacts merged')
+          } catch (error) {
+            onToast(error instanceof Error ? error.message : 'The contacts could not be merged')
+          }
+        }}
       />}
       {editingList && actions && <ContactListEditor
         list={editingList === 'new' ? undefined : editingList}

@@ -103,6 +103,25 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('profile-backup:restore', 'C:\Backups\aerio-profile-1')
   })
 
+  it('exposes contact merge, undo, link, and communication history commands with exact IPC channels', async () => {
+    const merge = api().contactMerge
+    await merge.merges()
+    await merge.mergeProvider({ survivorId: 'a', loserId: 'b' })
+    await merge.recordLocalMerge({ survivorBefore: { id: 'a' } })
+    await merge.undo('entry-1')
+    await merge.associations()
+    await merge.associate('link', 'a', 'b')
+    await merge.removeAssociation('a|b')
+    await api().mail.contactHistory.messages({ addresses: ['ada@example.test'] })
+    for (const channel of ['contacts:merges', 'contacts:associations']) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('contacts:merge-provider', { survivorId: 'a', loserId: 'b' })
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('contacts:merge-local-record', { survivorBefore: { id: 'a' } })
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('contacts:merge-undo', 'entry-1')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('contacts:associate', 'link', 'a', 'b')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('contacts:association-remove', 'a|b')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:contact-history:messages', { addresses: ['ada@example.test'] })
+  })
+
   it('forwards and unsubscribes update, lock, window, compose, and mail events', () => {
     const update = vi.fn()
     const lock = vi.fn()

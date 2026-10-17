@@ -88,6 +88,15 @@ const api: AerioDesktopApi = {
     importLocalData: () => ipcRenderer.invoke('productivity:local-import'),
     availability: (request) => ipcRenderer.invoke('productivity:availability', request)
   },
+  contactMerge: {
+    merges: () => ipcRenderer.invoke('contacts:merges'),
+    mergeProvider: (input) => ipcRenderer.invoke('contacts:merge-provider', input),
+    recordLocalMerge: (record) => ipcRenderer.invoke('contacts:merge-local-record', record),
+    undo: (entryId) => ipcRenderer.invoke('contacts:merge-undo', entryId),
+    associations: () => ipcRenderer.invoke('contacts:associations'),
+    associate: (kind, firstId, secondId) => ipcRenderer.invoke('contacts:associate', kind, firstId, secondId),
+    removeAssociation: (id) => ipcRenderer.invoke('contacts:association-remove', id)
+  },
   interchange: {
     snapshot: () => ipcRenderer.invoke('interchange:snapshot'),
     onChanged: (callback) => {
@@ -331,6 +340,9 @@ const api: AerioDesktopApi = {
       list: (query) => ipcRenderer.invoke('mail:attachments:list', query),
       open: (accountId, messageId, attachmentId, filename) => ipcRenderer.invoke('mail:attachment:open', accountId, messageId, attachmentId, filename),
       save: (accountId, messageId, attachmentId, filename) => ipcRenderer.invoke('mail:attachment:save', accountId, messageId, attachmentId, filename)
+    },
+    contactHistory: {
+      messages: (query) => ipcRenderer.invoke('mail:contact-history:messages', query)
     },
     storage: () => ipcRenderer.invoke('mail:storage'),
     diagnostics: {

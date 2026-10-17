@@ -25,6 +25,8 @@ import type {
   MailPage,
   MailAttachmentPage,
   MailAttachmentQuery,
+  MailContactHistoryPage,
+  MailContactHistoryQuery,
   MailFolderUnreadCounts,
   MailAccountUnreadCounts,
   MailAccountSettingsInput,
@@ -109,6 +111,7 @@ export type MailWorkerCommand =
   | { type: 'storage:stats' }
   | { type: 'diagnostics:health' }
   | { type: 'attachments:list'; payload: MailAttachmentQuery }
+  | { type: 'contacts:history'; payload: MailContactHistoryQuery }
   | { type: 'attachment:extract'; payload: { accountId: string; messageId: string; attachmentId: string; targetPath: string } }
   | { type: 'local:ensure' }
   | { type: 'local:transfer'; payload: import('../src/mail-types').MailLocalTransferInput }
@@ -150,6 +153,7 @@ export type MailWorkerResult =
   | MailMessageSource
   | MailPage
   | MailAttachmentPage
+  | MailContactHistoryPage
   | MailFolderUnreadCounts
   | MailAccountUnreadCounts
   | PendingOperation

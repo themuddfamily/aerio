@@ -545,6 +545,10 @@ export default function App() {
               syncing={productivitySyncing}
               sourceMessage={productivityMessage}
               listActions={contactListActions}
+              mergeApi={window.aerio.contactMerge}
+              onProviderSnapshot={setProductivity}
+              historyMail={window.aerio.mail}
+              onOpenMessage={(request) => void window.aerio.window.openMessage(request)}
               interchangePanel={window.aerio.interchange && <ContactInterchangePanel
                 api={window.aerio.interchange}
                 contacts={connectedState.contacts}

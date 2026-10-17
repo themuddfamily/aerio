@@ -4732,3 +4732,35 @@ img.avatar.contact-photo { object-fit: cover; }
 .event-conference .text-button { display: inline-flex; align-items: center; gap: 4px; }
 .event-conference .recurrence-note { margin: 0; }
 .event-conference-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 8px; border: 1px solid color-mix(in srgb, #d79a36 45%, var(--line)); border-radius: 6px; background: color-mix(in srgb, #d79a36 10%, var(--surface)); }
+/* Contact duplicates, merge preview, and communication history (E28). */
+.contact-duplicates-modal, .contact-merge-modal { width: min(820px, 96vw); }
+.contact-duplicates { display: grid; gap: 14px; max-height: min(640px, calc(100vh - 200px)); overflow: auto; }
+.duplicate-list, .merge-journal ul, .contact-history-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.duplicate-candidate { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 6px; }
+.duplicate-candidate.confidence-high { border-left: 3px solid var(--accent); }
+.duplicate-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.duplicate-pair span, .contact-history-list button > span { display: grid; min-width: 0; }
+.duplicate-pair small, .contact-history-list small { color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.duplicate-reasons { margin: 0; font-size: 12px; }
+.duplicate-reasons em { font-style: normal; font-weight: 600; margin-right: 4px; }
+.duplicate-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.merge-journal h3 { margin: 4px 0 8px; font-size: 13px; }
+.merge-journal li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; justify-content: space-between; font-size: 12px; }
+.merge-journal li small { flex-basis: 100%; color: var(--text-soft); }
+.merge-survivor { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.merge-fields { width: 100%; border-collapse: collapse; font-size: 13px; }
+.merge-fields th, .merge-fields td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.merge-photo { width: 36px; height: 36px; }
+.merge-lists { display: grid; gap: 4px; margin: 0; font-size: 13px; }
+.merge-lists div { display: grid; grid-template-columns: 90px 1fr; gap: 8px; }
+.merge-lists dd { margin: 0; overflow-wrap: anywhere; }
+.merge-warning { color: var(--text-soft); }
+.linked-contacts { display: grid; gap: 2px; }
+.contact-history { grid-column: 1 / -1; margin-top: 14px; display: grid; gap: 8px; }
+.contact-history-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.contact-history-accounts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; }
+.archived-badge { font-style: normal; color: var(--text-soft); }
+.contact-history-list button { width: 100%; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; text-align: left; background: transparent; border: 0; border-radius: 8px; padding: 6px 8px; color: inherit; cursor: pointer; }
+.contact-history-list button:hover { background: var(--accent-soft); }
+.contact-history-list li.unavailable { opacity: 0.65; }
+.contact-history-meta { white-space: nowrap; }

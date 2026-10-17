@@ -7,6 +7,7 @@ import type {
   MailAccountSummary,
   MailAttachment,
   MailAttachmentPage,
+  MailContactHistoryPage,
   MailDraftInput,
   MailDraftRecord,
   MailDraftResult,
@@ -41,6 +42,7 @@ import { mailRuleMatches as evaluateMailRule, mailRuleNeedsHeaders, mailRuleTrig
 import { AttachmentTextStore } from './attachment-text-store'
 import { MailMergeStore } from './mail-merge-store'
 import { listAttachmentPage } from './attachment-index'
+import { listContactHistoryPage } from './contact-history'
 import { MailDraftOpenPgpStore } from './openpgp-draft-store'
 import { LocalMailStore } from './local-mail-store'
 
@@ -1579,6 +1581,10 @@ export class MailDatabase {
 
   listAttachments(query: unknown): MailAttachmentPage {
     return listAttachmentPage(this.db, query, (path) => this.rawExists(path))
+  }
+
+  listContactHistory(query: unknown): MailContactHistoryPage {
+    return listContactHistoryPage(this.db, query)
   }
 
   storageStats(freeBytes: number): MailStorageStats {

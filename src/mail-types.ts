@@ -154,8 +154,44 @@ export interface MailAttachmentQuery {
   fileTypes?: MailAttachmentFileType[]
   minSize?: number
   maxSize?: number
+  /** Exact addresses: only messages sent by or to one of them (a contact's communication history). */
+  participants?: string[]
   cursor?: string
   pageSize?: number
+}
+
+/** Messages exchanged with any of a contact's addresses, newest first, across the chosen accounts. */
+export interface MailContactHistoryQuery {
+  addresses: string[]
+  accountIds?: string[]
+  /** Defaults to true; archived accounts are labelled in the results. */
+  includeArchivedAccounts?: boolean
+  cursor?: string
+  pageSize?: number
+}
+
+export interface MailContactHistoryItem {
+  accountId: string
+  accountEmail: string
+  accountArchived: boolean
+  threadId: string
+  messageId: string
+  date: string
+  fromName: string
+  fromEmail: string
+  to: string[]
+  cc: string[]
+  subject: string
+  snippet: string
+  /** 'from': the contact sent it; 'to': it was sent to the contact (To or Cc). */
+  direction: 'from' | 'to'
+  attachmentCount: number
+}
+
+export interface MailContactHistoryPage {
+  items: MailContactHistoryItem[]
+  nextCursor?: string
+  total: number
 }
 
 export interface MailAttachmentListItem {
@@ -784,6 +820,9 @@ export interface MailDesktopApi {
     list(query: MailAttachmentQuery): Promise<MailAttachmentPage>
     open(accountId: string, messageId: string, attachmentId: string, filename: string): Promise<{ error?: string }>
     save(accountId: string, messageId: string, attachmentId: string, filename: string): Promise<{ savedPath?: string; error?: string }>
+  }
+  contactHistory?: {
+    messages(query: MailContactHistoryQuery): Promise<MailContactHistoryPage>
   }
   storage(): Promise<MailStorageStats>
   diagnostics: {
