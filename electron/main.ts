@@ -79,6 +79,8 @@ import { GoogleProductivityConnector } from './productivity/google-connector'
 import { MicrosoftProductivityConnector } from './productivity/microsoft-connector'
 import { InterchangeStore } from './productivity/interchange-store'
 import { registerCalendarContactInterchange } from './productivity/interchange-ipc'
+import { carryPendingConferences } from './productivity/online-meetings'
+import { validEventConference } from '../src/lib/online-meetings'
 import { validContactInterchangeFields, validContactLists, validEventInterchangeFields } from '../src/lib/interchange-validation'
 import { contactEditConflict } from '../src/lib/contact-fields'
 import type { LocalModuleSnapshot, ProductivitySnapshot } from '../src/productivity-types'
@@ -468,7 +470,9 @@ async function syncProductivity(accountId: string): Promise<ProductivitySnapshot
       requireVault().hasMicrosoftContactsWriteAccess(accountId)
     )
   try {
-    const data = await connector.sync(store.accountData(accountId), store.checkpoints(accountId))
+    const previous = store.accountData(accountId)
+    const data = await connector.sync(previous, store.checkpoints(accountId))
+    data.events = carryPendingConferences(previous.events, data.events)
     store.replaceAccount(accountId, provider, data, data.checkpoints)
     diagnostic({
       level: 'info', component: 'provider', event: 'productivity-sync-complete', accountId,
@@ -497,7 +501,7 @@ function validCalendarEvent(value: unknown): value is CalendarEvent {
   if (!validText(event.color, 100) || !Array.isArray(event.attendees) || event.attendees.length > 1_000 || !event.attendees.every((item) => validText(item, 500))) return false
   if (!Number.isInteger(event.reminderMinutes) || Number(event.reminderMinutes) < 0 || Number(event.reminderMinutes) > 40_320) return false
   if (!(event.recurrence === undefined || event.recurrence === 'none' || event.recurrence === 'daily' || event.recurrence === 'weekly' || event.recurrence === 'monthly')) return false
-  return validEventInterchangeFields(event)
+  return validEventInterchangeFields(event) && validEventConference(event.conference)
 }
 
 function validContact(value: unknown): value is Contact {
@@ -599,6 +603,9 @@ async function updateProductivityEvent(input: CalendarEvent, scope?: RecurrenceE
   if (!calendar) throw new Error('That calendar is no longer available')
   if (!calendar.canWrite) throw new Error('This calendar cannot be edited until its account is reconnected')
   if (current.provider !== calendar.provider || current.accountId !== calendar.accountId) throw new Error('The event’s calendar connection changed; synchronize before editing')
+  // A requested meeting is stored with its request id before the write, so a failed or interrupted save is
+  // retried under the same id (and the editor reopens with it) instead of requesting a second meeting.
+  if (input.conference?.status === 'pending' && input.conference.requestId && !current.conference) store.upsertEvent({ ...current, conference: input.conference })
   const saved = await writableCalendarConnector(calendar).updateEvent(calendar, current, input)
   store.upsertEvent(saved)
   diagnostic({ level: 'info', component: 'provider', event: 'calendar-event-updated', accountId: calendar.accountId, details: { provider: calendar.provider, calendarId: calendar.id } })

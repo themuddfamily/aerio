@@ -1,4 +1,4 @@
-import type { Attachment, CalendarEvent, Contact, ContactList, Note, RecurrenceEditScope, Task } from './types'
+import type { Attachment, CalendarEvent, ConferenceProvider, Contact, ContactList, Note, RecurrenceEditScope, Task } from './types'
 
 export type ProductivityProvider = 'gmail' | 'microsoft'
 export type ProductivityModule = 'calendar' | 'contacts'
@@ -13,6 +13,20 @@ export interface SyncedCalendar {
   color: string
   primary: boolean
   canWrite: boolean
+  // Online meeting capability reported by the provider (E25); absent on calendars synced before E25.
+  conferences?: CalendarConferenceSupport
+}
+
+export interface CalendarConferenceSupport {
+  // Raw provider values: Google conferenceProperties.allowedConferenceSolutionTypes or Graph
+  // allowedOnlineMeetingProviders.
+  allowed: string[]
+  // Raw default provider when the provider reports one (Graph defaultOnlineMeetingProvider).
+  defaultProvider?: string
+  // Providers Aerio can create on this calendar with the current consent.
+  creatable: ConferenceProvider[]
+  // Whether an existing meeting can be detached from an event (Graph cannot turn isOnlineMeeting off).
+  canRemove: boolean
 }
 
 export interface SyncedCalendarEvent extends CalendarEvent {
