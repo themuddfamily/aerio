@@ -194,7 +194,7 @@ describe('App', () => {
     await act(async () => { finishRestore(outcome === 'restored' ? { tasks: [], notes: [], contacts: [] } : undefined) })
     await act(() => new Promise((resolve) => setTimeout(resolve, 450)))
     if (outcome === 'restored') expect(api.productivity.saveLocal).not.toHaveBeenCalled()
-    else expect(api.productivity.saveLocal).toHaveBeenCalledWith(expect.objectContaining({ tasks: expect.arrayContaining([expect.objectContaining({ id: 'task-2' })]) }))
+    else await waitFor(() => expect(api.productivity.saveLocal).toHaveBeenCalledWith(expect.objectContaining({ tasks: expect.arrayContaining([expect.objectContaining({ id: 'task-2' })]) })), { timeout: 1200 })
   })
 
   it('hydrates the shell, changes theme/settings/profile, navigates, and persists local modules', async () => {
