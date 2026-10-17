@@ -7,6 +7,7 @@ import Modal from './Modal'
 import MailSenderIdentities from './MailSenderIdentities'
 import { Pop3AccountSettingsSection } from './Pop3Account'
 import ExchangeAccountSection from './ExchangeAccountSection'
+import { MailOfflineSyncSection } from './MailOfflineSync'
 
 interface MailAccountSettingsModalProps {
   account: MailAccountSummary
@@ -134,6 +135,7 @@ export default function MailAccountSettingsModal({ account, onSaved, onClose, on
         <label className="toggle-row"><span><strong>Synchronize this account</strong><small>Check for new mail in the background.</small></span><input type="checkbox" checked={syncEnabled} onChange={(event) => setSyncEnabled(event.target.checked)} /></label>
         <label className="toggle-row"><span><strong>New-mail notifications</strong><small>Requires desktop notifications in Aerio settings.</small></span><input type="checkbox" checked={notifications} onChange={(event) => setNotifications(event.target.checked)} /></label>
       </section>
+      {window.aerio.mail.offline && <MailOfflineSyncSection account={account} onToast={onToast} />}
       <section>
         <h3>Connection and local data</h3>
         <p>Status: <strong>{account.status}</strong>{account.lastSyncAt ? ` · Last synchronized ${new Date(account.lastSyncAt).toLocaleString()}` : ''}</p>

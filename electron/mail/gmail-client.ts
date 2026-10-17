@@ -41,6 +41,22 @@ export interface GmailRawMessage {
   raw: string
 }
 
+export interface GmailMessagePart {
+  partId?: string
+  mimeType?: string
+  filename?: string
+  headers?: { name: string; value: string }[]
+  body?: { size?: number; data?: string; attachmentId?: string }
+  parts?: GmailMessagePart[]
+}
+
+/** A message in `metadata` or `full` format. */
+export interface GmailMessageResource extends Omit<GmailRawMessage, 'raw'> {
+  payload?: GmailMessagePart
+}
+
+export const GMAIL_METADATA_HEADERS = ['From', 'To', 'Cc', 'Subject', 'Date', 'Message-ID', 'References', 'In-Reply-To', 'Content-Type']
+
 export interface GmailHistory {
   id: string
   messagesAdded?: { message: GmailMessageReference }[]
@@ -166,9 +182,11 @@ export class GmailClient {
     return this.request<void>(`/labels/${encodeURIComponent(labelId)}`, { method: 'DELETE' })
   }
 
-  listMessages(pageToken?: string) {
+  /** `query` is a Gmail search such as `after:1700000000`, used for sync windows and server search. */
+  listMessages(pageToken?: string, query?: string) {
     const params = new URLSearchParams({ maxResults: '500', includeSpamTrash: 'true' })
     if (pageToken) params.set('pageToken', pageToken)
+    if (query) params.set('q', query)
     return this.request<{ messages?: GmailMessageReference[]; nextPageToken?: string; resultSizeEstimate?: number }>(`/messages?${params}`)
   }
 
@@ -191,6 +209,16 @@ export class GmailClient {
     })
     await Promise.all(workers)
     return results
+  }
+
+  /**
+   * `metadata` returns only headers and labels (E36 headers-only mode);
+   * `full` adds body parts, with attachments as references that are not downloaded.
+   */
+  getMessage(messageId: string, format: 'metadata' | 'full') {
+    const params = new URLSearchParams({ format })
+    if (format === 'metadata') for (const header of GMAIL_METADATA_HEADERS) params.append('metadataHeaders', header)
+    return this.request<GmailMessageResource>(`/messages/${encodeURIComponent(messageId)}?${params}`)
   }
 
   getMessageMinimal(messageId: string) {

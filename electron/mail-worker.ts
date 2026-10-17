@@ -48,6 +48,10 @@ import { pop3SmtpConfig } from './mail/pop3-settings'
 import { MailArchiveService } from './mail/mail-archive'
 import { removeArchivedMessages } from './mail/mail-archive-removal'
 import { scanMailDuplicates } from './mail/mail-duplicates'
+import { commitDownloadedRaw, downloadGmailMessage, downloadGraphMessage, downloadImapMessage, removePartialDownloads, upgradeStoredMessage, type RawMessageInput } from './mail/offline-download'
+import { createOfflineCommands, type OfflineCommands } from './mail/offline-commands'
+import { earliestStart, gmailAfterQuery, messageLocations, startForLocations } from '../src/lib/offline-sync'
+import { imapMessageLabels } from './mail/imap-client'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createCalendarMimeBuffer, createMime, createMimeBuffer } from './mail/mime-builder'
 import { calendarPartsFromRaw } from './mail/invitation-parts'
@@ -296,6 +300,32 @@ function localStoreDeps() {
   return { database, store: (accountId: string, message: Parameters<typeof parseRawAndStore>[1]) => parseRawAndStore(accountId, message) }
 }
 
+// Offline download and synchronization scope (E36). Without the offline
+// store every download path behaves like the original full download.
+let offlineCommandsInstance: OfflineCommands | undefined
+const offlineClients = { gmail: clientFor, microsoft: microsoftClientFor, imap: imapClientFor }
+function offlineDeps() {
+  if (!database) throw new Error('Database is not initialized')
+  return { database, storeRaw: (accountId: string, message: RawMessageInput) => parseRawAndStore(accountId, message) }
+}
+function offlineContext(accountId: string) {
+  return database?.offline ? database.offline.context(accountId) : undefined
+}
+function offline() {
+  if (!database) throw new Error('Database is not initialized')
+  offlineCommandsInstance ??= createOfflineCommands({
+    ...offlineDeps(),
+    clients: offlineClients,
+    online: () => online,
+    resync: (accountId) => {
+      const account = database?.getAccount(accountId)
+      if (account && account.syncEnabled && !account.archived && !paused.has(accountId)) void syncAccount(accountId)
+    },
+    changed: (accountId) => emit({ type: 'mail-changed', payload: { accountId } })
+  })
+  return offlineCommandsInstance
+}
+
 function addressList(value?: Address[]) {
   if (!value) return []
   return value.flatMap((address) => {
@@ -337,16 +367,8 @@ async function parseRawAndStore(accountId: string, message: {
   const isNew = !database.hasMessage(accountId, message.id)
   const raw = message.raw
   const path = database.rawPath(accountId, message.id)
-  const temporary = `${path}.partial`
-  writeFileSync(temporary, raw)
-  let parsed: Awaited<ReturnType<typeof PostalMime.parse>>
-  try {
-    parsed = await PostalMime.parse(raw)
-    renameSync(temporary, path)
-  } catch (error) {
-    rmSync(temporary, { force: true })
-    throw error
-  }
+  // Written to a temporary file and committed only once it parses (E36: interrupted downloads never leave a partial original).
+  const parsed = await commitDownloadedRaw(path, raw, () => PostalMime.parse(raw))
   const from = sender(parsed.from)
   const attachments = parsed.attachments.map((attachment, index) => ({
     id: attachmentId(attachment, index),
@@ -460,11 +482,14 @@ async function downloadInventory(accountId: string) {
   if (!hasInventory) database.resetInventory(accountId)
   let pageToken = checkpoint?.page_token ? String(checkpoint.page_token) : undefined
   const inventoryComplete = Boolean(checkpoint?.inventory_complete)
+  const scope = offlineContext(accountId)
+  const scopeStart = scope ? earliestStart(scope) : undefined
+  const windowQuery = gmailAfterQuery(scopeStart)
   if (!inventoryComplete) {
     progress(accountId, 'inventory', 'Building the mailbox inventory')
     do {
       await assertCanSync(accountId)
-      const page = await client.listMessages(pageToken)
+      const page = windowQuery ? await client.listMessages(pageToken, windowQuery) : await client.listMessages(pageToken)
       database.addInventory(accountId, page.messages ?? [])
       pageToken = page.nextPageToken
       const current = progress(accountId, 'inventory', `Indexed ${database.getSyncProgress(accountId)[0]?.total ?? 0} messages`)
@@ -473,8 +498,11 @@ async function downloadInventory(accountId: string) {
         initialHistoryId: profile.historyId
       })
     } while (pageToken)
+    // Cached mail older than the window keeps its header rows (E36).
+    database.offline?.retainOutsideWindow(accountId, scopeStart)
     database.reconcileInventory(accountId)
     database.completeInventory(accountId)
+    if (scope) database.setProviderState(accountId, { ...database.getProviderState<GmailScopeState>(accountId, {}), offlineWindowStart: scopeStart?.toISOString() ?? 'all' })
   }
 
   progress(accountId, 'downloading', 'Downloading messages for offline use')
@@ -487,8 +515,8 @@ async function downloadInventory(accountId: string) {
     if (!pending.length) break
     const results = await Promise.all(pending.map(async ({ id }) => {
       try {
-        const message = await client.getRawMessage(id)
-        await parseAndStore(accountId, message)
+        // A full inventory (first sync or Rebuild) downloads again, like before E36.
+        await downloadGmailMessage(offlineDeps(), client, accountId, id, scope, true)
         return { id }
       } catch (error) {
         return { id, error: error instanceof Error ? error : new Error(String(error)) }
@@ -564,10 +592,11 @@ async function applyGmailHistory(accountId: string, startHistoryId: string) {
 
   database.addInventory(accountId, [...changedMessages.values()])
   const newMessages: ParsedMailMessage[] = []
+  const scope = offlineContext(accountId)
   for (const message of changedMessages.values()) {
     try {
-      const stored = await parseAndStore(accountId, await client.getRawMessage(message.id))
-      if (stored.isNew && addedMessageIds.has(message.id)) newMessages.push(stored.record)
+      const result = await downloadGmailMessage(offlineDeps(), client, accountId, message.id, scope)
+      if (result.outcome === 'stored' && result.stored.isNew && addedMessageIds.has(message.id)) newMessages.push(result.stored.record)
     } catch (error) {
       if (error instanceof GmailApiError && error.status === 404) database.deleteMessage(accountId, message.id)
       else throw error
@@ -584,6 +613,7 @@ async function incrementalSync(accountId: string) {
   progress(accountId, 'incremental', 'Checking for changes')
   try {
     const result = await applyGmailHistory(accountId, startHistoryId)
+    await syncGmailScope(accountId)
     database.setAccountHistory(accountId, result.latestHistoryId, true)
     progress(accountId, 'complete', 'Up to date')
     if (result.changed) emit({ type: 'mail-changed', payload: { accountId } })
@@ -594,6 +624,55 @@ async function incrementalSync(accountId: string) {
       return downloadInventory(accountId)
     }
     throw error
+  }
+}
+
+interface GmailScopeState {
+  /** The window start the inventory last covered: an ISO date, or 'all'. */
+  offlineWindowStart?: string
+}
+
+/**
+ * After a widened window (E36) lists the newly included range with Gmail's
+ * `after:`/`before:` search, then downloads queued messages: that backfill
+ * plus content upgrades queued by a policy change.
+ */
+async function syncGmailScope(accountId: string) {
+  const scope = offlineContext(accountId)
+  if (!database || !scope) return
+  const client = clientFor(accountId)
+  const state = database.getProviderState<GmailScopeState>(accountId, {})
+  const start = earliestStart(scope)
+  const recorded = state.offlineWindowStart
+  if (recorded && recorded !== 'all' && (!start || start.getTime() < Date.parse(recorded))) {
+    const query = [gmailAfterQuery(start), `before:${Math.floor(Date.parse(recorded) / 1000)}`].filter(Boolean).join(' ')
+    let pageToken: string | undefined
+    do {
+      await assertCanSync(accountId)
+      const page = await client.listMessages(pageToken, query)
+      database.addInventory(accountId, page.messages ?? [])
+      pageToken = page.nextPageToken
+    } while (pageToken)
+  }
+  const current = start?.toISOString() ?? 'all'
+  if (recorded !== current) database.setProviderState(accountId, { ...state, offlineWindowStart: current })
+  let downloaded = 0
+  while (true) {
+    await assertCanSync(accountId)
+    const pending = database.pendingMessageIds(accountId, 2)
+    if (!pending.length) break
+    progress(accountId, 'downloading', 'Downloading messages for offline use')
+    for (const { id } of pending) {
+      try {
+        await downloadGmailMessage(offlineDeps(), client, accountId, id, scope)
+        downloaded += 1
+      } catch (error) {
+        if (isAuthenticationError(error)) throw error
+        if (error instanceof GmailApiError && error.status === 404) database.deleteMessage(accountId, id)
+        else database.markSyncItem(accountId, id, 'failed', error instanceof Error ? error.message : String(error))
+      }
+    }
+    if (downloaded % 20 < 2) emit({ type: 'mail-changed', payload: { accountId } })
   }
 }
 
@@ -614,15 +693,19 @@ async function syncImapAccount(accountId: string) {
     previous.folders ??= {}
     const next: ImapProviderState = { folders: {} }
     if (!database!.getAccountHistory(accountId)) database!.resetInventory(accountId)
+    const scope = offlineContext(accountId)
 
     for (const folder of folders) {
       await assertCanSync(accountId)
-      const inventory = await client.inventoryFolder(connection, folder)
+      // SEARCH SINCE marks the UIDs inside this folder's sync window (E36).
+      const since = scope ? startForLocations(scope, messageLocations(imapMessageLabels(folder, new Set(['\\Seen'])))) : undefined
+      const inventory = since ? await client.inventoryFolder(connection, folder, since) : await client.inventoryFolder(connection, folder)
       if (previous.folders[folder.path]?.uidValidity && previous.folders[folder.path].uidValidity !== inventory.uidValidity) {
         database!.reconcileRemoteFolder(accountId, folder.path, new Set())
       }
       const currentIds = new Set(inventory.refs.map((item) => item.id))
-      database!.addInventory(accountId, inventory.refs.map((item) => ({
+      const windowUids = inventory.windowUids
+      database!.addInventory(accountId, inventory.refs.filter((item) => !windowUids || windowUids.has(item.uid) || database!.hasMessage(accountId, item.id)).map((item) => ({
         id: item.id,
         threadId: item.threadId,
         remoteFolderId: item.folder,
@@ -651,22 +734,8 @@ async function syncImapAccount(accountId: string) {
         }
         try {
           const inventory = next.folders[folder.path]
-          const fetched = await client.fetchRaw(connection, folder, { id: item.id, threadId: item.threadId, folder: folder.path, uid, uidValidity: inventory.uidValidity, labels: [] })
-          const parsed = await PostalMime.parse(fetched.raw)
-          const rootHeader = parsed.references?.split(/\s+/).filter(Boolean)[0] ?? parsed.inReplyTo ?? parsed.messageId ?? item.threadId
-          const threadId = createHash('sha256').update(rootHeader).digest('base64url').slice(0, 32)
-          const stored = await parseRawAndStore(accountId, {
-            id: item.id,
-            threadId,
-            historyId: `${inventory.uidValidity}:${uid}`,
-            raw: fetched.raw,
-            labelIds: fetched.labels,
-            internalDate: fetched.internalDate,
-            sizeEstimate: fetched.size,
-            remoteFolderId: folder.path,
-            remoteUid: String(uid)
-          })
-          if (stored.isNew) newMessages.push(stored.record)
+          const result = await downloadImapMessage(offlineDeps(), client, connection, accountId, folder, { id: item.id, threadId: item.threadId, uid, uidValidity: inventory.uidValidity }, scope, firstSync)
+          if (result.outcome === 'stored' && result.stored.isNew) newMessages.push(result.stored.record)
         } catch (error) {
           database!.markSyncItem(accountId, item.id, 'failed', error instanceof Error ? error.message : String(error))
         }
@@ -684,6 +753,8 @@ async function syncImapAccount(accountId: string) {
 interface MicrosoftProviderState {
   deltaLinks: Record<string, string>
   specialFolders?: Record<string, string>
+  /** The sync window each folder's delta was started with (E36): an ISO date, or 'all'. */
+  windowStarts?: Record<string, string>
 }
 
 async function syncMicrosoftAccount(accountId: string) {
@@ -707,18 +778,26 @@ async function syncMicrosoftAccount(accountId: string) {
   if (!database.getAccountHistory(accountId)) database.resetInventory(accountId)
   const removed = new Set<string>()
   const active = new Set<string>()
+  const scope = offlineContext(accountId)
+  if (scope) state.windowStarts ??= {}
   for (const folder of folders) {
     await assertCanSync(accountId)
+    // The receivedDateTime filter is fixed when a delta starts, so a widened window (E36) starts a new delta.
+    const since = scope ? startForLocations(scope, messageLocations(microsoftMessageLabels(folder, { id: '', isRead: true }))) : undefined
+    const windowStart = since?.toISOString() ?? 'all'
+    const startedWith = state.windowStarts?.[folder.id]
+    if (scope && state.deltaLinks[folder.id] && startedWith && startedWith !== 'all' && (windowStart === 'all' || windowStart < startedWith)) delete state.deltaLinks[folder.id]
     let fullFolderInventory = !state.deltaLinks[folder.id]
     let delta
     try {
-      delta = await client.delta(folder.id, state.deltaLinks[folder.id])
+      delta = since ? await client.delta(folder.id, state.deltaLinks[folder.id], since) : await client.delta(folder.id, state.deltaLinks[folder.id])
     } catch (error) {
       if (!(error instanceof MicrosoftGraphError) || error.status !== 410 || !state.deltaLinks[folder.id]) throw error
       delete state.deltaLinks[folder.id]
       fullFolderInventory = true
-      delta = await client.delta(folder.id)
+      delta = since ? await client.delta(folder.id, undefined, since) : await client.delta(folder.id)
     }
+    if (scope && fullFolderInventory) state.windowStarts![folder.id] = windowStart
     const currentFolderMessages = new Set<string>()
     for (const message of delta.messages) {
       if (message['@removed']) {
@@ -730,6 +809,15 @@ async function syncMicrosoftAccount(accountId: string) {
       const labels = microsoftMessageLabels(folder, message)
       const threadId = message.conversationId ?? message.id
       database.addInventory(accountId, [{ id: message.id, threadId, remoteFolderId: folder.id, remoteUid: message.id }])
+      if (scope) {
+        try {
+          const result = await downloadGraphMessage(offlineDeps(), client, accountId, { message, folderId: folder.id, labels, threadId, refresh: fullAccountInventory }, scope)
+          if (result.outcome === 'stored' && result.stored.isNew) newMessages.push(result.stored.record)
+        } catch (error) {
+          database.markSyncItem(accountId, message.id, 'failed', error instanceof Error ? error.message : String(error))
+        }
+        continue
+      }
       if (database.hasMessage(accountId, message.id) && !fullAccountInventory) {
         database.updateMessageLabels(accountId, message.id, labels, `graph:${Date.now()}`, { remoteFolderId: folder.id, remoteUid: message.id })
         database.markSyncItem(accountId, message.id, 'complete')
@@ -751,12 +839,30 @@ async function syncMicrosoftAccount(accountId: string) {
         database.markSyncItem(accountId, message.id, 'failed', error instanceof Error ? error.message : String(error))
       }
     }
-    if (fullFolderInventory) database.reconcileRemoteFolder(accountId, folder.id, currentFolderMessages)
+    // A windowed delta does not list older mail, which keeps its cached header rows.
+    if (fullFolderInventory) database.reconcileRemoteFolder(accountId, folder.id, scope ? new Set([...currentFolderMessages, ...database.offline.idsBefore(accountId, folder.id, since)]) : currentFolderMessages)
     if (delta.deltaLink) state.deltaLinks[folder.id] = delta.deltaLink
     progress(accountId, 'downloading', `Updated ${folder.displayName}`)
   }
   for (const id of removed) if (!active.has(id)) database.deleteMessage(accountId, id)
+  if (fullAccountInventory && scope) database.offline.retainOutsideWindow(accountId, earliestStart(scope))
   if (fullAccountInventory) database.reconcileInventory(accountId)
+  // Content upgrades queued by a policy change (E36).
+  if (scope) {
+    while (true) {
+      await assertCanSync(accountId)
+      const pending = database.pendingMessageIds(accountId, 10)
+      if (!pending.length) break
+      for (const item of pending) {
+        try {
+          await upgradeStoredMessage(offlineDeps(), offlineClients, accountId, item.id, scope)
+        } catch (error) {
+          if (isAuthenticationError(error)) throw error
+          database.markSyncItem(accountId, item.id, 'failed', error instanceof Error ? error.message : String(error))
+        }
+      }
+    }
+  }
   database.setProviderState(accountId, state)
   database.setAccountHistory(accountId, `graph:${Date.now()}`, true)
   progress(accountId, 'complete', 'Up to date')
@@ -800,6 +906,7 @@ async function syncAccount(accountId: string, forceFull = false) {
   emit({ type: 'accounts-changed', payload: database.listAccounts() })
   try {
     const provider = database.getAccount(accountId)?.provider
+    if (database.offline) offline().expire()
     if (forceFull) database.resetInventory(accountId)
     if (provider === 'pop3') await syncPop3Account(accountId)
     else if (provider === 'microsoft') await syncMicrosoftAccount(accountId)
@@ -807,6 +914,7 @@ async function syncAccount(accountId: string, forceFull = false) {
     else if (provider && provider !== 'gmail') await syncImapAccount(accountId)
     else if (forceFull || !database.getAccountHistory(accountId)) await downloadInventory(accountId)
     else await incrementalSync(accountId)
+    if (database?.offline) offline().maintain(accountId)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     const current = database.getSyncProgress(accountId)[0]
@@ -1321,12 +1429,22 @@ function deleteMailMerge(id: string) {
   rmSync(join(contentPath, 'mail-merge', safeDraftPart(id)), { recursive: true, force: true })
 }
 
+/** The stored original, downloaded on demand when the offline scope (E36) kept only headers or the body. */
+async function originalPath(accountId: string, messageId: string) {
+  if (!database) throw new Error('Database is not initialized')
+  if (database.offline) return offline().ensureRaw(accountId, messageId)
+  return database.getMessageRaw(accountId, messageId)
+}
+
 async function extractAttachment(accountId: string, messageId: string, attachmentIdValue: string, targetPath: string) {
   if (!database) throw new Error('Database is not initialized')
-  const rawPath = database.getMessageRaw(accountId, messageId)
+  // Attachments listed before the original was downloaded have metadata ids; match those by name after downloading.
+  const listed = database.offline ? database.getAttachment(accountId, messageId, attachmentIdValue) : undefined
+  const rawPath = await originalPath(accountId, messageId)
   if (!rawPath || !database.rawExists(rawPath)) throw new Error('The original message is not available offline')
   const parsed = await PostalMime.parse(readFileSync(rawPath))
   const attachment = parsed.attachments.find((item, index) => attachmentId(item, index) === attachmentIdValue)
+    ?? (listed ? parsed.attachments.find((item, index) => (item.filename || `attachment-${index + 1}`) === String(listed.filename) && (item.mimeType || 'application/octet-stream') === String(listed.mime_type)) : undefined)
   if (!attachment) throw new Error('Attachment not found')
   const content = typeof attachment.content === 'string'
     ? Buffer.from(attachment.content, attachment.encoding === 'base64' ? 'base64' : 'utf8')
@@ -1370,7 +1488,7 @@ async function stopAttachmentIndexing() {
 
 async function stageMessageAttachments(draftId: string, accountId: string, messageId: string) {
   if (!database) throw new Error('Database is not initialized')
-  const rawPath = database.getMessageRaw(accountId, messageId)
+  const rawPath = await originalPath(accountId, messageId)
   if (!rawPath) throw new Error('The original message is not available offline')
   const parsed = await PostalMime.parse(readFileSync(rawPath))
   const directory = join(contentPath, 'drafts', safeDraftPart(draftId))
@@ -1457,6 +1575,9 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     folderManagerInstance = undefined
     importServiceInstance = undefined
     pop3ServiceInstance = undefined
+    offlineCommandsInstance = undefined
+    // A download cut off by a crash leaves only a temporary file; the message stays queued and downloads again (E36).
+    if (database.offline) removePartialDownloads(contentPath)
     // Imports that were queued (not running) when Aerio closed continue now;
     // interrupted ones wait for the user to resume them.
     if (database.localMail?.nextQueuedJob()) void importService().pump()
@@ -1515,7 +1636,9 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'mail:unread-counts') return database.folderUnreadCounts(command.payload.accountIds)
   if (command.type === 'mail:account-unread-counts') return database.accountUnreadCounts()
   if (command.type === 'mail:thread') {
-    const thread = database.getThread(command.payload.accountId, command.payload.threadId)
+    let thread = database.getThread(command.payload.accountId, command.payload.threadId)
+    // Header-only messages download when opened, or carry an offline notice (E36).
+    if (database.offline) thread = await offline().annotateThread(command.payload.accountId, thread)
     thread.messages = thread.messages.map((message: MailMessageDetail) => {
       const { html, remoteContent } = sanitizeMessageHtmlWithReport(message.html, command.payload.allowRemoteImages)
       return { ...message, sanitizedHtml: html, remoteContent }
@@ -1523,7 +1646,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     return thread
   }
   if (command.type === 'mail:export') {
-    const rawPath = database.getMessageRaw(command.payload.accountId, command.payload.messageId)
+    const rawPath = await originalPath(command.payload.accountId, command.payload.messageId)
     if (!rawPath) throw new Error('The original message is not available offline')
     copyFileSync(rawPath, command.payload.targetPath)
     return
@@ -1603,7 +1726,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     return
   }
   if (command.type === 'mail:source') {
-    const rawPath = database.getMessageRaw(command.payload.accountId, command.payload.messageId)
+    const rawPath = await originalPath(command.payload.accountId, command.payload.messageId)
     if (!rawPath) throw new Error('The original message is not available offline')
     return parseMessageSource(readFileSync(rawPath))
   }
@@ -1784,6 +1907,14 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     return
   }
   if (command.type === 'sync:progress') return database.getSyncProgress()
+  if (command.type === 'offline:settings') return offline().settings(command.payload.accountId)
+  if (command.type === 'offline:set-account-policy') return offline().setAccountPolicy(command.payload.accountId, command.payload.policy)
+  if (command.type === 'offline:set-folder-override') return offline().setFolderOverride(command.payload.accountId, command.payload.labelId, command.payload.override)
+  if (command.type === 'offline:extend') return offline().extend(command.payload)
+  if (command.type === 'offline:availability') return offline().availability(command.payload.accountId, command.payload.labelId)
+  if (command.type === 'offline:search-coverage') return offline().searchCoverage(command.payload.accountIds)
+  if (command.type === 'offline:server-search') return offline().serverSearch(command.payload)
+  if (command.type === 'offline:reclaim') return offline().reclaim(command.payload.accountId)
   if (command.type === 'storage:stats') {
     const stats = statfsSync(contentPath)
     return database.storageStats(Number(stats.bavail) * Number(stats.bsize))
@@ -1884,6 +2015,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     folderManagerInstance = undefined
     importServiceInstance = undefined
     pop3ServiceInstance = undefined
+    offlineCommandsInstance = undefined
     return
   }
 }

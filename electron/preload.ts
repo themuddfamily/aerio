@@ -481,6 +481,16 @@ const api: AerioDesktopApi = {
       resolve: (jobId, keys, decision) => ipcRenderer.invoke('mail:import:resolve', jobId, keys, decision),
       transfer: (input) => ipcRenderer.invoke('mail:local:transfer', input)
     },
+    offline: {
+      settings: (accountId) => ipcRenderer.invoke('mail:offline:settings', accountId),
+      setAccountPolicy: (accountId, policy) => ipcRenderer.invoke('mail:offline:set-account-policy', accountId, policy),
+      setFolderOverride: (accountId, labelId, override) => ipcRenderer.invoke('mail:offline:set-folder-override', accountId, labelId, override),
+      extend: (input) => ipcRenderer.invoke('mail:offline:extend', input),
+      availability: (accountId, labelId) => ipcRenderer.invoke('mail:offline:availability', accountId, labelId),
+      searchCoverage: (accountIds) => ipcRenderer.invoke('mail:offline:search-coverage', accountIds),
+      serverSearch: (input) => ipcRenderer.invoke('mail:offline:server-search', input),
+      reclaim: (accountId) => ipcRenderer.invoke('mail:offline:reclaim', accountId)
+    },
     pop3: {
       test: (input) => ipcRenderer.invoke('mail:pop3:test', input),
       connect: (input) => ipcRenderer.invoke('mail:pop3:connect', input),

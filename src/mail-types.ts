@@ -246,6 +246,8 @@ export interface MailMessageDetail {
   remoteContent?: MailRemoteContentReport
   labelIds: string[]
   attachments: MailAttachment[]
+  /** What is stored offline for this message (E36); absent for fully downloaded mail. */
+  offline?: import('./offline-sync-types').MailOfflineContentInfo
 }
 
 export type MailTrackingReason = 'tiny-dimensions' | 'hidden-style' | 'known-tracker-host' | 'tracking-path'
@@ -414,6 +416,8 @@ export interface MailQuery {
   category?: string
   cursor?: string
   pageSize?: number
+  /** Lists only the conversations a server search found (E36). */
+  serverSearchId?: string
 }
 
 /** A named search scoped to an account (or all accounts), mailbox, and optional label. */
@@ -887,6 +891,8 @@ export interface MailDesktopApi {
   pop3?: import('./pop3-types').Pop3Api
   /** Inbox category tabs and classification rules (E33); optional for test doubles. */
   categories?: import('./mail-category-types').MailCategoriesApi
+  /** Offline download and synchronization scope (E36); optional so test doubles stay valid. */
+  offline?: import('./offline-sync-types').MailOfflineApi
   onEvent(callback: (event: MailWorkerEvent) => void): () => void
 }
 
