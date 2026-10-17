@@ -11,6 +11,7 @@ import { InvitationStore } from './productivity/invitation-store'
 import { ProductivityStore } from './productivity/store'
 import { TaskStore } from './productivity/task-store'
 import { countRows, PROFILE_PREVIEW_LABELS, profileTableExists, type ProfileBackupLayout } from './profile-backup'
+import { prepareRestoredMcpDatabase, scrubMcpBackup } from './mcp/store'
 
 export const RESTORED_SEND_HOLD_MESSAGE = 'Held after restoring a profile backup. Review this message and send it again if it is still needed.'
 export const RESTORED_MERGE_HOLD_MESSAGE = 'Held after restoring a profile backup. This message may have been sent after the backup was taken; check Sent, then resend or skip.'
@@ -135,6 +136,14 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
         { label: 'Connected tasks', count: countRows(db, 'task_entities') },
         { label: PROFILE_PREVIEW_LABELS.heldTaskWrites, count: countRows(db, 'task_operations', ACTIVE_TASK_WRITE) + countRows(db, 'task_list_operations', ACTIVE_TASK_WRITE) }
       ]
+    },
+    {
+      // Issued client tokens are stripped like the app-lock verifier; a restore leaves the bridge off.
+      file: 'mcp-automation.sqlite',
+      label: 'External automation (MCP) settings',
+      scrubBackup: scrubMcpBackup,
+      prepareRestore: (path) => withDatabase(path, prepareRestoredMcpDatabase),
+      summarize: (db) => [{ label: 'External automation settings', count: countRows(db, 'mcp_settings') }]
     }
   ],
   directories: [

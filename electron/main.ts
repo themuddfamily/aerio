@@ -118,6 +118,8 @@ import { assertSingleProtection, normalizeSmimeOptions } from './mail/smime-draf
 import { initializeChat, type ChatRuntime } from './chat/chat-main'
 import { registerChatIpc } from './chat/chat-ipc'
 import { CHAT_SERVICE_SCHEME } from './chat/service-host'
+import { registerMcpAutomation } from './mcp/automation-ipc'
+import { isMcpBridgeLaunch, mcpLaunchCommand, startMcpBridgeMode } from './mcp/bridge-mode'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -128,10 +130,13 @@ const builtInOAuthClients = parseOAuthEnvironment({
   microsoftClientId: import.meta.env.MAIN_VITE_MICROSOFT_CLIENT_ID || DEFAULT_MICROSOFT_CLIENT_ID
 })
 
-const hasSingleInstanceLock = app.requestSingleInstanceLock()
+// `--mcp` runs only the stdio automation bridge (E48); it must not claim the app's single-instance lock.
+const mcpBridgeMode = isMcpBridgeLaunch(process.argv)
+const hasSingleInstanceLock = !mcpBridgeMode && app.requestSingleInstanceLock()
 const hideTestWindows = process.env.AERIO_TEST_HIDDEN === '1'
 
-if (!hasSingleInstanceLock) app.quit()
+if (mcpBridgeMode) void startMcpBridgeMode(app)
+else if (!hasSingleInstanceLock) app.quit()
 if (process.platform === 'win32') app.setAppUserModelId('com.aerio.desktop')
 
 protocol.registerSchemesAsPrivileged([
@@ -174,6 +179,7 @@ let messageLocalStore: MessageLocalStore | null = null
 let mailTemplateStore: MailTemplateStore | null = null
 let profileBackups: ReturnType<typeof registerProfileBackup> | null = null
 let chatRuntime: ChatRuntime | null = null
+let mcpAutomation: ReturnType<typeof registerMcpAutomation> | null = null
 let readyToOpenWindows = false
 const senderFaviconCache = new Map<string, { image: Buffer | null; expiresAt: number }>()
 const senderFaviconCandidateRequests = new Map<string, Promise<Buffer | null>>()
@@ -1121,6 +1127,7 @@ function publishAppLockStatus() {
   BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('app-lock:status-changed', status))
   // Locking clears Chat's decrypted renderer state and transient verification emoji; unlocking opens a pending notification route.
   chatRuntime?.lockChanged(status.locked)
+  mcpAutomation?.lockChanged()
   return status
 }
 
@@ -2143,6 +2150,25 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     isLocked: () => appLockStatus().locked
   })
   registerMailImport({ ipcMain, worker: requireMailWorker, localAccount: (account) => accountProviders.set(account.id, account.provider) })
+  // External automation (E48): the local MCP channel listens only while enabled in Settings.
+  mcpAutomation = registerMcpAutomation({
+    ipcMain,
+    userData: app.getPath('userData'),
+    launch: mcpLaunchCommand(app),
+    worker: requireMailWorker,
+    isLocked: () => appLockStatus().locked,
+    validateDraft: (input) => validateDraft(input),
+    approveAttachmentPaths: (paths) => { for (const path of paths) approvedAttachmentPaths.add(path) },
+    sendDraft: (input) => {
+      const draft = validateDraft(input, true)
+      return assertOpenPgpSendable(requireOpenPgp(), requireMailWorker(), draft)
+        .then(() => assertSmimeSendable(requireSmime(), requireMailWorker(), draft))
+        .then(() => requireMailWorker().request<MailDraftResult>({ type: 'drafts:send', payload: draft }))
+    },
+    openMessage: (input) => createMessageWindow(input),
+    changed: (status) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('mcp:changed', status)),
+    diagnostic: (level, event, details, message) => diagnostic({ level, component: 'app', event, details, message })
+  })
   profileBackups = registerProfileBackup({
     userData: app.getPath('userData'),
     appVersion: app.getVersion(),
@@ -2227,6 +2253,7 @@ app.on('before-quit', () => {
   if (taskPolling) clearInterval(taskPolling)
   profileBackups?.stop()
   void chatRuntime?.dispose().catch(() => {})
+  void mcpAutomation?.stop().catch(() => {})
   void taskService?.close().catch(() => {})
   updates?.stop()
   interchangeService?.dispose()

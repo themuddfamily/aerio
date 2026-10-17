@@ -3105,6 +3105,17 @@ kbd {
 .profile-restore-warnings { color: var(--muted); }
 .profile-restore-outcome { justify-items: start; font-size: 10px; }
 .profile-restore-outcome.rolled-back { border-color: var(--danger); }
+.mcp-capabilities { display: grid; gap: 8px; margin-top: 8px; }
+.mcp-capability { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.mcp-capability > strong { font-size: 11px; }
+.mcp-capability ul { margin: 4px 0 0; padding-left: 18px; color: var(--muted); font-size: 9.5px; }
+.mcp-capability code, .mcp-snippet { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; }
+.mcp-scope { display: grid; gap: 4px; margin: 10px 0 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 10.5px; }
+.mcp-scope ul { display: grid; gap: 3px; margin: 2px 0 0; padding-left: 18px; list-style: none; }
+.mcp-scope small { color: var(--muted); }
+.mcp-automation h4 { margin: 12px 0 4px; font-size: 11px; }
+.mcp-issue { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-top: 8px; }
+.mcp-snippet { max-height: 220px; margin: 0; padding: 8px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-size: 9.5px; white-space: pre; user-select: text; }
 
 .organize-mail { max-height: 420px; display: grid; gap: 10px; padding: 16px 20px; overflow-y: auto; }
 .organize-mail > section { display: grid; gap: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }

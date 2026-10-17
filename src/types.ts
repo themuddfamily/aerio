@@ -265,6 +265,8 @@ export interface AerioDesktopApi {
   ai: import('./ai-assistant-types').AiAssistantApi
   openPgp?: import('./openpgp-types').OpenPgpApi
   smime?: import('./smime-types').SmimeApi
+  /** External automation through the local MCP bridge (E48). */
+  mcp?: import('./mcp-types').McpAutomationApi
   interchange: import('./interchange-types').InterchangeDesktopApi
   dav: import('./dav-types').DavDesktopApi
   contactMerge?: import('./contact-merge-types').ContactMergeDesktopApi

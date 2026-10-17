@@ -9,5 +9,5 @@
     "strict": true,
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "vite.main.config.ts", "vite.preload.config.ts", "vite.chat-service.config.ts", "electron", "scripts", "src/types.ts", "src/preferences.ts"]
+  "include": ["vite.config.ts", "vite.main.config.ts", "vite.preload.config.ts", "vite.chat-service.config.ts", "vite.mcp-bridge.config.ts", "electron", "scripts", "src/types.ts", "src/preferences.ts"]
 }

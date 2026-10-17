@@ -8,6 +8,7 @@ import { MailTemplateStore } from './mail/template-store'
 import { ProductivityStore } from './productivity/store'
 import { DavStore, RESTORED_DAV_MESSAGE, RESTORED_DAV_WRITE_MESSAGE } from './productivity/dav-store'
 import { TaskStore } from './productivity/task-store'
+import { hashMcpToken, McpAutomationStore } from './mcp/store'
 import { applyPendingProfileRestore, createProfileBackup, previewProfileBackup, stageProfileRestore } from './profile-backup'
 import { PROFILE_BACKUP_LAYOUT, RESTORED_ACCOUNT_MESSAGE, RESTORED_MERGE_HOLD_MESSAGE, RESTORED_SEND_HOLD_MESSAGE } from './profile-backup-layout'
 
@@ -143,6 +144,29 @@ describe('full profile layout', () => {
       expect(restored.mailMerge.get('running')).toMatchObject({ status: 'needs-review', lastError: RESTORED_MERGE_HOLD_MESSAGE, counts: { sent: 1, ambiguous: 2, pending: 0 } })
       expect(restored.mailMerge.get('finished')).toMatchObject({ status: 'cancelled', counts: { cancelled: 3 } })
       expect(restored.mailMerge.dueJobs(new Date(Date.now() + 86_400_000).toISOString())).toEqual([])
+    } finally { restored.close() }
+  })
+
+  it('backs up external automation choices without client tokens and restores them with the bridge off', async () => {
+    const profile = makeProfile()
+    const mcp = new McpAutomationStore(join(profile, 'mcp-automation.sqlite'))
+    mcp.saveSettings({ enabled: true, capabilities: { write: true, send: true, delete: false }, accountScope: ['account-1'] })
+    const { client, token } = mcp.createClient('Claude Desktop')
+    mcp.reserveSend(client.id, 'send-key-0001', 'local-draft')
+    mcp.close()
+    const { path } = await backupOf(profile)
+    const copy = readFileSync(join(path, 'data', 'mcp-automation.sqlite'))
+    expect(copy.includes(hashMcpToken(token))).toBe(false)
+    expect(copy.includes(token)).toBe(false)
+    expect(Object.fromEntries((await previewProfileBackup(path, profile, PROFILE_BACKUP_LAYOUT)).counts.map((item) => [item.label, item.count]))).toMatchObject({ 'External automation settings': 1 })
+
+    await stageProfileRestore({ backupPath: path, userData: profile, layout: PROFILE_BACKUP_LAYOUT })
+    applyPendingProfileRestore(profile)
+    const restored = new McpAutomationStore(join(profile, 'mcp-automation.sqlite'))
+    try {
+      expect(restored.settings()).toEqual({ enabled: false, capabilities: { write: true, send: true, delete: false }, accountScope: ['account-1'] })
+      expect(restored.listClients()).toEqual([])
+      expect(restored.authenticate(token)).toBeUndefined()
     } finally { restored.close() }
   })
 
