@@ -146,7 +146,36 @@ export interface MailMessageLocalData {
 
 export interface MailMessageRef { accountId: string; threadId: string; messageId: string }
 
+/** One destination from a List-Unsubscribe header (RFC 2369), with RFC 8058 one-click support for HTTPS. */
+export interface MailUnsubscribeOption {
+  kind: 'https' | 'mailto'
+  /** The exact URI from the header; actions are only accepted for URIs that the stored message still advertises. */
+  url: string
+  /** Host for HTTPS links or the recipient address for mailto links, shown to the user before acting. */
+  destination: string
+  oneClick: boolean
+  mailto?: { to: string[]; subject: string; body: string }
+}
+
+export interface MailListUnsubscribeInfo {
+  listId?: string
+  options: MailUnsubscribeOption[]
+  /** Problems found while reading the headers, such as ignored insecure or malformed entries. */
+  warnings: string[]
+}
+
+export type MailUnsubscribeMethod = 'one-click' | 'browser' | 'mailto'
+
+export interface MailUnsubscribeResult {
+  method: MailUnsubscribeMethod
+  destination: string
+  status: 'unsubscribed' | 'opened' | 'queued'
+}
+
 export interface MessageToolsApi {
+  /** Reads list-unsubscribe metadata only; it never contacts the list. */
+  unsubscribeInfo(ref: MailMessageRef): Promise<MailListUnsubscribeInfo>
+  unsubscribe(ref: MailMessageRef, request: { url: string; method: MailUnsubscribeMethod }): Promise<MailUnsubscribeResult>
   updateLocal(ref: MailMessageRef, updates: Partial<Pick<MailMessageLocalData, 'categories' | 'format' | 'fontSize'>>): Promise<MailMessageLocalData>
   save(ref: MailMessageRef): Promise<{ savedPath?: string }>
   saveAttachments(ref: MailMessageRef): Promise<{ savedPath?: string; count: number }>

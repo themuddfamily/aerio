@@ -101,7 +101,9 @@ const api: AerioDesktopApi = {
       createTask: (ref, input) => ipcRenderer.invoke('mail:message:create-task', ref, input),
       addNote: (ref, input) => ipcRenderer.invoke('mail:message:add-note', ref, input),
       notes: (ref) => ipcRenderer.invoke('mail:message:notes', ref),
-      translate: (ref, input) => ipcRenderer.invoke('mail:message:translate', ref, input)
+      translate: (ref, input) => ipcRenderer.invoke('mail:message:translate', ref, input),
+      unsubscribeInfo: (ref) => ipcRenderer.invoke('mail:message:unsubscribe-info', ref),
+      unsubscribe: (ref, request) => ipcRenderer.invoke('mail:message:unsubscribe', ref, request)
     },
     credentials: {
       status: () => ipcRenderer.invoke('gmail:credentials:status'),

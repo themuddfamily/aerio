@@ -4100,6 +4100,10 @@ kbd {
 .message-category { padding: 3px 9px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); font-size: 12px; }
 .message-linked-notes article { border-top: 1px solid var(--line); padding: 12px 0; }
 .message-linked-notes p { white-space: pre-wrap; }
+.message-unsubscribe-option { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
+.message-unsubscribe-option h3 { margin: 0; font-size: 14px; }
+.message-unsubscribe-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.message-unsubscribe-warnings { margin: 0; padding-left: 18px; color: var(--muted); }
 .message-custom-format .message-body, .message-custom-format .message-body * { font-size: var(--message-font-size) !important; }
 
 .context-menu {
