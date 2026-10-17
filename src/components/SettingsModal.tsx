@@ -7,6 +7,7 @@ import type { LocalModuleSnapshot } from '../productivity-types'
 import Modal from './Modal'
 import AiAssistantSettings from './AiAssistantSettings'
 import ProfileBackupSection from './ProfileBackupSection'
+import DavAccountsSection from './DavAccountsSection'
 
 const readReceiptChoices: [MailReadReceiptPolicy, string][] = [['never', 'Never send'], ['ask', 'Ask me'], ['always', 'Always send']]
 
@@ -230,6 +231,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
           </div>
         </section>
         <ProfileBackupSection />
+        <DavAccountsSection />
         <section className="settings-section">
           <div className="settings-icon"><RefreshCw size={18} /></div>
           <div className="settings-content">

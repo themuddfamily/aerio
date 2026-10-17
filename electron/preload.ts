@@ -101,6 +101,21 @@ const api: AerioDesktopApi = {
     refresh: (calendarId) => ipcRenderer.invoke('interchange:refresh', calendarId),
     removeCalendar: (calendarId) => ipcRenderer.invoke('interchange:calendar-remove', calendarId)
   },
+  dav: {
+    snapshot: () => ipcRenderer.invoke('dav:snapshot'),
+    onChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, snapshot: import('../src/dav-types').DavSnapshot) => callback(snapshot)
+      ipcRenderer.on('dav:changed', listener)
+      return () => ipcRenderer.removeListener('dav:changed', listener)
+    },
+    addAccount: (input) => ipcRenderer.invoke('dav:account-add', input),
+    updatePassword: (accountId, password) => ipcRenderer.invoke('dav:account-password', accountId, password),
+    removeAccount: (accountId) => ipcRenderer.invoke('dav:account-remove', accountId),
+    sync: (accountId) => ipcRenderer.invoke('dav:sync', accountId),
+    syncAll: () => ipcRenderer.invoke('dav:sync-all'),
+    setCollectionEnabled: (collectionId, enabled) => ipcRenderer.invoke('dav:collection-enabled', collectionId, enabled),
+    resolve: (reviewId, resolution) => ipcRenderer.invoke('dav:resolve', reviewId, resolution)
+  },
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     maximize: () => ipcRenderer.invoke('window:maximize'),

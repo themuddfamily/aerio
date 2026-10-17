@@ -16,6 +16,7 @@ The layout is an allowlist. Only these profile entries are copied:
 | `mail-templates.sqlite` | QuickText snippets and templates |
 | `productivity.sqlite` | Local Tasks, Notes, and Contacts, local calendars and internet-calendar subscriptions, plus the provider calendar/contact cache |
 | `provider-tasks.sqlite` | The connected-task cache, durable task/list operations, and resolution history |
+| `dav.sqlite` | CalDAV/CardDAV accounts (no passwords), discovered collections with sync tokens and ctags, the resource cache with ETags, and pending writes |
 | `mail/` | Downloaded `.eml` files and staged draft attachments |
 | `note-attachments/`, `template-attachments/` | Managed attachment copies |
 
@@ -24,6 +25,7 @@ Writable local mail folders (roadmap E18) don't exist yet. When they're added, t
 ### Never included
 
 - `oauth-vault.dat`: OAuth access and refresh tokens, IMAP/SMTP passwords, and the secure-storage (DPAPI/Keychain/libsecret) encryption around them. The engine also refuses any file with this name inside a managed folder, and rejects any manifest that lists one.
+- `dav-credentials.dat`: CalDAV/CardDAV app passwords encrypted with OS secure storage. On restore, DAV accounts ask for the password again, and writes that were still queued are held for review instead of being sent.
 - The app-lock passphrase verifier. Backups delete it under `secure_delete` and `VACUUM`, so the bytes don't survive in free pages. On restore, the current device keeps its own app lock, or keeps having none.
 - Diagnostic logs, window bounds, update caches, `profile-backup.json` (the schedule itself), and earlier restore staging or rollback copies.
 

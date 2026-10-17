@@ -1,6 +1,7 @@
 import type { Attachment, CalendarEvent, Contact, Note, Task } from './types'
 
-export type ProductivityProvider = 'gmail' | 'microsoft'
+// 'dav' covers CalDAV/CardDAV accounts (iCloud, Fastmail, Nextcloud, generic servers); see dav-types.ts.
+export type ProductivityProvider = 'gmail' | 'microsoft' | 'dav'
 export type ProductivityModule = 'calendar' | 'contacts'
 export type ProductivitySyncPhase = 'idle' | 'syncing' | 'ready' | 'error'
 

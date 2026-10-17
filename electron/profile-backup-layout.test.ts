@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { MailDatabase } from './mail/database'
 import { MailTemplateStore } from './mail/template-store'
 import { ProductivityStore } from './productivity/store'
+import { DavStore, RESTORED_DAV_MESSAGE, RESTORED_DAV_WRITE_MESSAGE } from './productivity/dav-store'
 import { TaskStore } from './productivity/task-store'
 import { applyPendingProfileRestore, createProfileBackup, previewProfileBackup, stageProfileRestore } from './profile-backup'
 import { PROFILE_BACKUP_LAYOUT, RESTORED_ACCOUNT_MESSAGE, RESTORED_SEND_HOLD_MESSAGE } from './profile-backup-layout'
@@ -156,5 +157,27 @@ describe('full profile layout', () => {
     const productivity = new ProductivityStore(join(restoreTarget, 'productivity.sqlite'))
     expect(productivity.localSnapshot().tasks).toEqual([])
     productivity.close()
+  })
+
+  it('backs up CalDAV/CardDAV state without the app-password vault and holds restored writes', async () => {
+    const profile = makeProfile()
+    const dav = new DavStore(join(profile, 'dav.sqlite'))
+    dav.saveAccount({ id: 'dav-1', preset: 'fastmail', name: 'Fastmail', username: 'ada@example.com', serverUrl: 'https://caldav.fastmail.com/', calendarRoots: [], contactsRoots: [], status: 'ready' })
+    dav.saveOperation({ id: 'op-1', accountId: 'dav-1', collectionId: 'c', href: 'https://caldav.fastmail.com/x.ics', kind: 'event', action: 'create', data: 'BEGIN:VCALENDAR', status: 'queued', attempts: 0, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' })
+    dav.close()
+    writeFileSync(join(profile, 'dav-credentials.dat'), 'sealed-app-password')
+    const { path } = await backupOf(profile)
+    expect(existsSync(join(path, 'data', 'dav-credentials.dat'))).toBe(false)
+    const counts = Object.fromEntries((await previewProfileBackup(path, profile, PROFILE_BACKUP_LAYOUT)).counts.map((item) => [item.label, item.count]))
+    expect(counts).toMatchObject({ 'Calendar and contacts accounts (CalDAV/CardDAV)': 1, 'Pending calendar and contact changes': 1 })
+    const report = await stageProfileRestore({ backupPath: path, userData: profile, layout: PROFILE_BACKUP_LAYOUT })
+    expect(report.accountsToReauthorize).toBe(2)
+    applyPendingProfileRestore(profile)
+    const restored = new DavStore(join(profile, 'dav.sqlite'))
+    try {
+      expect(restored.account('dav-1')).toMatchObject({ status: 'needs-auth', error: RESTORED_DAV_MESSAGE })
+      expect(restored.operations().map((operation) => [operation.status, operation.error])).toEqual([['held', RESTORED_DAV_WRITE_MESSAGE]])
+    } finally { restored.close() }
+    expect(readFileSync(join(profile, 'dav-credentials.dat'), 'utf8')).toBe('sealed-app-password')
   })
 })

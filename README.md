@@ -28,6 +28,7 @@ Remaining release work and optional future features are tracked in [ROADMAP.md](
 - Dedicated message windows for provider mail; double-click a conversation to open or focus its window
 - Read-only local archive or complete local deletion when disconnecting an account
 - Google and Microsoft Calendar synchronization with event creation, editing, deletion, recurrence, and configurable reminders
+- CalDAV/CardDAV calendar and contact accounts (iCloud, Fastmail, Nextcloud, or any standards-based server) with `.well-known` discovery, read-only/shared collection detection, incremental `sync-collection` sync with ctag/ETag fallback, a durable offline write queue, and conflict review that never silently overwrites server changes ([CalDAV and CardDAV](docs/caldav-carddav.md))
 - Writable Google and Microsoft provider Contacts plus editable local Contacts, with portable backup and restore for local Contacts, Tasks, Notes, and managed note attachments
 - Google Tasks and Microsoft To Do lists/tasks with durable offline changes, conflict review, undo, native/local recurrence mapping, and separate connected-task backup/restore; see [provider task integration](docs/task-provider-integration.md)
 - Optional local passphrase privacy lock at launch, when Aerio is sent to the tray, or on demand
