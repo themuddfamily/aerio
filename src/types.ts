@@ -208,4 +208,5 @@ export interface AerioDesktopApi {
   mail: import('./mail-types').MailDesktopApi
   ai: import('./ai-assistant-types').AiAssistantApi
   interchange: import('./interchange-types').InterchangeDesktopApi
+  contactMerge?: import('./contact-merge-types').ContactMergeDesktopApi
 }

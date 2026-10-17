@@ -1385,6 +1385,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   }
   if (command.type === 'diagnostics:health') return database.diagnosticHealth()
   if (command.type === 'attachments:list') return database.listAttachments(command.payload)
+  if (command.type === 'contacts:history') return database.listContactHistory(command.payload)
   if (command.type === 'attachment:extract') {
     await extractAttachment(command.payload.accountId, command.payload.messageId, command.payload.attachmentId, command.payload.targetPath)
     return

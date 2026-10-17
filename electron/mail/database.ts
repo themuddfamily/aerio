@@ -7,6 +7,7 @@ import type {
   MailAccountSummary,
   MailAttachment,
   MailAttachmentPage,
+  MailContactHistoryPage,
   MailDraftInput,
   MailDraftRecord,
   MailDraftResult,
@@ -40,6 +41,7 @@ import { RuleRunLedger, readRawHeaders } from './rule-ledger'
 import { mailRuleMatches as evaluateMailRule, mailRuleNeedsHeaders, mailRuleTrigger, type MailRuleMessage } from '../../src/lib/mail-rules'
 import { AttachmentTextStore } from './attachment-text-store'
 import { listAttachmentPage } from './attachment-index'
+import { listContactHistoryPage } from './contact-history'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -1568,6 +1570,10 @@ export class MailDatabase {
 
   listAttachments(query: unknown): MailAttachmentPage {
     return listAttachmentPage(this.db, query, (path) => this.rawExists(path))
+  }
+
+  listContactHistory(query: unknown): MailContactHistoryPage {
+    return listContactHistoryPage(this.db, query)
   }
 
   storageStats(freeBytes: number): MailStorageStats {

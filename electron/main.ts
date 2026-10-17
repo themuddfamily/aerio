@@ -37,6 +37,7 @@ import type {
   ImapServerSettingsUpdate,
   MailPage,
   MailAttachmentPage,
+  MailContactHistoryPage,
   MailFolderUnreadCounts,
   MailAccountUnreadCounts,
   MailAccountSettingsInput,
@@ -57,6 +58,8 @@ import { MailWorkerClient } from './mail/worker-client'
 import { validateCreateFolder, validateDeleteFolder, validateFolderReference, validateUpdateFolder } from './mail/folder-validation'
 import { registerMailRuleHandlers } from './mail/server-rule-ipc'
 import { normalizeAttachmentQuery } from './mail/attachment-index'
+import { normalizeContactHistoryQuery } from './mail/contact-history'
+import { registerContactMerge } from './productivity/contact-merge-ipc'
 import { DiagnosticLogger, type DiagnosticRecord } from './diagnostics'
 import { UpdateManager } from './update-manager'
 import { ProductivityStore } from './productivity/store'
@@ -1532,6 +1535,11 @@ function registerIpc() {
     if (!validId(groupId) || !ids(add) || !ids(remove) || add.length + remove.length === 0) throw new Error('Choose contacts to add or remove')
     return updateProductivityContactGroupMembers(groupId, add, remove)
   })
+  registerContactMerge(ipcMain, () => ({
+    store: requireProductivityStore(),
+    connector: (accountId, provider) => writableContactsConnector(accountId, provider as 'gmail' | 'microsoft'),
+    log: (event, accountId, details) => diagnostic({ level: 'info', component: 'provider', event, accountId, details })
+  }), validContact)
   ipcMain.handle('app:update:status', () => updates?.status() ?? ({
     phase: 'unsupported',
     currentVersion: app.getVersion(),
@@ -1879,6 +1887,8 @@ function registerIpc() {
   })
   ipcMain.handle('mail:attachments:list', (_event, query: unknown) =>
     requireMailWorker().request<MailAttachmentPage>({ type: 'attachments:list', payload: normalizeAttachmentQuery(query) }))
+  ipcMain.handle('mail:contact-history:messages', (_event, query: unknown) =>
+    requireMailWorker().request<MailContactHistoryPage>({ type: 'contacts:history', payload: normalizeContactHistoryQuery(query) }))
   ipcMain.handle('mail:attachment:open', async (_event, accountId: string, messageId: string, attachmentId: string, filename: string) => {
     const directory = join(tmpdir(), 'aerio-attachments')
     mkdirSync(directory, { recursive: true })

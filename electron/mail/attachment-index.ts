@@ -73,6 +73,25 @@ function decodeCursor(value: string): AttachmentCursor {
   throw new Error('The attachment list position is no longer valid')
 }
 
+// Lower-cased complete addresses, as a contact's addresses are matched exactly.
+export function normalizeParticipants(value: unknown) {
+  if (!Array.isArray(value)) return undefined
+  const addresses = [...new Set(value.flatMap((item) => typeof item === 'string' && item.length <= 320 && /^[^\s@<>]+@[^\s@<>]+$/.test(item.trim()) ? [item.trim().toLowerCase()] : []))].slice(0, 50)
+  return addresses.length ? addresses : undefined
+}
+
+// Matches a message whose sender, To, or Cc is one of `count` bound addresses. Recipients are stored
+// as "Name <address>" or a bare address, so both forms are compared exactly (no LIKE wildcards).
+export function participantSql(alias: string, count: number) {
+  const list = Array.from({ length: count }, () => '?').join(',')
+  const recipient = (column: string) => `EXISTS(SELECT 1 FROM json_each(${alias}.${column}) r WHERE lower(trim(r.value)) IN (${list})
+    OR (instr(r.value,'<')>0 AND lower(trim(substr(r.value,instr(r.value,'<')+1,length(r.value)-instr(r.value,'<')-1))) IN (${list})))`
+  return {
+    sql: `(lower(trim(${alias}.from_email)) IN (${list}) OR ${recipient('to_json')} OR ${recipient('cc_json')})`,
+    params: (addresses: string[]) => [...addresses, ...addresses, ...addresses, ...addresses, ...addresses]
+  }
+}
+
 const text = (value: unknown, max = 200) => typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : undefined
 const bytes = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined
 const isoDate = (value: unknown) => {
@@ -98,6 +117,7 @@ export function normalizeAttachmentQuery(input: unknown): MailAttachmentQuery {
     fileTypes: fileTypes?.length ? fileTypes : undefined,
     minSize: bytes(query.minSize),
     maxSize: bytes(query.maxSize),
+    participants: normalizeParticipants(query.participants),
     cursor: text(query.cursor, 2_000),
     pageSize
   }
@@ -112,18 +132,21 @@ const json = <T>(value: unknown, fallback: T): T => {
   }
 }
 
+// Shared by the attachment and contact-history listings; expects messages as `m` and threads as `t`.
+export const VISIBLE_MESSAGE_WHERE = [
+  // Trash and spam are excluded the same way the "All mail" folder excludes them.
+  't.trashed=0',
+  `NOT EXISTS(SELECT 1 FROM json_each(t.label_ids_json) WHERE value='SPAM')`,
+  // Provider copies of one logical message (e.g. IMAP folders) appear once, as
+  // the newest copy, matching how the thread reader groups by Message-ID.
+  `NOT EXISTS(SELECT 1 FROM gmail_messages d WHERE d.account_id=m.account_id AND d.thread_id=m.thread_id AND d.id<>m.id
+    AND trim(coalesce(m.header_message_id,''))<>'' AND lower(trim(d.header_message_id))=lower(trim(m.header_message_id))
+    AND (d.internal_date>m.internal_date OR (d.internal_date=m.internal_date AND d.id>m.id)))`
+]
+
 export function listAttachmentPage(db: DatabaseSync, input: unknown, rawExists: (path: string) => boolean): MailAttachmentPage {
   const query = normalizeAttachmentQuery(input)
-  const where: string[] = [
-    // Trash and spam are excluded the same way the "All mail" folder excludes them.
-    't.trashed=0',
-    `NOT EXISTS(SELECT 1 FROM json_each(t.label_ids_json) WHERE value='SPAM')`,
-    // Provider copies of one logical message (e.g. IMAP folders) appear once, as
-    // the newest copy, matching how the thread reader groups by Message-ID.
-    `NOT EXISTS(SELECT 1 FROM gmail_messages d WHERE d.account_id=m.account_id AND d.thread_id=m.thread_id AND d.id<>m.id
-      AND trim(coalesce(m.header_message_id,''))<>'' AND lower(trim(d.header_message_id))=lower(trim(m.header_message_id))
-      AND (d.internal_date>m.internal_date OR (d.internal_date=m.internal_date AND d.id>m.id)))`
-  ]
+  const where: string[] = [...VISIBLE_MESSAGE_WHERE]
   const params: (string | number)[] = []
   if (query.accountIds) {
     where.push(`a.account_id IN (${query.accountIds.map(() => '?').join(',')})`)
@@ -142,6 +165,11 @@ export function listAttachmentPage(db: DatabaseSync, input: unknown, rawExists: 
   if (query.recipient) {
     where.push(`lower(m.to_json||' '||m.cc_json) LIKE lower(?) ESCAPE '\\'`)
     params.push(containsPattern(query.recipient))
+  }
+  if (query.participants) {
+    const match = participantSql('m', query.participants.length)
+    where.push(match.sql)
+    params.push(...match.params(query.participants))
   }
   if (query.dateFrom) {
     where.push('datetime(m.internal_date)>=datetime(?)')

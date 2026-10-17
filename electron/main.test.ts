@@ -918,6 +918,15 @@ describe.sequential('Electron main process', () => {
     expect(mocks.google.deleteContact).toHaveBeenCalledWith(current)
   })
 
+  it('routes contact history through the mail worker and registers the contact merge handlers', async () => {
+    await invoke('mail:contact-history:messages', { addresses: ['Ada@Example.test', 'nope'], accountIds: ['a1b2'], pageSize: 999 })
+    expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'contacts:history', payload: { addresses: ['ada@example.test'], accountIds: ['a1b2'], includeArchivedAccounts: true, cursor: undefined, pageSize: 100 } })
+    for (const channel of ['contacts:merges', 'contacts:merge-provider', 'contacts:merge-local-record', 'contacts:merge-undo', 'contacts:associations', 'contacts:associate', 'contacts:association-remove']) {
+      expect(mocks.ipcHandlers.has(channel), channel).toBe(true)
+    }
+    expect(() => invoke('contacts:merge-provider', { survivorId: 'a', loserId: 'a', merged: {} })).toThrow(/review the merged details/)
+  })
+
   it('rejects provider contact edits made against an older revision', async () => {
     await invoke('mail:accounts:connect')
     const current = { id: 'abcdef:google-contact:people/existing', remoteId: 'people/existing', accountId: 'abcdef', provider: 'gmail', readOnly: false, revision: 'etag-2', name: 'Ada', email: '', group: 'Google', favorite: false, color: '#4d8f78' }
