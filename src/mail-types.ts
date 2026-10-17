@@ -711,6 +711,7 @@ export interface MailDiagnosticHealth {
 export interface MailDesktopApi {
   messageTools: MessageToolsApi
   automaticReplies: MailAutomaticRepliesApi
+  cloudAttachments: import('./cloud-attachment-types').CloudAttachmentsApi
   credentials: {
     status(): Promise<MailCredentialStatus>
     import(): Promise<MailCredentialStatus>
