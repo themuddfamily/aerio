@@ -31,6 +31,7 @@ export const PROFILE_BACKUP_EXCLUSIONS = [
   'smime-certificates.dat (S/MIME certificates, trust choices, and passphrase-protected private keys; export a password-protected PKCS#12 to move them)',
   'meeting-host-vault.dat (Zoom and Webex OAuth tokens and app registrations; reconnect them in Settings › Online meetings)',
   'App-lock passphrase verifier (the current device keeps its own app lock)',
+  'directory.sqlite (organization directory / offline address book cache; rebuilt from the server after a restore)',
   'Diagnostic logs, window bounds, and update caches',
   'Earlier restore staging and rollback copies'
 ]

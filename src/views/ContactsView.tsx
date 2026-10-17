@@ -1,4 +1,4 @@
-import { Building2, Cake, Copy, Edit3, GitMerge, Globe, HardDrive, Link2, Mail, MapPin, Phone, Plus, RefreshCw, Search, Star, Trash2, Users, UsersRound } from 'lucide-react'
+import { BookUser, Building2, Cake, Copy, Edit3, GitMerge, Globe, HardDrive, Link2, Mail, MapPin, Phone, Plus, RefreshCw, Search, Star, Trash2, Users, UsersRound } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import type { AppState, Contact, ContactField, MessageWindowRequest } from '../types'
@@ -15,6 +15,8 @@ import { contactPairKey, linkedContactIds, type DuplicateCandidate } from '../li
 import { ContactDuplicatesModal, ContactMergePreview } from '../components/ContactMergePanel'
 import ContactHistoryPanel, { type ContactHistoryMailApi } from '../components/ContactHistoryPanel'
 import { useContactMerge } from '../components/use-contact-merge'
+import DirectoryPanel from '../components/DirectoryPanel'
+import type { DirectoryEntry } from '../directory-types'
 
 interface ContactsViewProps {
   state: AppState
@@ -44,6 +46,18 @@ const isSyncedContact = (contact: Contact): contact is SyncedContact =>
   'remoteId' in contact && 'accountId' in contact && 'provider' in contact && 'readOnly' in contact
 const initials = (name: string) => name.split(' ').map((value) => value[0]).join('')
 
+/** A personal-contact copy of a read-only directory entry (E41); the directory itself is never edited. */
+export function contactFromDirectory(entry: DirectoryEntry): Contact {
+  const phones = [entry.phone && { value: entry.phone, type: 'work' }, entry.mobile && { value: entry.mobile, type: 'mobile' }].filter((field): field is { value: string; type: string } => Boolean(field))
+  return {
+    id: uid('contact'), name: entry.name, email: entry.email, emails: [{ value: entry.email, type: 'work' }],
+    ...(phones.length ? { phone: phones[0].value, phones } : {}),
+    ...(entry.company ? { company: entry.company } : {}), ...(entry.title ? { title: entry.title } : {}),
+    ...(entry.department || entry.office ? { notes: [entry.department && `Department: ${entry.department}`, entry.office && `Office: ${entry.office}`].filter(Boolean).join('\n') } : {}),
+    group: 'Personal', favorite: false, color: '#4d8f78', source: 'local'
+  }
+}
+
 function ContactAvatar({ contact, className }: { contact: Contact; className: string }) {
   return contact.photo
     ? <img className={`avatar ${className} contact-photo`} src={contact.photo} alt="" />
@@ -61,6 +75,8 @@ export default function ContactsView({
   const [selectedId, setSelectedId] = useState(state.contacts[0]?.id ?? '')
   const [editing, setEditing] = useState<Contact | 'new' | null>(null)
   const [editingList, setEditingList] = useState<RecipientList | 'new' | null>(null)
+  const [directoryOpen, setDirectoryOpen] = useState(false)
+  const [prefill, setPrefill] = useState<Contact>()
   const groups = ['All contacts', 'Favourites', ...Array.from(new Set(state.contacts.flatMap(contactGroupNames)))]
   const lists = useMemo(() => buildRecipientLists({ contacts: state.contacts, lists: listActions?.localLists, groups: listActions?.groups }), [listActions?.groups, listActions?.localLists, state.contacts])
   const activeList = lists.find((list) => list.id === listId)
@@ -168,7 +184,7 @@ export default function ContactsView({
   return (
     <div className="workspace">
       <aside className="context-sidebar">
-        <button className="compose-button" onClick={() => setEditing('new')}><Plus size={18} /> New contact</button>
+        <button className="compose-button" onClick={() => { setPrefill(undefined); setEditing('new') }}><Plus size={18} /> New contact</button>
         <button className="button ghost small sidebar-sync" title="Synchronize provider contacts" disabled={syncing} onClick={() => void onSync()}><RefreshCw className={syncing ? 'spin' : undefined} size={15} /> {syncing ? 'Syncing…' : 'Sync now'}</button>
         {providerAccounts.length > 0 && <button className="button ghost small sidebar-sync" title="Reconnect an account with permission to edit provider contacts" disabled={syncing} onClick={() => void onEnableEditing?.()}><Edit3 size={15} /> Enable editing</button>}
         {merging.available && <button className="button ghost small sidebar-sync" title="Review possible duplicate contacts" onClick={() => setDuplicatesOpen(true)}><GitMerge size={15} /> Find duplicates</button>}
@@ -176,7 +192,7 @@ export default function ContactsView({
         <div className="sidebar-group">
           <span className="sidebar-label">Contacts</span>
           {groups.map((item) => (
-            <button className={`sidebar-item ${!activeList && group === item ? 'active' : ''}`} onClick={() => { setGroup(item); setListId(undefined) }} onContextMenu={(event) => showContextMenu(event, [
+            <button className={`sidebar-item ${!directoryOpen && !activeList && group === item ? 'active' : ''}`} onClick={() => { setGroup(item); setListId(undefined); setDirectoryOpen(false) }} onContextMenu={(event) => showContextMenu(event, [
               { label: `Open ${item}`, icon: Users, action: () => { setGroup(item); setListId(undefined) } }
             ], item)} key={item}>
               {item === 'Favourites' ? <Star size={17} /> : <Users size={17} />}<span>{item}</span>
@@ -187,16 +203,21 @@ export default function ContactsView({
         {actions && <ContactListsSidebar
           lists={lists}
           selectedId={activeList?.id}
-          onSelect={(list) => setListId(list.id)}
+          onSelect={(list) => { setListId(list.id); setDirectoryOpen(false) }}
           onCreate={() => setEditingList('new')}
           onEdit={setEditingList}
           onDelete={(list) => void deleteList(list)}
           onEmail={emailList}
         />}
+        {window.aerio?.directory && <div className="sidebar-group">
+          <span className="sidebar-label">Organization</span>
+          <button className={`sidebar-item ${directoryOpen ? 'active' : ''}`} title="Read-only people, groups, and rooms from your organization" onClick={() => setDirectoryOpen(true)}><BookUser size={17} /><span>Directory</span><em>read-only</em></button>
+        </div>}
         {interchangePanel}
         <div className="contact-insight"><span className="insight-number">{state.contacts.length}</span><p>contacts</p></div>
       </aside>
-      <section className="contact-list-panel">
+      {directoryOpen && <DirectoryPanel initialQuery={query} onCompose={onCompose} onToast={onToast} onAddToContacts={(entry) => { setPrefill(contactFromDirectory(entry)); setEditing('new') }} />}
+      {!directoryOpen && <section className="contact-list-panel">
         <header className="panel-heading"><div><h1>{heading}</h1><p>{activeList ? `${recipientListLabel(activeList)} · ${activeList.members.length} addresses${activeList.unreachable ? ` · ${activeList.unreachable} without email` : ''}` : `${contacts.length} people`}</p></div>
           {activeList && <div className="panel-heading-actions">
             <button className="button ghost small" disabled={!activeList.members.length} onClick={() => emailList(activeList)}><Mail size={14} /> Email list</button>
@@ -217,8 +238,8 @@ export default function ContactsView({
             <div key={member.email} className="contact-row external-member"><span className="avatar large">@</span><span><strong>{member.name || member.email}</strong><small>{member.email} · not a saved contact</small></span></div>
           ))}
         </div>
-      </section>
-      <section className="contact-detail-panel">
+      </section>}
+      {!directoryOpen && <section className="contact-detail-panel">
         {selected ? <>
           <header className="contact-hero" onContextMenu={(event) => showContactMenu(event, selected)}>
             <ContactAvatar contact={selected} className="hero-avatar" />
@@ -266,9 +287,10 @@ export default function ContactsView({
           </div>
           {historyMail && onOpenMessage && <ContactHistoryPanel addresses={historyAddresses} mail={historyMail} onOpenMessage={onOpenMessage} onToast={onToast} />}
         </> : <div className="empty-state grow"><Users size={32} /><h3>Select a contact</h3></div>}
-      </section>
+      </section>}
       {editing && <ContactEditor
         contact={editing === 'new' ? undefined : editing}
+        prefill={editing === 'new' ? prefill : undefined}
         providerAccounts={providerAccounts}
         onClose={() => setEditing(null)}
         onSave={saveContact}
@@ -322,26 +344,29 @@ export default function ContactsView({
 const withBlankRow = (fields: ContactField[], type: string) => fields.length ? fields : [{ value: '', type }]
 
 function ContactEditor({
-  contact, providerAccounts, onClose, onSave, onDelete, onToast
+  contact, prefill, providerAccounts, onClose, onSave, onDelete, onToast
 }: {
   contact?: Contact
+  /** Initial values for a new contact, e.g. copied from the read-only directory. */
+  prefill?: Contact
   providerAccounts: { id: string; email: string; provider: 'gmail' | 'microsoft' | 'dav' | 'exchange' }[]
   onClose(): void
   onSave(contact: Contact, accountId?: string): Promise<void> | void
   onDelete?(): void
   onToast(message: string): void
 }) {
-  const initial = editableFields(contact)
-  const [name, setName] = useState(contact?.name ?? '')
+  const source = contact ?? prefill
+  const initial = editableFields(source)
+  const [name, setName] = useState(source?.name ?? '')
   const [emails, setEmails] = useState(() => withBlankRow(initial.emails, 'home'))
   const [phones, setPhones] = useState(() => withBlankRow(initial.phones, 'mobile'))
   const [addresses, setAddresses] = useState(initial.addresses)
-  const [company, setCompany] = useState(contact?.company ?? '')
-  const [title, setTitle] = useState(contact?.title ?? '')
+  const [company, setCompany] = useState(source?.company ?? '')
+  const [title, setTitle] = useState(source?.title ?? '')
   const [groupText, setGroupText] = useState(initial.groups.filter((group) => !['Google', 'Outlook'].includes(group)).join(', ') || (contact ? '' : 'Personal'))
   const [birthday, setBirthday] = useState(contact?.birthday ?? '')
   const [photo, setPhoto] = useState(contact?.photo)
-  const [notes, setNotes] = useState(contact?.notes ?? '')
+  const [notes, setNotes] = useState(source?.notes ?? '')
   const [favorite, setFavorite] = useState(contact?.favorite ?? false)
   const [target, setTarget] = useState(contact && isSyncedContact(contact) ? contact.accountId : 'local')
   const [saving, setSaving] = useState(false)

@@ -289,6 +289,8 @@ export interface AerioDesktopApi {
   meetingHosts?: import('./meeting-host-types').MeetingHostApi
   /** On-premises Exchange (EWS) accounts; optional so test doubles of the API stay valid. */
   exchange?: import('./exchange-types').ExchangeDesktopApi
+  /** Organization directory and offline address book (E41); optional so test doubles stay valid. */
+  directory?: import('./directory-types').DirectoryDesktopApi
   contactMerge?: import('./contact-merge-types').ContactMergeDesktopApi
   /** Duplicate cleanup for mail, events, and tasks (E32). */
   duplicates?: import('./duplicate-cleanup-types').DuplicateCleanupApi

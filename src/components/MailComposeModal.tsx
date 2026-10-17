@@ -18,6 +18,7 @@ import { useKeymapKeyDown } from '../lib/use-keymap'
 import { ReplyWatchControl, armReplyWatch, replyWatchDeadline, type ReplyWatchSetting } from './MailReplyWatches'
 import { describeExpansion, expandRecipientLists, recipientListLabel, recipientListPreview, suggestRecipientLists, type RecipientList } from '../lib/distribution-lists'
 import { useRecipientLists } from './use-recipient-lists'
+import { useRecipientDirectorySections } from './RecipientDirectory'
 import { MailAiComposeAssist } from './MailAiComposeAssist'
 import { aiFeatureAvailable, useAiAssistantStatus } from '../lib/use-ai-assistant'
 import { cloudAttachmentsAvailable, confirmCloudLinks, MailCloudAttachments } from './MailCloudAttachments'
@@ -137,6 +138,11 @@ ${signature}` : ''}${forwardedText}`
     return true
   }
   const listSuggestions = recipientField ? suggestRecipientLists(fieldValue(recipientField).split(/[;,]/).at(-1) ?? '', recipientLists) : []
+  // Personal contacts and the read-only organization directory follow the cached-mail suggestions (E41).
+  const extraRecipients = useRecipientDirectorySections({
+    accountId, query: recipientField ? fieldValue(recipientField).split(/[;,]/).at(-1)?.trim() ?? '' : '', enabled: Boolean(recipientField),
+    exclude: recipientSuggestions, onChoose: (suggestion) => chooseRecipient(suggestion), onChooseMany: (suggestions, note) => { chooseRecipient(...suggestions); onToast(note) }, onToast
+  })
   const ai = useAiAssistantStatus()
   const [aiOpen, setAiOpen] = useState(false)
   const [cloudOpen, setCloudOpen] = useState(false)
@@ -281,14 +287,16 @@ ${signature}` : ''}${forwardedText}`
     }
   }
 
-  const chooseRecipient = (suggestion: MailRecipientSuggestion) => {
-    if (!recipientField) return
+  const chooseRecipient = (...suggestions: MailRecipientSuggestion[]) => {
+    if (!recipientField || !suggestions.length) return
     const value = recipientField === 'to' ? to : recipientField === 'cc' ? cc : bcc
     const parts = splitAddresses(value)
-    const displayName = suggestion.name && /[,;]/.test(suggestion.name) ? `"${suggestion.name.replaceAll('"', '')}"` : suggestion.name
-    const formatted = displayName ? `${displayName} <${suggestion.email}>` : suggestion.email
-    if (/[,;]\s*$/.test(value) || !parts.length) parts.push(formatted)
-    else parts[parts.length - 1] = formatted
+    const formatted = suggestions.map((suggestion) => {
+      const displayName = suggestion.name && /[,;]/.test(suggestion.name) ? `"${suggestion.name.replaceAll('"', '')}"` : suggestion.name
+      return displayName ? `${displayName} <${suggestion.email}>` : suggestion.email
+    })
+    if (/[,;]\s*$/.test(value) || !parts.length) parts.push(...formatted)
+    else parts.splice(parts.length - 1, 1, ...formatted)
     const next = `${parts.map((part) => part.trim()).filter(Boolean).join(', ')}, `
     if (recipientField === 'to') setTo(next)
     else if (recipientField === 'cc') setCc(next)
@@ -468,7 +476,7 @@ ${signature}` : ''}${forwardedText}`
           <div className="compose-row"><label>Cc</label><input value={cc} onFocus={() => setRecipientField('cc')} onBlur={() => expandLists('cc')} onChange={(event) => setCc(event.target.value)} /><button className="text-button" onClick={() => setBccVisible((value) => !value)}>Bcc</button><button className="text-button" onClick={() => setReplyToVisible((value) => !value)}>Reply-To</button></div>
           {bccVisible && <div className="compose-row"><label>Bcc</label><input value={bcc} onFocus={() => setRecipientField('bcc')} onBlur={() => expandLists('bcc')} onChange={(event) => setBcc(event.target.value)} /></div>}
           {(replyToVisible || replyToField) && <div className="compose-row"><label>Reply-To</label><input value={replyToField} onFocus={() => setRecipientField(undefined)} onChange={(event) => setReplyToField(event.target.value)} placeholder="replies@example.com" /></div>}
-          {recipientField && (recipientSuggestions.length > 0 || listSuggestions.length > 0) && <div className="recipient-suggestions">{listSuggestions.map((list) => <button key={list.id} className="recipient-list-suggestion" title={list.members.map((member) => member.email).join(', ')} onMouseDown={(event) => event.preventDefault()} onClick={() => expandLists(recipientField, list)}><span className="avatar">{list.members.length}</span><span><strong>{list.name} · {recipientListLabel(list)}</strong><small>{recipientListPreview(list)}</small></span></button>)}{recipientSuggestions.map((suggestion) => <button key={`${suggestion.accountId}:${suggestion.email}`} onMouseDown={(event) => event.preventDefault()} onClick={() => chooseRecipient(suggestion)}><span className="avatar">{(suggestion.name || suggestion.email).slice(0, 2).toUpperCase()}</span><span><strong>{suggestion.name || suggestion.email}</strong><small>{suggestion.email}</small></span></button>)}</div>}
+          {recipientField && (recipientSuggestions.length > 0 || listSuggestions.length > 0 || extraRecipients.count > 0) && <div className="recipient-suggestions">{listSuggestions.map((list) => <button key={list.id} className="recipient-list-suggestion" title={list.members.map((member) => member.email).join(', ')} onMouseDown={(event) => event.preventDefault()} onClick={() => expandLists(recipientField, list)}><span className="avatar">{list.members.length}</span><span><strong>{list.name} · {recipientListLabel(list)}</strong><small>{recipientListPreview(list)}</small></span></button>)}{recipientSuggestions.map((suggestion) => <button key={`${suggestion.accountId}:${suggestion.email}`} onMouseDown={(event) => event.preventDefault()} onClick={() => chooseRecipient(suggestion)}><span className="avatar">{(suggestion.name || suggestion.email).slice(0, 2).toUpperCase()}</span><span><strong>{suggestion.name || suggestion.email}</strong><small>{suggestion.email}</small></span></button>)}{extraRecipients.nodes}</div>}
           <div className="compose-row"><label>Subject</label><input value={subject} onFocus={() => setRecipientField(undefined)} onChange={(event) => setSubject(event.target.value)} /></div>
           <MailFormattingToolbar editorRef={editorRef} onEditorChange={updateEditor} onToast={onToast}>
             {(signatures.length > 0 || Boolean(currentAccount?.signature.trim())) && <select className="compose-signature-select" aria-label="Signature" value={signatureChoice} onChange={(event) => {

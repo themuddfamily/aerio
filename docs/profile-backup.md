@@ -31,6 +31,7 @@ Writable local mail folders (roadmap E18) don't exist yet. When they're added, t
 - `smime-certificates.dat`: S/MIME certificates, trust choices, sender defaults, and passphrase-protected private keys, wrapped with the same secure storage. It is on the forbidden list and stays as it is on the device during a restore. Export a password-protected PKCS#12 from Settings › S/MIME certificates to move your certificate ([S/MIME mail](smime-mail.md)).
 - `dav-credentials.dat`: CalDAV/CardDAV app passwords encrypted with OS secure storage. On restore, DAV accounts ask for the password again, and writes that were still queued are held for review instead of being sent.
 - The app-lock passphrase verifier. Backups delete it under `secure_delete` and `VACUUM`, so the bytes don't survive in free pages. On restore, the current device keeps its own app lock, or keeps having none.
+- `directory.sqlite`: the organization directory's offline address book. It is a cache of server data that Aerio rebuilds on the next refresh (on demand, or within a day), so restoring an old copy would only show stale colleagues ([organization directory](organization-directory.md)).
 - Diagnostic logs, window bounds, update caches, `profile-backup.json` (the schedule itself), and earlier restore staging or rollback copies.
 
 ## Backup format and consistency

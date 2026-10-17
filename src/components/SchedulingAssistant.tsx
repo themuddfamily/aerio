@@ -1,6 +1,7 @@
 import { AlertTriangle, CalendarClock, ChevronLeft, ChevronRight, RefreshCw, Sparkles, UserPlus, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Modal from './Modal'
+import { DirectoryResourcePicker } from './RecipientDirectory'
 import type { AttendeeAvailability, AvailabilityRequest, AvailabilityResult, WorkingHours } from '../scheduling-types'
 import {
   addZonedDays, attendeeAddress, formatZoneDay, formatZoneTime, loadSecondaryZone, loadWorkingHours, msToWallInput,
@@ -151,6 +152,9 @@ export default function SchedulingAssistant({
     setDraft('')
   }
 
+  /** Rooms picked from the organization directory join as resources (E41). */
+  const addResource = (email: string) => setParticipants((current) => current.some((item) => attendeeAddress(item.email) === attendeeAddress(email)) ? current : [...current, { email, role: 'resource' }])
+
   const updateHours = (next: WorkingHours) => {
     setWorkingHours(next)
     saveWorkingHours(next)
@@ -259,6 +263,7 @@ export default function SchedulingAssistant({
           </select></label>
           <button className="button small" disabled={!draft.trim()} onClick={addParticipant}>Add</button>
         </div>
+        <DirectoryResourcePicker onAdd={(entry) => addResource(entry.email)} />
 
         <section className="scheduling-suggestions" aria-label="Suggested times">
           <h3><Sparkles size={14} /> Suggested times</h3>
