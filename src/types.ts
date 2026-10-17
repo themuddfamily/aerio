@@ -51,6 +51,27 @@ export interface CalendarEvent {
   originalStart?: string
   // Set only on occurrences generated in the view by the recurrence expander; never persisted.
   occurrenceOf?: string
+  // Online meeting (E25). Absent means "no change requested" on writes: connectors never drop an existing
+  // conference unless status is 'removed'. See src/lib/online-meetings.ts.
+  conference?: EventConference
+}
+
+export type ConferenceProvider = 'googleMeet' | 'teams' | 'skype' | 'zoom' | 'webex' | 'other'
+
+export interface EventConference {
+  provider: ConferenceProvider
+  // 'pending' on a write asks the connector to create a meeting; on a read it means the provider has not
+  // finished creating it. 'removed' asks the connector to detach the meeting.
+  status: 'pending' | 'ready' | 'failed' | 'removed'
+  // Stable id for the creation request, generated once when the meeting is added and reused by every retry
+  // (Google createRequest.requestId, Graph transactionId) so retries never create a second meeting.
+  requestId?: string
+  joinUrl?: string
+  conferenceId?: string
+  // Provider display name, e.g. "Google Meet" or a third-party add-on name.
+  name?: string
+  phone?: string
+  pin?: string
 }
 
 export type RecurrenceEditScope = 'occurrence' | 'following' | 'series'

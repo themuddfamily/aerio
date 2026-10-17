@@ -517,6 +517,7 @@ export default function App() {
               onDeleteProviderEvent={deleteProviderEvent}
               syncing={productivitySyncing}
               sourceMessage={productivityMessage}
+              conferenceCalendars={productivity.calendars}
               interchangePanel={window.aerio.interchange && <CalendarInterchangePanel
                 api={window.aerio.interchange}
                 snapshot={interchange}

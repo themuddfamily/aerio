@@ -4723,3 +4723,12 @@ img.avatar.contact-photo { object-fit: cover; }
 .sidebar-label:has(.icon-button) { display: flex; align-items: center; }
 .sidebar-label .icon-button { width: 22px; height: 22px; margin-left: auto; }
 .recipient-list-suggestion .avatar { font-variant-numeric: tabular-nums; }
+
+/* Online meetings in the event editor (E25) */
+.event-conference { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 13px; }
+.event-conference-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.event-conference-row .spacer { flex: 1; }
+.event-conference-host { color: var(--muted); overflow-wrap: anywhere; }
+.event-conference .text-button { display: inline-flex; align-items: center; gap: 4px; }
+.event-conference .recurrence-note { margin: 0; }
+.event-conference-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 8px; border: 1px solid color-mix(in srgb, #d79a36 45%, var(--line)); border-radius: 6px; background: color-mix(in srgb, #d79a36 10%, var(--surface)); }

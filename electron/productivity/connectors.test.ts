@@ -123,8 +123,8 @@ describe('productivity connector mapping', () => {
     expect(updated.title).toBe('Updated planning')
     await connector.deleteEvent(googleCalendar, updated)
     expect(fetchMock.mock.calls.map(([url, init]) => [url, init.method])).toEqual([
-      ['https://www.googleapis.com/calendar/v3/calendars/primary/events', 'POST'],
-      ['https://www.googleapis.com/calendar/v3/calendars/primary/events/remote-event', 'PATCH'],
+      ['https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1', 'POST'],
+      ['https://www.googleapis.com/calendar/v3/calendars/primary/events/remote-event?conferenceDataVersion=1', 'PATCH'],
       ['https://www.googleapis.com/calendar/v3/calendars/primary/events/remote-event', 'DELETE']
     ])
   })

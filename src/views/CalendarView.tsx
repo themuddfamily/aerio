@@ -19,6 +19,12 @@ import {
 } from '../lib/recurrence'
 import { isIanaTimeZone, localTimeZone, resolveTimeZoneName, timeZoneOffsetLabel, timeZoneOptions, wallTimeInZone, wallTimeToUtc } from '../lib/time-zones'
 import { RecurrenceScopeChooser, RepeatField } from './RecurrenceFields'
+import { EventConferenceField } from '../components/EventConferenceField'
+import { conferenceCapabilities } from '../lib/online-meetings'
+import type { SyncedCalendar } from '../productivity-types'
+
+// Provider calendar details the event editor needs for online meetings (E25).
+export type ConferenceCalendar = Pick<SyncedCalendar, 'id' | 'provider' | 'canWrite' | 'conferences'>
 
 type CalendarMode = 'month' | 'week' | 'day' | 'agenda'
 
@@ -34,6 +40,7 @@ interface CalendarViewProps {
   syncing?: boolean
   sourceMessage?: string
   interchangePanel?: React.ReactNode
+  conferenceCalendars?: readonly ConferenceCalendar[]
 }
 
 // Agenda and "Up next" expand repeating events this many days ahead.
@@ -83,7 +90,7 @@ function readSecondaryZone() {
 
 export default function CalendarView({
   state, query, onToast, writableCalendarIds,
-  onSync, onEnableEditing, onSaveProviderEvent, onDeleteProviderEvent, syncing = false, sourceMessage, interchangePanel
+  onSync, onEnableEditing, onSaveProviderEvent, onDeleteProviderEvent, syncing = false, sourceMessage, interchangePanel, conferenceCalendars
 }: CalendarViewProps) {
   const { showContextMenu } = useContextMenu()
   const [mode, setMode] = useState<CalendarMode>('month')
@@ -306,6 +313,7 @@ export default function CalendarView({
           state={state}
           readOnly={editing === 'new' ? false : !canEditEvent(editing)}
           writableCalendarIds={writableCalendarIds}
+          conferenceCalendars={conferenceCalendars}
           onClose={() => setEditing(null)}
           onSave={async (event, scope) => {
             const exists = Boolean(scope) || state.events.some((item) => item.id === event.id)
@@ -463,7 +471,7 @@ function initialTimes(event: CalendarEvent | undefined, date: Date, zone: string
   return { start: format(start, "yyyy-MM-dd'T'HH:mm"), end: format(new Date(start.getTime() + 60 * 60 * 1000), "yyyy-MM-dd'T'HH:mm") }
 }
 
-function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, writableCalendarIds, onClose, onSave, onDelete }: { event?: CalendarEvent; date: Date; defaultCalendarId?: string; state: AppState; readOnly?: boolean; writableCalendarIds: ReadonlySet<string>; onClose(): void; onSave(event: CalendarEvent, scope?: RecurrenceEditScope): Promise<void> | void; onDelete?(scope?: RecurrenceEditScope): Promise<void> | void }) {
+function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, writableCalendarIds, conferenceCalendars, onClose, onSave, onDelete }: { event?: CalendarEvent; date: Date; defaultCalendarId?: string; state: AppState; readOnly?: boolean; writableCalendarIds: ReadonlySet<string>; conferenceCalendars?: readonly ConferenceCalendar[]; onClose(): void; onSave(event: CalendarEvent, scope?: RecurrenceEditScope): Promise<void> | void; onDelete?(scope?: RecurrenceEditScope): Promise<void> | void }) {
   const localZone = localTimeZone()
   const [zone, setZone] = useState(() => resolveTimeZoneName(event?.timeZone) ?? localZone)
   const [allDay, setAllDay] = useState(() => Boolean(event && isAllDayEvent(event)))
@@ -481,6 +489,8 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
   const [attendees, setAttendees] = useState(event?.attendees.join(', ') ?? '')
   const [rule, setRule] = useState<string | undefined>(initialRule)
   const [reminderMinutes, setReminderMinutes] = useState(event?.reminderMinutes ?? 15)
+  const [conference, setConference] = useState(event?.conference)
+  const conferenceCalendar = conferenceCalendars?.find((item) => item.id === calendarId)
   const [busy, setBusy] = useState<'save' | 'delete'>()
   const [pendingScope, setPendingScope] = useState<'save' | 'delete'>()
   const color = state.accounts.find((account) => account.id === calendarId)?.color ?? '#6659e8'
@@ -513,7 +523,8 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
       attendees: attendees.split(',').map((value) => value.trim()).filter(Boolean), reminderMinutes,
       allDay: allDay || undefined,
       timeZone: allDay ? undefined : zone,
-      recurrence: 'none'
+      recurrence: 'none',
+      ...(conference ? { conference } : {})
     }
     // Synced occurrences never carry a rule; the provider keeps the series pattern.
     if (providerInstance) return preserveEventInterchangeFields(event, base)
@@ -547,7 +558,7 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
         </div>
         {localHint && <p className="recurrence-note event-zone-hint">{localHint}</p>}
         <div className="form-grid-2">
-          <label className="field-label">Calendar<select value={calendarId} disabled={readOnly || Boolean(event)} onChange={(e) => setCalendarId(e.target.value)}>{state.accounts.filter((account) => writableCalendarIds.has(account.id) || account.id === event?.calendarId).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
+          <label className="field-label">Calendar<select value={calendarId} disabled={readOnly || Boolean(event)} onChange={(e) => { setCalendarId(e.target.value); if (conference?.status === 'pending') setConference(undefined) }}>{state.accounts.filter((account) => writableCalendarIds.has(account.id) || account.id === event?.calendarId).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
           <label className="field-label">Reminder<select value={reminderMinutes} disabled={readOnly} onChange={(e) => setReminderMinutes(Number(e.target.value))}><option value={0}>At event time</option><option value={5}>5 minutes before</option><option value={10}>10 minutes before</option><option value={15}>15 minutes before</option><option value={30}>30 minutes before</option><option value={60}>1 hour before</option><option value={1440}>1 day before</option></select></label>
         </div>
         <RepeatField
@@ -557,6 +568,16 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
           managedNote={providerInstance ? `Part of a repeating series managed by ${providerName}. Changes can apply to this event, this and following events, or all events; the repeat pattern itself is kept.` : undefined}
           onChange={setRule}
         />
+        {(conferenceCalendar || conference) && (
+          <EventConferenceField
+            value={conference}
+            original={event?.conference}
+            capabilities={conferenceCapabilities(conferenceCalendar)}
+            canRemove={Boolean(conferenceCalendar?.conferences?.canRemove)}
+            disabled={readOnly}
+            onChange={setConference}
+          />
+        )}
         <label className="field-label"><MapPin size={14} /> Location<input value={location} disabled={readOnly} onChange={(e) => setLocation(e.target.value)} placeholder="Add a place or video link" /></label>
         <label className="field-label"><Users size={14} /> Attendees<input value={attendees} disabled={readOnly} onChange={(e) => setAttendees(e.target.value)} placeholder="Separate email addresses with commas" /></label>
         {!readOnly && !allDay && <SchedulingAssistantButton calendarId={calendarId} organizerEmail={state.accounts.find((account) => account.id === calendarId)?.email} start={start} end={end} inputTimeZone={zone} attendees={attendees}
