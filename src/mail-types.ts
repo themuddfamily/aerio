@@ -489,6 +489,8 @@ export interface MailDraftInput {
   fromIdentityId?: string
   replyTo?: string[]
   sendOptions?: MailSendOptions
+  /** OpenPGP Sign/Encrypt choice; delivery aborts rather than sending plaintext when it cannot be honored. */
+  openPgp?: import('./openpgp-types').MailOpenPgpOptions
 }
 
 export type MailImportance = 'low' | 'normal' | 'high'

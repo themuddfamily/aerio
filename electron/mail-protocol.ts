@@ -186,6 +186,23 @@ export interface WorkerCredentialResponse {
   error?: string
 }
 
+/** Asks the main process to sign and/or encrypt an outgoing message; crypto never runs in the worker. */
+export interface WorkerOpenPgpRequest {
+  kind: 'openpgp-request'
+  id: string
+  message: string
+  from: string
+  recipients: string[]
+  options: import('../src/openpgp-types').MailOpenPgpOptions
+}
+
+export interface WorkerOpenPgpResponse {
+  kind: 'openpgp-response'
+  id: string
+  message?: string
+  error?: string
+}
+
 export interface WorkerEventMessage {
   kind: 'event'
   event: MailWorkerEvent

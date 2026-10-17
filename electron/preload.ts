@@ -132,6 +132,22 @@ const api: AerioDesktopApi = {
     search: (requestId, request) => ipcRenderer.invoke('ai:search', requestId, request),
     cancel: (requestId) => ipcRenderer.invoke('ai:cancel', requestId)
   },
+  openPgp: {
+    status: () => ipcRenderer.invoke('openpgp:status'),
+    generate: (input) => ipcRenderer.invoke('openpgp:generate', input),
+    importText: (armored, passphrase) => ipcRenderer.invoke('openpgp:import-text', armored, passphrase),
+    importFile: (passphrase) => ipcRenderer.invoke('openpgp:import-file', passphrase),
+    exportPublic: (fingerprint) => ipcRenderer.invoke('openpgp:export-public', fingerprint),
+    exportPrivate: (fingerprint, passphrase) => ipcRenderer.invoke('openpgp:export-private', fingerprint, passphrase),
+    delete: (fingerprint) => ipcRenderer.invoke('openpgp:delete', fingerprint),
+    setVerification: (fingerprint, state) => ipcRenderer.invoke('openpgp:verification', fingerprint, state),
+    unlock: (fingerprint, passphrase) => ipcRenderer.invoke('openpgp:unlock', fingerprint, passphrase),
+    forgetPassphrases: () => ipcRenderer.invoke('openpgp:forget'),
+    preflight: (input) => ipcRenderer.invoke('openpgp:preflight', input),
+    inspect: (ref) => ipcRenderer.invoke('openpgp:inspect', ref),
+    decrypt: (ref, passphrase) => ipcRenderer.invoke('openpgp:decrypt', ref, passphrase),
+    saveAttachment: (ref, index) => ipcRenderer.invoke('openpgp:save-attachment', ref, index)
+  },
   mail: {
     messageTools: {
       updateLocal: (ref, updates) => ipcRenderer.invoke('mail:message:local', ref, updates),

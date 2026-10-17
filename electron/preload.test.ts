@@ -268,6 +268,29 @@ describe('preload bridge', () => {
     expect(Object.keys(ai).sort()).toEqual(['cancel', 'compose', 'configure', 'search', 'status', 'suggestReplies', 'summarize'])
   })
 
+  it('exposes OpenPGP key management and message crypto with exact IPC channels', async () => {
+    const openPgp = api().openPgp!
+    const ref = { accountId: 'a', threadId: 't', messageId: 'm' }
+    const calls: [string, ...unknown[]][] = []
+    const call = async (promise: Promise<unknown>, channel: string, ...args: unknown[]) => { await promise; calls.push([channel, ...args]) }
+    await call(openPgp.status(), 'openpgp:status')
+    await call(openPgp.generate({ name: 'A', email: 'a@example.test', passphrase: 'p' }), 'openpgp:generate', { name: 'A', email: 'a@example.test', passphrase: 'p' })
+    await call(openPgp.importText('key', 'pass'), 'openpgp:import-text', 'key', 'pass')
+    await call(openPgp.importFile(), 'openpgp:import-file', undefined)
+    await call(openPgp.exportPublic('F'), 'openpgp:export-public', 'F')
+    await call(openPgp.exportPrivate('F', 'p'), 'openpgp:export-private', 'F', 'p')
+    await call(openPgp.delete('F'), 'openpgp:delete', 'F')
+    await call(openPgp.setVerification('F', 'verified'), 'openpgp:verification', 'F', 'verified')
+    await call(openPgp.unlock('F', 'p'), 'openpgp:unlock', 'F', 'p')
+    await call(openPgp.forgetPassphrases(), 'openpgp:forget')
+    await call(openPgp.preflight({ accountId: 'a', recipients: [], options: {} }), 'openpgp:preflight', { accountId: 'a', recipients: [], options: {} })
+    await call(openPgp.inspect(ref), 'openpgp:inspect', ref)
+    await call(openPgp.decrypt(ref, 'p'), 'openpgp:decrypt', ref, 'p')
+    await call(openPgp.saveAttachment(ref, 0), 'openpgp:save-attachment', ref, 0)
+    for (const [channel, ...args] of calls) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel, ...args)
+    expect(Object.keys(openPgp)).toHaveLength(calls.length)
+  })
+
   it('exposes provider automatic replies with exact IPC channels', async () => {
     const replies = api().mail.automaticReplies
     const settings = { enabled: true, subject: 'Away', internalMessage: 'Back Monday', externalMessage: '', externalAudience: 'all' }

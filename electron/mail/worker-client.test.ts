@@ -107,6 +107,21 @@ describe('MailWorkerClient', () => {
     }))
   })
 
+  it('answers OpenPGP protection requests and refuses them without a protector', async () => {
+    const protector = vi.fn().mockResolvedValue('protected')
+    new MailWorkerClient('mail-worker.js', vi.fn(), vi.fn(), protector)
+    const worker = latestWorker()
+    const request = { message: 'raw', from: 'a@example.test', recipients: ['b@example.test'], options: { encrypt: true } }
+    worker.emit('message', { kind: 'openpgp-request', id: 'pgp-1', ...request })
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalledWith({ kind: 'openpgp-response', id: 'pgp-1', message: 'protected' }))
+    expect(protector).toHaveBeenCalledWith(request)
+
+    new MailWorkerClient('mail-worker.js', vi.fn(), vi.fn())
+    const bare = latestWorker()
+    bare.emit('message', { kind: 'openpgp-request', id: 'pgp-2', ...request })
+    await vi.waitFor(() => expect(bare.postMessage).toHaveBeenCalledWith(expect.objectContaining({ kind: 'openpgp-response', id: 'pgp-2', error: expect.stringMatching(/not sent/) })))
+  })
+
   it.each([
     [new Error('worker crashed'), 'worker crashed'],
     ['native crash', 'native crash']

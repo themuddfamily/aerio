@@ -4493,6 +4493,50 @@ kbd {
 .csv-mapping-row > span,
 .csv-mapping-row > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .csv-mapping-row > small { color: var(--muted); }
+
+/* OpenPGP mail: composer control, message banner, and key manager. */
+.mail-openpgp-options .mail-send-options-panel { width: 320px; }
+.mail-openpgp-options.attention > summary { color: var(--danger); }
+.mail-openpgp-check { display: grid; gap: 4px; }
+.mail-openpgp-check p { margin: 0; display: grid; gap: 4px; }
+.mail-openpgp-check select { font: inherit; }
+.mail-openpgp-unlock { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+.mail-openpgp-unlock input { flex: 1; min-width: 140px; }
+
+.openpgp-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-bottom: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.openpgp-notice > svg { flex-shrink: 0; margin-top: 3px; color: var(--muted); }
+.openpgp-notice > div { flex: 1; min-width: 0; }
+.openpgp-notice.openpgp-good > svg { color: var(--success); }
+.openpgp-notice.openpgp-bad { border-color: var(--danger); background: var(--danger-soft); }
+.openpgp-notice.openpgp-bad > svg { color: var(--danger); }
+.openpgp-notice p { margin: 0; }
+.openpgp-notice small { color: var(--muted); }
+.openpgp-signatures { margin: 2px 0; padding-left: 16px; }
+.openpgp-signatures small { display: block; font-family: ui-monospace, monospace; }
+.openpgp-signatures .openpgp-bad { color: var(--danger); }
+.openpgp-decrypted { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: var(--message-font-size, 14px); color: var(--text); }
+.openpgp-attachments { display: grid; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; font-size: 12px; }
+.openpgp-attachments li { display: flex; align-items: center; gap: 6px; }
+
+.openpgp-form { display: grid; gap: 8px; margin: 8px 0; }
+.openpgp-key-list { display: grid; gap: 8px; margin: 8px 0; padding: 0; list-style: none; }
+.openpgp-key-list > li { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.openpgp-key-list > li.inactive { opacity: 0.7; }
+.openpgp-key-list > li > div:first-child { display: grid; gap: 2px; }
+.openpgp-key-list small { color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.openpgp-key-list code { font-size: 12px; letter-spacing: 0.02em; overflow-wrap: anywhere; }
+
 /* Mail import and Local Folders */
 .mail-import { gap: 10px; }
 .mail-import-local { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 8px; background: var(--surface-2); color: var(--text-soft); font-size: 10.5px; }
