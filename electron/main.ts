@@ -67,6 +67,7 @@ import type { ProviderTaskInput, TaskFieldPatch, TaskLocalMetadata, TaskResoluti
 import { parseTaskBackup } from './productivity/task-backup'
 import { MessageLocalStore } from './mail/message-local-store'
 import { registerMessageTools } from './mail/message-tools'
+import { AiAssistantStore, registerAiAssistant } from './mail/ai-assistant'
 import { MailTemplateStore, parseMailTemplateBackup, type MailTemplateBackup } from './mail/template-store'
 import { registerMailTemplates } from './mail/template-tools'
 import { registerMailIdentities, validateDraftSender } from './mail/identity-ipc'
@@ -1284,6 +1285,7 @@ function registerIpc() {
   registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
   } })
+  registerAiAssistant({ worker: requireMailWorker, store: new AiAssistantStore(join(app.getPath('userData'), 'ai-assistant.json'), join(app.getPath('userData'), 'ai-assistant-key.dat')) })
   const automaticReplies = new AutomaticRepliesService({
     account: async (accountId) => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId),
     googleToken: (accountId) => requireVault().accessToken(accountId),

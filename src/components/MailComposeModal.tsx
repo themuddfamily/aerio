@@ -1,4 +1,4 @@
-import { Bold, CalendarClock, Copy, Italic, Link, List, Paperclip, Save, Send, Trash2, Underline, X } from 'lucide-react'
+import { Bold, CalendarClock, Copy, Italic, Link, List, Paperclip, Save, Send, Sparkles, Trash2, Underline, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MailAccountSummary, MailDraftInput, MailDraftRecord, MailThreadDetail, MailRecipientSuggestion, MailSendOptions } from '../mail-types'
 import { formatFileSize } from '../lib/domain'
@@ -10,6 +10,8 @@ import { primaryIdentityId, type MailSenderIdentity, type MailSignature } from '
 import { defaultIdentityId, identityLabel, LEGACY_SIGNATURE_ID, replaceSignatureBlock, replyIdentityId, signatureBlockHtml, signatureBlockUnchanged, signatureForIdentity, QUOTE_ATTRIBUTE, type ComposerSignature } from '../lib/mail-signature'
 import MailSendOptionsControl from './MailSendOptionsControl'
 import { ReplyWatchControl, armReplyWatch, replyWatchDeadline, type ReplyWatchSetting } from './MailReplyWatches'
+import { MailAiComposeAssist } from './MailAiComposeAssist'
+import { aiFeatureAvailable, useAiAssistantStatus } from '../lib/use-ai-assistant'
 
 interface MailComposeModalProps {
   accounts: MailAccountSummary[]
@@ -18,6 +20,8 @@ interface MailComposeModalProps {
   replyAll?: boolean
   forward?: boolean
   initialTo?: string
+  /** Plain text placed above the signature of a new message, e.g. an AI reply the user chose. */
+  initialBody?: string
   onClose(): void
   onSent(result: import('../mail-types').MailDraftResult): void
   onToast(message: string): void
@@ -54,7 +58,7 @@ const localDateTimeValue = (value?: string) => {
   return new Date(date.getTime() - offset).toISOString().slice(0, 16)
 }
 
-export default function MailComposeModal({ accounts, draft, replyTo, replyAll, forward, initialTo, onClose, onSent, onToast }: MailComposeModalProps) {
+export default function MailComposeModal({ accounts, draft, replyTo, replyAll, forward, initialTo, initialBody, onClose, onSent, onToast }: MailComposeModalProps) {
   const { showContextMenu } = useContextMenu()
   const replyMessage = replyTo?.messages.at(-1)
   const forwardedText = replyTo && forward && replyMessage ? `\n\n---------- Forwarded message ----------\nFrom: ${replyMessage.fromName || replyMessage.fromEmail} <${replyMessage.fromEmail}>\nDate: ${new Date(replyMessage.date).toLocaleString()}\nSubject: ${replyMessage.subject}\n\n${replyMessage.text}` : ''
@@ -72,8 +76,12 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
   const signatureContext = replyTo ? 'reply' : 'new'
   const initialSignature = draft ? undefined : signatureForIdentity(undefined, accounts.find((account) => account.id === initialAccountId), [], signatureContext)
   const signature = draft ? '' : accounts.find((account) => account.id === initialAccountId)?.signature.trim() ?? ''
-  const initialText = draft?.text ?? `${signature ? `\n\n-- \n${signature}` : ''}${forwardedText}`
-  const initialHtml = draft?.html ?? `${initialSignature ? `<div data-aerio-signature-spacer=""><br></div>${signatureBlockHtml(initialSignature)}` : ''}${forwardedText ? `<div ${QUOTE_ATTRIBUTE}="forward">${escapeHtml(forwardedText)}</div>` : ''}`
+  const body = draft ? '' : initialBody?.trim() ?? ''
+  const initialText = draft?.text ?? `${body}${signature ? `
+
+-- 
+${signature}` : ''}${forwardedText}`
+  const initialHtml = draft?.html ?? `${body ? `<div>${escapeHtml(body)}</div>` : ''}${initialSignature ? `<div data-aerio-signature-spacer=""><br></div>${signatureBlockHtml(initialSignature)}` : ''}${forwardedText ? `<div ${QUOTE_ATTRIBUTE}="forward">${escapeHtml(forwardedText)}</div>` : ''}`
   const [accountId, setAccountId] = useState(initialAccountId)
   const [identityId, setIdentityId] = useState(draft?.fromIdentityId ?? primaryIdentityId(initialAccountId))
   const [identities, setIdentities] = useState<MailSenderIdentity[]>([])
@@ -100,6 +108,8 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
   const [conflict, setConflict] = useState(false)
   const [recipientField, setRecipientField] = useState<'to' | 'cc' | 'bcc'>()
   const [recipientSuggestions, setRecipientSuggestions] = useState<MailRecipientSuggestion[]>([])
+  const ai = useAiAssistantStatus()
+  const [aiOpen, setAiOpen] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
   const editorHtmlRef = useRef(initialHtml)
   const firstRender = useRef(true)
@@ -438,7 +448,9 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
               if (changes.subject) setSubject(changes.subject)
               setAttachments((current) => [...current, ...changes.attachments.filter((item) => !current.some((existing) => existing.path.toLowerCase() === item.path.toLowerCase()))])
             }} />
+            {aiFeatureAvailable(ai, 'compose') && <button className={`icon-button ${aiOpen ? 'active' : ''}`} title="Draft or rephrase with AI" aria-pressed={aiOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setAiOpen((open) => !open)}><Sparkles size={15} /></button>}
           </div>
+          {aiOpen && ai && <MailAiComposeAssist status={ai} editorRef={editorRef} text={text} replyTo={!forward && replyMessage ? { accountId: replyMessage.accountId, threadId: replyMessage.threadId, messageId: replyMessage.id } : undefined} onEditorChange={updateEditor} onClose={() => setAiOpen(false)} />}
           <div
             ref={bindEditor}
             className="compose-body compose-rich-body"

@@ -109,6 +109,15 @@ const api: AerioDesktopApi = {
     ipcRenderer.on('command:compose', listener)
     return () => ipcRenderer.removeListener('command:compose', listener)
   },
+  ai: {
+    status: () => ipcRenderer.invoke('ai:status'),
+    configure: (input) => ipcRenderer.invoke('ai:configure', input),
+    summarize: (requestId, ref) => ipcRenderer.invoke('ai:summarize', requestId, ref),
+    suggestReplies: (requestId, ref) => ipcRenderer.invoke('ai:replies', requestId, ref),
+    compose: (requestId, input) => ipcRenderer.invoke('ai:compose', requestId, input),
+    search: (requestId, request) => ipcRenderer.invoke('ai:search', requestId, request),
+    cancel: (requestId) => ipcRenderer.invoke('ai:cancel', requestId)
+  },
   mail: {
     messageTools: {
       updateLocal: (ref, updates) => ipcRenderer.invoke('mail:message:local', ref, updates),

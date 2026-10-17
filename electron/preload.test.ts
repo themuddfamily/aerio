@@ -207,6 +207,22 @@ describe('preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('mail:attachment:open', 'account-1', 'message-1', 'attachment-1', 'file.txt')
   })
 
+  it('exposes the optional AI assistant without any send or mutate channel', async () => {
+    const ai = api().ai
+    const ref = { accountId: 'account-1', threadId: 'thread-1', messageId: 'message-1' }
+    await ai.status()
+    await ai.configure({ enabled: true })
+    await ai.summarize('r1', ref)
+    await ai.suggestReplies('r2', ref)
+    await ai.compose('r3', { instruction: 'Shorter', draft: 'Hi' })
+    await ai.search('r4', 'invoices')
+    await ai.cancel('r4')
+    for (const [channel, ...args] of [['ai:status'], ['ai:configure', { enabled: true }], ['ai:summarize', 'r1', ref], ['ai:replies', 'r2', ref], ['ai:compose', 'r3', { instruction: 'Shorter', draft: 'Hi' }], ['ai:search', 'r4', 'invoices'], ['ai:cancel', 'r4']] as const) {
+      expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel, ...args)
+    }
+    expect(Object.keys(ai).sort()).toEqual(['cancel', 'compose', 'configure', 'search', 'status', 'suggestReplies', 'summarize'])
+  })
+
   it('exposes provider automatic replies with exact IPC channels', async () => {
     const replies = api().mail.automaticReplies
     const settings = { enabled: true, subject: 'Away', internalMessage: 'Back Monday', externalMessage: '', externalAudience: 'all' }

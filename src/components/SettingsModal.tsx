@@ -5,6 +5,7 @@ import type { MailDiagnosticHealth, MailReadReceiptPolicy } from '../mail-types'
 import { normalizeReadReceiptPolicy } from '../lib/mail-send-options'
 import type { LocalModuleSnapshot } from '../productivity-types'
 import Modal from './Modal'
+import AiAssistantSettings from './AiAssistantSettings'
 
 const readReceiptChoices: [MailReadReceiptPolicy, string][] = [['never', 'Never send'], ['ask', 'Ask me'], ['always', 'Always send']]
 
@@ -308,6 +309,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
             </label>
           </div>
         </section>
+        <AiAssistantSettings />
         <section className="settings-section">
           <div className="settings-icon"><MailCheck size={18} /></div>
           <div className="settings-content">
