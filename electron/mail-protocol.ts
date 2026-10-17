@@ -122,6 +122,10 @@ export type MailWorkerCommand =
   | { type: 'import:pause' | 'import:resume' | 'import:cancel' | 'import:dismiss'; payload: { id: string } }
   | { type: 'import:items'; payload: { jobId: string } }
   | { type: 'import:resolve'; payload: { jobId: string; keys: string[]; decision: 'import' | 'discard' } }
+  | { type: 'archive:get'; payload: { accountId: string } }
+  | { type: 'archive:save' | 'archive:preview'; payload: import('../src/mail-archive-types').MailArchivePolicyInput }
+  | { type: 'archive:run'; payload: { accountId: string } }
+  | { type: 'archive:resume' | 'archive:cancel' | 'archive:items'; payload: { jobId: string } }
   | { type: 'network'; payload: { online: boolean } }
   | { type: 'polling'; payload: { intervalMs: number; immediate?: boolean } }
   | { type: 'shutdown' }
@@ -174,6 +178,10 @@ export type MailWorkerResult =
   | import('../src/mail-types').MailImportJob[]
   | import('../src/mail-types').MailImportItem[]
   | import('../src/mail-types').MailLocalTransferResult
+  | import('../src/mail-archive-types').MailArchiveStatus
+  | import('../src/mail-archive-types').MailArchivePreview
+  | import('../src/mail-archive-types').MailArchiveJob
+  | import('../src/mail-archive-types').MailArchiveItem[]
 
 export interface WorkerRequest {
   kind: 'request'

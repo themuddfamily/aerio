@@ -64,6 +64,8 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
           context.report.heldSends += Number(db.prepare(`UPDATE gmail_drafts SET status='failed',delivery_at=NULL,error=?,updated_at=? WHERE ${OUTGOING}`).run(RESTORED_SEND_HOLD_MESSAGE, new Date().toISOString()).changes)
           context.report.heldSends += holdMailMergesForRestore(db, RESTORED_MERGE_HOLD_MESSAGE)
           context.report.accountsToReauthorize += Number(db.prepare(`UPDATE gmail_accounts SET status='needs-auth',error=? WHERE archived=0`).run(RESTORED_ACCOUNT_MESSAGE).changes)
+          // Automatic archiving waits for the user after a restore instead of removing server mail on its own.
+          db.prepare(`UPDATE mail_archive_jobs SET status='paused',error=?,updated_at=? WHERE status='running'`).run('Paused after restoring a profile backup. Choose Resume to continue archiving.', new Date().toISOString())
         })
       },
       summarize: (db) => [
@@ -77,6 +79,7 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
         { label: 'Saved searches', count: countRows(db, 'mail_saved_searches') },
         { label: 'Reply watches', count: countRows(db, 'mail_reply_watches', `status='pending'`) },
         { label: 'Pinned conversations', count: countRows(db, 'mail_pins') },
+        { label: 'Automatic archive policies', count: countRows(db, 'mail_archive_policies', 'enabled=1') },
         { label: 'Unfinished mail merges', count: countRows(db, 'mail_merge_jobs', MAIL_MERGE_ACTIVE) }
       ]
     },

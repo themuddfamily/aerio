@@ -129,6 +129,7 @@ const mocks = vi.hoisted(() => {
   // Replaced with a real SQLite-backed store in the mail merge test.
   db.mailMerge = { recoverInterrupted: vi.fn(() => []), pruneSendLog: vi.fn(), dueJobs: vi.fn(() => []) } as any
   db.openPgp = { get: vi.fn((): any => ({})) }
+  db.archive = { removalFor: vi.fn((row: any): any => row.message_ids_json ? { accountId: row.account_id, mode: row.archive_removal ?? 'trash', messages: JSON.parse(row.message_ids_json).map((id: string) => ({ id })) } : undefined) }
   db.smime = { get: vi.fn((): any => ({})) }
 
   const gmail = {
@@ -140,7 +141,7 @@ const mocks = vi.hoisted(() => {
     updateDraft: vi.fn().mockResolvedValue({ id: 'remote-draft', message: { id: 'gmail-revision-2' } }),
     draftRevision: vi.fn().mockResolvedValue('gmail-revision-1'),
     deleteDraft: vi.fn().mockResolvedValue(undefined), sendDraft: vi.fn().mockResolvedValue(undefined), sendMessage: vi.fn().mockResolvedValue(undefined),
-    trashThreads: vi.fn().mockResolvedValue(undefined), untrashThreads: vi.fn().mockResolvedValue(undefined), modifyThreads: vi.fn().mockResolvedValue(undefined),
+    trashThreads: vi.fn().mockResolvedValue(undefined), trashMessages: vi.fn().mockResolvedValue(undefined), untrashThreads: vi.fn().mockResolvedValue(undefined), modifyThreads: vi.fn().mockResolvedValue(undefined),
     listLabels: vi.fn().mockResolvedValue([]), inventory: vi.fn().mockResolvedValue({ messages: [], nextPageToken: undefined }),
     getMessages: vi.fn().mockResolvedValue([]), history: vi.fn().mockResolvedValue({ history: [], historyId: '1' }),
     listMessages: vi.fn().mockResolvedValue({ messages: [], nextPageToken: undefined }),
@@ -229,6 +230,18 @@ const localMocks = vi.hoisted(() => {
 })
 vi.mock('./mail/mail-import', () => ({ MailImportService: vi.fn(function (deps: any) { localMocks.deps.push(deps); return localMocks.service }) }))
 vi.mock('./mail/local-folders', () => ({ transferToLocalFolders: localMocks.transfer }))
+const archiveMocks = vi.hoisted(() => {
+  const job = { id: 'archive-1', accountId: 'account-1', status: 'running' }
+  return {
+    job,
+    deps: [] as any[],
+    service: {
+      status: vi.fn(() => ({ accountId: 'account-1', jobs: [job] })), savePolicy: vi.fn(() => ({ accountId: 'account-1', jobs: [] })), preview: vi.fn(() => ({ count: 0 })),
+      runNow: vi.fn(() => job), resume: vi.fn(() => job), cancel: vi.fn(() => job), items: vi.fn(() => []), tick: vi.fn(), reconcile: vi.fn(), halt: vi.fn()
+    }
+  }
+})
+vi.mock('./mail/mail-archive', () => ({ MailArchiveService: vi.fn(function (deps: any) { archiveMocks.deps.push(deps); return archiveMocks.service }) }))
 
 import './mail-worker'
 
@@ -583,6 +596,34 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.db.dueOperations.mockReturnValueOnce([{ id: 'failed', account_id: 'account-1', kind: 'unread', thread_ids_json: '["thread-1"]', label_id: null }]).mockReturnValue([])
     await request({ type: 'network', payload: { online: true } })
     await vi.waitFor(() => expect(mocks.db.restoreOperationSnapshot).toHaveBeenCalledWith('failed', 'failed', 'permanent provider failure'))
+  })
+
+  it('routes automatic archiving and removes archived messages one by one instead of whole threads', async () => {
+    expect(archiveMocks.service.tick).toHaveBeenCalled()
+    const policy = { accountId: 'account-1', enabled: true }
+    expect((await request({ type: 'archive:get', payload: { accountId: 'account-1' } })).result).toEqual({ accountId: 'account-1', jobs: [archiveMocks.job] })
+    await request({ type: 'archive:save', payload: policy })
+    await request({ type: 'archive:preview', payload: policy })
+    await request({ type: 'archive:run', payload: { accountId: 'account-1' } })
+    for (const type of ['archive:resume', 'archive:cancel', 'archive:items']) await request({ type, payload: { jobId: 'archive-1' } })
+    expect(archiveMocks.service.savePolicy).toHaveBeenCalledWith(policy)
+    expect(archiveMocks.service.preview).toHaveBeenCalledWith(policy)
+    expect(archiveMocks.service.runNow).toHaveBeenCalledWith('account-1')
+    for (const method of ['resume', 'cancel', 'items'] as const) expect(archiveMocks.service[method]).toHaveBeenCalledWith('archive-1')
+    archiveMocks.deps.at(-1).emit(archiveMocks.job)
+    expect(mocks.posted).toContainEqual({ kind: 'event', event: { type: 'archive-progress', payload: archiveMocks.job } })
+
+    mocks.gmail.trashThreads.mockClear()
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.dueOperations.mockReturnValueOnce([
+      { id: 'archive-op', account_id: 'account-1', kind: 'trash', thread_ids_json: '["thread-1"]', label_id: null, message_ids_json: '["old-1","old-2"]', archive_removal: 'trash' }
+    ]).mockReturnValue([])
+    archiveMocks.service.reconcile.mockClear()
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(mocks.db.updateOperation).toHaveBeenCalledWith('archive-op', 'succeeded'))
+    expect(mocks.gmail.trashMessages).toHaveBeenCalledWith(['old-1', 'old-2'])
+    expect(mocks.gmail.trashThreads).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(archiveMocks.service.reconcile).toHaveBeenCalled())
   })
 
   it('synchronizes, delivers, and discards queued Gmail drafts', async () => {

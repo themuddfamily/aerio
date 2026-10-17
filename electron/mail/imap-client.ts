@@ -238,6 +238,22 @@ export class ImapSmtpClient {
     })
   }
 
+  /** Permanently deletes individual messages by UID (flag \Deleted and expunge those UIDs). */
+  async deleteMessages(messages: { folder: string; uid: number }[]) {
+    await this.withConnection(async (client) => {
+      const grouped = new Map<string, number[]>()
+      for (const message of messages) grouped.set(message.folder, [...(grouped.get(message.folder) ?? []), message.uid])
+      for (const [folder, uids] of grouped) {
+        const lock = await client.getMailboxLock(folder)
+        try {
+          await client.messageDelete(uids, { uid: true })
+        } finally {
+          lock.release()
+        }
+      }
+    })
+  }
+
   async saveDraft(raw: Buffer, existingId?: string) {
     return this.withConnection(async (client) => {
       const folder = this.folderFor(await this.listFolders(client), '\\Drafts')

@@ -48,6 +48,7 @@ import { MailDraftSmimeStore } from './smime-draft-store'
 import { LocalMailStore } from './local-mail-store'
 import { MAIL_PIN_JOIN, MAIL_THREAD_CURSOR_CLAUSE, MAIL_THREAD_CURSOR_PARAMS, MAIL_THREAD_ORDER, MailPinStore, decodeMailThreadCursor, encodeMailThreadCursor, mailThreadCursorParams } from './mail-pins'
 import { isLocalOnlyMailAction } from '../../src/lib/mail-pins'
+import { MailArchiveStore } from './mail-archive-store'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -113,6 +114,7 @@ export class MailDatabase {
   readonly attachmentText: AttachmentTextStore
   readonly mailMerge: MailMergeStore
   readonly pins: MailPinStore
+  readonly archive: MailArchiveStore
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -132,6 +134,7 @@ export class MailDatabase {
     this.attachmentText = new AttachmentTextStore(this.db)
     this.mailMerge = new MailMergeStore(this.db)
     this.pins = new MailPinStore(this.db)
+    this.archive = new MailArchiveStore(this.db, this)
   }
 
   close() {

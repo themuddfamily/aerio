@@ -218,6 +218,11 @@ export class GmailClient {
     return Promise.all(threadIds.map((threadId) => this.request(`/threads/${encodeURIComponent(threadId)}/trash`, { method: 'POST', body: '{}' })))
   }
 
+  /** Message-level Trash: other messages of the conversation are left where they are. */
+  async trashMessages(messageIds: string[]) {
+    for (const messageId of messageIds) await this.request(`/messages/${encodeURIComponent(messageId)}/trash`, { method: 'POST', body: '{}' })
+  }
+
   untrashThreads(threadIds: string[]) {
     return Promise.all(threadIds.map((threadId) => this.request(`/threads/${encodeURIComponent(threadId)}/untrash`, { method: 'POST', body: '{}' })))
   }

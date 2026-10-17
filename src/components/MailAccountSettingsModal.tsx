@@ -2,6 +2,7 @@ import { RefreshCw, RotateCcw, Save, ShieldCheck } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { MailAccountSummary, ImapServerSettings } from '../mail-types'
 import MailAutomaticRepliesSection from './MailAutomaticRepliesSection'
+import MailArchivingSection from './MailArchivingSection'
 import Modal from './Modal'
 import MailSenderIdentities from './MailSenderIdentities'
 
@@ -125,6 +126,7 @@ export default function MailAccountSettingsModal({ account, onSaved, onClose, on
       </section>
       {window.aerio.mail.identities && <MailSenderIdentities account={account} onToast={onToast} />}
       <MailAutomaticRepliesSection account={account} onToast={onToast} />
+      {window.aerio.mail.archiving && <MailArchivingSection account={account} onToast={onToast} />}
       <section>
         <h3>Synchronization and alerts</h3>
         <label className="toggle-row"><span><strong>Synchronize this account</strong><small>Check for new mail in the background.</small></span><input type="checkbox" checked={syncEnabled} onChange={(event) => setSyncEnabled(event.target.checked)} /></label>

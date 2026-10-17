@@ -38,6 +38,8 @@ import { parseMessageSource } from './mail/message-source'
 import { runMailQuickAction } from './mail/quick-actions'
 import { MailImportService } from './mail/mail-import'
 import { transferToLocalFolders } from './mail/local-folders'
+import { MailArchiveService } from './mail/mail-archive'
+import { removeArchivedMessages } from './mail/mail-archive-removal'
 import { draftRecipientsAreSyncable } from '../src/lib/mail-address'
 import { createCalendarMimeBuffer, createMime, createMimeBuffer } from './mail/mime-builder'
 import { calendarPartsFromRaw } from './mail/invitation-parts'
@@ -200,6 +202,30 @@ function importService() {
     })
   }
   return importServiceInstance
+}
+
+// Automatic archiving (E31): scheduled sweeps into Local Folders. The pass
+// runs at startup (catching up on runs missed while Aerio was closed) and
+// every minute after that.
+let archiveServiceInstance: MailArchiveService | undefined
+let archiveTimer: NodeJS.Timeout | undefined
+const ARCHIVE_SCHEDULER_INTERVAL_MS = 60_000
+function archiveService() {
+  if (!database) throw new Error('Database is not initialized')
+  if (!archiveServiceInstance) {
+    archiveServiceInstance = new MailArchiveService({
+      database,
+      store: (accountId, message) => parseRawAndStore(accountId, message),
+      freeBytes: () => {
+        const stats = statfsSync(contentPath)
+        return Number(stats.bavail) * Number(stats.bsize)
+      },
+      emit: (job) => emit({ type: 'archive-progress', payload: job }),
+      changed: (accountId, threadIds) => emit({ type: 'mail-changed', payload: { accountId, ...(threadIds ? { threadIds } : {}) } }),
+      operationQueued: () => { void processOperations() }
+    })
+  }
+  return archiveServiceInstance
 }
 
 function localStoreDeps() {
@@ -778,7 +804,17 @@ async function runOperations() {
     emit({ type: 'operation', payload: { id, accountId, kind, status: 'running' } })
     try {
       const provider = database.getAccount(accountId)?.provider ?? 'gmail'
-      if (provider === 'gmail') {
+      const archiveRemoval = database.archive.removalFor(row)
+      if (archiveRemoval) {
+        // Automatic archiving removes exactly the archived messages, never whole conversations.
+        await removeArchivedMessages({
+          provider,
+          gmail: () => clientFor(accountId),
+          microsoft: () => microsoftClientFor(accountId),
+          imap: () => imapClientFor(accountId),
+          microsoftDeletedItems: database.getProviderState<MicrosoftProviderState>(accountId, { deltaLinks: {} }).specialFolders?.deleteditems
+        }, archiveRemoval)
+      } else if (provider === 'gmail') {
         const client = clientFor(accountId)
         if (kind === 'trash' || (kind === 'move' && labelId === 'TRASH')) await client.trashThreads(threadIds)
         else if (kind === 'untrash') await client.untrashThreads(threadIds)
@@ -813,6 +849,7 @@ async function runOperations() {
       }
     }
   }
+  archiveServiceInstance?.reconcile()
   await processQueuedDrafts()
 }
 
@@ -1310,6 +1347,11 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     clearInterval(pollTimer)
     clearInterval(mailMergeTimer)
     mailMergeTimer = setInterval(() => void mailMergeRunner().tick().catch(() => undefined), 1_000)
+    archiveServiceInstance?.halt()
+    archiveServiceInstance = undefined
+    clearInterval(archiveTimer)
+    archiveTimer = setInterval(() => { try { archiveService().tick() } catch { /* Retried on the next pass. */ } }, ARCHIVE_SCHEDULER_INTERVAL_MS)
+    try { archiveService().tick() } catch { /* Retried on the next pass. */ }
     operationTimer = setInterval(() => void processOperations(), 2_000)
     schedulePolling(BACKGROUND_MAIL_POLL_INTERVAL_MS)
     return
@@ -1653,6 +1695,13 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'import:dismiss') return importService().dismiss(command.payload.id)
   if (command.type === 'import:items') return importService().items(command.payload.jobId)
   if (command.type === 'import:resolve') return importService().resolve(command.payload.jobId, command.payload.keys, command.payload.decision)
+  if (command.type === 'archive:get') return archiveService().status(command.payload.accountId)
+  if (command.type === 'archive:save') return archiveService().savePolicy(command.payload)
+  if (command.type === 'archive:preview') return archiveService().preview(command.payload)
+  if (command.type === 'archive:run') return archiveService().runNow(command.payload.accountId)
+  if (command.type === 'archive:resume') return archiveService().resume(command.payload.jobId)
+  if (command.type === 'archive:cancel') return archiveService().cancel(command.payload.jobId)
+  if (command.type === 'archive:items') return archiveService().items(command.payload.jobId)
   if (command.type === 'network') {
     online = command.payload.online
     emit({ type: 'connectivity', payload: { online } })
@@ -1671,7 +1720,11 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     clearInterval(operationTimer)
     clearInterval(pollTimer)
     clearInterval(mailMergeTimer)
+    clearInterval(archiveTimer)
     mailMergeRunnerInstance = undefined
+    // An archive run stops at its next message and resumes on the next start.
+    archiveServiceInstance?.halt()
+    archiveServiceInstance = undefined
     // A running import stops at its next message; it resumes from its saved
     // cursor after the user chooses Resume on the next start.
     importServiceInstance?.halt()

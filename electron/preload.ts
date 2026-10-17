@@ -387,6 +387,15 @@ const api: AerioDesktopApi = {
       resolve: (jobId, keys, decision) => ipcRenderer.invoke('mail:import:resolve', jobId, keys, decision),
       transfer: (input) => ipcRenderer.invoke('mail:local:transfer', input)
     },
+    archiving: {
+      get: (accountId) => ipcRenderer.invoke('mail:archive:get', accountId),
+      save: (input) => ipcRenderer.invoke('mail:archive:save', input),
+      preview: (input) => ipcRenderer.invoke('mail:archive:preview', input),
+      runNow: (accountId) => ipcRenderer.invoke('mail:archive:run', accountId),
+      resume: (jobId) => ipcRenderer.invoke('mail:archive:resume', jobId),
+      cancel: (jobId) => ipcRenderer.invoke('mail:archive:cancel', jobId),
+      items: (jobId) => ipcRenderer.invoke('mail:archive:items', jobId)
+    },
     sync: {
       start: (accountId) => ipcRenderer.invoke('mail:sync:start', accountId),
       pause: (accountId) => ipcRenderer.invoke('mail:sync:pause', accountId),

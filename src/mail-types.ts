@@ -850,6 +850,8 @@ export interface MailDesktopApi {
   }
   serverRules?: import('./mail-server-rule-types').MailServerRulesApi
   merge?: import('./mail-merge-types').MailMergeApi
+  /** Automatic archiving into Local Folders (E31); optional so test doubles stay valid. */
+  archiving?: import('./mail-archive-types').MailArchivingApi
   savedSearches: {
     list(): Promise<MailSavedSearch[]>
     save(input: MailSavedSearchInput): Promise<MailSavedSearch>
@@ -884,6 +886,7 @@ export type MailWorkerEvent =
   | { type: 'new-mail'; payload: { accountId: string; count: number; threadId?: string; subject?: string; sender?: string } }
   | { type: 'draft-delivery'; payload: MailDraftResult }
   | { type: 'mail-merge'; payload: import('./mail-merge-types').MailMergeJobSummary }
+  | { type: 'archive-progress'; payload: import('./mail-archive-types').MailArchiveJob }
   | { type: 'reply-watch'; payload: { watch: MailReplyWatch; reason: 'replied' | 'expired' } }
   | { type: 'import-progress'; payload: MailImportJob }
 
