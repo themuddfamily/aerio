@@ -63,6 +63,10 @@ export type MailWorkerCommand =
   | { type: 'drafts:get'; payload: { id: string } }
   | { type: 'drafts:delete'; payload: { id: string } }
   | { type: 'drafts:stage-message-attachments'; payload: { draftId: string; accountId: string; messageId: string } }
+  | { type: 'folders:create'; payload: import('../src/mail-types').CreateMailFolderInput }
+  | { type: 'folders:update'; payload: import('../src/mail-types').UpdateMailFolderInput }
+  | { type: 'folders:delete'; payload: import('../src/mail-types').DeleteMailFolderInput }
+  | { type: 'folders:delete-preview'; payload: { accountId: string; labelId: string } }
   | { type: 'rules:list'; payload: { accountIds?: string[] } }
   | { type: 'rules:save'; payload: MailRuleInput }
   | { type: 'rules:delete'; payload: { id: string } }
@@ -111,6 +115,8 @@ export type MailWorkerResult =
   | MailDraftRecord[]
   | MailDraftAttachmentFile[]
   | import('../src/mail-types').MailReceiptInfo
+  | import('../src/mail-types').MailFolderMutationResult
+  | import('../src/mail-types').MailFolderDeletePreview
 
 export interface WorkerRequest {
   kind: 'request'

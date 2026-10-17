@@ -4315,3 +4315,12 @@ kbd {
 .template-editor footer { justify-content: flex-end; margin: 0 -12px; }
 .reply-watch-control { display: flex; align-items: center; gap: 6px; }
 .reply-watch-control > .icon-button.active { color: var(--accent); background: var(--accent-soft); }
+/* Folder and label management */
+.mail-folder-list > article { min-height: 44px; }
+.mail-folder-delete { display: grid; gap: 12px; padding: 16px 20px; color: var(--text-soft); font-size: 11px; }
+.mail-folder-delete p { margin: 0; line-height: 1.5; }
+.mail-folder-error { color: var(--danger); font-size: 9.5px; }
+.mail-folder-colors { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; border: 0; }
+.mail-folder-colors legend { margin-bottom: 6px; color: var(--muted); font-size: 10px; }
+.mail-folder-colors button { width: 22px; height: 22px; border: 2px solid transparent; border-radius: 50%; }
+.mail-folder-colors button[aria-pressed='true'] { border-color: var(--text); box-shadow: 0 0 0 2px var(--surface) inset; }

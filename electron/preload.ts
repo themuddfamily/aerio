@@ -160,6 +160,12 @@ const api: AerioDesktopApi = {
       create: (input) => ipcRenderer.invoke('mail:reply-watches:create', input),
       cancel: (id) => ipcRenderer.invoke('mail:reply-watches:cancel', id)
     },
+    folders: {
+      create: (input) => ipcRenderer.invoke('mail:folders:create', input),
+      update: (input) => ipcRenderer.invoke('mail:folders:update', input),
+      delete: (input) => ipcRenderer.invoke('mail:folders:delete', input),
+      deletePreview: (accountId, labelId) => ipcRenderer.invoke('mail:folders:delete-preview', accountId, labelId)
+    },
     rules: {
       list: (accountIds) => ipcRenderer.invoke('mail:rules:list', accountIds),
       save: (input) => ipcRenderer.invoke('mail:rules:save', input),

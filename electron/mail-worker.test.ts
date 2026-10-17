@@ -109,6 +109,7 @@ const mocks = vi.hoisted(() => {
     activateForDraft: vi.fn(),
     process: vi.fn((): any[] => [])
   }
+  method('recoverInterruptedFolderOperations', () => [])
 
   const gmail = {
     copyToLabel: vi.fn().mockResolvedValue(undefined),

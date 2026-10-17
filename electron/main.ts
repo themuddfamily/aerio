@@ -44,12 +44,14 @@ import type {
   PendingOperation,
   SyncProgress
 } from '../src/mail-types'
+import type { CreateMailFolderInput, DeleteMailFolderInput, MailFolderDeletePreview, MailFolderMutationResult, UpdateMailFolderInput } from '../src/mail-types'
 import { OAuthVault } from './mail/oauth-vault'
 import { normalizeReadReceiptPolicy, normalizeSendOptions } from '../src/lib/mail-send-options'
 import { DEFAULT_GOOGLE_CLIENT_ID, DEFAULT_MICROSOFT_CLIENT_ID, parseOAuthEnvironment } from './mail/oauth-config'
 import { ImapSmtpClient } from './mail/imap-client'
 import { PROVIDER_PRESETS, validateImapAccount } from './mail/provider-presets'
 import { MailWorkerClient } from './mail/worker-client'
+import { validateCreateFolder, validateDeleteFolder, validateFolderReference, validateUpdateFolder } from './mail/folder-validation'
 import { DiagnosticLogger, type DiagnosticRecord } from './diagnostics'
 import { UpdateManager } from './update-manager'
 import { ProductivityStore } from './productivity/store'
@@ -1695,6 +1697,14 @@ function registerIpc() {
     for (const file of files) approvedAttachmentPaths.add(file.path)
     return files
   })
+  ipcMain.handle('mail:folders:create', (_event, input: CreateMailFolderInput) =>
+    requireMailWorker().request<MailFolderMutationResult>({ type: 'folders:create', payload: validateCreateFolder(input) }))
+  ipcMain.handle('mail:folders:update', (_event, input: UpdateMailFolderInput) =>
+    requireMailWorker().request<MailFolderMutationResult>({ type: 'folders:update', payload: validateUpdateFolder(input) }))
+  ipcMain.handle('mail:folders:delete', (_event, input: DeleteMailFolderInput) =>
+    requireMailWorker().request<MailFolderMutationResult>({ type: 'folders:delete', payload: validateDeleteFolder(input) }))
+  ipcMain.handle('mail:folders:delete-preview', (_event, accountId: string, labelId: string) =>
+    requireMailWorker().request<MailFolderDeletePreview>({ type: 'folders:delete-preview', payload: validateFolderReference(accountId, labelId) }))
   ipcMain.handle('mail:rules:list', (_event, accountIds?: string[]) =>
     requireMailWorker().request<MailRule[]>({ type: 'rules:list', payload: { accountIds } }))
   ipcMain.handle('mail:rules:save', (_event, input: MailRuleInput) =>

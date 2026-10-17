@@ -182,6 +182,28 @@ async function scenario(security) {
     const reset = await worker.request({ type: 'mail:list', payload: { folder: 'inbox', accountIds: ['integration'] } })
     assert.equal(reset.total, 1)
     assert.equal(reset.items[0].subject, 'Reset UIDVALIDITY message')
+    // Folder management through the worker: create, rename, and a guarded
+    // delete that empties into Trash instead of expunging the message.
+    const created = await worker.request({ type: 'folders:create', payload: { accountId: 'integration', name: 'Projects' } })
+    assert.equal(created.label.id, 'folder:Projects')
+    assert.ok(imap.getMailbox('Projects'))
+    imap.appendMessage('Projects', [], undefined, raw('filed', 'Filed project message'))
+    await sync()
+    assert.equal((await worker.request({ type: 'mail:list', payload: { labelId: 'folder:Projects', folder: 'all', accountIds: ['integration'] } })).total, 1)
+    const renamed = await worker.request({ type: 'folders:update', payload: { accountId: 'integration', labelId: 'folder:Projects', name: 'Clients' } })
+    assert.deepEqual(renamed.renamed, { 'folder:Projects': 'folder:Clients' })
+    assert.ok(imap.getMailbox('Clients'))
+    assert.equal(imap.getMailbox('Clients').messages.length, 1)
+    await assert.rejects(worker.request({ type: 'folders:update', payload: { accountId: 'integration', labelId: 'folder:Discarded', name: 'Bin' } }), /system folder/)
+    await assert.rejects(worker.request({ type: 'folders:delete', payload: { accountId: 'integration', labelId: 'folder:Clients' } }), /contains 1 message on the server/)
+    assert.equal(imap.getMailbox('Clients').messages.length, 1)
+    const trashBefore = imap.getMailbox('Discarded').messages.length
+    const deleted = await worker.request({ type: 'folders:delete', payload: { accountId: 'integration', labelId: 'folder:Clients', confirmNonEmpty: true } })
+    assert.equal(deleted.deletedId, 'folder:Clients')
+    assert.equal(imap.getMailbox('Clients'), undefined)
+    assert.equal(imap.getMailbox('Discarded').messages.length, trashBefore + 1)
+    await sync()
+    assert.equal((await worker.request({ type: 'mail:list', payload: { folder: 'trash', accountIds: ['integration'] } })).items.some((item) => item.subject === 'Filed project message'), true)
     await worker.request({ type: 'network', payload: { online: false } })
     await worker.request({ type: 'drafts:schedule', payload: { input: { id: 'restart-send', accountId: 'integration', to: ['reader@example.test'], cc: [], bcc: [], subject: 'Worker recovery send', text: 'Recovered offline delivery', attachmentPaths: [] }, deliveryAt: new Date(Date.now() - 1_000).toISOString() } })
     await worker.close(); worker = undefined
@@ -218,7 +240,7 @@ async function scenario(security) {
     assert.ok(authentications.some((item) => item.protocol === 'imap'))
     assert.ok(authentications.some((item) => item.protocol === 'smtp'))
     assert.ok(authentications.every((item) => item.secure), 'All authentication must occur after encryption')
-    console.log(`✓ ${security}: encrypted authentication, special folders, raw fetch/flags/moves/drafts, SMTP rejection/retry, real-worker sync/UIDVALIDITY and offline restart delivery`)
+    console.log(`✓ ${security}: encrypted authentication, special folders, raw fetch/flags/moves/drafts, SMTP rejection/retry, real-worker sync/UIDVALIDITY, folder create/rename/guarded delete and offline restart delivery`)
   } finally {
     if (worker) await worker.close().catch(() => undefined)
     for (const socket of sockets) socket.destroy()
