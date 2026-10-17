@@ -47,6 +47,7 @@ import { AttachmentContentIndexer } from './mail/attachment-text-indexer'
 import { AttachmentExtractRunner } from './mail/attachment-extract-runner'
 import { supportedSendOptions } from '../src/lib/mail-send-options'
 import { isLocalOnlyMailAction } from '../src/lib/mail-pins'
+import { handleMailFolderPreferenceCommand, type MailFolderPreferenceCommand } from './mail/folder-preferences'
 import type { MailMergeJobInput } from '../src/mail-merge-types'
 import { clampMailMergeLimits, MAIL_MERGE_MAX_RECIPIENTS, normalizeMergeRecipients } from '../src/lib/mail-merge'
 import { MailMergeNotSubmittedError, MailMergeRunner } from './mail/mail-merge-runner'
@@ -1513,11 +1514,14 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   }
   if (command.type === 'drafts:stage-message-attachments') return stageMessageAttachments(command.payload.draftId, command.payload.accountId, command.payload.messageId)
   if (command.type === 'folders:delete-preview') return folderManager().preview(command.payload.accountId, command.payload.labelId)
+  if (command.type.startsWith('folder-preferences:')) return handleMailFolderPreferenceCommand(database, command as MailFolderPreferenceCommand)
   if (command.type === 'folders:create' || command.type === 'folders:update' || command.type === 'folders:delete') {
     const accountId = command.payload.accountId
     const result = command.type === 'folders:create' ? await folderManager().create(command.payload)
       : command.type === 'folders:update' ? await folderManager().update(command.payload)
         : await folderManager().delete(command.payload)
+    // Favorites and appearance of a folder deleted through Aerio are dropped with it.
+    if (result.deletedId) database.folderPreferences.forget(accountId, [result.deletedId])
     emit({ type: 'mail-changed', payload: { accountId } })
     // Renamed IMAP folders and deleted folders' messages are re-indexed.
     const provider = database.getAccount(accountId)?.provider

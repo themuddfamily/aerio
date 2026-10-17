@@ -110,6 +110,7 @@ beforeEach(() => {
   } })
   window.confirm = vi.fn(() => true)
   api.mail.accounts.list.mockImplementation(async () => accountsResult)
+  api.mail.mail.labels.mockResolvedValue([{ accountId: 'account', id: 'project', name: 'Project', type: 'user' }])
   api.mail.accounts.disconnect.mockResolvedValue(undefined)
   api.mail.sync.progress.mockResolvedValue([])
   api.mail.sync.start.mockResolvedValue(undefined)
@@ -871,5 +872,62 @@ describe('ConnectedMailView', () => {
     api.mail.mail.action.mockClear()
     rerender(view({ id: 4, action: 'pin' }))
     await waitFor(() => expect(api.mail.mail.action).toHaveBeenCalledWith({ accountId: 'account', threadIds: ['thread-1'], action: 'pin' }))
+  })
+
+  it('adds folders to Favorites from the folder context menu and opens, reorders, and removes them without deleting folders', async () => {
+    const user = userEvent.setup()
+    accountsResult = [account(), account({ id: 'imap', provider: 'imap', email: 'me@imap.test' })]
+    api.mail.mail.labels.mockResolvedValue([
+      { accountId: 'account', id: 'project', name: 'Project', type: 'user' },
+      ...Array.from({ length: 13 }, (_, index) => ({ accountId: 'imap', id: `folder:Project/${index + 1}`, name: `Project/${index + 1}`, type: 'user' as const, parentId: 'folder:Project' })),
+      { accountId: 'imap', id: 'folder:Project', name: 'Project', type: 'user' }
+    ] as any)
+    let preferences: any = { favorites: [], appearance: [] }
+    const folderPreferences = {
+      get: vi.fn(async () => preferences),
+      addFavorite: vi.fn(async (accountId: string, labelId: string) => {
+        preferences = { ...preferences, favorites: [...preferences.favorites, { accountId, labelId, position: preferences.favorites.length, lastKnownName: labelId, addedAt: '2026-10-01T00:00:00Z' }] }
+        return preferences
+      }),
+      removeFavorite: vi.fn(async (accountId: string, labelId: string) => {
+        preferences = { ...preferences, favorites: preferences.favorites.filter((item: any) => item.accountId !== accountId || item.labelId !== labelId) }
+        return preferences
+      }),
+      reorderFavorites: vi.fn(async (order: any[]) => {
+        preferences = { ...preferences, favorites: order.map((item, position) => ({ ...preferences.favorites.find((other: any) => other.accountId === item.accountId && other.labelId === item.labelId), position })) }
+        return preferences
+      }),
+      setFavoriteAlias: vi.fn(async () => preferences),
+      setAppearance: vi.fn(async () => preferences)
+    }
+    Object.defineProperty(window, 'aerio', { configurable: true, value: { ...api, mail: { ...api.mail, folderPreferences } } })
+    renderMail(); await screen.findByText('Launch & plans')
+    const sidebar = within(document.querySelector('.context-sidebar')!)
+    // The full tree, not just the first twelve labels, with a filter for large trees.
+    expect(await sidebar.findByRole('button', { name: '13' })).toBeInTheDocument()
+    expect(sidebar.getByLabelText('Filter folders')).toBeInTheDocument()
+
+    const choose = async (target: Element, label: string) => {
+      fireEvent.contextMenu(target)
+      await user.click(within(screen.getByRole('menu')).getByText(label))
+    }
+    const gmailTree = within(sidebar.getByRole('tree', { name: 'Folders in me@example.test' }))
+    const imapTree = within(sidebar.getByRole('tree', { name: 'Folders in me@imap.test' }))
+    await choose(gmailTree.getByRole('button', { name: 'Project' }), 'Add to Favorites')
+    await choose(imapTree.getByRole('button', { name: 'Project' }), 'Add to Favorites')
+    expect(folderPreferences.addFavorite).toHaveBeenCalledWith('account', 'project')
+    expect(folderPreferences.addFavorite).toHaveBeenCalledWith('imap', 'folder:Project')
+    const favorites = within(await sidebar.findByRole('group', { name: 'Favorites' }))
+    await waitFor(() => expect(favorites.getAllByRole('button').map((button) => button.textContent)).toEqual(['Project me@example.test', 'Project me@imap.test']))
+
+    await user.click(favorites.getAllByRole('button')[1])
+    await waitFor(() => expect(api.mail.mail.list).toHaveBeenCalledWith(expect.objectContaining({ accountIds: ['imap'], labelId: 'folder:Project' })))
+    await choose(favorites.getAllByRole('button')[1], 'Move up')
+    expect(folderPreferences.reorderFavorites).toHaveBeenCalledWith([{ accountId: 'imap', labelId: 'folder:Project' }, { accountId: 'account', labelId: 'project' }])
+    await waitFor(() => expect(favorites.getAllByRole('button')[0]).toHaveTextContent('me@imap.test'))
+    await choose(favorites.getAllByRole('button')[0], 'Remove from Favorites')
+    expect(folderPreferences.removeFavorite).toHaveBeenCalledWith('imap', 'folder:Project')
+    await waitFor(() => expect(favorites.getAllByRole('button')).toHaveLength(1))
+    expect(imapTree.getByRole('button', { name: 'Project' })).toBeInTheDocument()
   })
 })

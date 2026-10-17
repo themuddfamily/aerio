@@ -344,6 +344,14 @@ const api: AerioDesktopApi = {
       delete: (input) => ipcRenderer.invoke('mail:folders:delete', input),
       deletePreview: (accountId, labelId) => ipcRenderer.invoke('mail:folders:delete-preview', accountId, labelId)
     },
+    folderPreferences: {
+      get: () => ipcRenderer.invoke('mail:folder-preferences:get'),
+      addFavorite: (accountId, labelId) => ipcRenderer.invoke('mail:folder-preferences:add-favorite', accountId, labelId),
+      removeFavorite: (accountId, labelId) => ipcRenderer.invoke('mail:folder-preferences:remove-favorite', accountId, labelId),
+      reorderFavorites: (order) => ipcRenderer.invoke('mail:folder-preferences:reorder', order),
+      setFavoriteAlias: (accountId, labelId, alias) => ipcRenderer.invoke('mail:folder-preferences:set-alias', accountId, labelId, alias),
+      setAppearance: (input) => ipcRenderer.invoke('mail:folder-preferences:set-appearance', input)
+    },
     rules: {
       list: (accountIds) => ipcRenderer.invoke('mail:rules:list', accountIds),
       save: (input) => ipcRenderer.invoke('mail:rules:save', input),

@@ -849,6 +849,7 @@ export interface MailDesktopApi {
     run(id: string): Promise<MailRuleRunResult>
   }
   serverRules?: import('./mail-server-rule-types').MailServerRulesApi
+  folderPreferences?: import('./mail-folder-preference-types').MailFolderPreferencesApi
   merge?: import('./mail-merge-types').MailMergeApi
   savedSearches: {
     list(): Promise<MailSavedSearch[]>

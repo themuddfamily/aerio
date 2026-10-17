@@ -12,6 +12,8 @@ import MailOrganizeModal from '../components/MailOrganizeModal'
 import MailMessageSourceModal from '../components/MailMessageSourceModal'
 import MailRulesModal from '../components/MailRulesModal'
 import MailFolderManagerModal from '../components/MailFolderManagerModal'
+import { MailFavoritesSidebar, MailFolderDisplayModal, MailFolderTreeSidebar, favoriteMenuItems, folderPreferenceMenuItems, useMailFolderPreferences } from '../components/MailSidebarFolders'
+import { folderKey } from '../lib/mail-folder-preferences'
 import { LocalFoldersSidebar, MailImportModal, MailLocalTransferModal, localFoldersAccountOf } from '../components/MailLocalFolders'
 import { isLocalFoldersAccount } from '../lib/local-folders'
 import { HardDrive, Import as ImportIcon } from 'lucide-react'
@@ -100,6 +102,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [localDrafts, setLocalDrafts] = useState<MailDraftRecord[]>([])
   const [folder, setFolder] = useState<NonNullable<MailQuery['folder']>>('inbox')
   const [labelId, setLabelId] = useState<string>()
+  const folderPrefs = useMailFolderPreferences(onToast)
+  const [folderDisplay, setFolderDisplay] = useState<{ label: MailLabel; focusAlias?: boolean }>()
   const [accountId, setAccountId] = useState<string>('all')
   const [search, setSearch] = useState('')
   const [searchFilters, setSearchFilters] = useState<MailSearchFilters>({})
@@ -972,7 +976,6 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
 
   const activeProgress = sync.filter((item) => shouldShowDetailedSync(item, accounts.find((account) => account.id === item.accountId)))
   const mailboxRefreshing = isMailboxRefreshing(accounts, sync, accountId)
-  const visibleLabels = labels.filter((label) => label.type === 'user' && label.accountId !== localAccount?.id && (accountId === 'all' || label.accountId === accountId)).slice(0, 12)
   const syncUnavailable = accountId === 'all'
     ? !accounts.some((account) => !account.archived)
     : Boolean(accounts.find((account) => account.id === accountId)?.archived)
@@ -998,6 +1001,9 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     <div ref={mailPanes.containerRef} className="workspace mail-workspace real-mail" style={mailPanes.style}>
       <aside className="context-sidebar">
         <button className="compose-button" disabled={!sendableAccounts.length} onClick={() => setCompose({})}><Plus size={18} /> New message</button>
+        <MailFavoritesSidebar favorites={folderPrefs.preferences.favorites} accounts={accounts} labels={labels} appearance={folderPrefs.appearance} selectedAccountId={accountId} selectedLabelId={labelId} onOpen={toggleLabel} onReorder={(order) => void folderPrefs.reorder(order)} onRemove={(favorite) => void folderPrefs.removeFavorite(favorite.accountId, favorite.labelId)} onContextMenu={(event, row, index, rows) => showContextMenu(event, favoriteMenuItems(row, index, rows, {
+          open: toggleLabel, reorder: (order) => void folderPrefs.reorder(order), rename: () => row.label && setFolderDisplay({ label: row.label, focusAlias: true }), remove: () => void folderPrefs.removeFavorite(row.favorite.accountId, row.favorite.labelId)
+        }), row.name)} />
         <div className="sidebar-group">
           <span className="sidebar-label">Mailboxes</span>
           {folderButton('inbox', <Inbox size={17} />)}
@@ -1018,14 +1024,16 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           {accounts.map((account) => { const unread = accountUnreadCounts[account.id] ?? 0; return <button aria-label={accountLabel(account.email, unread)} className={`sidebar-item mail-account-row ${accountId === account.id ? 'active' : ''}`} key={account.id} onClick={() => selectAccount(account.id)} onContextMenu={(event) => showAccountMenu(event, account)} title={`${account.email} · ${account.provider}${account.archived ? ' · offline archive' : ''}`}><span className="account-dot" style={{ background: account.color }} /><span>{account.email}{account.archived ? ' · archive' : ''}<small className="provider-name">{account.provider}</small></span>{accountBadge(unread)}<i className={`account-state ${account.status}`} /></button> })}
           <button className="sidebar-item" onClick={addAccount}><UserPlus size={16} /><span>Add mail account</span></button>
         </div>
-          {visibleLabels.length > 0 && <div className="sidebar-group"><span className="sidebar-label">Labels</span>{visibleLabels.map((label) => { const selected = labelId === label.id && accountId === label.accountId; return <button className={`sidebar-item ${selected ? 'active' : ''}`} aria-pressed={selected} key={`${label.accountId}:${label.id}`} onClick={() => toggleLabel(label)} onContextMenu={(event) => showContextMenu(event, [
+          <MailFolderTreeSidebar accounts={accounts.filter((account) => account.id !== localAccount?.id)} labels={labels} accountFilter={accountId} appearance={folderPrefs.appearance} favorites={folderPrefs.favorites} selectedAccountId={accountId} selectedLabelId={labelId} showHidden={folderPrefs.showHidden} onToggleHidden={folderPrefs.toggleShowHidden} onOpen={toggleLabel} onContextMenu={(event, label) => { const selected = labelId === label.id && accountId === label.accountId; showContextMenu(event, [
             { label: selected ? `Clear ${label.name} filter` : `Open ${label.name}`, icon: Tag, action: () => toggleLabel(label) },
             { label: 'New message', icon: Plus, separatorBefore: true, disabled: !sendableAccounts.some((account) => account.id === label.accountId), action: () => setCompose({}) },
             { label: 'Check account for mail', icon: RefreshCw, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => startSync(label.accountId) },
+            ...folderPreferenceMenuItems(folderPrefs, label, () => setFolderDisplay({ label })),
             { label: 'Manage folders and labels…', icon: FolderInput, separatorBefore: true, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => setFoldersOpen(label.accountId) }
-          ], label.name)}><Tag size={15} /><span>{label.name}</span></button> })}</div>}
-        {localAccount && <LocalFoldersSidebar account={localAccount} labels={labels} selectedAccountId={accountId} selectedLabelId={labelId} onOpen={toggleLabel} onManage={() => setFoldersOpen(localAccount.id)} onImport={() => setImportOpen(true)} onContextMenu={(event, label) => showContextMenu(event, [
+          ], label.name) }} />
+        {localAccount && <LocalFoldersSidebar account={localAccount} labels={labels} selectedAccountId={accountId} selectedLabelId={labelId} onOpen={toggleLabel} onManage={() => setFoldersOpen(localAccount.id)} onImport={() => setImportOpen(true)} appearance={folderPrefs.appearance} showHidden={folderPrefs.showHidden} onToggleHidden={folderPrefs.toggleShowHidden} onContextMenu={(event, label) => showContextMenu(event, [
           { label: `Open ${label.name}`, icon: FolderInput, action: () => toggleLabel(label) },
+          ...folderPreferenceMenuItems(folderPrefs, label, () => setFolderDisplay({ label })),
           { label: 'Manage Local Folders…', icon: Settings2, separatorBefore: true, action: () => setFoldersOpen(localAccount.id) },
           { label: 'Import mail…', icon: ImportIcon, action: () => setImportOpen(true) }
         ], label.name)} />}
@@ -1201,7 +1209,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       {attachmentsOpen && <MailAttachmentsModal accounts={accounts} onToast={onToast} onClose={() => setAttachmentsOpen(false)} />}
       {quickActionsOpen && <MailQuickActionsModal accounts={accounts} labels={labels} quickActions={quickActions.quickActions} onSave={async (input) => { const saved = await quickActions.save(input); onToast(`Saved “${saved.name}”`) }} onDelete={quickActions.remove} onClose={() => setQuickActionsOpen(false)} />}
       {rulesOpen && <MailRulesModal accounts={accounts} labels={labels} onToast={onToast} onClose={() => setRulesOpen(false)} />}
-      {foldersOpen && <MailFolderManagerModal accounts={accounts} labels={labels} initialAccountId={foldersOpen === true ? undefined : foldersOpen} onToast={onToast} onClose={() => setFoldersOpen(undefined)} onChanged={(changedAccount, result) => {
+      {folderDisplay && <MailFolderDisplayModal label={folderDisplay.label} account={accounts.find((account) => account.id === folderDisplay.label.accountId)} labels={labels} appearance={folderPrefs.appearance.get(folderKey(folderDisplay.label.accountId, folderDisplay.label.id))} favorite={folderPrefs.favorites.get(folderKey(folderDisplay.label.accountId, folderDisplay.label.id))} focusAlias={folderDisplay.focusAlias} onClose={() => setFolderDisplay(undefined)} onSave={async ({ alias, appearance }) => (alias === undefined || await folderPrefs.setAlias(appearance.accountId, appearance.labelId, alias)) && await folderPrefs.setAppearance(appearance)} />}
+      {foldersOpen && <MailFolderManagerModal accounts={accounts} labels={labels} initialAccountId={foldersOpen === true ? undefined : foldersOpen} onToast={onToast} isFavorite={folderPrefs.available ? folderPrefs.isFavorite : undefined} onToggleFavorite={(label) => void (folderPrefs.isFavorite(label.accountId, label.id) ? folderPrefs.removeFavorite(label.accountId, label.id) : folderPrefs.addFavorite(label.accountId, label.id))} onClose={() => setFoldersOpen(undefined)} onChanged={(changedAccount, result) => {
         setLabels((items) => [...items.filter((label) => label.accountId !== changedAccount), ...result.labels])
         // Keep the open folder selected across path-based renames; leave it when deleted.
         if (accountId === changedAccount && labelId) {

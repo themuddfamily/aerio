@@ -48,6 +48,7 @@ import { MailDraftSmimeStore } from './smime-draft-store'
 import { LocalMailStore } from './local-mail-store'
 import { MAIL_PIN_JOIN, MAIL_THREAD_CURSOR_CLAUSE, MAIL_THREAD_CURSOR_PARAMS, MAIL_THREAD_ORDER, MailPinStore, decodeMailThreadCursor, encodeMailThreadCursor, mailThreadCursorParams } from './mail-pins'
 import { isLocalOnlyMailAction } from '../../src/lib/mail-pins'
+import { MailFolderPreferenceStore } from './folder-preferences'
 
 export interface ParsedMailMessage {
   accountId: string
@@ -113,6 +114,7 @@ export class MailDatabase {
   readonly attachmentText: AttachmentTextStore
   readonly mailMerge: MailMergeStore
   readonly pins: MailPinStore
+  readonly folderPreferences: MailFolderPreferenceStore
 
   constructor(databasePath: string, contentPath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
@@ -132,6 +134,7 @@ export class MailDatabase {
     this.attachmentText = new AttachmentTextStore(this.db)
     this.mailMerge = new MailMergeStore(this.db)
     this.pins = new MailPinStore(this.db)
+    this.folderPreferences = new MailFolderPreferenceStore(this.db)
   }
 
   close() {
@@ -546,9 +549,12 @@ export class MailDatabase {
 
   replaceLabels(accountId: string, labels: MailLabel[]) {
     this.transaction(() => {
+      const before = this.listLabels([accountId])
       this.stmt('DELETE FROM gmail_labels WHERE account_id=?').run(accountId)
       const insert = this.stmt('INSERT INTO gmail_labels(account_id,id,name,type,color,parent_id) VALUES(?,?,?,?,?,?)')
       for (const label of labels) insert.run(accountId, label.id, label.name, label.type, label.color ?? null, label.parentId ?? null)
+      // Favorites and folder appearance follow folders renamed in other clients.
+      this.folderPreferences.reconcile(accountId, this.getAccount(accountId)?.provider, before, labels)
     })
   }
 
@@ -1740,6 +1746,7 @@ export class MailDatabase {
           .run(JSON.stringify(actions.map((action) => action.labelId && map.has(action.labelId) ? { ...action, labelId: map.get(action.labelId) } : action)), nowIso(), String(rule.id))
       }
       for (const threadId of threads) this.rebuildThread(accountId, threadId)
+      this.folderPreferences.rename(accountId, Object.fromEntries(map))
     })
   }
 

@@ -79,6 +79,7 @@ export type MailWorkerCommand =
   | { type: 'folders:update'; payload: import('../src/mail-types').UpdateMailFolderInput }
   | { type: 'folders:delete'; payload: import('../src/mail-types').DeleteMailFolderInput }
   | { type: 'folders:delete-preview'; payload: { accountId: string; labelId: string } }
+  | import('./mail/folder-preferences').MailFolderPreferenceCommand
   | { type: 'rules:list'; payload: { accountIds?: string[] } }
   | { type: 'rules:save'; payload: MailRuleInput }
   | { type: 'rules:delete'; payload: { id: string } }
@@ -128,6 +129,7 @@ export type MailWorkerCommand =
 
 export type MailWorkerResult =
   | void
+  | import('../src/mail-folder-preference-types').MailFolderPreferences
   | boolean
   | MailAccountSummary
   | MailAccountSummary[]
