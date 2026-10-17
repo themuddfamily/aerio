@@ -8,6 +8,8 @@ import { ModalShell } from './Modal'
 import MailTemplatePicker from './MailTemplatePicker'
 import MailSendOptionsControl from './MailSendOptionsControl'
 import { ReplyWatchControl, armReplyWatch, replyWatchDeadline, type ReplyWatchSetting } from './MailReplyWatches'
+import { describeExpansion, expandRecipientLists, recipientListLabel, recipientListPreview, suggestRecipientLists, type RecipientList } from '../lib/distribution-lists'
+import { useRecipientLists } from './use-recipient-lists'
 
 interface MailComposeModalProps {
   accounts: MailAccountSummary[]
@@ -88,6 +90,18 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
   const [conflict, setConflict] = useState(false)
   const [recipientField, setRecipientField] = useState<'to' | 'cc' | 'bcc'>()
   const [recipientSuggestions, setRecipientSuggestions] = useState<MailRecipientSuggestion[]>([])
+  // Distribution lists typed or picked in To/Cc/Bcc expand to their member addresses.
+  const recipientLists = useRecipientLists()
+  const fieldValue = (field: 'to' | 'cc' | 'bcc') => field === 'to' ? to : field === 'cc' ? cc : bcc
+  const expandLists = (field: 'to' | 'cc' | 'bcc', pick?: RecipientList, suffix = '') => {
+    const expansion = expandRecipientLists(fieldValue(field), recipientLists, pick)
+    if (!expansion.expanded.length) return false
+    ;(field === 'to' ? setTo : field === 'cc' ? setCc : setBcc)(expansion.value)
+    setRecipientSuggestions([])
+    onToast(`${describeExpansion(expansion)}${suffix}`)
+    return true
+  }
+  const listSuggestions = recipientField ? suggestRecipientLists(fieldValue(recipientField).split(/[;,]/).at(-1) ?? '', recipientLists) : []
   const editorRef = useRef<HTMLDivElement>(null)
   const editorHtmlRef = useRef(initialHtml)
   const firstRender = useRef(true)
@@ -273,6 +287,7 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
   }
 
   const send = async () => {
+    if ((['to', 'cc', 'bcc'] as const).filter((field) => expandLists(field, undefined, '. Review the recipients, then send again.')).length) return
     const recipients = [...input.to, ...input.cc, ...input.bcc]
     if (!recipients.length) {
       onToast('Add at least one recipient')
@@ -334,10 +349,10 @@ export default function MailComposeModal({ accounts, draft, replyTo, replyAll, f
     >
         <div className="compose">
           <div className="compose-row"><label>From</label><select value={accountId} disabled={Boolean(draft)} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((account) => <option value={account.id} key={account.id}>{account.displayName} · {account.email}</option>)}</select></div>
-          <div className="compose-row"><label>To</label><input autoFocus value={to} onFocus={() => setRecipientField('to')} onChange={(event) => setTo(event.target.value)} placeholder="name@example.com" /></div>
-          <div className="compose-row"><label>Cc</label><input value={cc} onFocus={() => setRecipientField('cc')} onChange={(event) => setCc(event.target.value)} /><button className="text-button" onClick={() => setBccVisible((value) => !value)}>Bcc</button></div>
-          {bccVisible && <div className="compose-row"><label>Bcc</label><input value={bcc} onFocus={() => setRecipientField('bcc')} onChange={(event) => setBcc(event.target.value)} /></div>}
-          {recipientField && recipientSuggestions.length > 0 && <div className="recipient-suggestions">{recipientSuggestions.map((suggestion) => <button key={`${suggestion.accountId}:${suggestion.email}`} onMouseDown={(event) => event.preventDefault()} onClick={() => chooseRecipient(suggestion)}><span className="avatar">{(suggestion.name || suggestion.email).slice(0, 2).toUpperCase()}</span><span><strong>{suggestion.name || suggestion.email}</strong><small>{suggestion.email}</small></span></button>)}</div>}
+          <div className="compose-row"><label>To</label><input autoFocus value={to} onFocus={() => setRecipientField('to')} onBlur={() => expandLists('to')} onChange={(event) => setTo(event.target.value)} placeholder="name@example.com" /></div>
+          <div className="compose-row"><label>Cc</label><input value={cc} onFocus={() => setRecipientField('cc')} onBlur={() => expandLists('cc')} onChange={(event) => setCc(event.target.value)} /><button className="text-button" onClick={() => setBccVisible((value) => !value)}>Bcc</button></div>
+          {bccVisible && <div className="compose-row"><label>Bcc</label><input value={bcc} onFocus={() => setRecipientField('bcc')} onBlur={() => expandLists('bcc')} onChange={(event) => setBcc(event.target.value)} /></div>}
+          {recipientField && (recipientSuggestions.length > 0 || listSuggestions.length > 0) && <div className="recipient-suggestions">{listSuggestions.map((list) => <button key={list.id} className="recipient-list-suggestion" title={list.members.map((member) => member.email).join(', ')} onMouseDown={(event) => event.preventDefault()} onClick={() => expandLists(recipientField, list)}><span className="avatar">{list.members.length}</span><span><strong>{list.name} · {recipientListLabel(list)}</strong><small>{recipientListPreview(list)}</small></span></button>)}{recipientSuggestions.map((suggestion) => <button key={`${suggestion.accountId}:${suggestion.email}`} onMouseDown={(event) => event.preventDefault()} onClick={() => chooseRecipient(suggestion)}><span className="avatar">{(suggestion.name || suggestion.email).slice(0, 2).toUpperCase()}</span><span><strong>{suggestion.name || suggestion.email}</strong><small>{suggestion.email}</small></span></button>)}</div>}
           <div className="compose-row"><label>Subject</label><input value={subject} onFocus={() => setRecipientField(undefined)} onChange={(event) => setSubject(event.target.value)} /></div>
           <div className="compose-formatting" role="toolbar" aria-label="Message formatting">
             <button className="icon-button" title="Bold" onMouseDown={(event) => event.preventDefault()} onClick={() => format('bold')}><Bold size={15} /></button>

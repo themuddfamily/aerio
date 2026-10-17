@@ -1,6 +1,10 @@
 import type { CalendarEvent, Contact } from '../../src/types'
-import type { ProviderProductivityData, ProviderProductivitySyncResult, SyncedCalendar, SyncedCalendarEvent, SyncedContact } from '../../src/productivity-types'
+import type { ProviderProductivityData, ProviderProductivitySyncResult, SyncedCalendar, SyncedCalendarEvent, SyncedContact, SyncedContactGroup } from '../../src/productivity-types'
 import { ProductivityApiError, retryingJson, type ProductivityConnector } from './connector'
+import {
+  attachGooglePhotos, googleContactGroupFields, googlePhotoBytes, googleRichContactBody, googleRichContactFields, googleUpdatePersonFields,
+  mapGoogleContactGroup, mapGoogleRichContact, type GoogleContactGroup, type GoogleRichPerson
+} from './google-contacts'
 
 interface GooglePage<T> { items?: T[]; connections?: T[]; nextPageToken?: string; nextSyncToken?: string }
 interface GoogleCalendar { id: string; summary?: string; backgroundColor?: string; primary?: boolean; accessRole?: string }
@@ -27,8 +31,8 @@ interface GooglePerson {
   memberships?: { contactGroupMembership?: { contactGroupResourceName?: string } }[]
 }
 
-const googleContactFields = 'names,emailAddresses,phoneNumbers,organizations,biographies,memberships,metadata'
-
+// Single-value body kept for callers that only have the legacy fields; the connector writes
+// googleRichContactBody (google-contacts.ts), which carries every value and raw provider details.
 export const googleContactBody = (contact: Contact, revision?: string, remoteId?: string) => {
   const parts = contact.name.trim().split(/\s+/)
   const familyName = parts.length > 1 ? parts.pop() : undefined
@@ -150,7 +154,7 @@ export class GoogleProductivityConnector implements ProductivityConnector {
     }
     const contactSync = await this.syncContacts(previous.contacts, checkpoints.contacts)
     if (contactSync.checkpoint) nextCheckpoints.contacts = contactSync.checkpoint
-    return { calendars, events, contacts: contactSync.items, checkpoints: nextCheckpoints }
+    return { calendars, events, contacts: contactSync.items, contactGroups: contactSync.groups, checkpoints: nextCheckpoints }
   }
 
   private async syncEvents(calendar: SyncedCalendar, previous: SyncedCalendarEvent[], checkpoint: string | undefined, from: Date, to: Date) {
@@ -180,10 +184,12 @@ export class GoogleProductivityConnector implements ProductivityConnector {
   }
 
   private async syncContacts(previous: SyncedContact[], checkpoint?: string) {
+    const groups = await this.listContactGroups()
+    this.useContactGroups(groups)
     const run = async (syncToken?: string) => {
-      const query = new URLSearchParams({ personFields: googleContactFields, pageSize: '1000', requestSyncToken: 'true' })
+      const query = new URLSearchParams({ personFields: googleRichContactFields, pageSize: '1000', requestSyncToken: 'true' })
       if (syncToken) query.set('syncToken', syncToken)
-      const delta = await this.pagesWithCheckpoint<GooglePerson>(`https://people.googleapis.com/v1/people/me/connections?${query}`, 'connections')
+      const delta = await this.pagesWithCheckpoint<GoogleRichPerson>(`https://people.googleapis.com/v1/people/me/connections?${query}`, 'connections')
       const current = syncToken ? new Map(previous.map((contact) => [contact.sourceId ?? contact.remoteId, contact])) : new Map<string, SyncedContact>()
       for (const person of delta.items) {
         const sourceId = person.metadata?.sources?.find((source) => source.type === 'CONTACT')?.id ?? person.resourceName
@@ -191,10 +197,16 @@ export class GoogleProductivityConnector implements ProductivityConnector {
           current.delete(sourceId)
           continue
         }
-        const mapped = mapGoogleContact(this.accountId, person, !this.contactsWriteAuthorized)
+        const mapped = mapGoogleRichContact(this.accountId, person, !this.contactsWriteAuthorized, this.groupNames)
         if (mapped) current.set(sourceId, mapped)
       }
-      return { items: [...current.values()], checkpoint: delta.checkpoint }
+      // Group names can change without the member records changing; re-resolve cached contacts.
+      const items = [...current.values()].map((contact) => {
+        const names = (contact.groupIds ?? []).flatMap((id) => this.groupNames.get(id) ?? [])
+        const { groups: _previousGroups, ...rest } = contact
+        return { ...rest, ...(names.length ? { groups: names } : {}), group: names[0] ?? 'Google' }
+      })
+      return { items: await attachGooglePhotos(items, previous), checkpoint: delta.checkpoint, groups }
     }
     try {
       return await run(checkpoint)
@@ -231,10 +243,10 @@ export class GoogleProductivityConnector implements ProductivityConnector {
 
   async createContact(contact: Contact) {
     this.assertContactsWritable()
-    const remote = await retryingJson<GooglePerson>(this.provider, `https://people.googleapis.com/v1/people:createContact?personFields=${googleContactFields}`, this.token, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(googleContactBody(contact))
+    const remote = await retryingJson<GoogleRichPerson>(this.provider, `https://people.googleapis.com/v1/people:createContact?personFields=${googleRichContactFields}`, this.token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(googleRichContactBody(contact))
     })
-    return this.mapWrittenContact(remote)
+    return this.writeContactPhoto(this.mapWrittenContact(remote), contact)
   }
 
   async updateContact(current: SyncedContact, contact: Contact) {
@@ -244,11 +256,122 @@ export class GoogleProductivityConnector implements ProductivityConnector {
     // Require a refresh instead of allowing a stale edit to overwrite newer data.
     const revision = current.revision
     if (!revision) throw new Error('Google did not return a contact revision; synchronize Contacts before editing again')
-    const query = new URLSearchParams({ updatePersonFields: 'names,emailAddresses,phoneNumbers,organizations,biographies', personFields: googleContactFields })
-    const remote = await retryingJson<GooglePerson>(this.provider, `${resource}:updateContact?${query}`, this.token, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(googleContactBody(contact, revision, current.remoteId))
+    const query = new URLSearchParams({ updatePersonFields: googleUpdatePersonFields, personFields: googleRichContactFields })
+    const remote = await retryingJson<GoogleRichPerson>(this.provider, `${resource}:updateContact?${query}`, this.token, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(googleRichContactBody(contact, current))
+    }).catch((error: unknown) => { throw googleConflict(error, 'contact') })
+    return this.writeContactPhoto(this.mapWrittenContact(remote), contact, current)
+  }
+
+  // contactGroups resource names mapped to display names, used when mapping written contacts.
+  private groupNames = new Map<string, string>()
+
+  useContactGroups(groups: SyncedContactGroup[]) {
+    this.groupNames = new Map(groups.map((group) => [group.remoteId, group.name]))
+  }
+
+  async listContactGroups() {
+    const groups: SyncedContactGroup[] = []
+    let pageToken: string | undefined
+    try {
+      do {
+        const query = new URLSearchParams({ pageSize: '1000', groupFields: googleContactGroupFields })
+        if (pageToken) query.set('pageToken', pageToken)
+        const page = await retryingJson<{ contactGroups?: GoogleContactGroup[]; nextPageToken?: string }>(this.provider, `https://people.googleapis.com/v1/contactGroups?${query}`, this.token)
+        groups.push(...(page.contactGroups ?? []).flatMap((group) => mapGoogleContactGroup(this.accountId, group, this.contactsWriteAuthorized) ?? []))
+        pageToken = page.nextPageToken
+      } while (pageToken)
+    } catch (error) {
+      // Contacts still synchronize when groups are unavailable; they just carry no group names.
+      if (!(error instanceof ProductivityApiError)) throw error
+      return []
+    }
+    return groups
+  }
+
+  async createContactGroup(name: string) {
+    this.assertContactsWritable()
+    const remote = await retryingJson<GoogleContactGroup>(this.provider, 'https://people.googleapis.com/v1/contactGroups', this.token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contactGroup: { name: name.trim() }, readGroupFields: googleContactGroupFields })
     })
-    return this.mapWrittenContact(remote)
+    return this.mapWrittenGroup(remote)
+  }
+
+  async renameContactGroup(group: SyncedContactGroup, name: string) {
+    this.assertGroupManageable(group)
+    const remote = await retryingJson<GoogleContactGroup>(this.provider, this.contactResource(group.remoteId), this.token, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactGroup: { name: name.trim(), etag: group.revision }, updateGroupFields: 'name', readGroupFields: googleContactGroupFields })
+    }).catch((error: unknown) => { throw googleConflict(error, 'group') })
+    return this.mapWrittenGroup(remote)
+  }
+
+  async deleteContactGroup(group: SyncedContactGroup) {
+    this.assertGroupManageable(group)
+    // Members stay in Google Contacts; only the group is removed.
+    await retryingJson<void>(this.provider, `${this.contactResource(group.remoteId)}?deleteContacts=false`, this.token, { method: 'DELETE' })
+  }
+
+  // Adds and removes members, then re-reads the affected people: membership changes bump their etags.
+  async modifyContactGroupMembers(group: SyncedContactGroup, add: SyncedContact[], remove: SyncedContact[]) {
+    if (!this.contactsWriteAuthorized || group.readOnly || group.accountId !== this.accountId || group.provider !== this.provider) {
+      throw new Error('Reconnect this Google account once to enable Contacts editing')
+    }
+    for (const contact of [...add, ...remove]) this.assertContactsWritable(contact)
+    const result = await retryingJson<{ notFoundResourceNames?: string[]; canNotRemoveLastContactGroupResourceNames?: string[] } | undefined>(
+      this.provider, `${this.contactResource(group.remoteId)}/members:modify`, this.token, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resourceNamesToAdd: add.map((contact) => contact.remoteId), resourceNamesToRemove: remove.map((contact) => contact.remoteId) })
+      })
+    const previous = [...add, ...remove]
+    const refreshed: SyncedContact[] = []
+    for (let index = 0; index < previous.length; index += 200) {
+      const query = new URLSearchParams({ personFields: googleRichContactFields })
+      for (const contact of previous.slice(index, index + 200)) query.append('resourceNames', contact.remoteId)
+      const page = await retryingJson<{ responses?: { person?: GoogleRichPerson }[] }>(this.provider, `https://people.googleapis.com/v1/people:batchGet?${query}`, this.token)
+      for (const response of page.responses ?? []) {
+        const mapped = response.person && mapGoogleRichContact(this.accountId, response.person, false, this.groupNames)
+        if (mapped) refreshed.push(mapped)
+      }
+    }
+    return {
+      contacts: await attachGooglePhotos(refreshed, previous),
+      skipped: (result?.notFoundResourceNames?.length ?? 0) + (result?.canNotRemoveLastContactGroupResourceNames?.length ?? 0)
+    }
+  }
+
+  private assertGroupManageable(group: SyncedContactGroup) {
+    if (group.system) throw new Error('Google system groups cannot be renamed or deleted')
+    if (!this.contactsWriteAuthorized || group.readOnly || group.accountId !== this.accountId || group.provider !== this.provider) {
+      throw new Error('Reconnect this Google account once to enable Contacts editing')
+    }
+  }
+
+  private mapWrittenGroup(remote: GoogleContactGroup) {
+    const mapped = mapGoogleContactGroup(this.accountId, remote, true)
+    if (!mapped) throw new Error('Google saved the group but did not return valid group details')
+    this.groupNames.set(mapped.remoteId, mapped.name)
+    return mapped
+  }
+
+  // Photos have their own endpoints; a failed photo write keeps the saved contact details.
+  private async writeContactPhoto(saved: SyncedContact, contact: Contact, current?: SyncedContact): Promise<SyncedContact> {
+    if ((contact.photo ?? '') === (current?.photo ?? '')) return current?.photo ? { ...saved, photo: current.photo } : saved
+    const resource = this.contactResource(saved.remoteId)
+    const bytes = googlePhotoBytes(contact.photo)
+    try {
+      if (bytes) {
+        await retryingJson(this.provider, `${resource}:updateContactPhoto`, this.token, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photoBytes: bytes, personFields: 'metadata' })
+        })
+        return { ...saved, photo: contact.photo }
+      }
+      await retryingJson<void>(this.provider, `${resource}:deleteContactPhoto`, this.token, { method: 'DELETE' })
+      const { photo: _removed, ...rest } = saved
+      return rest
+    } catch {
+      return current?.photo ? { ...saved, photo: current.photo } : saved
+    }
   }
 
   async deleteContact(contact: SyncedContact) {
@@ -282,8 +405,8 @@ export class GoogleProductivityConnector implements ProductivityConnector {
     return `https://people.googleapis.com/v1/${remoteId.split('/').map(encodeURIComponent).join('/')}`
   }
 
-  private mapWrittenContact(remote: GooglePerson) {
-    const mapped = mapGoogleContact(this.accountId, remote, false)
+  private mapWrittenContact(remote: GoogleRichPerson) {
+    const mapped = mapGoogleRichContact(this.accountId, remote, false, this.groupNames)
     if (!mapped) throw new Error('Google saved the contact but did not return valid contact details')
     return mapped
   }
@@ -307,4 +430,12 @@ export class GoogleProductivityConnector implements ProductivityConnector {
     }
     return { items, checkpoint }
   }
+}
+
+// The People API reports a stale etag as 400 FAILED_PRECONDITION (409 on some group writes).
+function googleConflict(error: unknown, record: 'contact' | 'group') {
+  if (error instanceof ProductivityApiError && (error.status === 409 || (error.status === 400 && /etag|precondition|changed/i.test(error.message)))) {
+    return new Error(`This Google ${record} changed elsewhere; synchronize Contacts and merge your changes`)
+  }
+  return error
 }

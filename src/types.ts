@@ -75,6 +75,27 @@ export interface Contact {
   nickname?: string
   birthday?: string
   sourceUid?: string
+  // Every group or category the contact belongs to; `group` stays the primary one shown in lists.
+  groups?: string[]
+  // A small data: URL image (PNG, JPEG, GIF, or WebP); see src/lib/contact-fields.ts for bounds.
+  photo?: string
+}
+
+// An explicit distribution list. Members reference a contact by id when picked from the address
+// book and always carry the address used at the time, so a list survives contact deletion and can
+// include people who are not saved contacts.
+export interface ContactListMember {
+  contactId?: string
+  email: string
+  name?: string
+}
+
+export interface ContactList {
+  id: string
+  name: string
+  members: ContactListMember[]
+  notes?: string
+  source: 'local'
 }
 
 export interface Task {

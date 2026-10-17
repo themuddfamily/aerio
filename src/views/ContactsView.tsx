@@ -1,11 +1,15 @@
-import { Building2, Copy, Edit3, Mail, MapPin, Phone, Plus, RefreshCw, Search, Star, Trash2, Users } from 'lucide-react'
+import { Building2, Cake, Copy, Edit3, Globe, Mail, MapPin, Phone, Plus, RefreshCw, Search, Star, Trash2, Users, UsersRound } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
-import type { AppState, Contact } from '../types'
+import type { AppState, Contact, ContactField } from '../types'
 import type { SyncedContact } from '../productivity-types'
 import Modal from '../components/Modal'
+import { ContactFieldList, ContactPhotoPicker } from '../components/ContactFieldsEditor'
+import { ContactListEditor, ContactListsSidebar, deleteRecipientList, saveRecipientList, type ContactListActions } from '../components/ContactListsPanel'
 import { uid } from '../lib/domain'
 import { preserveContactInterchangeFields } from '../lib/interchange-plan'
+import { ADDRESS_TYPES, contactEmailAddresses, contactGroupNames, editableFields, EMAIL_TYPES, isContactBirthday, PHONE_TYPES, withContactFields } from '../lib/contact-fields'
+import { buildRecipientLists, formatRecipient, listContactIds, recipientListLabel, recipientListPreview, type RecipientList } from '../lib/distribution-lists'
 
 interface ContactsViewProps {
   state: AppState
@@ -21,26 +25,42 @@ interface ContactsViewProps {
   syncing?: boolean
   sourceMessage?: string
   interchangePanel?: React.ReactNode
+  // Distribution lists: local lists and provider group management. Omitted in read-only embeddings.
+  listActions?: Omit<ContactListActions, 'saveProviderContact'>
 }
 
 const isSyncedContact = (contact: Contact): contact is SyncedContact =>
   'remoteId' in contact && 'accountId' in contact && 'provider' in contact && 'readOnly' in contact
+const initials = (name: string) => name.split(' ').map((value) => value[0]).join('')
+
+function ContactAvatar({ contact, className }: { contact: Contact; className: string }) {
+  return contact.photo
+    ? <img className={`avatar ${className} contact-photo`} src={contact.photo} alt="" />
+    : <span className={`avatar ${className}`} style={{ background: contact.color }}>{initials(contact.name)}</span>
+}
 
 export default function ContactsView({
   state, query, onCompose, onToast, onSync, onEnableEditing, onLocalContactsChange,
-  onSaveProviderContact, onDeleteProviderContact, providerAccounts = [], syncing = false, sourceMessage, interchangePanel
+  onSaveProviderContact, onDeleteProviderContact, providerAccounts = [], syncing = false, sourceMessage, interchangePanel, listActions
 }: ContactsViewProps) {
   const { showContextMenu } = useContextMenu()
   const [group, setGroup] = useState('All contacts')
+  const [listId, setListId] = useState<string>()
   const [selectedId, setSelectedId] = useState(state.contacts[0]?.id ?? '')
   const [editing, setEditing] = useState<Contact | 'new' | null>(null)
-  const groups = ['All contacts', 'Favourites', ...Array.from(new Set(state.contacts.map((contact) => contact.group)))]
+  const [editingList, setEditingList] = useState<RecipientList | 'new' | null>(null)
+  const groups = ['All contacts', 'Favourites', ...Array.from(new Set(state.contacts.flatMap(contactGroupNames)))]
+  const lists = useMemo(() => buildRecipientLists({ contacts: state.contacts, lists: listActions?.localLists, groups: listActions?.groups }), [listActions?.groups, listActions?.localLists, state.contacts])
+  const activeList = lists.find((list) => list.id === listId)
+  const listMembers = useMemo(() => activeList ? listContactIds(activeList, state.contacts) : undefined, [activeList, state.contacts])
   const contacts = useMemo(() => state.contacts
-    .filter((contact) => group === 'All contacts' || (group === 'Favourites' ? contact.favorite : contact.group === group))
-    .filter((contact) => !query || `${contact.name} ${contact.email} ${contact.company ?? ''}`.toLowerCase().includes(query.toLowerCase()))
-    .sort((a, b) => a.name.localeCompare(b.name)), [group, query, state.contacts])
+    .filter((contact) => listMembers ? listMembers.has(contact.id) : group === 'All contacts' || (group === 'Favourites' ? contact.favorite : contactGroupNames(contact).includes(group)))
+    .filter((contact) => !query || `${contact.name} ${contactEmailAddresses(contact).join(' ')} ${contact.company ?? ''}`.toLowerCase().includes(query.toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name)), [group, listMembers, query, state.contacts])
   const selected = contacts.find((contact) => contact.id === selectedId) ?? contacts[0]
   const localContacts = state.contacts.filter((contact) => contact.source === 'local')
+  const actions: ContactListActions | undefined = listActions && { ...listActions, saveProviderContact: onSaveProviderContact }
+  const selectedLists = selected ? lists.filter((list) => listContactIds(list, [selected]).size) : []
 
   const saveContact = async (contact: Contact, accountId?: string) => {
     try {
@@ -54,7 +74,9 @@ export default function ContactsView({
       }
       if (!onSaveProviderContact) throw new Error('Provider contact editing is unavailable')
       const providerExists = editing !== null && editing !== 'new' && isSyncedContact(editing)
-      const saved = await onSaveProviderContact(accountId, contact, providerExists)
+      // The revision the editor started from lets the main process reject a stale overwrite.
+      const payload = providerExists && editing.revision ? { ...contact, revision: editing.revision } as Contact : contact
+      const saved = await onSaveProviderContact(accountId, payload, providerExists)
       setSelectedId(saved.id)
       setEditing(null)
       onToast(providerExists ? 'Provider contact updated' : 'Provider contact created')
@@ -80,6 +102,19 @@ export default function ContactsView({
     }
   }
 
+  const deleteList = async (list: RecipientList) => {
+    if (!actions || !window.confirm(`Delete the list “${list.name}”? Its members stay in your contacts.`)) return
+    try {
+      onToast(await deleteRecipientList(actions, state.contacts, list))
+      setListId(undefined)
+      setEditingList(null)
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'The list could not be deleted')
+    }
+  }
+
+  const emailList = (list: RecipientList) => onCompose(list.members.map(formatRecipient).join(', '))
+
   const contactMenu = (contact: Contact): ContextMenuItem[] => [
     { label: 'Email', icon: Mail, disabled: !contact.email, action: () => onCompose(contact.email) },
     { label: 'Copy email address', icon: Copy, separatorBefore: true, disabled: !contact.email, action: () => copyText(contact.email) },
@@ -93,6 +128,7 @@ export default function ContactsView({
   ]
 
   const showContactMenu = (event: React.MouseEvent, contact: Contact) => showContextMenu(event, contactMenu(contact), contact.name)
+  const heading = activeList?.name ?? group
 
   return (
     <div className="workspace">
@@ -104,34 +140,52 @@ export default function ContactsView({
         <div className="sidebar-group">
           <span className="sidebar-label">Contacts</span>
           {groups.map((item) => (
-            <button className={`sidebar-item ${group === item ? 'active' : ''}`} onClick={() => setGroup(item)} onContextMenu={(event) => showContextMenu(event, [
-              { label: `Open ${item}`, icon: Users, action: () => setGroup(item) }
+            <button className={`sidebar-item ${!activeList && group === item ? 'active' : ''}`} onClick={() => { setGroup(item); setListId(undefined) }} onContextMenu={(event) => showContextMenu(event, [
+              { label: `Open ${item}`, icon: Users, action: () => { setGroup(item); setListId(undefined) } }
             ], item)} key={item}>
               {item === 'Favourites' ? <Star size={17} /> : <Users size={17} />}<span>{item}</span>
-              <em>{item === 'All contacts' ? state.contacts.length : item === 'Favourites' ? state.contacts.filter((contact) => contact.favorite).length : state.contacts.filter((contact) => contact.group === item).length}</em>
+              <em>{item === 'All contacts' ? state.contacts.length : item === 'Favourites' ? state.contacts.filter((contact) => contact.favorite).length : state.contacts.filter((contact) => contactGroupNames(contact).includes(item)).length}</em>
             </button>
           ))}
         </div>
+        {actions && <ContactListsSidebar
+          lists={lists}
+          selectedId={activeList?.id}
+          onSelect={(list) => setListId(list.id)}
+          onCreate={() => setEditingList('new')}
+          onEdit={setEditingList}
+          onDelete={(list) => void deleteList(list)}
+          onEmail={emailList}
+        />}
         {interchangePanel}
         <div className="contact-insight"><span className="insight-number">{state.contacts.length}</span><p>contacts</p></div>
       </aside>
       <section className="contact-list-panel">
-        <header className="panel-heading"><div><h1>{group}</h1><p>{contacts.length} people</p></div></header>
+        <header className="panel-heading"><div><h1>{heading}</h1><p>{activeList ? `${recipientListLabel(activeList)} · ${activeList.members.length} addresses${activeList.unreachable ? ` · ${activeList.unreachable} without email` : ''}` : `${contacts.length} people`}</p></div>
+          {activeList && <div className="panel-heading-actions">
+            <button className="button ghost small" disabled={!activeList.members.length} onClick={() => emailList(activeList)}><Mail size={14} /> Email list</button>
+            <button className="button ghost small" disabled={activeList.readOnly} title={activeList.readOnly ? 'Enable provider editing to change this list' : undefined} onClick={() => setEditingList(activeList)}><Edit3 size={14} /> Edit list</button>
+          </div>}
+        </header>
+        {activeList && <p className="provider-source-note list-preview">{recipientListPreview(activeList, 6)}</p>}
         <div className="inline-search"><Search size={16} /><span>{query || 'Search from the top bar'}</span></div>
-        <div className="contact-list" onContextMenu={(event) => showContextMenu(event, [{ label: `Show ${group}`, icon: Users, action: () => setGroup(group) }], 'Contacts')}>
+        <div className="contact-list" onContextMenu={(event) => showContextMenu(event, [{ label: `Show ${heading}`, icon: Users, action: () => undefined }], 'Contacts')}>
           {contacts.map((contact) => (
             <button key={contact.id} className={`contact-row ${selected?.id === contact.id ? 'selected' : ''}`} onClick={() => setSelectedId(contact.id)} onContextMenu={(event) => showContactMenu(event, contact)}>
-              <span className="avatar large" style={{ background: contact.color }}>{contact.name.split(' ').map((value) => value[0]).join('')}</span>
+              <ContactAvatar contact={contact} className="large" />
               <span><strong>{contact.name}</strong><small>{contact.title ?? contact.group}{contact.company ? ` · ${contact.company}` : ''}</small></span>
               {contact.favorite && <Star className="favourite" size={14} fill="currentColor" />}
             </button>
+          ))}
+          {activeList && activeList.members.filter((member) => !member.contactId).map((member) => (
+            <div key={member.email} className="contact-row external-member"><span className="avatar large">@</span><span><strong>{member.name || member.email}</strong><small>{member.email} · not a saved contact</small></span></div>
           ))}
         </div>
       </section>
       <section className="contact-detail-panel">
         {selected ? <>
           <header className="contact-hero" onContextMenu={(event) => showContactMenu(event, selected)}>
-            <span className="avatar hero-avatar" style={{ background: selected.color }}>{selected.name.split(' ').map((value) => value[0]).join('')}</span>
+            <ContactAvatar contact={selected} className="hero-avatar" />
             <div><h1>{selected.name}</h1><p>{selected.title}{selected.company && ` at ${selected.company}`}</p></div>
           </header>
           <div className="contact-actions">
@@ -139,6 +193,7 @@ export default function ContactsView({
             <button onClick={() => onToast(selected.phone ? `Call ${selected.phone}` : 'No phone number saved')}><span><Phone size={19} /></span>Call</button>
             {(selected.source === 'local' || (isSyncedContact(selected) && !selected.readOnly)) && <button onClick={() => setEditing(selected)}><span><Edit3 size={19} /></span>Edit</button>}
           </div>
+          {isSyncedContact(selected) && selected.readOnly && <p className="provider-source-note">Read-only: reconnect this account with Contacts editing to change it.</p>}
           <div className="contact-detail-grid">
             <section className="detail-card">
               <h3>Details</h3>
@@ -146,18 +201,19 @@ export default function ContactsView({
                 <div onContextMenu={(event) => showContextMenu(event, [{ label: 'Email contact', icon: Mail, disabled: !selected.email, action: () => onCompose(selected.email) }, { label: 'Copy email address', icon: Copy, disabled: !selected.email, action: () => copyText(selected.email) }], 'Email')}><dt><Mail size={15} /> Email</dt><dd>{selected.email || 'Not added'}</dd></div>
                 <div onContextMenu={(event) => showContextMenu(event, [{ label: selected.phone ? `Call ${selected.name}` : 'No phone number saved', icon: Phone, disabled: !selected.phone, action: () => onToast(`Call ${selected.phone}`) }, { label: 'Copy phone number', icon: Copy, disabled: !selected.phone, action: () => copyText(selected.phone!) }], 'Phone')}><dt><Phone size={15} /> Phone</dt><dd>{selected.phone ?? 'Not added'}</dd></div>
                 <div onContextMenu={(event) => showContextMenu(event, [{ label: 'Copy company', icon: Copy, disabled: !selected.company, action: () => copyText(selected.company!) }], 'Company')}><dt><Building2 size={15} /> Company</dt><dd>{selected.company ?? 'Not added'}</dd></div>
-                <div onContextMenu={(event) => showContextMenu(event, [{ label: 'Copy group', icon: Copy, action: () => copyText(selected.group) }], 'Group')}><dt><MapPin size={15} /> Group</dt><dd>{selected.group}</dd></div>
+                <div onContextMenu={(event) => showContextMenu(event, [{ label: 'Copy group', icon: Copy, action: () => copyText(contactGroupNames(selected).join(', ')) }], 'Group')}><dt><Users size={15} /> {contactGroupNames(selected).length > 1 ? 'Groups' : 'Group'}</dt><dd>{contactGroupNames(selected).join(', ') || selected.group}</dd></div>
                 {[
                   ...(selected.emails ?? []).filter((field) => field.value !== selected.email).map((field) => ({ icon: Mail, label: 'Email', field })),
                   ...(selected.phones ?? []).filter((field) => field.value !== selected.phone).map((field) => ({ icon: Phone, label: 'Phone', field })),
                   ...(selected.addresses ?? []).map((field) => ({ icon: MapPin, label: 'Address', field })),
-                  ...(selected.urls ?? []).map((field) => ({ icon: Building2, label: 'Website', field }))
+                  ...(selected.urls ?? []).map((field) => ({ icon: Globe, label: 'Website', field }))
                 ].map(({ icon: Icon, label, field }, index) => (
                   <div key={`${label}-${index}`} onContextMenu={(event) => showContextMenu(event, [{ label: `Copy ${label.toLowerCase()}`, icon: Copy, action: () => copyText(field.value) }], label)}>
                     <dt><Icon size={15} /> {label}{field.type ? ` (${field.type})` : ''}</dt><dd>{field.value}</dd>
                   </div>
                 ))}
-                {selected.birthday && <div><dt><Star size={15} /> Birthday</dt><dd>{selected.birthday}</dd></div>}
+                {selected.birthday && <div><dt><Cake size={15} /> Birthday</dt><dd>{selected.birthday}</dd></div>}
+                {selectedLists.length > 0 && <div><dt><UsersRound size={15} /> Lists</dt><dd>{selectedLists.map((list) => list.name).join(', ')}</dd></div>}
               </dl>
             </section>
             <section className="detail-card" onContextMenu={(event) => { if (!window.getSelection()?.toString()) showContextMenu(event, [{ label: 'Copy notes', icon: Copy, disabled: !selected.notes, action: () => copyText(selected.notes!) }], 'Contact notes') }}>
@@ -172,31 +228,54 @@ export default function ContactsView({
         onClose={() => setEditing(null)}
         onSave={saveContact}
         onDelete={editing === 'new' ? undefined : () => void deleteContact(editing)}
+        onToast={onToast}
+      />}
+      {editingList && actions && <ContactListEditor
+        list={editingList === 'new' ? undefined : editingList}
+        contacts={state.contacts}
+        providerAccounts={providerAccounts}
+        canCreateGroups={Boolean(actions.createGroup)}
+        onClose={() => setEditingList(null)}
+        onToast={onToast}
+        onSave={async (target, name, memberIds, extra) => {
+          const original = editingList === 'new' ? undefined : editingList
+          onToast(await saveRecipientList(actions, state.contacts, original, target, name, memberIds, extra))
+          setEditingList(null)
+        }}
       />}
     </div>
   )
 }
 
+const withBlankRow = (fields: ContactField[], type: string) => fields.length ? fields : [{ value: '', type }]
+
 function ContactEditor({
-  contact, providerAccounts, onClose, onSave, onDelete
+  contact, providerAccounts, onClose, onSave, onDelete, onToast
 }: {
   contact?: Contact
   providerAccounts: { id: string; email: string; provider: 'gmail' | 'microsoft' }[]
   onClose(): void
   onSave(contact: Contact, accountId?: string): Promise<void> | void
   onDelete?(): void
+  onToast(message: string): void
 }) {
+  const initial = editableFields(contact)
   const [name, setName] = useState(contact?.name ?? '')
-  const [email, setEmail] = useState(contact?.email ?? '')
-  const [phone, setPhone] = useState(contact?.phone ?? '')
+  const [emails, setEmails] = useState(() => withBlankRow(initial.emails, 'home'))
+  const [phones, setPhones] = useState(() => withBlankRow(initial.phones, 'mobile'))
+  const [addresses, setAddresses] = useState(initial.addresses)
   const [company, setCompany] = useState(contact?.company ?? '')
   const [title, setTitle] = useState(contact?.title ?? '')
-  const [group, setGroup] = useState(contact?.group ?? 'Personal')
+  const [groupText, setGroupText] = useState(initial.groups.filter((group) => !['Google', 'Outlook'].includes(group)).join(', ') || (contact ? '' : 'Personal'))
+  const [birthday, setBirthday] = useState(contact?.birthday ?? '')
+  const [photo, setPhoto] = useState(contact?.photo)
   const [notes, setNotes] = useState(contact?.notes ?? '')
   const [favorite, setFavorite] = useState(contact?.favorite ?? false)
   const [target, setTarget] = useState(contact && isSyncedContact(contact) ? contact.accountId : 'local')
   const [saving, setSaving] = useState(false)
   const providerTarget = providerAccounts.find((account) => account.id === target)
+  const provider = providerTarget?.provider ?? (contact && isSyncedContact(contact) ? contact.provider : undefined)
+  const birthdayInvalid = Boolean(birthday.trim()) && !isContactBirthday(birthday) && birthday !== contact?.birthday
   return (
     <Modal
       title={contact ? 'Edit contact' : 'New contact'}
@@ -210,29 +289,41 @@ function ContactEditor({
             {providerAccounts.map((account) => <option key={account.id} value={account.id}>{account.email} · {account.provider === 'gmail' ? 'Google' : 'Microsoft'}</option>)}
           </select>
         </label>
+        <ContactPhotoPicker photo={photo} name={name} color={contact?.color ?? '#4d8f78'} disabled={provider === 'microsoft'} onChange={setPhoto} onError={onToast} />
+        {provider === 'microsoft' && <small>Microsoft contact photos are not synchronized by Aerio.</small>}
         <label className="field-label">Name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label>
+        <ContactFieldList label="Emails" itemLabel="Email" fields={emails} types={EMAIL_TYPES} inputType="email" onChange={setEmails} />
+        <ContactFieldList label="Phones" itemLabel="Phone" fields={phones} types={PHONE_TYPES} inputType="tel" onChange={setPhones} />
+        <ContactFieldList label="Addresses" itemLabel="Address" fields={addresses} types={ADDRESS_TYPES} placeholder="Street, city, postal code, country" onChange={setAddresses} />
+        {provider === 'microsoft' && <small>Outlook keeps up to three email addresses, one mobile number, and one home, work, and other address; values beyond those slots are not saved to Outlook.</small>}
         <div className="form-grid-2">
-          <label className="field-label">Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
-          <label className="field-label">Phone<input value={phone} onChange={(event) => setPhone(event.target.value)} /></label>
           <label className="field-label">Company<input value={company} onChange={(event) => setCompany(event.target.value)} /></label>
           <label className="field-label">Job title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-          <label className="field-label">Group<input value={group} onChange={(event) => setGroup(event.target.value)} /></label>
+          <label className="field-label">Birthday<input value={birthday} placeholder="YYYY-MM-DD or --MM-DD" aria-invalid={birthdayInvalid} onChange={(event) => setBirthday(event.target.value)} /></label>
+          <label className="field-label">{provider === 'microsoft' ? 'Categories' : 'Groups'}<input value={groupText} disabled={provider === 'gmail'} placeholder="Comma-separated" onChange={(event) => setGroupText(event.target.value)} /></label>
           <label className="check-label"><input type="checkbox" checked={favorite} disabled={target !== 'local'} onChange={(event) => setFavorite(event.target.checked)} /> Favourite {target !== 'local' && '(local contacts only)'}</label>
         </div>
-        {target !== 'local' && <small>Provider support for contact groups varies; core name, email, phone, company, title, and notes fields are synchronized.</small>}
+        {provider === 'gmail' && <small>Google contact groups are managed from Distribution lists in the sidebar.</small>}
         <label className="field-label">Notes<textarea value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
         <footer className="modal-footer">
           {onDelete && <button className="button danger-subtle" onClick={onDelete}><Trash2 size={16} /> Delete</button>}
           <span className="spacer" /><button className="button ghost" onClick={onClose}>Cancel</button>
-          <button className="button primary" disabled={!name.trim() || saving} onClick={() => {
+          <button className="button primary" disabled={!name.trim() || saving || birthdayInvalid} onClick={() => {
             setSaving(true)
-            const next: Contact = preserveContactInterchangeFields(contact, {
-              id: contact?.id ?? uid('contact'), name: name.trim(), email: email.trim(), phone: phone.trim() || undefined,
-              company: company.trim() || undefined, title: title.trim() || undefined, group: group.trim() || (target === 'local' ? 'Personal' : 'Contacts'),
-              notes: notes.trim() || undefined, favorite: target === 'local' ? favorite : false,
+            const fallbackGroup = target === 'local' ? 'Personal' : provider === 'microsoft' ? 'Outlook' : 'Google'
+            const base = preserveContactInterchangeFields(contact, {
+              id: contact?.id ?? uid('contact'), name: name.trim(), email: '', company: company.trim() || undefined, title: title.trim() || undefined,
+              group: fallbackGroup, notes: notes.trim() || undefined, favorite: target === 'local' ? favorite : false,
               color: contact?.color ?? (providerTarget?.provider === 'microsoft' ? '#3b6fd8' : '#4d8f78'),
               ...(target === 'local' ? { source: 'local' as const } : {})
             })
+            // Google memberships are edited through contact groups, so the editor keeps them as synchronized.
+            const groupNames = provider === 'gmail' ? (contact?.groups ?? []) : groupText.split(',')
+            const next = withContactFields(base, { emails, phones, addresses, groups: groupNames }, provider === 'gmail' ? contact?.group ?? fallbackGroup : fallbackGroup)
+            if (birthday.trim()) next.birthday = birthday.trim()
+            else delete next.birthday
+            if (photo) next.photo = photo
+            else delete next.photo
             void Promise.resolve(onSave(next, target === 'local' ? undefined : target)).finally(() => setSaving(false))
           }}>{saving ? 'Saving…' : 'Save contact'}</button>
         </footer>

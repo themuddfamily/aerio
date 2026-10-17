@@ -1,6 +1,7 @@
 import type { CalendarEvent, Contact } from '../../src/types'
 import type { ProviderProductivityData, ProviderProductivitySyncResult, SyncedCalendar, SyncedCalendarEvent, SyncedContact } from '../../src/productivity-types'
 import { ProductivityApiError, retryingJson, type ProductivityConnector } from './connector'
+import { mapMicrosoftRichContact, microsoftRichContactBody, microsoftRichContactSelect, type GraphRichContact } from './microsoft-contacts'
 
 interface GraphPage<T> { value: T[]; '@odata.nextLink'?: string; '@odata.deltaLink'?: string }
 interface GraphCalendar { id: string; name?: string; color?: string; isDefaultCalendar?: boolean; canEdit?: boolean }
@@ -195,17 +196,16 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
         const knownFolder = previous.find((contact) => contact.folderId)?.folderId
         const folderId = knownFolder ?? await this.defaultContactFolderId()
         if (!folderId) return { items: [] as SyncedContact[], checkpoint: undefined }
-        const select = 'id,changeKey,parentFolderId,displayName,givenName,surname,emailAddresses,businessPhones,mobilePhone,companyName,jobTitle,personalNotes,categories'
-        initial = `https://graph.microsoft.com/v1.0/me/contactFolders/${encodeURIComponent(folderId)}/contacts/delta?$select=${select}`
+        initial = `https://graph.microsoft.com/v1.0/me/contactFolders/${encodeURIComponent(folderId)}/contacts/delta?$select=${microsoftRichContactSelect}`
       }
-      const delta = await this.deltaPages<GraphContact>(initial)
+      const delta = await this.deltaPages<GraphRichContact>(initial)
       const current = deltaLink ? new Map(previous.map((contact) => [contact.remoteId, contact])) : new Map<string, SyncedContact>()
       for (const contact of delta.items) {
         if (contact['@removed']) {
           current.delete(contact.id)
           continue
         }
-        const mapped = mapMicrosoftContact(this.accountId, contact, !this.contactsWriteAuthorized)
+        const mapped = mapMicrosoftRichContact(this.accountId, contact, !this.contactsWriteAuthorized)
         if (mapped) current.set(contact.id, mapped)
       }
       return { items: [...current.values()], checkpoint: delta.checkpoint }
@@ -247,7 +247,7 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
   async createContact(contact: Contact) {
     this.assertContactsWritable()
     const remote = await retryingJson<GraphContact>(this.provider, this.contactsUrl(), this.token, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(microsoftContactBody(contact))
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(microsoftRichContactBody(contact))
     })
     return this.mapWrittenContact(remote)
   }
@@ -258,7 +258,7 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
     const remote = await retryingJson<GraphContact>(this.provider, `${this.contactsUrl()}/${encodeURIComponent(current.remoteId)}`, this.token, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(microsoftContactBody(contact))
+      body: JSON.stringify(microsoftRichContactBody(contact, current))
     })
     return this.mapWrittenContact(remote)
   }
@@ -303,8 +303,8 @@ export class MicrosoftProductivityConnector implements ProductivityConnector {
     }
   }
 
-  private mapWrittenContact(remote: GraphContact) {
-    const mapped = mapMicrosoftContact(this.accountId, remote, false)
+  private mapWrittenContact(remote: GraphRichContact) {
+    const mapped = mapMicrosoftRichContact(this.accountId, remote, false)
     if (!mapped) throw new Error('Microsoft saved the contact but did not return valid contact details')
     return mapped
   }
