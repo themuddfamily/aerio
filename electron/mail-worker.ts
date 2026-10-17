@@ -114,7 +114,9 @@ async function getCredential(accountId: string) {
   })
 }
 
-const openPgpRequested = (input: MailDraftInput) => Boolean(input.openPgp?.sign || input.openPgp?.encrypt)
+const smimeRequested = (input: MailDraftInput) => Boolean(input.smime?.sign || input.smime?.encrypt)
+/** OpenPGP or S/MIME protection was asked for; the main process does the crypto either way. */
+const protectionRequested = (input: MailDraftInput) => Boolean(input.openPgp?.sign || input.openPgp?.encrypt) || smimeRequested(input)
 
 /**
  * Signs and/or encrypts an outgoing message in the main process when the
@@ -122,13 +124,12 @@ const openPgpRequested = (input: MailDraftInput) => Boolean(input.openPgp?.sign 
  * kept: a protected draft is never sent as plaintext.
  */
 async function protectOutgoing(mime: Buffer, input: MailDraftInput, from: string | undefined) {
-  const options = input.openPgp
-  if (!options || !openPgpRequested(input)) return mime
+  if (!protectionRequested(input)) return mime
   if (!from) throw new Error('The sender address is unknown, so the message cannot be signed or encrypted. The message was not sent; your draft is kept.')
   const id = crypto.randomUUID()
   const message = await new Promise<string>((resolve, reject) => {
     openPgpRequests.set(id, { resolve, reject })
-    port.postMessage({ kind: 'openpgp-request', id, message: mime.toString('utf8'), from, recipients: [...input.to, ...input.cc, ...input.bcc], options })
+    port.postMessage({ kind: 'openpgp-request', id, message: mime.toString('utf8'), from, recipients: [...input.to, ...input.cc, ...input.bcc], options: input.openPgp ?? {}, ...(smimeRequested(input) ? { smime: input.smime } : {}) })
   })
   return Buffer.from(message, 'utf8')
 }
@@ -868,7 +869,8 @@ function draftInputFromRow(row: Record<string, string | number | bigint | null>)
     attachmentPaths: JSON.parse(String(row.attachment_paths_json)),
     ...(row.send_options_json ? { sendOptions: JSON.parse(String(row.send_options_json)) } : {}),
     ...database!.identities.draftSender(String(row.id)),
-    ...database!.openPgp.get(String(row.id))
+    ...database!.openPgp.get(String(row.id)),
+    ...database!.smime.get(String(row.id))
   }
 }
 
@@ -936,7 +938,7 @@ async function saveDraft(input: MailDraftInput) {
   if (!database) throw new Error('Database is not initialized')
   input = stageDraftAttachments(input)
   // An encrypted draft stays on this device: syncing it would store plaintext with the provider.
-  const canSync = online && !input.openPgp?.encrypt && draftRecipientsAreSyncable(input.to, input.cc, input.bcc)
+  const canSync = online && !input.openPgp?.encrypt && !input.smime?.encrypt && draftRecipientsAreSyncable(input.to, input.cc, input.bcc)
   let result = database.saveDraft(input, { status: canSync ? 'syncing' : 'local' })
   if (!canSync) return result
   try {
@@ -980,7 +982,7 @@ async function saveDraft(input: MailDraftInput) {
 async function transmitMessage(input: MailDraftInput, provider: MailAccountSummary['provider'], sender: ReturnType<typeof senderFor>, remoteDraftId?: string): Promise<{ messageIdHeader?: string; threadId?: string }> {
   const from = sender?.from
   if (provider === 'gmail') {
-    const raw = openPgpRequested(input) ? (await protectOutgoing(createMimeBuffer(input, from), input, from)).toString('base64url') : createMime(input, from)
+    const raw = protectionRequested(input) ? (await protectOutgoing(createMimeBuffer(input, from), input, from)).toString('base64url') : createMime(input, from)
     const reference = remoteDraftId
       ? await clientFor(input.accountId).sendDraft(remoteDraftId, raw)
       : await clientFor(input.accountId).sendMessage(raw, input.threadId)
@@ -989,7 +991,7 @@ async function transmitMessage(input: MailDraftInput, provider: MailAccountSumma
   if (provider === 'microsoft') {
     // Exchange assigns its own Message-ID; the watch adopts it from the synced Sent copy.
     const mime = await protectOutgoing(createMimeBuffer(input, from), input, from)
-    if (openPgpRequested(input)) {
+    if (protectionRequested(input)) {
       // Sending the stored provider draft would send its plaintext, so send the protected MIME instead.
       const client = microsoftClientFor(input.accountId)
       await client.send(mime, undefined, input.sendOptions)

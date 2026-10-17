@@ -10,7 +10,9 @@ import { primaryIdentityId, type MailSenderIdentity, type MailSignature } from '
 import { defaultIdentityId, identityLabel, LEGACY_SIGNATURE_ID, replaceSignatureBlock, replyIdentityId, signatureBlockHtml, signatureBlockUnchanged, signatureForIdentity, QUOTE_ATTRIBUTE, type ComposerSignature } from '../lib/mail-signature'
 import MailSendOptionsControl from './MailSendOptionsControl'
 import MailComposeOpenPgpControl from './MailComposeOpenPgpControl'
+import MailComposeSmimeControl from './MailComposeSmimeControl'
 import type { MailOpenPgpOptions } from '../openpgp-types'
+import type { MailSmimeOptions } from '../smime-types'
 import MailFormattingToolbar, { useRichEditorInput } from './MailFormattingToolbar'
 import { ReplyWatchControl, armReplyWatch, replyWatchDeadline, type ReplyWatchSetting } from './MailReplyWatches'
 import { describeExpansion, expandRecipientLists, recipientListLabel, recipientListPreview, suggestRecipientLists, type RecipientList } from '../lib/distribution-lists'
@@ -109,6 +111,12 @@ ${signature}` : ''}${forwardedText}`
   const [attachments, setAttachments] = useState<{ name: string; size: number; path: string }[]>(() => (draft?.attachmentPaths ?? []).map((path) => ({ name: fileName(path), size: 0, path })))
   const [sendOptions, setSendOptions] = useState<MailSendOptions | undefined>(draft?.sendOptions)
   const [openPgp, setOpenPgp] = useState<MailOpenPgpOptions | undefined>(draft?.openPgp)
+  const [smime, setSmime] = useState<MailSmimeOptions | undefined>(draft?.openPgp ? undefined : draft?.smime)
+  // One protection method per message: choosing one turns the other off.
+  const protectionTouched = useRef(Boolean(draft))
+  const chooseOpenPgp = (next: MailOpenPgpOptions | undefined) => { protectionTouched.current = true; setOpenPgp(next); if (next) setSmime(undefined) }
+  const chooseSmime = (next: MailSmimeOptions | undefined) => { protectionTouched.current = true; setSmime(next); if (next) setOpenPgp(undefined) }
+  const protectedMessage = Boolean(openPgp?.sign || openPgp?.encrypt || smime?.sign || smime?.encrypt)
   const [replyWatch, setReplyWatch] = useState<ReplyWatchSetting>({ enabled: false, deadline: '' })
   const [scheduledFor, setScheduledFor] = useState(() => localDateTimeValue(draft?.status === 'scheduled' ? draft.deliveryAt : undefined))
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'sending' | 'closing' | 'failed'>(draft?.status === 'failed' ? 'failed' : draft ? 'saved' : 'idle')
@@ -156,8 +164,9 @@ ${signature}` : ''}${forwardedText}`
     fromIdentityId: identityId !== primaryIdentityId(accountId) ? identityId : undefined,
     replyTo: replyToField.trim() ? splitAddresses(replyToField) : undefined,
     ...(sendOptions ? { sendOptions } : {}),
-    ...(openPgp ? { openPgp } : {})
-  }), [accountId, attachments, bcc, cc, draft?.inReplyTo, draft?.references, draft?.threadId, draftId, forward, html, identityId, openPgp, replyMessage, replyTo?.id, replyToField, sendOptions, subject, text, to])
+    ...(openPgp ? { openPgp } : {}),
+    ...(smime ? { smime } : {})
+  }), [accountId, attachments, bcc, cc, draft?.inReplyTo, draft?.references, draft?.threadId, draftId, forward, html, identityId, openPgp, replyMessage, replyTo?.id, replyToField, sendOptions, smime, subject, text, to])
   const fingerprint = useMemo(() => JSON.stringify(input), [input])
   const initialFingerprint = useRef(fingerprint)
   const latestFingerprint = useRef(fingerprint)
@@ -321,6 +330,21 @@ ${signature}` : ''}${forwardedText}`
     applySignature(signatureForIdentity(next, accounts.find((account) => account.id === nextAccountId), availableSignatures, signatureContext), onlyIfUntouched)
   }
 
+  // A sender's S/MIME default applies to new messages until the user picks a protection choice.
+  const senderIdentity = input.fromIdentityId
+  useEffect(() => {
+    const api = window.aerio?.smime
+    if (!api || protectionTouched.current || !accountId) return
+    let cancelled = false
+    void api.identityDefault({ accountId, fromIdentityId: senderIdentity }).then((value) => {
+      if (cancelled || protectionTouched.current || !value || !(value.sign || value.encrypt)) return
+      // Not a user edit, so it must not autosave an otherwise untouched draft.
+      rebaseline.current = latestFingerprint.current === initialFingerprint.current
+      setSmime({ ...(value.sign ? { sign: true } : {}), ...(value.encrypt ? { encrypt: true } : {}) })
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [accountId, senderIdentity])
+
   useEffect(() => {
     const api = window.aerio.mail.identities
     if (!api) return
@@ -481,8 +505,9 @@ ${signature}` : ''}${forwardedText}`
           {conflict && <button className="button ghost small" disabled={status === 'saving' || status === 'sending'} onClick={() => void saveAsCopy()}><Copy size={15} /> Save as copy</button>}
           <button className="button ghost small danger-subtle" disabled={status === 'sending'} onClick={() => void discard()}><Trash2 size={15} /> Discard</button>
           <MailSendOptionsControl provider={accounts.find((account) => account.id === accountId)?.provider} value={sendOptions} disabled={status === 'sending'} onChange={setSendOptions} />
-          <MailComposeOpenPgpControl accountId={accountId} fromIdentityId={input.fromIdentityId} recipients={[...input.to, ...input.cc, ...input.bcc]} value={openPgp} disabled={status === 'sending'} onChange={setOpenPgp} />
-          {window.aerio.mail.merge && !replyTo && <button className="button ghost small" title={openPgp?.sign || openPgp?.encrypt ? 'Mail merge does not sign or encrypt; turn off OpenPGP first' : 'Send a personalized copy to each recipient'} disabled={status === 'sending' || Boolean(openPgp?.sign || openPgp?.encrypt)} onClick={() => setMergeOpen(true)}><Users size={15} /> Mail merge</button>}
+          <MailComposeOpenPgpControl accountId={accountId} fromIdentityId={input.fromIdentityId} recipients={[...input.to, ...input.cc, ...input.bcc]} value={openPgp} disabled={status === 'sending'} onChange={chooseOpenPgp} />
+          <MailComposeSmimeControl accountId={accountId} fromIdentityId={input.fromIdentityId} recipients={[...input.to, ...input.cc, ...input.bcc]} value={smime} disabled={status === 'sending'} onChange={chooseSmime} />
+          {window.aerio.mail.merge && !replyTo && <button className="button ghost small" title={protectedMessage ? 'Mail merge does not sign or encrypt; turn off OpenPGP and S/MIME first' : 'Send a personalized copy to each recipient'} disabled={status === 'sending' || protectedMessage} onClick={() => setMergeOpen(true)}><Users size={15} /> Mail merge</button>}
           <span className="spacer" />
           <ReplyWatchControl value={replyWatch} onChange={setReplyWatch} />
           <label className="mail-schedule-field" title="Schedule delivery"><CalendarClock size={15} /><input aria-label="Scheduled delivery time" type="datetime-local" min={localDateTimeValue(new Date(Date.now() + 60_000).toISOString())} value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} />{scheduledFor && <button type="button" aria-label="Clear scheduled delivery" onClick={() => setScheduledFor('')}><X size={13} /></button>}</label>

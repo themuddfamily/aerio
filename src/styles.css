@@ -4588,6 +4588,15 @@ kbd {
 .openpgp-key-list small { color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
 .openpgp-key-list code { font-size: 12px; letter-spacing: 0.02em; overflow-wrap: anywhere; }
 
+/* S/MIME reuses the OpenPGP layouts; only certificate details are new. */
+.smime-certificate-details { font-size: 12px; color: var(--text-soft); }
+.smime-certificate-details > summary { cursor: pointer; color: var(--muted); }
+.smime-certificate-details dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 10px; margin: 6px 0 0; }
+.smime-certificate-details dt { color: var(--muted); }
+.smime-certificate-details dd { margin: 0; overflow-wrap: anywhere; }
+.smime-certificate-details code { font-size: 11px; }
+.smime-chain { margin: 2px 0 0; padding-left: 18px; }
+
 /* CalDAV/CardDAV accounts (Settings) */
 .dav-account-list, .dav-collection-list, .dav-review ul { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
 .dav-account-list > li { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }

@@ -527,6 +527,8 @@ export interface MailDraftInput {
   sendOptions?: MailSendOptions
   /** OpenPGP Sign/Encrypt choice; delivery aborts rather than sending plaintext when it cannot be honored. */
   openPgp?: import('./openpgp-types').MailOpenPgpOptions
+  /** S/MIME Sign/Encrypt choice; never combined with OpenPGP, and delivery never falls back to plaintext. */
+  smime?: import('./smime-types').MailSmimeOptions
 }
 
 export type MailImportance = 'low' | 'normal' | 'high'

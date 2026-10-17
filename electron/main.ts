@@ -112,6 +112,9 @@ import { registerProfileBackup } from './profile-backup-tools'
 import { OpenPgpKeyring } from './mail/openpgp-keyring'
 import { assertOpenPgpSendable, registerOpenPgp } from './mail/openpgp-ipc'
 import { normalizeOpenPgpOptions } from './mail/openpgp-draft-store'
+import { SmimeStore } from './mail/smime-store'
+import { assertSmimeSendable, protectOutgoingMessage, registerSmime } from './mail/smime-ipc'
+import { assertSingleProtection, normalizeSmimeOptions } from './mail/smime-draft-store'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -145,6 +148,7 @@ let unlockBlockedUntil = 0
 let oauthVault: OAuthVault | null = null
 let mailWorker: MailWorkerClient | null = null
 let openPgpKeyring: OpenPgpKeyring | null = null
+let smimeStore: SmimeStore | null = null
 const accountProviders = new Map<string, MailAccountSummary['provider']>()
 const approvedAttachmentPaths = new Set<string>()
 let quitting = false
@@ -260,6 +264,11 @@ function requireOpenPgp() {
   return openPgpKeyring
 }
 
+function requireSmime() {
+  if (!smimeStore) throw new Error('S/MIME is not ready. The message was not sent; your draft is kept.')
+  return smimeStore
+}
+
 function requireVault() {
   if (!oauthVault) throw new Error('Secure mail storage is not ready')
   return oauthVault
@@ -287,6 +296,8 @@ function validateDraft(input: MailDraftInput, forSend = false) {
   validateDraftSender(input, forSend)
   input.sendOptions = normalizeSendOptions(input.sendOptions)
   input.openPgp = normalizeOpenPgpOptions(input.openPgp)
+  input.smime = normalizeSmimeOptions(input.smime)
+  assertSingleProtection(input)
   if (input.attachmentPaths.some((path) => typeof path !== 'string' || !approvedAttachmentPaths.has(path))) {
     throw new Error('A draft referenced a file that was not selected through Aerio')
   }
@@ -870,6 +881,7 @@ async function initializeMail() {
   oauthVault = new OAuthVault(join(userData, 'oauth-vault.dat'), builtInOAuthClients)
   // Deliberately outside the profile-backup allowlist: keys leave only by explicit export.
   openPgpKeyring = new OpenPgpKeyring(join(userData, 'openpgp-keyring.dat'), { storage: safeStorage, isLocked: () => applicationLocked })
+  smimeStore = new SmimeStore(join(userData, 'smime-certificates.dat'), { storage: safeStorage, isLocked: () => applicationLocked })
   mailWorker = new MailWorkerClient(
     join(import.meta.dirname, 'mail-worker.js'),
     (accountId) => requireVault().credential(accountId, accountProviders.get(accountId) ?? 'gmail'),
@@ -886,7 +898,7 @@ async function initializeMail() {
       mainWindow?.webContents.send('mail:event', event)
       for (const window of messageWindows.values()) if (!window.isDestroyed()) window.webContents.send('mail:event', event)
     },
-    (request) => requireOpenPgp().protect(request.message, request)
+    (request) => protectOutgoingMessage(requireOpenPgp, requireSmime, request)
   )
   await mailWorker.request({
     type: 'initialize',
@@ -1129,6 +1141,7 @@ function lockApplication() {
   if (!loadAppLockRecord()) return appLockStatus()
   applicationLocked = true
   openPgpKeyring?.lock()
+  smimeStore?.lock()
   for (const window of messageWindows.values()) window.close()
   return publishAppLockStatus()
 }
@@ -1456,6 +1469,7 @@ function registerIpc() {
   registerMailIdentities({ worker: requireMailWorker })
   registerMailMerge({ worker: requireMailWorker, validateMessage: (draft) => validateDraft(draft) })
   registerOpenPgp({ keyring: requireOpenPgp(), worker: requireMailWorker })
+  registerSmime({ store: requireSmime(), worker: requireMailWorker })
   registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
   } })
@@ -1922,12 +1936,16 @@ function registerIpc() {
   // Sign/Encrypt drafts are checked before queuing; delivery checks again and never falls back to plaintext.
   ipcMain.handle('mail:drafts:send', (_event, input: MailDraftInput) => {
     const draft = validateDraft(input, true)
-    return assertOpenPgpSendable(requireOpenPgp(), requireMailWorker(), draft).then(() => requireMailWorker().request({ type: 'drafts:send', payload: draft }))
+    return assertOpenPgpSendable(requireOpenPgp(), requireMailWorker(), draft)
+      .then(() => assertSmimeSendable(requireSmime(), requireMailWorker(), draft))
+      .then(() => requireMailWorker().request({ type: 'drafts:send', payload: draft }))
   })
   ipcMain.handle('mail:drafts:schedule', (_event, input: MailDraftInput, deliveryAt: string) => {
     const draft = validateDraft(input, true)
     const at = validateFutureDate(deliveryAt, 'Scheduled send time')
-    return assertOpenPgpSendable(requireOpenPgp(), requireMailWorker(), draft).then(() => requireMailWorker().request({ type: 'drafts:schedule', payload: { input: draft, deliveryAt: at } }))
+    return assertOpenPgpSendable(requireOpenPgp(), requireMailWorker(), draft)
+      .then(() => assertSmimeSendable(requireSmime(), requireMailWorker(), draft))
+      .then(() => requireMailWorker().request({ type: 'drafts:schedule', payload: { input: draft, deliveryAt: at } }))
   })
   ipcMain.handle('mail:drafts:cancel-send', (_event, id: string) => {
     if (typeof id !== 'string' || !id || id.length > 200) throw new Error('Invalid queued message id')

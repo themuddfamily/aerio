@@ -44,6 +44,7 @@ import { MailMergeStore } from './mail-merge-store'
 import { listAttachmentPage } from './attachment-index'
 import { listContactHistoryPage } from './contact-history'
 import { MailDraftOpenPgpStore } from './openpgp-draft-store'
+import { MailDraftSmimeStore } from './smime-draft-store'
 import { LocalMailStore } from './local-mail-store'
 
 export interface ParsedMailMessage {
@@ -102,6 +103,7 @@ export class MailDatabase {
   private readonly db: DatabaseSync
   readonly identities: MailIdentityStore
   readonly openPgp: MailDraftOpenPgpStore
+  readonly smime: MailDraftSmimeStore
   private statements = new Map<string, StatementSync>()
   readonly replyWatches: ReplyWatchStore
   readonly localMail: LocalMailStore
@@ -120,6 +122,7 @@ export class MailDatabase {
     this.migrate()
     this.identities = new MailIdentityStore(this.db)
     this.openPgp = new MailDraftOpenPgpStore(this.db)
+    this.smime = new MailDraftSmimeStore(this.db)
     this.replyWatches = new ReplyWatchStore(this.db)
     this.localMail = new LocalMailStore(this.db, this)
     this.ruleLedger = new RuleRunLedger(this.db)
@@ -1213,6 +1216,7 @@ export class MailDatabase {
     )
     this.identities.saveDraftSender(id, input)
     this.openPgp.save(id, input.openPgp)
+    this.smime.save(id, input.smime)
     const stored = this.getDraft(id)
     return {
       id,
@@ -1249,6 +1253,7 @@ export class MailDatabase {
       attachmentPaths: json<string[]>(String(row.attachment_paths_json), []),
       ...this.identities.draftSender(String(row.id)),
       ...this.openPgp.get(String(row.id)),
+      ...this.smime.get(String(row.id)),
       ...(sendOptions ? { sendOptions } : {}),
       status: String(row.status) as MailDraftRecord['status'],
       updatedAt: String(row.updated_at),

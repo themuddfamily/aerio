@@ -7,6 +7,7 @@ import MailReceiptNotice from './MailReceiptNotice'
 import MeetingInvitationNotice from './MeetingInvitationNotice'
 import MessageHtml from './MessageHtml'
 import OpenPgpMessageNotice from './OpenPgpMessageNotice'
+import SmimeMessageNotice from './SmimeMessageNotice'
 import SenderAvatar from './SenderAvatar'
 import TrackingProtectionNotice from './TrackingProtectionNotice'
 
@@ -71,6 +72,7 @@ export default function ThreadMessageAccordion({
           {expanded && <MailReceiptNotice accountId={message.accountId} messageId={message.id} />}
           {expanded && message.attachments.some(isCalendarAttachment) && <MeetingInvitationNotice accountId={message.accountId} messageId={message.id} />}
           {expanded && <OpenPgpMessageNotice message={message} />}
+          {expanded && <SmimeMessageNotice message={message} />}
           {message.sanitizedHtml && message.local?.format !== 'plain'
             ? <MessageHtml className="message-body mail-html" html={message.sanitizedHtml} />
             : <div className="message-body mail-text">{message.text}</div>}

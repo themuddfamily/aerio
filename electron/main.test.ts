@@ -178,7 +178,7 @@ const mocks = vi.hoisted(() => {
     ipcHandlers, appHandlers, protocolHandlers, windows, notifications, trays, FakeBrowserWindow, FakeDatabaseSync,
     setLinuxLoginItem: vi.fn(),
     linuxTrayHostAvailable: vi.fn(async () => true),
-    vault, worker, openPgp: { lock: vi.fn(), protect: vi.fn() }, assertOpenPgpSendable: vi.fn(async () => undefined), MailWorkerClient, store, google, microsoft, updateManager, taskService, diagnosticLogger, imapClient, image,
+    vault, worker, openPgp: { lock: vi.fn(), protect: vi.fn() }, assertOpenPgpSendable: vi.fn(async () => undefined), smime: { lock: vi.fn(), protect: vi.fn() }, assertSmimeSendable: vi.fn(async () => undefined), MailWorkerClient, store, google, microsoft, updateManager, taskService, diagnosticLogger, imapClient, image,
     get accounts() { return accounts }, set accounts(value: any[]) { accounts = value },
     failWorker(error: Error) { workerFailure = error }, emitWorker(event: any) { workerEvent?.(event) },
     setOpenResult(value: any) { dialogOpenResult = value }, setSaveResult(value: any) { dialogSaveResult = value },
@@ -246,6 +246,8 @@ vi.mock('./mail/worker-client', () => ({ MailWorkerClient: mocks.MailWorkerClien
 vi.mock('./mail/ai-assistant', () => ({ AiAssistantStore: vi.fn(), registerAiAssistant: vi.fn() }))
 vi.mock('./mail/openpgp-keyring', () => ({ OpenPgpKeyring: vi.fn(function () { return mocks.openPgp }) }))
 vi.mock('./mail/openpgp-ipc', () => ({ registerOpenPgp: vi.fn(), assertOpenPgpSendable: mocks.assertOpenPgpSendable }))
+vi.mock('./mail/smime-store', () => ({ SmimeStore: vi.fn(function () { return mocks.smime }) }))
+vi.mock('./mail/smime-ipc', () => ({ registerSmime: vi.fn(), assertSmimeSendable: mocks.assertSmimeSendable, protectOutgoingMessage: vi.fn() }))
 vi.mock('./mail/imap-client', () => ({ ImapSmtpClient: vi.fn(function () { return mocks.imapClient }) }))
 vi.mock('./mail/provider-presets', () => ({ PROVIDER_PRESETS: [{ id: 'gmail' }], validateImapAccount: mocks.validateImap }))
 vi.mock('./diagnostics', () => ({ DiagnosticLogger: vi.fn(function () { return mocks.diagnosticLogger }) }))
@@ -386,6 +388,7 @@ describe.sequential('Electron main process', () => {
     expect(invoke('app-lock:lock')).toEqual({ enabled: true, locked: true })
     // Locking also drops every cached OpenPGP passphrase.
     expect(mocks.openPgp.lock).toHaveBeenCalled()
+    expect(mocks.smime.lock).toHaveBeenCalled()
     expect(mocks.windows[0].webContents.send).toHaveBeenCalledWith('app-lock:status-changed', { enabled: true, locked: true })
     expect(() => invoke('window:open-message', { source: 'connected', accountId: 'a1b2', threadId: 'thread', title: 'Locked' })).toThrow(/Unlock Aerio/)
     const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
@@ -465,6 +468,12 @@ describe.sequential('Electron main process', () => {
     mocks.worker.request.mockClear()
     await expect(invoke('mail:drafts:send', { ...sendable, openPgp: { encrypt: true, ignored: 1 } })).rejects.toThrow(/No OpenPGP public key/)
     expect(mocks.assertOpenPgpSendable).toHaveBeenLastCalledWith(mocks.openPgp, mocks.worker, expect.objectContaining({ openPgp: { encrypt: true } }))
+    expect(mocks.worker.request).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'drafts:send' }))
+    // S/MIME is checked the same way, and a draft cannot ask for both methods.
+    mocks.assertSmimeSendable.mockRejectedValueOnce(new Error('No S/MIME certificate for: reader@example.test.'))
+    await expect(invoke('mail:drafts:send', { ...sendable, smime: { sign: true, ignored: 1 } })).rejects.toThrow(/No S\/MIME certificate/)
+    expect(mocks.assertSmimeSendable).toHaveBeenLastCalledWith(mocks.smime, mocks.worker, expect.objectContaining({ smime: { sign: true } }))
+    expect(() => invoke('mail:drafts:save', { ...sendable, openPgp: { sign: true }, smime: { encrypt: true } })).toThrow(/either OpenPGP or S\/MIME/)
     expect(mocks.worker.request).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'drafts:send' }))
     await expect(invoke('mail:drafts:list', ['a1b2'])).resolves.toHaveLength(1)
     await expect(invoke('mail:drafts:get', 'draft-1')).resolves.toMatchObject({ id: 'draft-1' })

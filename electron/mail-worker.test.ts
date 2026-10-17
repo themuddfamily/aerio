@@ -129,6 +129,7 @@ const mocks = vi.hoisted(() => {
   // Replaced with a real SQLite-backed store in the mail merge test.
   db.mailMerge = { recoverInterrupted: vi.fn(() => []), pruneSendLog: vi.fn(), dueJobs: vi.fn(() => []) } as any
   db.openPgp = { get: vi.fn((): any => ({})) }
+  db.smime = { get: vi.fn((): any => ({})) }
 
   const gmail = {
     copyToLabel: vi.fn().mockResolvedValue(undefined),
@@ -1399,6 +1400,35 @@ describe.sequential('mail worker protocol routing', () => {
     } finally {
       mocks.setOpenPgpReply(() => ({ message: 'PROTECTED' }))
       mocks.db.openPgp.get.mockImplementation(() => ({}))
+      mocks.db.getAccount.mockReturnValue(mocks.account)
+    }
+  })
+
+  it('hands S/MIME deliveries to the main process and keeps encrypted S/MIME drafts local', async () => {
+    const row = (id: string) => ({ id, account_id: 'account-1', thread_id: null, in_reply_to: null, references_json: '[]', to_json: '["ada@example.test"]', cc_json: '[]', bcc_json: '[]', subject: 'Secret', body_text: 'Body', body_html: null, attachment_paths_json: '[]', gmail_draft_id: null })
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.getDraft.mockReturnValue(undefined)
+    mocks.db.smime.get.mockImplementation((id: string) => id.startsWith('smime') ? { smime: { sign: true, encrypt: true } } : {})
+    try {
+      mocks.gmail.sendMessage.mockClear()
+      queueDeliveries([row('smime-ok')])
+      await request({ type: 'network', payload: { online: true } })
+      await vi.waitFor(() => expect(mocks.gmail.sendMessage).toHaveBeenCalledWith(Buffer.from('PROTECTED').toString('base64url'), undefined))
+      expect([...mocks.posted].reverse().find((message) => message.kind === 'openpgp-request')).toMatchObject({ options: {}, smime: { sign: true, encrypt: true }, recipients: ['ada@example.test'] })
+
+      mocks.setOpenPgpReply(() => ({ error: 'No S/MIME certificate for: ada@example.test. The message was not sent; your draft is kept.' }))
+      mocks.gmail.sendMessage.mockClear()
+      queueDeliveries([row('smime-missing')])
+      await request({ type: 'network', payload: { online: true } })
+      await vi.waitFor(() => expect(mocks.db.updateDraftResult).toHaveBeenCalledWith('smime-missing', expect.objectContaining({ status: 'failed', error: expect.stringMatching(/No S\/MIME certificate.*draft is kept/) })))
+      expect(mocks.gmail.sendMessage).not.toHaveBeenCalled()
+
+      mocks.gmail.createDraft.mockClear()
+      await expect(request({ type: 'drafts:save', payload: { id: 'smime-draft', accountId: 'account-1', to: ['ada@example.test'], cc: [], bcc: [], subject: 'S', text: 'B', references: [], attachmentPaths: [], smime: { encrypt: true } } })).resolves.toMatchObject({ result: { status: 'local' } })
+      expect(mocks.gmail.createDraft).not.toHaveBeenCalled()
+    } finally {
+      mocks.setOpenPgpReply(() => ({ message: 'PROTECTED' }))
+      mocks.db.smime.get.mockImplementation(() => ({}))
       mocks.db.getAccount.mockReturnValue(mocks.account)
     }
   })

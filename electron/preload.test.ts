@@ -318,6 +318,31 @@ describe('preload bridge', () => {
     expect(Object.keys(openPgp)).toHaveLength(calls.length)
   })
 
+  it('exposes S/MIME certificate management and message crypto with exact IPC channels', async () => {
+    const smime = api().smime!
+    const ref = { accountId: 'a', threadId: 't', messageId: 'm' }
+    const calls: [string, ...unknown[]][] = []
+    const call = async (promise: Promise<unknown>, channel: string, ...args: unknown[]) => { await promise; calls.push([channel, ...args]) }
+    await call(smime.status(), 'smime:status')
+    await call(smime.importFile(), 'smime:import-file')
+    await call(smime.retryImport('pw', 'pass'), 'smime:retry-import', 'pw', 'pass')
+    await call(smime.importText('pem'), 'smime:import-text', 'pem')
+    await call(smime.exportCertificate('F'), 'smime:export-certificate', 'F')
+    await call(smime.exportPkcs12('F', 'p', 'e'), 'smime:export-pkcs12', 'F', 'p', 'e')
+    await call(smime.delete('F'), 'smime:delete', 'F')
+    await call(smime.setTrusted('F', true), 'smime:trust', 'F', true)
+    await call(smime.unlock('F', 'p'), 'smime:unlock', 'F', 'p')
+    await call(smime.forgetPassphrases(), 'smime:forget')
+    await call(smime.preflight({ accountId: 'a', recipients: [], options: {} }), 'smime:preflight', { accountId: 'a', recipients: [], options: {} })
+    await call(smime.identityDefault({ accountId: 'a' }), 'smime:identity-default', { accountId: 'a' })
+    await call(smime.setIdentityDefault({ accountId: 'a' }, { sign: true, encrypt: false }), 'smime:set-identity-default', { accountId: 'a' }, { sign: true, encrypt: false })
+    await call(smime.inspect(ref), 'smime:inspect', ref)
+    await call(smime.decrypt(ref, 'p'), 'smime:decrypt', ref, 'p')
+    await call(smime.saveAttachment(ref, 0), 'smime:save-attachment', ref, 0)
+    for (const [channel, ...args] of calls) expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel, ...args)
+    expect(Object.keys(smime)).toHaveLength(calls.length)
+  })
+
   it('exposes provider automatic replies with exact IPC channels', async () => {
     const replies = api().mail.automaticReplies
     const settings = { enabled: true, subject: 'Away', internalMessage: 'Back Monday', externalMessage: '', externalAudience: 'all' }

@@ -178,6 +178,24 @@ const api: AerioDesktopApi = {
     decrypt: (ref, passphrase) => ipcRenderer.invoke('openpgp:decrypt', ref, passphrase),
     saveAttachment: (ref, index) => ipcRenderer.invoke('openpgp:save-attachment', ref, index)
   },
+  smime: {
+    status: () => ipcRenderer.invoke('smime:status'),
+    importFile: () => ipcRenderer.invoke('smime:import-file'),
+    retryImport: (password, passphrase) => ipcRenderer.invoke('smime:retry-import', password, passphrase),
+    importText: (pem) => ipcRenderer.invoke('smime:import-text', pem),
+    exportCertificate: (fingerprint) => ipcRenderer.invoke('smime:export-certificate', fingerprint),
+    exportPkcs12: (fingerprint, passphrase, exportPassword) => ipcRenderer.invoke('smime:export-pkcs12', fingerprint, passphrase, exportPassword),
+    delete: (fingerprint) => ipcRenderer.invoke('smime:delete', fingerprint),
+    setTrusted: (fingerprint, trusted) => ipcRenderer.invoke('smime:trust', fingerprint, trusted),
+    unlock: (fingerprint, passphrase) => ipcRenderer.invoke('smime:unlock', fingerprint, passphrase),
+    forgetPassphrases: () => ipcRenderer.invoke('smime:forget'),
+    preflight: (input) => ipcRenderer.invoke('smime:preflight', input),
+    identityDefault: (sender) => ipcRenderer.invoke('smime:identity-default', sender),
+    setIdentityDefault: (sender, value) => ipcRenderer.invoke('smime:set-identity-default', sender, value),
+    inspect: (ref) => ipcRenderer.invoke('smime:inspect', ref),
+    decrypt: (ref, passphrase) => ipcRenderer.invoke('smime:decrypt', ref, passphrase),
+    saveAttachment: (ref, index) => ipcRenderer.invoke('smime:save-attachment', ref, index)
+  },
   mail: {
     messageTools: {
       updateLocal: (ref, updates) => ipcRenderer.invoke('mail:message:local', ref, updates),

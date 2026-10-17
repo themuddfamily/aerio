@@ -205,7 +205,7 @@ export interface WorkerCredentialResponse {
   error?: string
 }
 
-/** Asks the main process to sign and/or encrypt an outgoing message; crypto never runs in the worker. */
+/** Asks the main process to sign and/or encrypt an outgoing message (OpenPGP or S/MIME); crypto never runs in the worker. */
 export interface WorkerOpenPgpRequest {
   kind: 'openpgp-request'
   id: string
@@ -213,6 +213,8 @@ export interface WorkerOpenPgpRequest {
   from: string
   recipients: string[]
   options: import('../src/openpgp-types').MailOpenPgpOptions
+  /** Present when the draft asks for S/MIME instead of OpenPGP. */
+  smime?: import('../src/smime-types').MailSmimeOptions
 }
 
 export interface WorkerOpenPgpResponse {

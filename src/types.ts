@@ -264,6 +264,7 @@ export interface AerioDesktopApi {
   mail: import('./mail-types').MailDesktopApi
   ai: import('./ai-assistant-types').AiAssistantApi
   openPgp?: import('./openpgp-types').OpenPgpApi
+  smime?: import('./smime-types').SmimeApi
   interchange: import('./interchange-types').InterchangeDesktopApi
   dav: import('./dav-types').DavDesktopApi
   contactMerge?: import('./contact-merge-types').ContactMergeDesktopApi

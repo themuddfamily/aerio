@@ -7,6 +7,7 @@ import type { LocalModuleSnapshot } from '../productivity-types'
 import Modal from './Modal'
 import AiAssistantSettings from './AiAssistantSettings'
 import OpenPgpKeyManager from './OpenPgpKeyManager'
+import SmimeCertificateManager from './SmimeCertificateManager'
 import ProfileBackupSection from './ProfileBackupSection'
 import DavAccountsSection from './DavAccountsSection'
 
@@ -316,6 +317,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
         </section>
         <AiAssistantSettings />
         <OpenPgpKeyManager />
+        <SmimeCertificateManager />
         <section className="settings-section">
           <div className="settings-icon"><MailCheck size={18} /></div>
           <div className="settings-content">
