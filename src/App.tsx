@@ -1,3 +1,5 @@
+import ProviderChatWorkspace from './views/ProviderChatWorkspace'
+import type { ProviderChatSnapshot } from './provider-chat-types'
 import {
   CalendarDays, CheckCircle2, ChevronRight, Command, ContactRound, HelpCircle, LockKeyhole, Mail,
   MessagesSquare, Moon, NotebookPen, Pin, PinOff, Plus, Search, Settings, Sparkles, Sun, UserRound, X, Zap
@@ -99,7 +101,18 @@ export default function App() {
   // Matrix chat: a display snapshot (gate, accounts, rooms) pushed by the main process.
   const [chatSnapshot, setChatSnapshot] = useState<ChatSnapshot>()
   const [chatOpenRequest, setChatOpenRequest] = useState<ChatOpenRequest>()
-  const chatAvailable = Boolean(window.aerio.chat && chatSnapshot?.gate.enabled)
+  const [providerChatSnapshot, setProviderChatSnapshot] = useState<ProviderChatSnapshot>()
+  const [providerChatOpenRequest, setProviderChatOpenRequest] = useState<{ accountId: string; roomId: string }>()
+  useEffect(() => {
+    const api = window.aerio.providerChat
+    if (!api) return
+    void api.snapshot().then(setProviderChatSnapshot).catch(() => {})
+    return api.onEvent((event) => {
+      if (event.type === 'snapshot') setProviderChatSnapshot(event.snapshot)
+      if (event.type === 'open-room') { setProviderChatOpenRequest({ accountId: event.accountId, roomId: event.roomId }); setActiveModule('chat') }
+    })
+  }, [])
+  const chatAvailable = Boolean((window.aerio.chat && chatSnapshot?.gate.enabled) || (window.aerio.providerChat && providerChatSnapshot))
   const visibleModules = useMemo(() => chatAvailable ? [...modules, chatModule] : modules, [chatAvailable])
   useEffect(() => window.aerio.chat?.onEvent((event) => {
     if (event.type === 'snapshot') setChatSnapshot(event.snapshot)
@@ -516,7 +529,7 @@ export default function App() {
             {visibleModules.map((module) => {
               const { id, label, icon: Icon } = module
               const badge = id === 'chat'
-                ? (chatSnapshot?.rooms ?? []).reduce((total, room) => total + (room.membership === 'invite' ? 1 : room.membership === 'join' && !room.muted ? room.unread : 0), 0)
+                ? (chatSnapshot?.rooms ?? []).reduce((total, room) => total + (room.membership === 'invite' ? 1 : room.membership === 'join' && !room.muted ? room.unread : 0), 0) + (providerChatSnapshot?.rooms ?? []).reduce((total, room) => total + room.unread, 0)
                 : unreadCount(connectedState, id)
               return (
                 <button key={id} className={activeModule === id ? 'active' : ''} aria-label={label} aria-current={activeModule === id ? 'page' : undefined} title={keyLabel(`module.${id}`) ? `${label} · ${keyLabel(`module.${id}`)}` : label} onClick={() => navigate(id)} onContextMenu={(event) => showModuleMenu(event, module)}>
@@ -613,7 +626,9 @@ export default function App() {
             />}
             {activeModule === 'tasks' && <TasksView state={connectedState} query={query} accounts={connectedAccounts} onChange={updateConnectedLocal} onToast={showToast} />}
             {activeModule === 'notes' && <NotesView state={connectedState} query={query} onChange={updateConnectedLocal} onToast={showToast} />}
-            {activeModule === 'chat' && chatAvailable && chatSnapshot && <ChatView chat={window.aerio.chat!} snapshot={chatSnapshot} openRequest={chatOpenRequest} onToast={showToast} />}
+            {activeModule === 'chat' && chatAvailable && (window.aerio.providerChat && providerChatSnapshot
+              ? <ProviderChatWorkspace api={window.aerio.providerChat} snapshot={providerChatSnapshot} openRequest={providerChatOpenRequest} matrixOpenId={chatOpenRequest?.id} matrixDetail={chatSnapshot?.gate.message} matrix={chatSnapshot?.gate.enabled && window.aerio.chat ? <ChatView chat={window.aerio.chat} snapshot={chatSnapshot} openRequest={chatOpenRequest} onToast={showToast} /> : undefined} onToast={showToast} />
+              : chatSnapshot?.gate.enabled && window.aerio.chat ? <ChatView chat={window.aerio.chat} snapshot={chatSnapshot} openRequest={chatOpenRequest} onToast={showToast} /> : null)}
           </div>
         </main>
       </div>

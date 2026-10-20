@@ -58,7 +58,7 @@ const MICROSOFT_INTERACTIVE_ONLY_SCOPES = new Set(['Tasks.ReadWrite', 'MailboxSe
 // The organization directory (E41) adds directory.readonly, or User.ReadBasic.All/People.Read and
 // optionally Place.Read.All/GroupMember.Read.All, the same way.
 const OPTIONAL_GOOGLE_SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/directory.readonly']
-const OPTIONAL_MICROSOFT_SCOPES = ['Files.ReadWrite', 'User.ReadBasic.All', 'People.Read', 'Place.Read.All', 'GroupMember.Read.All']
+const OPTIONAL_MICROSOFT_SCOPES = ['Chat.ReadWrite', 'ChatMessage.Send', 'Team.ReadBasic.All', 'Channel.ReadBasic.All', 'ChannelMessage.Read.All', 'ChannelMessage.Send', 'Files.ReadWrite', 'User.ReadBasic.All', 'People.Read', 'Place.Read.All', 'GroupMember.Read.All']
 
 export interface OAuthAuthorizeOptions {
   /** Opt-in scopes added to this grant on top of the mail scopes. */

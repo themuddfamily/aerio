@@ -641,6 +641,20 @@ describe('OAuthVault interactive authorization', () => {
     expect(mocks.servers[0].close).toHaveBeenCalledOnce()
   })
 
+  it('requests Teams scopes only on explicit connector consent', async () => {
+    const scopesFor = async (additionalScopes?: string[]) => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error_description: 'stop' }, false)))
+      const vault = new OAuthVault(vaultPath, { microsoftClientId })
+      await vault.authorizeMicrosoft(undefined, { additionalScopes }).catch(() => undefined)
+      return new URL(String(mocks.shell.openExternal.mock.calls.at(-1)?.[0])).searchParams.get('scope')!.split(' ')
+    }
+    const baseline = await scopesFor()
+    expect(baseline).not.toContain('Chat.ReadWrite'); expect(baseline).not.toContain('ChannelMessage.Read.All')
+    const chat = await scopesFor(['Chat.ReadWrite', 'ChatMessage.Send'])
+    expect(chat).toContain('Chat.ReadWrite'); expect(chat).toContain('ChatMessage.Send'); expect(chat).not.toContain('ChannelMessage.Read.All')
+    expect(await scopesFor(['Team.ReadBasic.All', 'Channel.ReadBasic.All', 'ChannelMessage.Read.All', 'ChannelMessage.Send'])).toEqual(expect.arrayContaining(['Team.ReadBasic.All', 'Channel.ReadBasic.All', 'ChannelMessage.Read.All', 'ChannelMessage.Send']))
+  })
+
   it('asks for opt-in cloud storage scopes only when requested and keeps them on later reconnects', async () => {
     const microsoftAccount = { accountId: 'b5e7f0d4b3e0a2c1f9e8d7c6', email: 'person@example.test' }
     const authorizeMicrosoft = async (vault: OAuthVault, options?: { additionalScopes?: string[] }) => {

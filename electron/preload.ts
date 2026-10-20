@@ -3,6 +3,21 @@ import type { AerioDesktopApi, AppPreferences } from '../src/types'
 import type { ApplyMailActionInput, MailDraftInput, MailWorkerEvent, ImapAccountInput, MailQuery } from '../src/mail-types'
 
 const api: AerioDesktopApi = {
+  providerChat: {
+    snapshot: () => ipcRenderer.invoke('provider-chat:snapshot'),
+    connect: (provider, input, accountId) => ipcRenderer.invoke('provider-chat:connect', provider, input, accountId),
+    remove: (accountId) => ipcRenderer.invoke('provider-chat:remove', accountId),
+    refresh: (accountId) => ipcRenderer.invoke('provider-chat:refresh', accountId),
+    messages: (accountId, roomId, options) => ipcRenderer.invoke('provider-chat:messages', accountId, roomId, options),
+    send: (accountId, roomId, body, threadId) => ipcRenderer.invoke('provider-chat:send', accountId, roomId, body, threadId),
+    markRead: (accountId, roomId) => ipcRenderer.invoke('provider-chat:read', accountId, roomId),
+    preferences: (accountId, previews) => ipcRenderer.invoke('provider-chat:preferences', accountId, previews),
+    onEvent: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, event: import('../src/provider-chat-types').ProviderChatEvent) => callback(event)
+      ipcRenderer.on('provider-chat:event', listener)
+      return () => ipcRenderer.removeListener('provider-chat:event', listener)
+    }
+  },
   appProfiles: {
     list: () => ipcRenderer.invoke('app-profiles:list'),
     create: (name) => ipcRenderer.invoke('app-profiles:create', name),

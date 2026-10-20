@@ -121,6 +121,17 @@ function chatApi(enabled: boolean) {
 }
 
 describe('App Chat gate', () => {
+  it('offers Teams workspace while preserving a closed Matrix gate', async () => {
+    const chat = chatApi(false)
+    const providerChat = { snapshot: vi.fn(async () => ({ available: true, providers: [{ id: 'teams', name: 'Microsoft Teams', available: true, detail: 'Work or school', fields: [] }], accounts: [], rooms: [] })), onEvent: vi.fn(() => vi.fn()) }
+    Object.defineProperty(window, 'aerio', { configurable: true, value: { ...api, chat: chat.api, providerChat } })
+    renderApp(); await screen.findByRole('region', { name: 'Mail mock' })
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Chat' }))
+    expect(await screen.findByRole('heading', { name: 'Connect chat' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Matrix' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Chat mock' })).not.toBeInTheDocument()
+  })
+
   it('keeps Chat out of navigation while the gate is closed', async () => {
     const chat = chatApi(false)
     Object.defineProperty(window, 'aerio', { configurable: true, value: { ...api, chat: chat.api } })

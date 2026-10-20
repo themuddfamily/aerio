@@ -271,6 +271,7 @@ export interface AppLockControls {
 }
 
 export interface AerioDesktopApi {
+  providerChat?: import('./provider-chat-types').ProviderChatApi
   appProfiles?: import('./app-profile-types').AppProfilesApi
   messageToolbar?: import('./lib/message-toolbar').MessageToolbarApi
   calendarWeather?: import('./calendar-weather-types').CalendarWeatherApi

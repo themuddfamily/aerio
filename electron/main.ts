@@ -1,3 +1,5 @@
+import { initializeProviderChat } from './chat/providers/main'
+import { TeamsChatAdapter } from './chat/providers/teams'
 import { AppProfileRegistry, configureProfilePaths, registerAppProfiles, selectedProfileDirectory } from './app-profiles'
 import { MailUnifiedViewsStore, registerMailUnifiedViews } from './mail/unified-views'
 import { registerMessageToolbar } from './message-toolbar'
@@ -256,6 +258,7 @@ let taskNetworkOnline = true
 let messageLocalStore: MessageLocalStore | null = null
 let mailTemplateStore: MailTemplateStore | null = null
 let profileBackups: ReturnType<typeof registerProfileBackup> | null = null
+let providerChatRuntime: ReturnType<typeof initializeProviderChat> | null = null
 let chatRuntime: ChatRuntime | null = null
 let mcpAutomation: ReturnType<typeof registerMcpAutomation> | null = null
 let readyToOpenWindows = false
@@ -1308,6 +1311,7 @@ function publishAppLockStatus() {
   if (status.locked) mailNotificationService?.clear()
   BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('app-lock:status-changed', status))
   // Locking clears Chat's decrypted renderer state and transient verification emoji; unlocking opens a pending notification route.
+  providerChatRuntime?.broadcast()
   chatRuntime?.lockChanged(status.locked)
   mcpAutomation?.lockChanged()
   return status
@@ -2468,6 +2472,18 @@ if (hasSingleInstanceLock && !profileStartupFailed) app.whenReady().then(async (
     isServiceSender: (senderId) => chatRuntime?.isServiceSender(senderId) ?? false,
     isLocked: () => appLockStatus().locked
   })
+  providerChatRuntime = initializeProviderChat({
+    userData: app.getPath('userData'),
+    adapters: [new TeamsChatAdapter({
+      configured: () => { try { return requireVault().microsoftStatus().configured } catch { return false } },
+      authorize: (expected, scopes) => requireVault().authorizeMicrosoft(expected, { additionalScopes: scopes }),
+      token: (accountId) => requireVault().microsoftAccessToken(accountId),
+      scopes: (accountId) => requireVault().grantedScopes(accountId, 'microsoft')
+    })],
+    locked: () => appLockStatus().locked, online: () => taskNetworkOnline && net.isOnline(),
+    notificationsEnabled: () => Boolean(loadPreferences().settings.notifications), quietNotifications: hideTestWindows,
+    isServiceSender: (id) => chatRuntime?.isServiceSender(id) ?? false, openMainWindow: () => openMainWindow()
+  })
   registerMailImport({ ipcMain, worker: requireMailWorker, localAccount: (account) => accountProviders.set(account.id, account.provider) })
   registerOfflineSync({ ipcMain, worker: requireMailWorker, isLocked: () => appLockStatus().locked })
   // External automation (E48): the local MCP channel listens only while enabled in Settings.
@@ -2699,6 +2715,7 @@ app.on('before-quit', () => {
   calendarReminders?.close()
   taskExtras?.dispose()
   profileBackups?.stop()
+  providerChatRuntime?.close()
   void chatRuntime?.dispose().catch(() => {})
   void mcpAutomation?.stop().catch(() => {})
   void taskService?.close().catch(() => {})
