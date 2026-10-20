@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "Aerio",
+    "slug": "aerio-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/aerio-icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "dev.aerio.mobile"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/aerio-icon.png",
+        "backgroundColor": "#6558e8"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "dev.aerio.mobile",
+      "allowBackup": false
+    },
+    "web": {
+      "favicon": "./assets/aerio-icon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ],
+      "expo-secure-store",
+      "expo-web-browser",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Unlock your private Aerio mail."
+        }
+      ],
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.aerio-unconfigured"
+        }
+      ],
+      "./plugins/with-short-cmake.cjs"
+    ],
+    "scheme": "aerio"
+  }
+}
