@@ -218,3 +218,16 @@ describe('CalendarView', () => {
     await waitFor(() => expect(props.onToast).toHaveBeenCalledWith('Event could not be deleted'))
   })
 })
+
+
+describe('Calendar agenda navigation requests', () => {
+  it('opens the requested day and event details, including read-only provider events', () => {
+    const selected = calendarEvent({ start: '2027-02-12T10:00:00Z', end: '2027-02-12T11:00:00Z' })
+    render(<ContextMenuProvider><CalendarView state={state([selected])} query="" writableCalendarIds={new Set()} {...callbacks()} openRequest={{ id: 1, day: new Date(2027, 1, 12), event: selected }} /></ContextMenuProvider>)
+    expect(screen.getByRole('button', { name: 'day' })).toHaveClass('active')
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByLabelText('Event title')).toHaveValue('Planning session')
+    expect(screen.getByLabelText('Event title')).toBeDisabled()
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('12 February 2027')
+  })
+})

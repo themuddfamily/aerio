@@ -11,6 +11,7 @@ import ProfileModal from './components/ProfileModal'
 import AppInfoModal from './components/AppInfoModal'
 import AppLockScreen from './components/AppLockScreen'
 import CalendarView from './views/CalendarView'
+import MailAgenda from './components/MailAgenda'
 import ContactsView from './views/ContactsView'
 import TasksView from './views/TasksView'
 import NotesView from './views/NotesView'
@@ -56,6 +57,15 @@ export default function App() {
   const [appLock, setAppLock] = useState<AppLockStatus>()
   const [appLockError, setAppLockError] = useState('')
   const [activeModule, setActiveModule] = useState<ModuleId>('mail')
+  const [agendaOpen, setAgendaOpen] = useState(() => {
+    try { return window.localStorage.getItem('aerio.mail.dailyAgenda') !== 'hidden' } catch { return true }
+  })
+  const [calendarOpenRequest, setCalendarOpenRequest] = useState<{ id: number; day: Date; event?: CalendarEvent }>()
+  useEffect(() => { if (activeModule !== 'calendar') setCalendarOpenRequest(undefined) }, [activeModule])
+  const setAgendaVisible = (visible: boolean) => {
+    setAgendaOpen(visible)
+    try { window.localStorage.setItem('aerio.mail.dailyAgenda', visible ? 'visible' : 'hidden') } catch { /* The choice still applies for this session. */ }
+  }
   const [query, setQuery] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [duplicatesOpen, setDuplicatesOpen] = useState(false)
@@ -525,6 +535,7 @@ export default function App() {
         <main className="app-main">
           <header className="global-bar">
             <span className={`save-indicator ${saveStatus}`} aria-live="polite">{saveStatus === 'saved' ? 'All changes saved' : 'Saving…'}</span>
+            {activeModule === 'mail' && <button className="theme-quick" aria-label="Toggle daily agenda" title="Daily agenda" aria-pressed={agendaOpen} onClick={() => setAgendaVisible(!agendaOpen)}><CalendarDays size={17} /></button>}
             <button className="theme-quick" aria-label="Toggle theme" title="Toggle theme" onClick={() => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', customThemeId: undefined } })} onContextMenu={(event) => showContextMenu(event, [
               { label: 'System theme', icon: Settings, checked: !preferences.settings.customThemeId && preferences.settings.theme === 'system', action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: 'system', customThemeId: undefined } }) },
               { label: 'Light theme', icon: Sun, checked: !preferences.settings.customThemeId && preferences.settings.theme === 'light', action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: 'light', customThemeId: undefined } }) },
@@ -534,8 +545,11 @@ export default function App() {
             </button>
           </header>
           <div className="module-content">
-            {activeModule === 'mail' && <ConnectedMailView onToast={showToast} composeRequest={composeRequest} searchRequest={mailSearchRequest} quickActionRequest={mailQuickActionRequest} pinRequest={mailPinRequest} />}
+            {activeModule === 'mail' && <div className="mail-with-agenda"><div className="mail-agenda-primary"><ConnectedMailView onToast={showToast} composeRequest={composeRequest} searchRequest={mailSearchRequest} quickActionRequest={mailQuickActionRequest} pinRequest={mailPinRequest} /></div>
+              {agendaOpen && <MailAgenda events={connectedState.events} calendars={connectedState.accounts} syncing={productivitySyncing} status={productivityMessage} onSync={() => void syncProductivity()} onClose={() => setAgendaVisible(false)} onOpen={(day, event) => { setCalendarOpenRequest((current) => ({ id: (current?.id ?? 0) + 1, day, event })); navigate('calendar') }} />}
+            </div>}
             {activeModule === 'calendar' && <CalendarView
+              openRequest={calendarOpenRequest}
               state={connectedState}
               query={query}
               onToast={showToast}

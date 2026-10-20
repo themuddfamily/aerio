@@ -34,6 +34,7 @@ export type ConferenceCalendar = Pick<SyncedCalendar, 'id' | 'provider' | 'canWr
 type CalendarMode = 'month' | 'week' | 'day' | 'agenda'
 
 interface CalendarViewProps {
+  openRequest?: { id: number; day: Date; event?: CalendarEvent }
   state: AppState
   query: string
   onToast(message: string): void
@@ -94,7 +95,7 @@ function readSecondaryZone() {
 }
 
 export default function CalendarView({
-  state, query, onToast, writableCalendarIds,
+  state, query, onToast, writableCalendarIds, openRequest,
   onSync, onEnableEditing, onSaveProviderEvent, onDeleteProviderEvent, syncing = false, sourceMessage, interchangePanel, conferenceCalendars
 }: CalendarViewProps) {
   const { showContextMenu } = useContextMenu()
@@ -104,6 +105,12 @@ export default function CalendarView({
   const [editing, setEditing] = useState<CalendarEvent | 'new' | null>(null)
   const [newDate, setNewDate] = useState<Date>(new Date())
   const [newCalendarId, setNewCalendarId] = useState<string>()
+  useEffect(() => {
+    if (!openRequest) return
+    setCursor(openRequest.day)
+    setMode('day')
+    if (openRequest.event) setEditing(openRequest.event)
+  }, [openRequest])
   const calendarIds = state.accounts.map((account) => account.id).join('\n')
   const hasWritableCalendar = writableCalendarIds.size > 0
   const canWriteCalendar = (calendarId: string) => writableCalendarIds.has(calendarId)

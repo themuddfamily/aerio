@@ -497,3 +497,32 @@ describe('App keyboard shortcuts', () => {
     expect(api.appLock.lock).not.toHaveBeenCalled()
   })
 })
+
+
+describe('Mail agenda integration', () => {
+  it('shows the sidebar alongside Mail, remembers hiding, and opens Calendar', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'localStorage')
+    const stored = new Map<string, string>()
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+      removeItem: (key: string) => stored.delete(key)
+    } })
+    window.localStorage.removeItem('aerio.mail.dailyAgenda')
+    const view = renderApp()
+    await screen.findByRole('region', { name: 'Mail mock' })
+    expect(screen.getByRole('complementary', { name: 'Daily agenda' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Hide daily agenda' }))
+    expect(screen.queryByRole('complementary', { name: 'Daily agenda' })).not.toBeInTheDocument()
+    expect(window.localStorage.getItem('aerio.mail.dailyAgenda')).toBe('hidden')
+    view.unmount()
+    renderApp()
+    await screen.findByRole('region', { name: 'Mail mock' })
+    expect(screen.queryByRole('complementary', { name: 'Daily agenda' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle daily agenda' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open day in Calendar' }))
+    expect(screen.getByRole('region', { name: 'Calendar mock' })).toBeInTheDocument()
+    window.localStorage.removeItem('aerio.mail.dailyAgenda')
+    if (descriptor) Object.defineProperty(window, 'localStorage', descriptor)
+  })
+})
