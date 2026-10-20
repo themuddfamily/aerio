@@ -1,3 +1,4 @@
+import { RocketChatAdapter } from './chat/providers/rocketchat'
 import { SlackChatAdapter } from './chat/providers/slack'
 import { initializeProviderChat } from './chat/providers/main'
 import { TeamsChatAdapter } from './chat/providers/teams'
@@ -2480,7 +2481,7 @@ if (hasSingleInstanceLock && !profileStartupFailed) app.whenReady().then(async (
       authorize: (expected, scopes) => requireVault().authorizeMicrosoft(expected, { additionalScopes: scopes }),
       token: (accountId) => requireVault().microsoftAccessToken(accountId),
       scopes: (accountId) => requireVault().grantedScopes(accountId, 'microsoft')
-    }), new SlackChatAdapter()],
+    }), new SlackChatAdapter(), new RocketChatAdapter()],
     locked: () => appLockStatus().locked, online: () => taskNetworkOnline && net.isOnline(),
     notificationsEnabled: () => Boolean(loadPreferences().settings.notifications), quietNotifications: hideTestWindows,
     isServiceSender: (id) => chatRuntime?.isServiceSender(id) ?? false, openMainWindow: () => openMainWindow()
