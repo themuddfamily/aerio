@@ -1,3 +1,4 @@
+import CalendarWeatherPanel from '../components/CalendarWeatherPanel'
 import { EventRemindersField } from '../components/EventRemindersField'
 import { eventReminders, validEventReminders } from '../lib/event-reminders'
 import {
@@ -289,6 +290,7 @@ export default function CalendarView({
             </button>
           ))}
         </div>
+        <CalendarWeatherPanel selectedDay={format(cursor, 'yyyy-MM-dd')} />
         <div className="sidebar-group calendar-zone-group">
           <label className="sidebar-label" htmlFor="calendar-secondary-zone">Secondary time zone</label>
           <select id="calendar-secondary-zone" value={secondaryZone} onChange={(event) => setSecondaryZone(event.target.value)}>

@@ -1,3 +1,4 @@
+import { CALENDAR_WEATHER_SCHEMA } from './productivity/calendar-weather'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -188,6 +189,12 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
       scrubBackup: scrubMcpBackup,
       prepareRestore: (path) => withDatabase(path, prepareRestoredMcpDatabase),
       summarize: (db) => [{ label: 'External automation settings', count: countRows(db, 'mcp_settings') }]
+    },
+    {
+      file: 'calendar-weather.sqlite',
+      label: 'Calendar weather location and forecast',
+      prepareRestore: (path) => withDatabase(path, (db) => db.exec(CALENDAR_WEATHER_SCHEMA)),
+      summarize: (db) => [{ label: 'Calendar weather settings', count: countRows(db, 'calendar_weather') }]
     },
     {
       file: 'calendar-reminders.sqlite',

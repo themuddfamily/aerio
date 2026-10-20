@@ -1,0 +1,12 @@
+.calendar-weather { display: grid; gap: 8px; }
+.calendar-weather p { margin: 0; }
+.calendar-weather details > * + * { margin-top: 8px; }
+.calendar-weather summary { cursor: pointer; font-size: 12px; overflow-wrap: anywhere; }
+.calendar-weather table { width: 100%; border-collapse: collapse; font-size: 10px; }
+.calendar-weather th, .calendar-weather td { text-align: left; padding: 5px 2px; vertical-align: top; }
+.calendar-weather td small { display: block; }
+.calendar-weather tr[aria-current=date] { background: var(--accent-soft); }
+.calendar-weather > small { font-size: 10px; color: var(--muted); }
+.calendar-weather caption { text-align: left; padding-bottom: 6px; font-weight: 600; }
+.weather-locations { list-style: none; padding: 0; }
+.weather-locations button { white-space: normal; text-align: left; }

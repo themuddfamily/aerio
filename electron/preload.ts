@@ -3,6 +3,12 @@ import type { AerioDesktopApi, AppPreferences } from '../src/types'
 import type { ApplyMailActionInput, MailDraftInput, MailWorkerEvent, ImapAccountInput, MailQuery } from '../src/mail-types'
 
 const api: AerioDesktopApi = {
+  calendarWeather: {
+    settings: () => ipcRenderer.invoke('calendar:weather:settings'),
+    configure: (settings) => ipcRenderer.invoke('calendar:weather:configure', settings),
+    search: (query) => ipcRenderer.invoke('calendar:weather:search', query),
+    forecast: () => ipcRenderer.invoke('calendar:weather:forecast')
+  },
   loadPreferences: () => ipcRenderer.invoke('preferences:load'),
   savePreferences: (preferences: AppPreferences) => ipcRenderer.invoke('preferences:save', preferences),
   chooseAttachments: () => ipcRenderer.invoke('files:choose'),
@@ -310,6 +316,7 @@ const api: AerioDesktopApi = {
     suggestReplies: (requestId, ref, automatic) => ipcRenderer.invoke('ai:replies', requestId, ref, automatic),
     compose: (requestId, input) => ipcRenderer.invoke('ai:compose', requestId, input),
     learnStyle: (requestId, sample) => ipcRenderer.invoke('ai:learn-style', requestId, sample),
+      generateRule: (requestId, input) => ipcRenderer.invoke('ai:generate-rule', requestId, input),
     search: (requestId, request) => ipcRenderer.invoke('ai:search', requestId, request),
     cancel: (requestId) => ipcRenderer.invoke('ai:cancel', requestId)
   },

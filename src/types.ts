@@ -269,6 +269,7 @@ export interface AppLockControls {
 }
 
 export interface AerioDesktopApi {
+  calendarWeather?: import('./calendar-weather-types').CalendarWeatherApi
   loadPreferences(): Promise<AppPreferences>
   savePreferences(preferences: AppPreferences): Promise<{ savedAt: string }>
   chooseAttachments(): Promise<Attachment[]>

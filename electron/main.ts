@@ -1,3 +1,4 @@
+import { CalendarWeatherService, registerCalendarWeather } from './productivity/calendar-weather'
 import { startEventReminders } from './productivity/event-reminders'
 import { normalizeThemeSettings } from '../src/lib/themes'
 import { validEventReminders } from '../src/lib/event-reminders'
@@ -220,6 +221,7 @@ let directoryIpc: ReturnType<typeof registerDirectory> | null = null
 let serverNotes: ReturnType<typeof setupServerNotes> | null = null
 let taskService: TaskService | null = null
 let taskPolling: NodeJS.Timeout | undefined
+let calendarWeather: CalendarWeatherService | null = null
 let calendarReminders: ReturnType<typeof startEventReminders> | null = null
 let taskExtras: ReturnType<typeof registerTaskExtras> | null = null
 let taskNetworkOnline = true
@@ -2346,6 +2348,8 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     },
     broadcast: (channel, payload) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send(channel, payload))
   })
+  calendarWeather = new CalendarWeatherService(join(app.getPath('userData'), 'calendar-weather.sqlite'))
+  registerCalendarWeather({ ipc: ipcMain, service: calendarWeather, locked: () => appLockStatus().locked })
   calendarReminders = startEventReminders({
     userData: app.getPath('userData'),
     events: () => [...requireProductivityStore().snapshot().events, ...(interchangeStore?.snapshot().events ?? [])],
@@ -2625,6 +2629,7 @@ app.on('before-quit', () => {
   quitting = true
   stopTrayMonitor()
   if (taskPolling) clearInterval(taskPolling)
+  calendarWeather?.close()
   calendarReminders?.close()
   taskExtras?.dispose()
   profileBackups?.stop()
