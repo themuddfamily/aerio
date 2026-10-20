@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MailAccountSummary, MailMessageDetail } from '../mail-types'
@@ -143,4 +143,28 @@ describe('offline scope UI (E36)', () => {
     expect(screen.queryByText(/download/)).not.toBeInTheDocument()
     expect(availabilitySummary(availability({ total: 1, full: 1, bodyOnly: 0, headersOnly: 0, outsideWindow: 0, bytes: 0 }))).toBe('1 cached message: 1 full · 0 bytes on this computer')
   })
+  it('never offers stale-account server searches or offline extensions after changing a unified subset', async () => {
+    const user = userEvent.setup(), onServerSearch = vi.fn()
+    offline.searchCoverage.mockResolvedValueOnce([{ accountId: 'account-1', complete: false, serverSearch: true, reasons: ['Not downloaded'] }])
+    let completeSearch!: (value: any) => void
+    offline.serverSearch.mockImplementationOnce(() => new Promise((resolve) => { completeSearch = resolve }))
+    const props = { query: 'launch', active: true, online: true, onServerSearch, onLocalResults: vi.fn(), onToast: vi.fn() }
+    const { rerender, unmount } = render(<MailSearchCoverageNotice {...props} accounts={[account()]} />)
+    await user.click(await screen.findByRole('button', { name: 'Search server' }))
+    offline.searchCoverage.mockImplementationOnce(() => new Promise(() => {}))
+    rerender(<MailSearchCoverageNotice {...props} accounts={[account({ id: 'other' })]} />)
+    expect(screen.queryByRole('button', { name: 'Search server' })).not.toBeInTheDocument()
+    await act(async () => completeSearch({ searchId: 'old-search', matched: 10, errors: [] }))
+    expect(onServerSearch).not.toHaveBeenCalled()
+    unmount()
+    offline.availability.mockResolvedValueOnce(availability({ windowStart: '2026-09-17T00:00:00.000Z' }))
+    const footerProps = { folder: 'inbox' as const, refreshKey: '1', onExtended: vi.fn(), onToast: vi.fn() }
+    const footer = render(<MailOfflineListFooter {...footerProps} accounts={[account()]} />)
+    await screen.findByRole('button', { name: 'Load more' })
+    offline.availability.mockImplementationOnce(() => new Promise(() => {}))
+    footer.rerender(<MailOfflineListFooter {...footerProps} accounts={[account({ id: 'other' })]} />)
+    expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument()
+    expect(offline.extend).not.toHaveBeenCalled()
+  })
+
 })

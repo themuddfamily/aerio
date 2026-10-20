@@ -1,3 +1,4 @@
+import { MAIL_UNIFIED_VIEWS_SCHEMA } from './mail/unified-views'
 import { CALENDAR_WEATHER_SCHEMA } from './productivity/calendar-weather'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -189,6 +190,12 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
       scrubBackup: scrubMcpBackup,
       prepareRestore: (path) => withDatabase(path, prepareRestoredMcpDatabase),
       summarize: (db) => [{ label: 'External automation settings', count: countRows(db, 'mcp_settings') }]
+    },
+    {
+      file: 'mail-unified-views.sqlite',
+      label: 'Unified mail account views',
+      prepareRestore: (path) => withDatabase(path, (db) => db.exec(MAIL_UNIFIED_VIEWS_SCHEMA)),
+      summarize: (db) => [{ label: 'Unified mail account views', count: countRows(db, 'mail_unified_views') }]
     },
     {
       file: 'calendar-weather.sqlite',

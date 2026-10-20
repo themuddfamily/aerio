@@ -1,3 +1,4 @@
+import { MailUnifiedViewsStore, registerMailUnifiedViews } from './mail/unified-views'
 import { registerMessageToolbar } from './message-toolbar'
 import { normalizeMessageToolbar } from '../src/lib/message-toolbar'
 import { CalendarWeatherService, registerCalendarWeather } from './productivity/calendar-weather'
@@ -223,6 +224,7 @@ let directoryIpc: ReturnType<typeof registerDirectory> | null = null
 let serverNotes: ReturnType<typeof setupServerNotes> | null = null
 let taskService: TaskService | null = null
 let taskPolling: NodeJS.Timeout | undefined
+let unifiedViewsStore: MailUnifiedViewsStore | null = null
 let calendarWeather: CalendarWeatherService | null = null
 let calendarReminders: ReturnType<typeof startEventReminders> | null = null
 let taskExtras: ReturnType<typeof registerTaskExtras> | null = null
@@ -1574,6 +1576,10 @@ function createTray() {
 }
 
 function registerIpc() {
+  unifiedViewsStore = new MailUnifiedViewsStore(join(app.getPath('userData'), 'mail-unified-views.sqlite'))
+  registerMailUnifiedViews({ ipc: ipcMain, store: unifiedViewsStore, accounts: () => requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' }), locked: () => appLockStatus().locked,
+    changed: (snapshot) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('mail:unified-views:changed', snapshot)) })
+
   const tasks = () => {
     if (!taskService) throw new Error('Task storage is not ready')
     return taskService
@@ -2634,6 +2640,7 @@ app.on('before-quit', () => {
   quitting = true
   stopTrayMonitor()
   if (taskPolling) clearInterval(taskPolling)
+  unifiedViewsStore?.close()
   calendarWeather?.close()
   calendarReminders?.close()
   taskExtras?.dispose()

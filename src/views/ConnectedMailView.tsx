@@ -1,3 +1,6 @@
+import MailUnifiedViewsModal from '../components/MailUnifiedViewsModal'
+import { useMailUnifiedViews } from '../lib/use-mail-unified-views'
+import { unifiedViewAccountIds, UNIFIED_MAIL_FOLDERS } from '../lib/mail-unified-views'
 import MessageToolbar from '../components/MessageToolbar'
 import {
   Archive, AtSign, CalendarClock, CheckSquare, ChevronDown, ChevronRight, Clock3, Copy, Download, Edit3, ExternalLink, Eye, FileText, Filter, FolderInput, Forward, Inbox, LoaderCircle, Mail, MailOpen,
@@ -105,8 +108,10 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const mailPanes = useResizableMailPanes()
   const [accounts, setAccounts] = useState<MailAccountSummary[]>([])
   const [labels, setLabels] = useState<MailLabel[]>([])
-  const [page, setPage] = useState<MailPage>(emptyPage)
-  const [folderUnreadCounts, setFolderUnreadCounts] = useState<MailFolderUnreadCounts>(emptyUnreadCounts)
+  const [rawPage, setPage] = useState<MailPage>(emptyPage)
+  const [pageScopeKey, setPageScopeKey] = useState('')
+  const [rawUnreadCounts, setFolderUnreadCounts] = useState<MailFolderUnreadCounts>(emptyUnreadCounts)
+  const [unreadSnapshotKey, setUnreadSnapshotKey] = useState('')
   const [accountUnreadCounts, setAccountUnreadCounts] = useState<MailAccountUnreadCounts>({})
   const [localDrafts, setLocalDrafts] = useState<MailDraftRecord[]>([])
   const [folder, setFolder] = useState<NonNullable<MailQuery['folder']>>('inbox')
@@ -117,6 +122,18 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [offlineFolder, setOfflineFolder] = useState<OfflineFolderTarget>()
   const [serverSearch, setServerSearch] = useState<{ id: string; matched: number }>()
   const [accountId, setAccountId] = useState<string>('all')
+  const unifiedViews = useMailUnifiedViews(onToast)
+  const [unifiedViewsOpen, setUnifiedViewsOpen] = useState(false)
+  const activeUnifiedView = accountId === 'all' ? unifiedViews.views.find((view) => view.id === unifiedViews.selectedId) : undefined
+  const availableAccountIds = accounts.map((account) => account.id)
+  const scopeAccountIds = accountId !== 'all' ? [accountId] : unifiedViewAccountIds(activeUnifiedView, folder, availableAccountIds)
+  const scopeKey = JSON.stringify([unifiedViews.loaded, scopeAccountIds])
+  const includesAccount = (id: string) => unifiedViews.loaded && (scopeAccountIds === undefined || scopeAccountIds.includes(id))
+  const scopedAccounts = accounts.filter((account) => includesAccount(account.id))
+  const unreadScopeKey = JSON.stringify([unifiedViews.loaded, accountId, activeUnifiedView, availableAccountIds])
+  const folderUnreadCounts = unreadSnapshotKey === unreadScopeKey ? rawUnreadCounts : emptyUnreadCounts
+  const page = pageScopeKey === scopeKey ? { ...rawPage, items: rawPage.items.filter((item) => includesAccount(item.accountId)) } : emptyPage
+
   // Inbox category tabs (E33) only split the Inbox; pinned conversations still list first within a tab.
   const inboxCategories = useInboxCategories(onToast, accountId)
   const [inboxTab, setInboxTab] = useState<MailCategoryId>('primary')
@@ -168,7 +185,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const [localTransferOpen, setLocalTransferOpen] = useState(false)
   const localAccount = localFoldersAccountOf(accounts)
   // Local Folders cannot send, so compose and reply only use server accounts.
-  const sendableAccounts = accounts.filter((account) => !account.archived && !isLocalFoldersAccount(account))
+  const sendableAccounts = accounts.filter((account) => includesAccount(account.id) && !account.archived && !isLocalFoldersAccount(account))
   const reloadLabels = useCallback(() => { void window.aerio.mail.mail.labels().then(setLabels).catch(() => undefined) }, [])
   const handledComposeRequest = useRef(0)
   const requestedMessage = useRef<{ threadKey: string; messageId: string } | undefined>(undefined)
@@ -207,17 +224,21 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
 
   const loadUnreadCounts = useCallback(async () => {
     const request = ++unreadCountRequest.current
-    if (!accounts.length) {
-      setFolderUnreadCounts(emptyUnreadCounts)
-      return
-    }
+    if (!accounts.length || !unifiedViews.loaded) { setFolderUnreadCounts(emptyUnreadCounts); setUnreadSnapshotKey(unreadScopeKey); return }
     try {
-      const counts = await window.aerio.mail.mail.unreadCounts(accountId === 'all' ? undefined : [accountId])
-      if (request === unreadCountRequest.current) setFolderUnreadCounts(counts)
+      const requests = new Map<string, Promise<MailFolderUnreadCounts>>()
+      const entries = await Promise.all(UNIFIED_MAIL_FOLDERS.map(async ({ id }) => {
+        const members = accountId !== 'all' ? [accountId] : unifiedViewAccountIds(activeUnifiedView, id, availableAccountIds)
+        const key = JSON.stringify(members) ?? 'all'
+        if (!requests.has(key)) requests.set(key, window.aerio.mail.mail.unreadCounts(members))
+        const counts = await requests.get(key)!
+        return [id, counts[id]] as const
+      }))
+      if (request === unreadCountRequest.current) { setFolderUnreadCounts(Object.fromEntries(entries) as MailFolderUnreadCounts); setUnreadSnapshotKey(unreadScopeKey) }
     } catch (error) {
       if (request === unreadCountRequest.current) onToast(error instanceof Error ? error.message : 'Unread counts could not be loaded')
     }
-  }, [accountId, accounts.length, onToast])
+  }, [unreadScopeKey, onToast])
 
   const loadAccountUnreadCounts = useCallback(async () => {
     const request = ++accountUnreadCountRequest.current
@@ -234,34 +255,34 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   }, [accountKeys, onToast])
 
   const loadDrafts = useCallback(async () => {
-    if (!accounts.length) {
+    if (!accounts.length || !unifiedViews.loaded) {
       setLocalDrafts([])
       return
     }
     try {
-      setLocalDrafts(await window.aerio.mail.drafts.list(accountId === 'all' ? undefined : [accountId]))
+      setLocalDrafts(await window.aerio.mail.drafts.list(scopeAccountIds))
     } catch (error) {
       onToast(error instanceof Error ? error.message : 'Drafts could not be loaded')
     }
-  }, [accountId, accounts.length, onToast])
+  }, [scopeKey, accounts.length, onToast])
 
   const requestMailPage = useCallback((cursor?: string) => window.aerio.mail.mail.list(serverSearch ? {
     // Server matches span the whole mailbox and may be header rows the local index cannot match.
     folder: 'all',
-    accountIds: accountId === 'all' ? undefined : [accountId],
+    accountIds: scopeAccountIds,
     serverSearchId: serverSearch.id,
     cursor,
     pageSize: 50
   } : {
     folder,
-    accountIds: accountId === 'all' ? undefined : [accountId],
+    accountIds: scopeAccountIds,
     labelId,
     search: search.trim() || undefined,
     filters: activeSearchFilterCount ? searchFilters : undefined,
     category: inboxTabsShown ? activeInboxTab : undefined,
     cursor,
     pageSize: 50
-  }), [accountId, folder, labelId, search, searchFilters, activeSearchFilterCount, inboxTabsShown, activeInboxTab, serverSearch])
+  }), [scopeKey, folder, labelId, search, searchFilters, activeSearchFilterCount, inboxTabsShown, activeInboxTab, serverSearch])
 
   const loadPage = useCallback(async () => {
     const request = ++pageRequest.current
@@ -269,7 +290,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     setLoadingMore(false)
     setLoadMoreError(false)
     // An invalid search shows its validation message instead of stale or unfiltered results.
-    if (!accounts.length || searchError) {
+    if (!accounts.length || !unifiedViews.loaded || searchError) {
       setPage(emptyPage)
       return
     }
@@ -278,6 +299,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       const next = await requestMailPage()
       if (request !== pageRequest.current) return
       setPage(next)
+      setPageScopeKey(scopeKey)
       setSelectedKey((current) => current && next.items.some((item) => `${item.accountId}:${item.id}` === current)
         ? current
         : next.items[0] ? `${next.items[0].accountId}:${next.items[0].id}` : '')
@@ -286,7 +308,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     } finally {
       if (request === pageRequest.current) setLoading(false)
     }
-  }, [accounts.length, onToast, requestMailPage, searchError])
+  }, [accounts.length, onToast, requestMailPage, searchError, scopeKey])
 
   const loadMore = useCallback(async () => {
     const cursor = page.nextCursor
@@ -383,8 +405,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     return () => clearTimeout(timer)
   }, [pendingSend])
 
-  useEffect(() => setCheckedKeys(new Set()), [accountId, folder, labelId, search, searchFilters, activeInboxTab])
-  useEffect(() => setServerSearch(undefined), [accountId, folder, labelId, search, searchFilters, activeInboxTab])
+  useEffect(() => setCheckedKeys(new Set()), [scopeKey, folder, labelId, search, searchFilters, activeInboxTab])
+  useEffect(() => setServerSearch(undefined), [scopeKey, folder, labelId, search, searchFilters, activeInboxTab])
 
   useEffect(() => {
     if (!searchFiltersOpen) return
@@ -564,7 +586,10 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     }
   }
 
-  const refreshMail = () => void startSync(accountId === 'all' ? undefined : accountId)
+  const refreshMail = () => {
+    if (scopeAccountIds === undefined) void startSync()
+    else for (const id of scopeAccountIds) { const account = accounts.find((item) => item.id === id); if (account && !account.archived && !isLocalFoldersAccount(account)) void startSync(id) }
+  }
 
   const markVisibleRead = async () => {
     const groups = new Map<string, string[]>()
@@ -737,11 +762,13 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   }
 
   function selectAccount(nextAccountId: string) {
+    void unifiedViews.select(undefined)
     setAccountId(nextAccountId)
     setLabelId(undefined)
   }
 
   function openSavedSearch(item: MailSavedSearch) {
+    if (item.accountId) void unifiedViews.select(undefined)
     setAccountId(item.accountId && accounts.some((account) => account.id === item.accountId) ? item.accountId : 'all')
     setFolder(item.folder)
     setLabelId(item.labelId)
@@ -761,6 +788,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
 
   function toggleLabel(label: MailLabel) {
     const selected = accountId === label.accountId && labelId === label.id
+    void unifiedViews.select(undefined)
     setAccountId(label.accountId)
     setLabelId(selected ? undefined : label.id)
     setFolder('all')
@@ -844,6 +872,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
   const unsnooze = (item: MailThreadSummary) => unsnoozeMany([item])
 
   const visibleLocalDrafts = (folder === 'drafts' || folder === 'scheduled') ? localDrafts.filter((draft) => {
+    if (!includesAccount(draft.accountId)) return false
     const delivery = ['scheduled', 'send-pending', 'queued'].includes(draft.status)
     if (folder === 'scheduled' ? !delivery : delivery) return false
     const term = search.trim().toLowerCase()
@@ -1017,15 +1046,13 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     )
   }
 
-  const activeProgress = sync.filter((item) => shouldShowDetailedSync(item, accounts.find((account) => account.id === item.accountId)))
-  const mailboxRefreshing = isMailboxRefreshing(accounts, sync, accountId)
-  const syncUnavailable = accountId === 'all'
-    ? !accounts.some((account) => !account.archived)
-    : Boolean(accounts.find((account) => account.id === accountId)?.archived)
+  const activeProgress = sync.filter((item) => includesAccount(item.accountId) && shouldShowDetailedSync(item, accounts.find((account) => account.id === item.accountId)))
+  const mailboxRefreshing = isMailboxRefreshing(scopedAccounts, sync, accountId)
+  const syncUnavailable = !scopedAccounts.some((account) => !account.archived && !isLocalFoldersAccount(account))
   const showFolderMenu = (event: React.MouseEvent, value: typeof folder) => showContextMenu(event, [
     { label: `Open ${folderNames[value]}`, icon: Mail, action: () => { setLabelId(undefined); setFolder(value) } },
     { label: 'New message', icon: Plus, separatorBefore: true, disabled: !sendableAccounts.length, action: () => setCompose({}) },
-    { label: 'Check for mail', icon: RefreshCw, disabled: syncUnavailable, action: () => startSync(accountId === 'all' ? undefined : accountId) },
+    { label: 'Check for mail', icon: RefreshCw, disabled: syncUnavailable, action: refreshMail },
     ...offlineFolderMenuItems(accounts.find((account) => account.id === accountId), mailboxOfflineTarget(value, folderNames[value]), setOfflineFolder)
   ], folderNames[value])
   const folderButton = (value: typeof folder, icon: React.ReactNode) => {
@@ -1045,7 +1072,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
     <div ref={mailPanes.containerRef} className="workspace mail-workspace real-mail" style={mailPanes.style}>
       <aside className="context-sidebar">
         <button className="compose-button" disabled={!sendableAccounts.length} onClick={() => setCompose({})}><Plus size={18} /> New message</button>
-        <MailFavoritesSidebar favorites={folderPrefs.preferences.favorites} accounts={accounts} labels={labels} appearance={folderPrefs.appearance} selectedAccountId={accountId} selectedLabelId={labelId} onOpen={toggleLabel} onReorder={(order) => void folderPrefs.reorder(order)} onRemove={(favorite) => void folderPrefs.removeFavorite(favorite.accountId, favorite.labelId)} onContextMenu={(event, row, index, rows) => showContextMenu(event, favoriteMenuItems(row, index, rows, {
+        <MailFavoritesSidebar favorites={activeUnifiedView ? folderPrefs.preferences.favorites.filter((favorite) => includesAccount(favorite.accountId)) : folderPrefs.preferences.favorites} accounts={activeUnifiedView ? scopedAccounts : accounts} labels={labels} appearance={folderPrefs.appearance} selectedAccountId={accountId} selectedLabelId={labelId} onOpen={toggleLabel} onReorder={(order) => void folderPrefs.reorder(order)} onRemove={(favorite) => void folderPrefs.removeFavorite(favorite.accountId, favorite.labelId)} onContextMenu={(event, row, index, rows) => showContextMenu(event, favoriteMenuItems(row, index, rows, {
           open: toggleLabel, reorder: (order) => void folderPrefs.reorder(order), rename: () => row.label && setFolderDisplay({ label: row.label, focusAlias: true }), remove: () => void folderPrefs.removeFavorite(row.favorite.accountId, row.favorite.labelId)
         }), row.name)} />
         <div className="sidebar-group">
@@ -1064,11 +1091,18 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
         </div>
         <div className="sidebar-group">
           <span className="sidebar-label">Accounts</span>
-          <button aria-label={accountLabel('All accounts', allAccountsUnread)} className={`sidebar-item ${accountId === 'all' ? 'active' : ''}`} onClick={() => selectAccount('all')} onContextMenu={(event) => showAccountMenu(event)}><span className="account-dot multi" /><span>All accounts</span>{accountBadge(allAccountsUnread)}</button>
+          <button aria-label={accountLabel('All accounts', allAccountsUnread)} className={`sidebar-item ${accountId === 'all' && !activeUnifiedView ? 'active' : ''}`}
+            disabled={!unifiedViews.loaded} onClick={() => selectAccount('all')} onContextMenu={(event) => showAccountMenu(event)}><span className="account-dot multi" /><span>All accounts</span>{accountBadge(allAccountsUnread)}</button>
+          {unifiedViews.views.map((view) => {
+            const members = unifiedViewAccountIds(view, folder, availableAccountIds) ?? []
+            const unread = members.reduce((sum, id) => sum + (accountUnreadCounts[id] ?? 0), 0)
+            return <button className={`sidebar-item ${activeUnifiedView?.id === view.id ? 'active' : ''}`} key={view.id} onClick={() => { setAccountId('all'); setLabelId(undefined); void unifiedViews.select(view.id) }} title={`${members.length} accounts in this folder`}><span className="account-dot multi" /><span>{view.name}</span>{accountBadge(unread)}</button>
+          })}
+          {unifiedViews.available && <button className="sidebar-item" onClick={() => unifiedViews.loaded ? setUnifiedViewsOpen(true) : void unifiedViews.reload()}><Settings2 size={16} /><span>{unifiedViews.loaded ? 'Manage unified views' : 'Retry loading unified views'}</span></button>}
           {accounts.map((account) => { const unread = accountUnreadCounts[account.id] ?? 0; return <button aria-label={accountLabel(account.email, unread)} className={`sidebar-item mail-account-row ${accountId === account.id ? 'active' : ''}`} key={account.id} onClick={() => selectAccount(account.id)} onContextMenu={(event) => showAccountMenu(event, account)} title={`${account.email} · ${account.provider}${account.archived ? ' · offline archive' : ''}`}><span className="account-dot" style={{ background: account.color }} /><span>{account.email}{account.archived ? ' · archive' : ''}<small className="provider-name">{account.provider}</small></span>{accountBadge(unread)}<i className={`account-state ${account.status}`} /></button> })}
           <button className="sidebar-item" onClick={addAccount}><UserPlus size={16} /><span>Add mail account</span></button>
         </div>
-          <MailFolderTreeSidebar accounts={accounts.filter((account) => account.id !== localAccount?.id)} labels={labels} accountFilter={accountId} appearance={folderPrefs.appearance} favorites={folderPrefs.favorites} selectedAccountId={accountId} selectedLabelId={labelId} showHidden={folderPrefs.showHidden} onToggleHidden={folderPrefs.toggleShowHidden} onOpen={toggleLabel} onContextMenu={(event, label) => { const selected = labelId === label.id && accountId === label.accountId; showContextMenu(event, [
+          <MailFolderTreeSidebar accounts={scopedAccounts.filter((account) => account.id !== localAccount?.id)} labels={labels} accountFilter={accountId} appearance={folderPrefs.appearance} favorites={folderPrefs.favorites} selectedAccountId={accountId} selectedLabelId={labelId} showHidden={folderPrefs.showHidden} onToggleHidden={folderPrefs.toggleShowHidden} onOpen={toggleLabel} onContextMenu={(event, label) => { const selected = labelId === label.id && accountId === label.accountId; showContextMenu(event, [
             { label: selected ? `Clear ${label.name} filter` : `Open ${label.name}`, icon: Tag, action: () => toggleLabel(label) },
             { label: 'New message', icon: Plus, separatorBefore: true, disabled: !sendableAccounts.some((account) => account.id === label.accountId), action: () => setCompose({}) },
             { label: 'Check account for mail', icon: RefreshCw, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => startSync(label.accountId) },
@@ -1076,7 +1110,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
             ...offlineFolderMenuItems(accounts.find((account) => account.id === label.accountId), { labelId: label.id, name: label.name }, setOfflineFolder),
             { label: 'Manage folders and labels…', icon: FolderInput, separatorBefore: true, disabled: Boolean(accounts.find((account) => account.id === label.accountId)?.archived), action: () => setFoldersOpen(label.accountId) }
           ], label.name) }} />
-        {localAccount && <LocalFoldersSidebar account={localAccount} labels={labels} selectedAccountId={accountId} selectedLabelId={labelId} onOpen={toggleLabel} onManage={() => setFoldersOpen(localAccount.id)} onImport={() => setImportOpen(true)} appearance={folderPrefs.appearance} showHidden={folderPrefs.showHidden} onToggleHidden={folderPrefs.toggleShowHidden} onContextMenu={(event, label) => showContextMenu(event, [
+        {localAccount && includesAccount(localAccount.id) && <LocalFoldersSidebar account={localAccount} labels={labels} selectedAccountId={accountId} selectedLabelId={labelId} onOpen={toggleLabel} onManage={() => setFoldersOpen(localAccount.id)} onImport={() => setImportOpen(true)} appearance={folderPrefs.appearance} showHidden={folderPrefs.showHidden} onToggleHidden={folderPrefs.toggleShowHidden} onContextMenu={(event, label) => showContextMenu(event, [
           { label: `Open ${label.name}`, icon: FolderInput, action: () => toggleLabel(label) },
           ...folderPreferenceMenuItems(folderPrefs, label, () => setFolderDisplay({ label })),
           { label: 'Manage Local Folders…', icon: Settings2, separatorBefore: true, action: () => setFoldersOpen(localAccount.id) },
@@ -1100,7 +1134,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
 
       <section className="mail-list-panel">
         <header className="panel-heading">
-          <div><h1>{labels.find((label) => label.id === labelId && label.accountId === accountId)?.name ?? folderNames[folder]}</h1><p>{folder === 'scheduled' ? `${visibleLocalDrafts.length.toLocaleString()} queued message${visibleLocalDrafts.length === 1 ? '' : 's'}` : `${page.total.toLocaleString()} conversations${folder === 'drafts' && visibleLocalDrafts.length ? ` · ${visibleLocalDrafts.length.toLocaleString()} editable drafts` : ''}`}</p></div>
+          <div><h1>{labels.find((label) => label.id === labelId && label.accountId === accountId)?.name ?? folderNames[folder]}{activeUnifiedView ? ` · ${activeUnifiedView.name}` : ''}</h1><p>{folder === 'scheduled' ? `${visibleLocalDrafts.length.toLocaleString()} queued message${visibleLocalDrafts.length === 1 ? '' : 's'}` : `${page.total.toLocaleString()} conversations${folder === 'drafts' && visibleLocalDrafts.length ? ` · ${visibleLocalDrafts.length.toLocaleString()} editable drafts` : ''}`}</p></div>
           <button className="icon-button" aria-label={mailboxRefreshing ? 'Checking for mail' : 'Check for mail'} title={mailboxRefreshing ? 'Checking for mail' : 'Check for mail'} onClick={refreshMail}><RefreshCw className={mailboxRefreshing ? 'spin' : undefined} size={17} /></button>
         </header>
         <div className="mail-search-shell" ref={searchShellRef}>
@@ -1113,7 +1147,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
             <button className={`mail-search-filter-button ${activeSearchFilterCount ? 'active' : ''}`} aria-expanded={searchFiltersOpen} aria-haspopup="dialog" title="Advanced search filters" onClick={() => setSearchFiltersOpen((open) => !open)}><Filter size={14} /><span>{activeSearchFilterCount || 'Filters'}</span></button>
           </div>
           {searchError && <p className="mail-search-error" role="alert">{searchError}</p>}
-          <MailSearchCoverageNotice accounts={accounts.filter((account) => accountId === 'all' || account.id === accountId)} query={search} active={Boolean(search.trim()) && !searchError} serverResults={serverSearch} online={navigator.onLine} onServerSearch={(id, matched) => setServerSearch({ id, matched })} onLocalResults={() => setServerSearch(undefined)} onToast={onToast} />
+          <MailSearchCoverageNotice accounts={scopedAccounts} query={search} active={Boolean(search.trim()) && !searchError} serverResults={serverSearch} online={navigator.onLine} onServerSearch={(id, matched) => setServerSearch({ id, matched })} onLocalResults={() => setServerSearch(undefined)} onToast={onToast} />
           {searchFiltersOpen && <MailSearchFiltersPanel value={searchFilters} onApply={(next) => { setSearchFilters(next); setSearchFiltersOpen(false) }} onClose={() => setSearchFiltersOpen(false)} />}
         </div>
         {inboxTabsShown && <InboxCategoryTabs tabs={inboxCategories.tabs} selected={activeInboxTab} counts={inboxCategories.counts} onSelect={setInboxTab} />}
@@ -1145,7 +1179,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
         })}
         <div className="message-list" id="mail-message-list" role={inboxTabsShown ? 'tabpanel' : undefined} aria-labelledby={inboxTabsShown ? `inbox-tab-${activeInboxTab.replace(':', '-')}` : undefined} ref={messageListRef} onContextMenu={(event) => showContextMenu(event, [
           { label: 'New message', icon: Plus, disabled: !sendableAccounts.length, action: () => setCompose({}) },
-          { label: 'Check for mail', icon: RefreshCw, separatorBefore: true, disabled: syncUnavailable, action: () => startSync(accountId === 'all' ? undefined : accountId) },
+          { label: 'Check for mail', icon: RefreshCw, separatorBefore: true, disabled: syncUnavailable, action: refreshMail },
           { label: 'Mark visible conversations as read', icon: MailOpen, disabled: !page.items.some((item) => item.unread), action: markVisibleRead }
         ], 'Conversation list')}>
           {visibleLocalDrafts.map((draft) => <button key={`draft:${draft.id}`} className={`message-row local-draft-row ${draft.status === 'failed' ? 'draft-failed' : ''} ${draft.status === 'scheduled' ? 'draft-scheduled' : ''}`} onClick={() => openLocalDraft(draft)} onContextMenu={(event) => showContextMenu(event, [
@@ -1201,10 +1235,11 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           {!loading && !page.items.length && !visibleLocalDrafts.length && <div className="empty-state"><Search size={28} /><h3>No conversations here</h3><p>Try another mailbox or search.</p></div>}
           {loading && <div className="empty-state"><LoaderCircle className="spin" size={28} /><p>Loading local mail…</p></div>}
           {page.nextCursor && <div className="mail-scroll-sentinel" ref={loadMoreSentinelRef} aria-live="polite">{loadingMore ? <><LoaderCircle className="spin" size={17} /><span>Loading more…</span></> : loadMoreError ? <button className="text-button" onClick={() => void loadMore()}>Couldn’t load more · Retry</button> : null}</div>}
-          {!page.nextCursor && !loading && !serverSearch && <MailOfflineListFooter accounts={accounts.filter((account) => accountId === 'all' || account.id === accountId)} folder={folder} labelId={labelId} refreshKey={`${page.total}:${page.items[0]?.id ?? ''}`} onExtended={() => void loadPage()} onToast={onToast} />}
+          {!page.nextCursor && !loading && !serverSearch && <MailOfflineListFooter accounts={scopedAccounts} folder={folder} labelId={labelId} refreshKey={`${page.total}:${page.items[0]?.id ?? ''}`} onExtended={() => void loadPage()} onToast={onToast} />}
         </div>
       </section>
 
+      {unifiedViewsOpen && <MailUnifiedViewsModal accounts={accounts} views={unifiedViews.views} onSave={unifiedViews.save} onRemove={unifiedViews.remove} onClose={() => setUnifiedViewsOpen(false)} />}
       <MailPaneSeparator pane="list" value={mailPanes.widths.list} onPointerDown={mailPanes.startResize} onKeyDown={mailPanes.resizeWithKeyboard} onReset={mailPanes.resetWidths} />
 
       <section className="reader-panel">
@@ -1261,7 +1296,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       {savingSearch && <MailSaveSearchModal accounts={accounts} labels={labels} initial={savingSearch} onClose={() => setSavingSearch(undefined)} onSave={async (input) => { const saved = await savedSearches.save(input); openSavedSearch(saved); onToast(`Saved “${saved.name}”`) }} />}
       {replyWatchesOpen && <MailReplyWatchesModal accounts={accounts} onToast={onToast} onClose={() => setReplyWatchesOpen(false)} />}
       {mailMergesOpen && <MailMergeJobsModal accounts={accounts} onToast={onToast} onClose={() => setMailMergesOpen(false)} />}
-      {attachmentsOpen && <MailAttachmentsModal accounts={accounts} onToast={onToast} onClose={() => setAttachmentsOpen(false)} />}
+      {attachmentsOpen && <MailAttachmentsModal accounts={scopedAccounts} onToast={onToast} onClose={() => setAttachmentsOpen(false)} />}
       {quickActionsOpen && <MailQuickActionsModal accounts={accounts} labels={labels} quickActions={quickActions.quickActions} onSave={async (input) => { const saved = await quickActions.save(input); onToast(`Saved “${saved.name}”`) }} onDelete={quickActions.remove} onClose={() => setQuickActionsOpen(false)} />}
       {rulesOpen && <MailRulesModal accounts={accounts} labels={labels} onToast={onToast} onClose={() => setRulesOpen(false)} />}
       {offlineFolder && <MailFolderOfflineModal target={offlineFolder} onClose={() => setOfflineFolder(undefined)} onToast={onToast} />}

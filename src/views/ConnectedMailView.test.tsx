@@ -96,6 +96,7 @@ const renderMail = (props: any = {}) => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  delete (api.mail as any).unifiedViews
   accountsResult = [account()]
   pageResult = initialPage
   unreadCountsResult = { inbox: 2, starred: 1, important: 0, sent: 0, drafts: 0, scheduled: 0, snoozed: 0, archive: 1, spam: 0, trash: 0, all: 3 }
@@ -1017,4 +1018,37 @@ describe('ConnectedMailView', () => {
     await waitFor(() => expect(favorites.getAllByRole('button')).toHaveLength(1))
     expect(imapTree.getByRole('button', { name: 'Project' })).toBeInTheDocument()
   })
+  it('loads a persisted unified view before querying and keeps search, pagination, drafts and actions inside its accounts', async () => {
+    const user = userEvent.setup()
+    accountsResult = [account(), account({ id: 'other', email: 'other@example.test' })]
+    pageResult = { ...initialPage, items: [...initialPage.items, summary({ accountId: 'other', id: 'foreign', subject: 'Excluded account message' })] }
+    let resolveSnapshot!: (snapshot: any) => void
+    const snapshot = { selectedId: 'work', views: [{ id: 'work', name: 'Work accounts', accountIds: ['account'], folderAccountIds: { sent: [] } }] }
+    const unifiedViews = { snapshot: vi.fn(() => new Promise((resolve) => { resolveSnapshot = resolve })), onChanged: vi.fn(() => () => {}), select: vi.fn(async (id?: string) => ({ ...snapshot, selectedId: id })), save: vi.fn(), remove: vi.fn() }
+    ;(api.mail as any).unifiedViews = unifiedViews
+    renderMail()
+    await waitFor(() => expect(api.mail.accounts.list).toHaveBeenCalled())
+    expect(api.mail.mail.list).not.toHaveBeenCalled()
+    await act(async () => resolveSnapshot(snapshot))
+    await screen.findByRole('heading', { name: 'Inbox · Work accounts' })
+    await screen.findByText('Launch & plans')
+    expect(screen.queryByText('Excluded account message')).not.toBeInTheDocument()
+    expect(api.mail.mail.list.mock.calls.every(([query]) => JSON.stringify(query.accountIds) === '["account"]')).toBe(true)
+    await user.click(within(document.querySelector('.context-sidebar')!).getByRole('button', { name: 'Drafts' }))
+    await waitFor(() => expect(api.mail.drafts.list).toHaveBeenCalledWith(['account']))
+    await user.click(within(document.querySelector('.context-sidebar')!).getByRole('button', { name: /Inbox/ }))
+    expect(api.mail.mail.unreadCounts).toHaveBeenCalledWith([])
+    await user.type(screen.getByLabelText('Search mail'), 'launch')
+    await waitFor(() => expect(api.mail.mail.list).toHaveBeenCalledWith(expect.objectContaining({ accountIds: ['account'], search: 'launch' })))
+    await act(async () => observerCallback?.([{ isIntersecting: true }]))
+    await waitFor(() => expect(api.mail.mail.list).toHaveBeenCalledWith(expect.objectContaining({ accountIds: ['account'], search: 'launch', cursor: 'next' })))
+    expect(api.mail.mail.action.mock.calls.every(([input]) => input.accountId === 'account')).toBe(true)
+    await user.click(within(document.querySelector('.context-sidebar')!).getByRole('button', { name: 'Sent' }))
+    await waitFor(() => expect(api.mail.mail.list).toHaveBeenCalledWith(expect.objectContaining({ folder: 'sent', accountIds: [] })))
+    expect(document.querySelectorAll('.message-row')).toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: /All accounts/ }))
+    await waitFor(() => expect(unifiedViews.select).toHaveBeenCalledWith(undefined))
+    await waitFor(() => expect(api.mail.mail.list).toHaveBeenCalledWith(expect.objectContaining({ accountIds: undefined })))
+  })
+
 })

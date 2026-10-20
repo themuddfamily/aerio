@@ -1,5 +1,5 @@
 import { CloudDownload, Database, HardDrive, LoaderCircle, RotateCcw, Save, Search, WifiOff } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MailAccountSummary, MailFolder, MailLabel, MailMessageDetail } from '../mail-types'
 import type {
   MailDownloadMode,
@@ -286,14 +286,15 @@ export function MailOfflineListFooter({ accounts, folder, labelId, refreshKey, o
     return () => { active = false }
   }, [accountKey, api, location, refreshKey])
 
-  const limited = reports.filter((report) => report.windowStart)
-  const loadingAll = reports.find((report) => report.loadAllUntil)
+  const scopedReports = reports.filter((report) => scoped.some((account) => account.id === report.accountId))
+  const limited = scopedReports.filter((report) => report.windowStart)
+  const loadingAll = scopedReports.find((report) => report.loadAllUntil)
   if (!api || (!limited.length && !loadingAll)) return null
   const earliest = limited.map((report) => report.windowStart!).sort()[0]
   const extend = async (mode: 'more' | 'all') => {
     setBusy(mode)
     try {
-      await api.extend({ accountIds: (limited.length ? limited : reports).map((report) => report.accountId), folder, ...(labelId ? { labelId } : {}), mode })
+      await api.extend({ accountIds: (limited.length ? limited : scopedReports).map((report) => report.accountId), folder, ...(labelId ? { labelId } : {}), mode })
       onToast(mode === 'all' ? 'Downloading all mail for this folder for the next 24 hours' : 'Downloading older mail for this folder')
       onExtended()
     } catch (reason) {
@@ -329,6 +330,10 @@ export function MailSearchCoverageNotice({ accounts, query, active, serverResult
   const [coverage, setCoverage] = useState<MailSearchCoverage[]>([])
   const [busy, setBusy] = useState(false)
   const accountKey = accounts.map((account) => account.id).join(',')
+  const currentAccountKey = useRef(accountKey)
+  currentAccountKey.current = accountKey
+  useEffect(() => { currentAccountKey.current = accountKey; setBusy(false); return () => { currentAccountKey.current = '' } }, [accountKey])
+
 
   useEffect(() => {
     if (!api || !active || !accountKey) return
@@ -337,19 +342,20 @@ export function MailSearchCoverageNotice({ accounts, query, active, serverResult
     return () => { current = false }
   }, [accountKey, active, api])
 
-  if (!api || !active) return null
+  if (!api || !active || !accountKey) return null
   if (serverResults) return <div className="mail-search-coverage server">
     <CloudDownload size={14} />
     <span>Showing {count(serverResults.matched)} server match{serverResults.matched === 1 ? '' : 'es'} across the whole mailbox. Messages that were not downloaded open from the server.</span>
     <button className="text-button" onClick={onLocalResults}>Show downloaded results</button>
   </div>
-  const incomplete = coverage.filter((item) => !item.complete)
+  const incomplete = coverage.filter((item) => !item.complete && accounts.some((account) => account.id === item.accountId))
   if (!incomplete.length) return null
   const searchable = incomplete.filter((item) => item.serverSearch)
   const run = async () => {
     setBusy(true)
     try {
       const result = await api.serverSearch({ accountIds: searchable.map((item) => item.accountId), query: query.trim() })
+      if (currentAccountKey.current !== accountKey) return
       for (const failure of result.errors) onToast(`${accounts.find((account) => account.id === failure.accountId)?.email ?? 'An account'}: ${failure.message}`)
       onServerSearch(result.searchId, result.matched)
     } catch (reason) {

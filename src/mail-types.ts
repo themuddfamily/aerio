@@ -41,8 +41,6 @@ export interface MailCredentialStatus {
 }
 
 export interface MailAccountSummary {
-  saveRepliesWithOriginal?: boolean
-  replyFilingIssues?: { subject: string; reason: string }[]
   id: string
   provider: MailProviderId
   email: string
@@ -56,6 +54,8 @@ export interface MailAccountSummary {
   signature: string
   notifications: boolean
   syncEnabled: boolean
+  saveRepliesWithOriginal?: boolean
+  replyFilingIssues?: { subject: string; reason: string }[]
 }
 
 export interface ImapServerSettings {
@@ -409,6 +409,7 @@ export interface MailSearchFilters {
 export type MailFolder = 'inbox' | 'starred' | 'important' | 'sent' | 'drafts' | 'scheduled' | 'snoozed' | 'archive' | 'spam' | 'trash' | 'all'
 
 export interface MailQuery {
+  /** Undefined includes every account; an empty array includes none. */
   accountIds?: string[]
   folder?: MailFolder
   labelId?: string
@@ -607,13 +608,13 @@ export interface MailDraftResult {
 }
 
 export interface MailAccountSettingsInput {
-  saveRepliesWithOriginal?: boolean
   accountId: string
   displayName: string
   color: string
   signature: string
   notifications: boolean
   syncEnabled: boolean
+  saveRepliesWithOriginal?: boolean
 }
 
 export interface MailDraftRecord extends Omit<MailDraftInput, 'id'>, MailDraftResult {}
@@ -793,6 +794,7 @@ export interface MailDiagnosticHealth {
 }
 
 export interface MailDesktopApi {
+  unifiedViews?: import('./mail-unified-view-types').MailUnifiedViewsApi
   messageTools: MessageToolsApi
   automaticReplies: MailAutomaticRepliesApi
   cloudAttachments: import('./cloud-attachment-types').CloudAttachmentsApi

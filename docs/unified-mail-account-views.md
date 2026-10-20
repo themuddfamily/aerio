@@ -1,0 +1,15 @@
+# Saved unified account views (D24)
+
+Use **Accounts → Manage unified views** in Mail to create, rename, edit, or delete named account groups. Select one or more accounts, then save. Saved views appear beside **All accounts** and individual accounts in the sidebar. Clicking a saved view applies it to the unified Mailboxes; choosing All accounts or an individual account leaves the view.
+
+Each view has base account membership. In **Folder membership**, a unified folder can optionally narrow that membership, including to an empty set. Other folders inherit the base group. This supports a Work group whose Inbox includes two accounts and whose Sent folder includes only one. Unavailable/deleted accounts are excluded at resolution time; a group with no remaining accounts stays empty. Saving an edited group removes unavailable references.
+
+The selected named view persists across restarts. View definitions and selection live in `mail-unified-views.sqlite`, included in full profile backups. Up to 30 named views are supported, each with at most 200 accounts. Changes are broadcast to open windows. The editor checks names, account identities, supported folders, and that folder overrides cannot introduce accounts outside the base group. IPC refuses reads and changes while Aerio is locked, and saves validate against current accounts in the desktop process.
+
+The resolved membership applies to conversation queries, local and advanced search, server-search queries and coverage, pagination, local/scheduled drafts, folder unread badges, attachment browsing, offline download extensions, and checking the current view for mail. Each folder badge uses that folder's override. Existing account-row badges remain account inbox unread counts; a saved-view row aggregates those counts for its current folder membership.
+
+The list and reader stop displaying an earlier account scope immediately during a scope change. Bulk and context actions take their targets from the scoped list. A persisted selection loads before the first mail query, so startup does not briefly query every account. Database query semantics distinguish `accountIds: undefined` (all accounts) from `accountIds: []` (none), including counts and drafts. Older pagination cursors and server search IDs cannot widen the selected account scope.
+
+Account rows remain navigation shortcuts, and an individual provider folder opens its account as before. Account management and mail-transfer destination choices still list available accounts so the user can explicitly choose another destination. Selecting a saved search scoped to a specific account opens that account; a saved search with no account keeps the current unified group. Unified groups do not alter provider folders or synchronization policies stored on each account.
+
+Validation covers persistence/selection, membership validation, empty folder overrides, query/search/server-search/pagination isolation, unread counts, drafts, configuration UI, preload subscriptions, scoped startup and actions, and preventing stale offline/search coverage from offering excluded accounts after a view changes.

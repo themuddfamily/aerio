@@ -922,8 +922,8 @@ export class MailDatabase {
   }
 
   folderUnreadCounts(accountIds?: string[]): MailFolderUnreadCounts {
-    const accountFilter = accountIds?.length
-      ? `AND t.account_id IN (${accountIds.map(() => '?').join(',')})`
+    const accountFilter = accountIds !== undefined
+      ? accountIds.length ? `AND t.account_id IN (${accountIds.map(() => '?').join(',')})` : 'AND 0=1'
       : ''
     const row = this.db.prepare(`
       WITH unread_threads AS (
@@ -982,6 +982,7 @@ export class MailDatabase {
   }
 
   listThreads(query: MailQuery): MailPage {
+    if (query.accountIds?.length === 0) return { items: [], total: 0 }
     const pageSize = Math.min(Math.max(query.pageSize ?? 50, 1), 100)
     const where: string[] = ['1=1']
     const params: (string | number)[] = []
@@ -1388,6 +1389,7 @@ export class MailDatabase {
   }
 
   listDrafts(accountIds?: string[]) {
+    if (accountIds?.length === 0) return []
     const where = [`status NOT IN ('sent','discarded','discard-queued')`]
     const params: string[] = []
     if (accountIds?.length) {

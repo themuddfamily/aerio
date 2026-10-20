@@ -376,6 +376,17 @@ const api: AerioDesktopApi = {
     }
   },
   mail: {
+    unifiedViews: {
+      snapshot: () => ipcRenderer.invoke('mail:unified-views:snapshot'),
+      save: (view) => ipcRenderer.invoke('mail:unified-views:save', view),
+      remove: (id) => ipcRenderer.invoke('mail:unified-views:remove', id),
+      select: (id) => ipcRenderer.invoke('mail:unified-views:select', id),
+      onChanged: (callback) => {
+        const listener = (_event: Electron.IpcRendererEvent, snapshot: import('../src/mail-unified-view-types').MailUnifiedViewsSnapshot) => callback(snapshot)
+        ipcRenderer.on('mail:unified-views:changed', listener)
+        return () => ipcRenderer.removeListener('mail:unified-views:changed', listener)
+      }
+    },
     messageTools: {
       updateLocal: (ref, updates) => ipcRenderer.invoke('mail:message:local', ref, updates),
       save: (ref) => ipcRenderer.invoke('mail:message:save', ref),
@@ -441,6 +452,17 @@ const api: AerioDesktopApi = {
       disconnect: (accountId, mode) => ipcRenderer.invoke('mail:accounts:disconnect', accountId, mode)
     },
     mail: {
+    unifiedViews: {
+      snapshot: () => ipcRenderer.invoke('mail:unified-views:snapshot'),
+      save: (view) => ipcRenderer.invoke('mail:unified-views:save', view),
+      remove: (id) => ipcRenderer.invoke('mail:unified-views:remove', id),
+      select: (id) => ipcRenderer.invoke('mail:unified-views:select', id),
+      onChanged: (callback) => {
+        const listener = (_event: Electron.IpcRendererEvent, snapshot: import('../src/mail-unified-view-types').MailUnifiedViewsSnapshot) => callback(snapshot)
+        ipcRenderer.on('mail:unified-views:changed', listener)
+        return () => ipcRenderer.removeListener('mail:unified-views:changed', listener)
+      }
+    },
       labels: (accountIds) => ipcRenderer.invoke('mail:labels:list', accountIds),
       suggestRecipients: (query, accountIds) => ipcRenderer.invoke('mail:recipients:suggest', query, accountIds),
       list: (query: MailQuery) => ipcRenderer.invoke('mail:threads:list', query),
