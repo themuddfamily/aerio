@@ -1,3 +1,4 @@
+import { initializeAppleScript } from './apple-script'
 import { XmppChatAdapter } from './chat/providers/xmpp'
 import { registerTaskDelegations } from './task-delegations-ipc'
 import { IceWarpChatAdapter } from './chat/providers/icewarp'
@@ -270,6 +271,7 @@ let providerChatRuntime: ReturnType<typeof initializeProviderChat> | null = null
 let aiAssistantRuntime: ReturnType<typeof registerAiAssistant> | undefined
 let chatRuntime: ChatRuntime | null = null
 let mcpAutomation: ReturnType<typeof registerMcpAutomation> | null = null
+let appleScriptAutomation: ReturnType<typeof initializeAppleScript> | null = null
 let settingsSync: SettingsSyncService | undefined
 let readyToOpenWindows = false
 const senderFaviconCache = new Map<string, { image: Buffer | null; expiresAt: number }>()
@@ -2534,6 +2536,13 @@ if (hasSingleInstanceLock && !profileStartupFailed) app.whenReady().then(async (
     changed: (status) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('mcp:changed', status)),
     diagnostic: (level, event, details, message) => diagnostic({ level, component: 'app', event, details, message })
   })
+  if (process.platform === 'darwin') {
+    try {
+      appleScriptAutomation = initializeAppleScript({ platform: process.platform,
+        addonPath: join(app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'build'), 'native', 'apple-script.node'),
+        runtime: () => mcpAutomation, locked: () => appLockStatus().locked })
+    } catch { diagnostic({ level: 'error', component: 'app', event: 'applescript-unavailable', message: 'The native AppleScript integration could not be loaded.' }) }
+  }
   registerMailArchiving({ ipcMain, worker: requireMailWorker, isLocked: () => appLockStatus().locked })
   registerMailInboxCategories({ ipcMain, worker: requireMailWorker })
   profileBackups = registerProfileBackup({
@@ -2748,6 +2757,7 @@ app.on('before-quit', () => {
   providerChatRuntime?.close()
   void chatRuntime?.dispose().catch(() => {})
   void mcpAutomation?.stop().catch(() => {})
+  appleScriptAutomation?.close()
   void taskService?.close().catch(() => {})
   updates?.stop()
   interchangeService?.dispose()

@@ -28,6 +28,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Compile native Apple-event integration for this architecture
+        run: npm run build:mac-native
       - run: npm test
       - run: npm run test:imap
       - run: npm run test:live-matrix

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
+import { auditMacAppleScript } from './mac-applescript-audit.mjs'
 
 export async function auditMacIntegration(application, page, preferences) {
+  await auditMacAppleScript(application, page)
   try {
     const registration = await page.evaluate(async (value) => {
       try { await window.aerio.savePreferences({ ...value, settings: { ...value.settings, launchAtLogin: true } }); return { saved: true } }

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+<dictionary title="Aerio Scripting Dictionary">
+  <suite name="Aerio Automation" code="AerI" description="Authenticated mail automation using Aerio's external automation permissions.">
+    <command name="call tool" code="AerIcall" description="Call an enabled Aerio mail tool. JSON contains name and arguments; returns a JSON result or error. Requires an issued client token, enabled External automation, allowed accounts and an unlocked app.">
+      <direct-parameter type="text" description="JSON object: {&quot;name&quot;:&quot;list_accounts&quot;,&quot;arguments&quot;:{}}" />
+      <parameter name="authorization" code="tokn" type="text" description="Client token issued once in Settings → External automation." />
+      <result type="text" description="JSON with ok and result, or ok=false and error." />
+    </command>
+  </suite>
+</dictionary>

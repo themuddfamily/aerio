@@ -9,6 +9,7 @@ coverage/
 live-test-config.local.json
 live-test-evidence/
 *.tsbuildinfo
+build/native/
 *.log
 .DS_Store
 Thumbs.db
