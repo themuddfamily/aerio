@@ -18,6 +18,14 @@ const api: AerioDesktopApi = {
       return () => ipcRenderer.removeListener('provider-chat:event', listener)
     }
   },
+  taskDelegations: {
+    list: () => ipcRenderer.invoke('task-delegations:list'),
+    assign: (input) => ipcRenderer.invoke('task-delegations:assign', input),
+    update: (input) => ipcRenderer.invoke('task-delegations:update', input),
+    respond: (input) => ipcRenderer.invoke('task-delegations:respond', input),
+    inspect: (accountId, messageId) => ipcRenderer.invoke('task-delegations:inspect', { accountId, messageId }),
+    retry: (draftId) => ipcRenderer.invoke('task-delegations:retry', { draftId })
+  },
   settingsSync: {
     status: () => ipcRenderer.invoke('settings-sync:status'),
     configure: (configuration) => ipcRenderer.invoke('settings-sync:configure', configuration),

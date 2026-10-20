@@ -1,5 +1,6 @@
 import { Check, Copy, Edit3, Plus, RefreshCw, Repeat2, Trash2, Undo2 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
+import { DelegateTaskButton } from '../components/TaskDelegation'
 import TaskFieldsEditor from '../components/TaskFieldsEditor'
 import TaskFieldChips, { connectedTaskFields } from '../components/TaskFieldChips'
 import { TASK_FIELD_CAPABILITIES, type TaskExtendedFields } from '../task-fields-types'
@@ -88,7 +89,7 @@ export default function ProviderTasksPanel({ snapshot, listId, query, showComple
           {task.fields.native?.recurrence && <em><Repeat2 size={13} /> {task.fields.native.recurrence.pattern.type} in Microsoft</em>}
           {task.remote?.native?.caldav?.recurrence && <em title={describeRecurrenceRule(task.remote.native.caldav.recurrence)}><Repeat2 size={13} /> Repeats</em>}{task.remote?.native?.caldav?.recurrenceId && <em><Repeat2 size={13} /> One occurrence</em>}{task.fields.native?.status === 'cancelled' && <em>Cancelled</em>}{task.fields.due && task.fields.native?.dueTimeZone && <em>{task.fields.native.dueTimeZone}</em>}
           <TaskFieldChips fields={connectedTaskFields(task)} completed={task.fields.completed} />
-        </span></button><span className={`priority-dot ${task.fields.native?.priority ?? task.local.priority}`} title={`${task.fields.native?.priority ?? task.local.priority} priority`} />
+        </span></button>{!task.remote?.assigned && <DelegateTaskButton title={task.fields.title} notes={task.fields.notes} due={task.fields.due} source={{ kind: 'provider', id: task.id }} />}<span className={`priority-dot ${task.fields.native?.priority ?? task.local.priority}`} title={`${task.fields.native?.priority ?? task.local.priority} priority`} />
       </div>)}
       {!tasks.length && <div className="empty-state"><h3>No tasks on this list</h3><p>{query ? 'Try another search.' : 'Create a task or synchronize this list.'}</p></div>}
     </div>

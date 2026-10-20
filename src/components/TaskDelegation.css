@@ -1,0 +1,5 @@
+.delegation-card { margin:16px 24px; padding:16px; border:1px solid var(--line); border-radius:10px; }
+.delegation-card h3 { margin:0 0 8px; }.delegation-card p,.delegation-explanation { color:var(--muted); overflow-wrap:anywhere; }.delegation-explanation { padding:0 24px; }
+.delegation-card fieldset { border:0; padding:12px 0; display:flex; flex-wrap:wrap; gap:10px; align-items:end; }.delegation-card label,.delegation-form label { display:flex; flex-direction:column; gap:6px; }
+.delegation-form { display:grid; gap:14px; }.delegation-form input,.delegation-form textarea,.delegation-form select,.delegation-card textarea,.delegation-card input { padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--surface); color:var(--text); }
+.delegation-notes { white-space:pre-wrap; }.delegation-delivery { font-size:12px; }.delegation-card textarea { min-width:240px; }

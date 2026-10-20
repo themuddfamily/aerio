@@ -8,6 +8,7 @@ import Modal from '../components/Modal'
 import { uid } from '../lib/domain'
 import type { AppState, Task } from '../types'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
+import { DelegateTaskButton, TaskDelegationPanel } from '../components/TaskDelegation'
 import ProviderTasksPanel from './ProviderTasksPanel'
 import ProviderTaskLists from './ProviderTaskLists'
 import type { TaskEntity, TaskSnapshot } from '../task-provider-types'
@@ -229,9 +230,10 @@ export default function TasksView({ state, query, onChange, onToast, accounts = 
   return (
     <div className="workspace">
       <aside className="context-sidebar">
-        <button className="compose-button" disabled={Boolean(providerListId && (!provider.lists.find((item) => item.id === providerListId) || provider.lists.find((item) => item.id === providerListId)?.readOnly))} onClick={() => providerListId ? setProviderEditing('new') : setEditing('new')}><Plus size={18} /> New task</button>
+        <button className="compose-button" disabled={list === 'Delegated tasks' || Boolean(providerListId && (!provider.lists.find((item) => item.id === providerListId) || provider.lists.find((item) => item.id === providerListId)?.readOnly))} onClick={() => providerListId ? setProviderEditing('new') : setEditing('new')}><Plus size={18} /> New task</button>
         <div className="sidebar-group">
           <span className="sidebar-label">Smart lists</span>
+          {window.aerio?.taskDelegations && <button className={`sidebar-item ${list === 'Delegated tasks' ? 'active' : ''}`} onClick={() => setList('Delegated tasks')}><ListTodo size={17} /><span>Delegated tasks</span></button>}
           <button className={`sidebar-item ${list === 'All tasks' ? 'active' : ''}`} onClick={() => setList('All tasks')} onContextMenu={(event) => showListMenu(event, 'All tasks')}><ListTodo size={17} /><span>All tasks</span><em>{state.tasks.filter((task) => !task.completed).length}</em></button>
           {lists.map((item) => (
             <button className={`sidebar-item ${list === item ? 'active' : ''}`} key={item} onClick={() => setList(item)} onContextMenu={(event) => showListMenu(event, item)}>
@@ -264,7 +266,10 @@ export default function TasksView({ state, query, onChange, onToast, accounts = 
           <div><strong>Nice rhythm</strong><p>{state.tasks.filter((task) => task.completed).length} of {state.tasks.length} tasks complete</p></div>
         </div>
       </aside>
-      {providerListId ? <ProviderTasksPanel key={providerListId} reminders={reminders} snapshot={provider} listId={providerListId} query={query} showCompleted={showCompleted} setShowCompleted={setShowCompleted} editing={providerEditing} setEditing={setProviderEditing} onSnapshot={setProvider} onToast={onToast} /> : <section className="module-panel tasks-panel">
+      {list === 'Delegated tasks' && !providerListId ? <TaskDelegationPanel onOpenSource={(source) => {
+        if (source.kind === 'local') { const task = state.tasks.find((item) => item.id === source.id); if (task) { setList(task.listId); setEditing(task) } else onToast('The original task is no longer available') }
+        else { const task = provider.tasks.find((item) => item.id === source.id); if (task) { setProviderListId(task.listId); setProviderEditing(task) } else onToast('The original connected task is no longer available') }
+      }} /> : providerListId ? <ProviderTasksPanel key={providerListId} reminders={reminders} snapshot={provider} listId={providerListId} query={query} showCompleted={showCompleted} setShowCompleted={setShowCompleted} editing={providerEditing} setEditing={setProviderEditing} onSnapshot={setProvider} onToast={onToast} /> : <section className="module-panel tasks-panel">
         <header className="module-header">
           <div><h1>{list}</h1><p>{tasks.filter((task) => !task.completed).length} still open</p></div>
           <label className="check-label"><input type="checkbox" checked={showCompleted} onChange={(event) => setShowCompleted(event.target.checked)} /> Show completed</label>
@@ -290,6 +295,7 @@ export default function TasksView({ state, query, onChange, onToast, accounts = 
                     <TaskFieldChips fields={task} completed={task.completed} />
                   </span>
                 </button>
+                <DelegateTaskButton title={task.title} notes={task.notes} due={task.due} source={{ kind: 'local', id: task.id }} />
                 <span className={`priority-dot ${task.priority}`} title={`${task.priority} priority`} />
               </div>
             )

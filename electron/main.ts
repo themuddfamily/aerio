@@ -1,3 +1,4 @@
+import { registerTaskDelegations } from './task-delegations-ipc'
 import { IceWarpChatAdapter } from './chat/providers/icewarp'
 import { SettingsSyncService } from './settings-sync'
 import { settingsSyncAdapter } from './settings-sync-data'
@@ -1763,6 +1764,7 @@ function registerIpc() {
       }
     })
   })
+  registerTaskDelegations(ipcMain, requireMailWorker, () => { if (appLockStatus().locked) throw new Error('Unlock Aerio before opening task assignments.') })
   registerSettingsSync(ipcMain, settingsSync)
   settingsSync.start()
   registerMessageToolbar({ ipcMain, load: loadPreferences, save: savePreferences,

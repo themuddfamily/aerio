@@ -602,4 +602,15 @@ describe('settings synchronization preload bridge', () => {
     expect(changed).toHaveBeenCalledWith({ schemaVersion: 1 })
     unsubscribe(); expect(mocks.listeners.get('settings-sync:applied')).toHaveLength(0)
   })
+  it('exposes explicit task delegation sends and request inspection', async () => {
+    const api = mocks.contextBridge.exposeInMainWorld.mock.calls[0][1] as any
+    await api.taskDelegations.list()
+    await api.taskDelegations.assign({ accountId: 'a', assignee: 'b@example.test', title: 'Task' })
+    await api.taskDelegations.respond({ id: 'task', expectedUpdatedAt: 'revision', response: 'accept' })
+    await api.taskDelegations.inspect('a', 'message')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('task-delegations:list')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('task-delegations:inspect', { accountId: 'a', messageId: 'message' })
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('task-delegations:respond', { id: 'task', expectedUpdatedAt: 'revision', response: 'accept' })
+  })
+
 })

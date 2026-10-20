@@ -41,6 +41,12 @@ import type { MailSenderIdentity, MailSenderIdentityInput, MailSignature, MailSi
 import type { MailMergeJob, MailMergeJobInput, MailMergeJobSummary, MailMergeResolution } from '../src/mail-merge-types'
 
 export type MailWorkerCommand =
+  | { type: 'task-delegations:list' }
+  | { type: 'task-delegations:assign'; payload: import('../src/task-delegation-types').DelegateTaskInput }
+  | { type: 'task-delegations:update'; payload: import('../src/task-delegation-types').DelegationChange }
+  | { type: 'task-delegations:respond'; payload: import('../src/task-delegation-types').DelegationReply }
+  | { type: 'task-delegations:inspect'; payload: { accountId: string; messageId: string } }
+  | { type: 'task-delegations:retry'; payload: { draftId: string } }
   | { type: 'settings-sync:signatures-export' }
   | { type: 'settings-sync:signatures-apply'; payload: import('../src/settings-sync-types').PortableSignatures; expected?: import('../src/settings-sync-types').PortableSignatures }
   | { type: 'initialize'; payload: { databasePath: string; contentPath: string; proxy?: import('./network-proxy-store').ProxyRuntimeConfig } }
@@ -146,6 +152,8 @@ export type MailWorkerCommand =
   | import('./mail/mailbox-owner-worker').MailboxOwnerCommand
 
 export type MailWorkerResult =
+  | import('../src/task-delegation-types').DelegatedTask
+  | import('../src/task-delegation-types').DelegatedTask[]
   | import('../src/settings-sync-types').PortableSignatures
   | { skippedAccounts: number; snapshot: import('../src/settings-sync-types').PortableSignatures }
   | void

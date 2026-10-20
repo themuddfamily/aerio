@@ -4,6 +4,7 @@ import type { MailMessageDetail } from '../mail-types'
 import { formatMailArrival, formatMailArrivalTooltip } from '../lib/mail-date'
 import { isCalendarAttachment } from '../lib/itip'
 import MailReceiptNotice from './MailReceiptNotice'
+import { TaskDelegationMessage } from './TaskDelegation'
 import MeetingInvitationNotice from './MeetingInvitationNotice'
 import MessageHtml from './MessageHtml'
 import OpenPgpMessageNotice from './OpenPgpMessageNotice'
@@ -76,6 +77,7 @@ export default function ThreadMessageAccordion({
           </div>}
           {expanded && <TrackingProtectionNotice report={message.remoteContent} remoteImagesPermitted={!onLoadRemoteImages} />}
           {expanded && <MailReceiptNotice accountId={message.accountId} messageId={message.id} />}
+          {expanded && message.attachments.some(isCalendarAttachment) && <TaskDelegationMessage accountId={message.accountId} messageId={message.id} />}
           {expanded && message.attachments.some(isCalendarAttachment) && <MeetingInvitationNotice accountId={message.accountId} messageId={message.id} />}
           {expanded && <OpenPgpMessageNotice message={message} />}
           {expanded && <SmimeMessageNotice message={message} />}

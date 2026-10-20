@@ -1,3 +1,4 @@
+import { TaskDelegationStore } from './task-delegations'
 import { MailPinSyncStore } from './mail-pin-sync'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
@@ -117,6 +118,7 @@ export function mailRuleMatches(rule: Pick<MailRuleInput, 'match' | 'conditions'
 }
 
 export class MailDatabase {
+  readonly taskDelegations: TaskDelegationStore
   readonly contentPath: string
   private readonly db: DatabaseSync
   readonly identities: MailIdentityStore
@@ -148,6 +150,7 @@ export class MailDatabase {
     this.db = new DatabaseSync(databasePath, { timeout: 5_000 })
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;')
     this.migrate()
+    this.taskDelegations = new TaskDelegationStore(this.db, this)
     this.replyFiling = new ReplyFilingStore(this.db, (callback) => this.transaction(callback))
     this.mailboxOwners = new MailboxOwnerStore(this.db, this)
     this.identities = new MailIdentityStore(this.db)

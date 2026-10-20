@@ -1281,14 +1281,16 @@ async function saveDraft(input: MailDraftInput) {
  */
 async function transmitMessage(input: MailDraftInput, provider: MailAccountSummary['provider'], sender: ReturnType<typeof senderFor>, remoteDraftId?: string): Promise<{ messageIdHeader?: string; threadId?: string }> {
   const from = sender?.from
+  const calendar = database!.taskDelegations.calendar(input.id)
+  const mimeForDelivery = (value: MailDraftInput, sender?: string, omitBcc = false) => calendar ? createCalendarMimeBuffer({ ...value, ...calendar, from: sender ?? database!.getAccount(value.accountId)!.email }) : createMimeBuffer(value, sender, omitBcc)
   if ((provider === 'exchange' || provider === 'microsoft') && sender?.identity?.delegation) {
     // Send as / send on behalf of a shared or delegated mailbox (E40).
-    const mime = await protectOutgoing(createMimeBuffer(input, from), input, from)
+    const mime = await protectOutgoing(mimeForDelivery(input, from), input, from)
     await mailboxOwners().sendDelegated(database!.getAccount(input.accountId)!, sender.identity, mime, input.sendOptions, remoteDraftId)
     return { messageIdHeader: messageIdFromMime(mime), threadId: input.threadId }
   }
   if (provider === 'gmail') {
-    const raw = protectionRequested(input) ? (await protectOutgoing(createMimeBuffer(input, from), input, from)).toString('base64url') : createMime(input, from)
+    const raw = protectionRequested(input) ? (await protectOutgoing(mimeForDelivery(input, from), input, from)).toString('base64url') : (calendar ? mimeForDelivery(input, from).toString('base64url') : createMime(input, from))
     const reference = remoteDraftId
       ? await clientFor(input.accountId).sendDraft(remoteDraftId, raw)
       : await clientFor(input.accountId).sendMessage(raw, input.threadId)
@@ -1296,7 +1298,7 @@ async function transmitMessage(input: MailDraftInput, provider: MailAccountSumma
   }
   if (provider === 'microsoft') {
     // Exchange assigns its own Message-ID; the watch adopts it from the synced Sent copy.
-    const mime = await protectOutgoing(createMimeBuffer(input, from), input, from)
+    const mime = await protectOutgoing(mimeForDelivery(input, from), input, from)
     if (protectionRequested(input)) {
       // Sending the stored provider draft would send its plaintext, so send the protected MIME instead.
       const client = microsoftClientFor(input.accountId)
@@ -1308,14 +1310,14 @@ async function transmitMessage(input: MailDraftInput, provider: MailAccountSumma
   if (provider === 'exchange') {
     // CreateItem with SendAndSaveCopy sends the final MIME; the superseded draft is then removed.
     const client = await exchangeClientFor(input.accountId)
-    const mime = await protectOutgoing(createMimeBuffer(input, from), input, from)
+    const mime = await protectOutgoing(mimeForDelivery(input, from), input, from)
     await sendExchangeMime(client, mime, input.sendOptions)
     if (remoteDraftId) await client.deleteItems([remoteDraftId], 'HardDelete').catch(() => undefined)
     return { messageIdHeader: messageIdFromMime(mime), threadId: input.threadId }
   }
   const client = await imapClientFor(input.accountId)
   const recipients = [...input.to, ...input.cc, ...input.bcc]
-  const mime = await protectOutgoing(createMimeBuffer(input, from, true), input, from)
+  const mime = await protectOutgoing(mimeForDelivery(input, from, true), input, from)
   // An alias also becomes the SMTP envelope sender; the server decides whether it is allowed.
   await (sender?.identity ? client.send(mime, recipients, input.sendOptions, sender.identity.email) : client.send(mime, recipients, input.sendOptions))
   if (remoteDraftId) await client.deleteDraft(remoteDraftId)
@@ -1630,6 +1632,16 @@ function applyRulesToNewMail(records: ParsedMailMessage[]) {
 }
 
 function emitNewMail(accountId: string, records: ParsedMailMessage[]) {
+  if (database) {
+    const current = database, account = current.getAccount(accountId)
+    if (account && !account.archived) for (const record of records) {
+      if (record.rawPath && existsSync(record.rawPath)) void calendarPartsFromRaw(readFileSync(record.rawPath)).then((parts) => {
+        if (database !== current || !parts.length) return
+        const addresses = [account.email, ...current.identities.list(current.listAccounts(), [accountId]).map((identity) => identity.email)]
+        current.taskDelegations.observe(accountId, record.fromEmail, addresses, parts)
+      }).catch(() => {})
+    }
+  }
   if (database && !database.getAccount(accountId)?.archived) {
     database.replyFiling?.observe(records)
     const provider = database.getAccount(accountId)?.provider ?? 'gmail'
@@ -1793,6 +1805,21 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'receipts:respond') {
     return receiptService().respond(command.payload.accountId, command.payload.messageId, command.payload.decision, command.payload.policy)
   }
+  if (command.type === 'task-delegations:list') return database.taskDelegations.list()
+  if (command.type === 'task-delegations:assign') return database.taskDelegations.assign(command.payload)
+  if (command.type === 'task-delegations:update') return database.taskDelegations.update(command.payload)
+  if (command.type === 'task-delegations:respond') return database.taskDelegations.respond(command.payload)
+  if (command.type === 'task-delegations:retry') return database.taskDelegations.retry(command.payload.draftId)
+  if (command.type === 'task-delegations:inspect') {
+    const { accountId, messageId } = command.payload
+    const context = database.receiptMessageContext(accountId, messageId), account = database.getAccount(accountId)
+    if (!context || !account || !context.rawPath || !existsSync(context.rawPath)) return
+    const parts = await calendarPartsFromRaw(readFileSync(context.rawPath))
+    const addresses = [account.email, ...database.identities.list(database.listAccounts(), [accountId]).map((identity) => identity.email)]
+    return database.taskDelegations.observe(accountId, context.fromEmail, addresses, parts)
+  }
+  if (['drafts:save', 'drafts:send'].includes(command.type) && 'payload' in command && database.taskDelegations.calendar((command.payload as MailDraftInput).id)) throw new Error('Use Tasks to update or cancel this task request.')
+  if (command.type === 'drafts:schedule' && database.taskDelegations.calendar(command.payload.input.id)) throw new Error('Use Tasks to update this task request.')
   if (command.type === 'invitations:source') {
     const { accountId, messageId } = command.payload
     const context = database.receiptMessageContext(accountId, messageId)

@@ -271,6 +271,7 @@ export interface AppLockControls {
 }
 
 export interface AerioDesktopApi {
+  taskDelegations?: import('./task-delegation-types').TaskDelegationApi
   settingsSync?: import('./settings-sync-types').SettingsSyncApi
   providerChat?: import('./provider-chat-types').ProviderChatApi
   appProfiles?: import('./app-profile-types').AppProfilesApi

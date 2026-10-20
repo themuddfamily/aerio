@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => {
     id: 'account-1', provider: 'gmail', email: 'person@example.test', displayName: 'Personal', color: '#123456',
     status: 'ready', archived: false, signature: '', notifications: true, syncEnabled: true
   }
-  const db: Record<string, any> = {}
+  const db: Record<string, any> = { taskDelegations: { calendar: vi.fn(() => undefined), list: vi.fn(() => []), observe: vi.fn(), assign: vi.fn(), update: vi.fn(), respond: vi.fn(), retry: vi.fn() } }
   const method = (name: string, value?: any) => { db[name] = vi.fn(typeof value === 'function' ? value : () => value) }
   method('close')
   method('listAccounts', () => [account])
@@ -226,7 +226,7 @@ vi.mock('./mail/attachment-text-indexer', () => ({
 vi.mock('./mail/attachment-extract-runner', () => ({
   AttachmentExtractRunner: vi.fn(function (options: any) { mocks.extractor.options = options; return mocks.extractor })
 }))
-vi.mock('./mail/mime-builder', () => ({ createMime: vi.fn(() => 'mime'), createMimeBuffer: vi.fn(() => Buffer.from('mime')) }))
+vi.mock('./mail/mime-builder', async () => { const actual = await vi.importActual<typeof import('./mail/mime-builder')>('./mail/mime-builder'); return { createCalendarMimeBuffer: actual.createCalendarMimeBuffer, createMime: vi.fn(() => 'mime'), createMimeBuffer: vi.fn(() => Buffer.from('mime')) } })
 const localMocks = vi.hoisted(() => {
   const job = { id: 'job-1', accountId: 'local-folders', status: 'queued' }
   const service = {
@@ -1097,6 +1097,23 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.db.dueOperations.mockReturnValueOnce([{ id: 'plain-op', account_id: 'account-1', kind: 'read', thread_ids_json: '["thread"]', label_id: null }]).mockReturnValue([])
     await request({ type: 'network', payload: { online: true } })
     await vi.waitFor(() => expect(mocks.db.rescheduleOperation).toHaveBeenCalledWith('plain-op', 'plain provider failure', 2_000))
+  })
+
+  it('delivers queued VTODO calendar MIME through the normal provider draft queue', async () => {
+    const id = 'task-calendar-fixture'
+    mocks.db.taskDelegations.calendar.mockImplementation((draftId: string) => draftId === id ? { method: 'REQUEST', ics: 'BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VTODO\r\nUID:fixture\r\nEND:VTODO\r\nEND:VCALENDAR\r\n' } : undefined)
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.getDraft.mockReturnValue(undefined)
+    const row = { id, account_id: 'account-1', thread_id: null, in_reply_to: null, references_json: '[]', to_json: '["recipient@example.test"]', cc_json: '[]', bcc_json: '[]', subject: 'Task fixture', body_text: 'Task', body_html: null, attachment_paths_json: '[]', gmail_draft_id: null }
+    const previous = mocks.gmail.sendMessage.mock.calls.length
+    queueDeliveries([row])
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(mocks.gmail.sendMessage.mock.calls.length).toBeGreaterThan(previous))
+    const mime = Buffer.from(mocks.gmail.sendMessage.mock.calls.at(-1)![0], 'base64url').toString()
+    expect(mime).toContain('Content-Type: text/calendar; charset=utf-8; method=REQUEST')
+    expect(mime).toContain(Buffer.from('BEGIN:VCALENDAR').toString('base64').slice(0, 16))
+    await expect(request({ type: 'drafts:send', payload: { id } })).resolves.toMatchObject({ error: { message: 'Use Tasks to update or cancel this task request.' } })
+    mocks.db.taskDelegations.calendar.mockImplementation(() => undefined)
   })
 
   it('covers offline, remote-id, missing-account, staged-file, and provider draft branches', async () => {
