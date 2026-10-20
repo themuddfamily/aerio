@@ -27,6 +27,7 @@ async function scenario(security) {
   const sockets = new Set()
   const deliveries = []
   const authentications = []
+  const protocol = []
   let rejectDelivery = false
   let worker
   const credentials = { key: certificates.private, cert: certificates.cert }
@@ -44,6 +45,12 @@ async function scenario(security) {
         Container: { flags: ['\\Noselect'] }
       } }
     }
+  })
+  // Keep only bounded fixture command/status diagnostics: never literals,
+  // authentication arguments, headers, message bodies or SMTP envelopes.
+  imap.outputHandlers.push((_connection, response, description, parsed) => {
+    protocol.push({ command: parsed?.command ?? '(notification)', status: response.command, description: String(description ?? '').slice(0, 120), ...(['SELECT', 'STATUS'].includes(parsed?.command) ? { mailbox: String(parsed.attributes?.[0]?.value ?? '').slice(0, 160) } : {}), ...(['NO', 'BAD'].includes(response.command) ? { error: response.attributes?.filter((item) => item.type === 'TEXT').map((item) => String(item.value).slice(0, 160)).join(' ') } : {}) })
+    if (protocol.length > 64) protocol.shift()
   })
   const login = imap.getCommandHandler('LOGIN')
   imap.setCommandHandler('LOGIN', (connection, ...args) => {
@@ -139,7 +146,7 @@ async function scenario(security) {
       await worker.request({ type: 'sync:start', payload: { accountId: 'integration' } })
       await until(() => {
         const error = events.find((event) => event.type === 'sync-progress' && event.payload.phase === 'error')
-        if (error) throw new Error(error.payload.error ?? error.payload.message ?? JSON.stringify(error.payload))
+        if (error) throw new Error(`${error.payload.error ?? error.payload.message ?? 'Worker sync failed'}; ${security} fixture protocol: ${JSON.stringify(protocol)}`)
         return events.some((event) => event.type === 'sync-progress' && event.payload.phase === 'complete')
       }, 'worker sync completion')
     }
@@ -190,10 +197,20 @@ async function scenario(security) {
     imap.appendMessage('Projects', [], undefined, raw('filed', 'Filed project message'))
     await sync()
     assert.equal((await worker.request({ type: 'mail:list', payload: { labelId: 'folder:Projects', folder: 'all', accountIds: ['integration'] } })).total, 1)
+    // Hold the rename-triggered background sync just before selecting Clients.
+    // Deletion must invalidate that pass and finish a fresh inventory, even
+    // when the old server SELECT then rejects the now-removed mailbox.
+    const select = imap.getCommandHandler('SELECT')
+    let releaseStaleSelect
+    imap.setCommandHandler('SELECT', (connection, parsed, data, callback) => {
+      if (parsed.attributes?.[0]?.value === 'Clients' && !releaseStaleSelect) releaseStaleSelect = () => select(connection, parsed, data, callback)
+      else return select(connection, parsed, data, callback)
+    })
     const renamed = await worker.request({ type: 'folders:update', payload: { accountId: 'integration', labelId: 'folder:Projects', name: 'Clients' } })
     assert.deepEqual(renamed.renamed, { 'folder:Projects': 'folder:Clients' })
     assert.ok(imap.getMailbox('Clients'))
     assert.equal(imap.getMailbox('Clients').messages.length, 1)
+    await until(() => Boolean(releaseStaleSelect), 'rename-triggered sync reaching the mailbox before concurrent deletion')
     await assert.rejects(worker.request({ type: 'folders:update', payload: { accountId: 'integration', labelId: 'folder:Discarded', name: 'Bin' } }), /system folder/)
     await assert.rejects(worker.request({ type: 'folders:delete', payload: { accountId: 'integration', labelId: 'folder:Clients' } }), /contains 1 message on the server/)
     assert.equal(imap.getMailbox('Clients').messages.length, 1)
@@ -202,6 +219,8 @@ async function scenario(security) {
     assert.equal(deleted.deletedId, 'folder:Clients')
     assert.equal(imap.getMailbox('Clients'), undefined)
     assert.equal(imap.getMailbox('Discarded').messages.length, trashBefore + 1)
+    imap.setCommandHandler('SELECT', select); releaseStaleSelect()
+    assert.ok(protocol.some((entry) => entry.command === 'SELECT' && entry.mailbox === 'Clients' && entry.status === 'BAD'), 'The concurrent deletion must actually reject the stale server SELECT')
     await sync()
     assert.equal((await worker.request({ type: 'mail:list', payload: { folder: 'trash', accountIds: ['integration'] } })).items.some((item) => item.subject === 'Filed project message'), true)
     await worker.request({ type: 'network', payload: { online: false } })

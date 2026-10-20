@@ -30,6 +30,7 @@ import type {
 } from './mail-protocol'
 import { MailDatabase, type ParsedMailMessage } from './mail/database'
 import { GmailApiError, GmailClient, type GmailRawMessage } from './mail/gmail-client'
+import { ImapTopology } from './mail/imap-topology'
 import { ImapSmtpClient, labelsForImapFolders, type ImapFolder } from './mail/imap-client'
 import { MicrosoftGraphClient, MicrosoftGraphError, microsoftLabels, microsoftMessageLabels } from './mail/microsoft-client'
 import { MailFolderManager } from './mail/folder-management'
@@ -712,11 +713,22 @@ interface ImapProviderState {
   folders: Record<string, { uidValidity: string; uidNext?: number; highestModseq?: string }>
 }
 
+const imapTopology = new ImapTopology()
 async function syncImapAccount(accountId: string) {
   if (!database) throw new Error('Database is not initialized')
-  const client = await imapClientFor(accountId)
   const firstSync = !database.getAccountHistory(accountId)
   const newMessages: ParsedMailMessage[] = []
+  await imapTopology.stable(accountId, () => syncImapInventory(accountId, firstSync, newMessages))
+  database.setAccountHistory(accountId, `imap:${Date.now()}`, true)
+  progress(accountId, 'complete', 'Up to date')
+  emit({ type: 'accounts-changed', payload: database.listAccounts() })
+  emit({ type: 'mail-changed', payload: { accountId } })
+  if (!firstSync) emitNewMail(accountId, [...new Map(newMessages.filter((message) => database!.hasMessage(accountId, message.id)).map((message) => [message.id, message])).values()])
+}
+
+async function syncImapInventory(accountId: string, firstSync: boolean, newMessages: ParsedMailMessage[]) {
+  if (!database) throw new Error('Database is not initialized')
+  const client = await imapClientFor(accountId)
   progress(accountId, 'inventory', 'Checking IMAP folders')
   await client.withConnection(async (connection) => {
     const folders = await client.listFolders(connection)
@@ -777,11 +789,6 @@ async function syncImapAccount(accountId: string) {
     database!.setProviderState(accountId, next)
     database!.reconcileImapPins(accountId)
   })
-  database.setAccountHistory(accountId, `imap:${Date.now()}`, true)
-  progress(accountId, 'complete', 'Up to date')
-  emit({ type: 'accounts-changed', payload: database.listAccounts() })
-  emit({ type: 'mail-changed', payload: { accountId } })
-  if (!firstSync) emitNewMail(accountId, newMessages)
 }
 
 interface MicrosoftProviderState {
@@ -1949,9 +1956,10 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type.startsWith('folder-preferences:')) return handleMailFolderPreferenceCommand(database, command as MailFolderPreferenceCommand)
   if (command.type === 'folders:create' || command.type === 'folders:update' || command.type === 'folders:delete') {
     const accountId = command.payload.accountId
-    const result = command.type === 'folders:create' ? await folderManager().create(command.payload)
-      : command.type === 'folders:update' ? await folderManager().update(command.payload)
-        : await folderManager().delete(command.payload)
+    const mutation = () => command.type === 'folders:create' ? folderManager().create(command.payload)
+      : command.type === 'folders:update' ? folderManager().update(command.payload)
+        : folderManager().delete(command.payload)
+    const result = database.getAccount(accountId)?.provider === 'imap' ? await imapTopology.mutate(accountId, mutation) : await mutation()
     // Favorites and appearance of a folder deleted through Aerio are dropped with it.
     if (result.deletedId) database.folderPreferences.forget(accountId, [result.deletedId])
     emit({ type: 'mail-changed', payload: { accountId } })
