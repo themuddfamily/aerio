@@ -62,6 +62,17 @@ describe('mail rule IPC validation', () => {
       .toMatchObject({ conditions: [{ field: 'category', operator: 'is', value: 'promotions' }], actions: [{ action: 'set-category', category: 'custom:receipts' }] })
   })
 
+  it('validates periodic scopes and bounded whole-minute intervals', () => {
+    for (const folder of ['inbox', 'archive', 'sent', 'all'] as const) {
+      expect(validateMailRule({ ...base, trigger: 'periodic', schedule: { intervalMinutes: 30, folder } })).toMatchObject({ trigger: 'periodic', schedule: { intervalMinutes: 30, folder } })
+    }
+    expect(() => validateMailRule({ ...base, trigger: 'periodic' })).toThrow('interval')
+    for (const intervalMinutes of [0, -1, 1.5, 10081, NaN, Infinity]) {
+      expect(() => validateMailRule({ ...base, trigger: 'periodic', schedule: { intervalMinutes, folder: 'inbox' } })).toThrow('interval')
+    }
+    expect(validateMailRule({ ...base, schedule: { intervalMinutes: 30, folder: 'inbox' } }).schedule).toBeUndefined()
+  })
+
   it.each([
     [{ trigger: 'sent' }, 'Choose when this rule runs'],
     [{ exceptions: 'bad' }, 'Add at most ten exceptions'],

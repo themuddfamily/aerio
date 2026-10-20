@@ -304,6 +304,7 @@ function importService() {
 // every minute after that.
 let archiveServiceInstance: MailArchiveService | undefined
 let archiveTimer: NodeJS.Timeout | undefined
+let ruleTimer: NodeJS.Timeout | undefined
 const ARCHIVE_SCHEDULER_INTERVAL_MS = 60_000
 function archiveService() {
   if (!database) throw new Error('Database is not initialized')
@@ -1547,7 +1548,7 @@ async function stageMessageAttachments(draftId: string, accountId: string, messa
   })
 }
 
-function applyRuleActions(rule: MailRule, threadIds: string[]) {
+function applyRuleActions(rule: MailRule, threadIds: string[], strict = false, emitRuleEvent = emit) {
   if (!database || !threadIds.length) return 0
   let operations = 0
   for (const action of rule.actions) {
@@ -1560,15 +1561,30 @@ function applyRuleActions(rule: MailRule, threadIds: string[]) {
       const batch = threadIds.slice(index, index + 20)
       try {
         const operation = database.applyLocalAction({ accountId: rule.accountId, threadIds: batch, action: action.action, labelId: action.labelId }, crypto.randomUUID(), 0)
-        emit({ type: 'operation', payload: operation })
+        emitRuleEvent({ type: 'operation', payload: operation })
         operations += 1
-      } catch {
+      } catch (error) {
+        if (strict) throw error
         // A stale destination or removed thread should not stop later rules.
       }
     }
   }
-  if (operations) emit({ type: 'mail-changed', payload: { accountId: rule.accountId, threadIds } })
+  if (operations) emitRuleEvent({ type: 'mail-changed', payload: { accountId: rule.accountId, threadIds } })
   return operations
+}
+
+function processScheduledRules() {
+  if (!database) return
+  for (const rule of database.dueScheduledRules()) {
+    const events: MailWorkerEvent[] = []
+    try {
+      // The queue, local changes, counters and deadline commit together.
+      database.runScheduledRule(rule.id, (current, threadIds) => applyRuleActions(current, threadIds, true, (event) => { events.push(event) }))
+      events.forEach(emit)
+    } catch {
+      // Rollback retains the deadline; retry next minute without partial work.
+    }
+  }
 }
 
 // Automatic rules for newly synced mail: incoming rules for received mail,
@@ -1640,6 +1656,9 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     clearInterval(archiveTimer)
     archiveTimer = setInterval(() => { try { archiveService().tick() } catch { /* Retried on the next pass. */ } }, ARCHIVE_SCHEDULER_INTERVAL_MS)
     try { archiveService().tick() } catch { /* Retried on the next pass. */ }
+    clearInterval(ruleTimer)
+    ruleTimer = setInterval(processScheduledRules, 60_000)
+    processScheduledRules()
     operationTimer = setInterval(() => void processOperations(), 2_000)
     schedulePolling(BACKGROUND_MAIL_POLL_INTERVAL_MS)
     return
@@ -2059,6 +2078,7 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
     clearInterval(pollTimer)
     clearInterval(mailMergeTimer)
     clearInterval(archiveTimer)
+    clearInterval(ruleTimer)
     mailMergeRunnerInstance = undefined
     // An archive run stops at its next message and resumes on the next start.
     archiveServiceInstance?.halt()

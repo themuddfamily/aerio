@@ -479,6 +479,8 @@ export class MailDatabase {
     if (!ruleColumns.has('trigger_mode')) this.db.exec(`ALTER TABLE mail_rules ADD COLUMN trigger_mode TEXT NOT NULL DEFAULT 'incoming'`)
     if (!ruleColumns.has('execution')) this.db.exec(`ALTER TABLE mail_rules ADD COLUMN execution TEXT NOT NULL DEFAULT 'local'`)
     if (!ruleColumns.has('server_rule_id')) this.db.exec('ALTER TABLE mail_rules ADD COLUMN server_rule_id TEXT')
+    if (!ruleColumns.has('schedule_json')) this.db.exec('ALTER TABLE mail_rules ADD COLUMN schedule_json TEXT')
+    if (!ruleColumns.has('next_run_at')) this.db.exec('ALTER TABLE mail_rules ADD COLUMN next_run_at TEXT')
     const labelColumns = new Set((this.db.prepare('PRAGMA table_info(gmail_labels)').all() as { name: string }[]).map((column) => column.name))
     if (!labelColumns.has('parent_id')) this.db.exec('ALTER TABLE gmail_labels ADD COLUMN parent_id TEXT')
     // Journal for provider folder/label changes so an interrupted request can
@@ -1481,7 +1483,9 @@ export class MailDatabase {
       conditions: json<MailRule['conditions']>(String(row.conditions_json), []),
       actions: json<MailRule['actions']>(String(row.actions_json), []),
       exceptions: json<MailRule['conditions']>(row.exceptions_json ? String(row.exceptions_json) : undefined, []),
-      trigger: row.trigger_mode === 'outgoing' || row.trigger_mode === 'archive' ? row.trigger_mode : 'incoming',
+      trigger: row.trigger_mode === 'outgoing' || row.trigger_mode === 'archive' || row.trigger_mode === 'periodic' ? row.trigger_mode : 'incoming',
+      ...(row.schedule_json ? { schedule: json<MailRule['schedule']>(String(row.schedule_json), undefined) } : {}),
+      ...(row.next_run_at ? { nextRunAt: String(row.next_run_at) } : {}),
       execution: row.execution === 'server' ? 'server' : 'local',
       ...(row.server_rule_id ? { serverRuleId: String(row.server_rule_id) } : {}),
       matchCount: Number(row.match_count),
@@ -1508,12 +1512,17 @@ export class MailDatabase {
     const id = input.id ?? crypto.randomUUID()
     const timestamp = nowIso()
     const execution = input.execution === 'server' && input.serverRuleId ? 'server' : 'local'
-    this.stmt(`INSERT INTO mail_rules(id,account_id,name,enabled,match_mode,conditions_json,actions_json,exceptions_json,trigger_mode,execution,server_rule_id,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id,name=excluded.name,enabled=excluded.enabled,
+    const existing = this.getRule(id)
+    const schedule = input.trigger === 'periodic' ? input.schedule : undefined
+    if (input.trigger === 'periodic' && (!schedule || !Number.isInteger(schedule.intervalMinutes) || schedule.intervalMinutes < 1 || schedule.intervalMinutes > 10_080 || !['inbox', 'archive', 'sent', 'all'].includes(schedule.folder))) throw new Error('Choose a folder and an interval between 1 minute and 7 days')
+    const keepCadence = existing?.enabled && existing.trigger === 'periodic' && existing.accountId === input.accountId && existing.schedule?.intervalMinutes === schedule?.intervalMinutes && existing.schedule?.folder === schedule?.folder
+    const nextRunAt = schedule && input.enabled && execution === 'local' ? keepCadence && existing?.nextRunAt ? existing.nextRunAt : new Date(Date.now() + schedule.intervalMinutes * 60_000).toISOString() : null
+    this.stmt(`INSERT INTO mail_rules(id,account_id,name,enabled,match_mode,conditions_json,actions_json,exceptions_json,trigger_mode,execution,server_rule_id,created_at,updated_at,schedule_json,next_run_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id,name=excluded.name,enabled=excluded.enabled,
       match_mode=excluded.match_mode,conditions_json=excluded.conditions_json,actions_json=excluded.actions_json,exceptions_json=excluded.exceptions_json,
-      trigger_mode=excluded.trigger_mode,execution=excluded.execution,server_rule_id=excluded.server_rule_id,updated_at=excluded.updated_at`)
+      trigger_mode=excluded.trigger_mode,execution=excluded.execution,server_rule_id=excluded.server_rule_id,updated_at=excluded.updated_at,schedule_json=excluded.schedule_json,next_run_at=excluded.next_run_at`)
       .run(id, input.accountId, input.name, input.enabled ? 1 : 0, input.match, JSON.stringify(input.conditions), JSON.stringify(input.actions),
-        JSON.stringify(input.exceptions ?? []), mailRuleTrigger(input), execution, input.serverRuleId ?? null, timestamp, timestamp)
+        JSON.stringify(input.exceptions ?? []), mailRuleTrigger(input), execution, input.serverRuleId ?? null, timestamp, timestamp, schedule ? JSON.stringify(schedule) : null, nextRunAt)
     return this.getRule(id)!
   }
 
@@ -1615,13 +1624,16 @@ export class MailDatabase {
   /** Match newest messages, optionally scoped to an explicit event's conversations. */
   matchingThreadIdsForRule(rule: MailRule, selectedThreadIds?: string[]) {
     if (selectedThreadIds && !selectedThreadIds.length) return []
-    const folder = mailRuleTrigger(rule) === 'outgoing' ? 'SENT' : 'INBOX'
+    const selectedFolder = rule.trigger === 'periodic' ? rule.schedule?.folder ?? 'inbox' : rule.trigger === 'outgoing' ? 'sent' : rule.trigger === 'archive' ? 'archive' : 'inbox'
+    const folder = selectedFolder === 'sent' ? 'SENT' : 'INBOX'
     const scope = selectedThreadIds
       ? 'm.thread_id IN (SELECT value FROM json_each(?))'
-      : mailRuleTrigger(rule) === 'archive'
+      : selectedFolder === 'all'
+        ? `EXISTS(SELECT 1 FROM gmail_threads t WHERE t.account_id=m.account_id AND t.id=m.thread_id AND t.trashed=0 AND t.draft=0 AND NOT EXISTS(SELECT 1 FROM json_each(t.label_ids_json) WHERE value='SPAM'))`
+      : selectedFolder === 'archive'
         ? `EXISTS(SELECT 1 FROM gmail_threads t WHERE t.account_id=m.account_id AND t.id=m.thread_id AND t.inbox=0 AND t.trashed=0 AND t.sent=0 AND t.draft=0 AND NOT EXISTS(SELECT 1 FROM json_each(t.label_ids_json) WHERE value='SPAM'))`
         : `EXISTS(SELECT 1 FROM gmail_messages inbox,json_each(inbox.label_ids_json) WHERE inbox.account_id=m.account_id AND inbox.thread_id=m.thread_id AND value=?)`
-    const scopeParams = selectedThreadIds ? [JSON.stringify(selectedThreadIds)] : mailRuleTrigger(rule) === 'archive' ? [] : [folder]
+    const scopeParams = selectedThreadIds ? [JSON.stringify(selectedThreadIds)] : selectedFolder === 'archive' || selectedFolder === 'all' ? [] : [folder]
     const rows = this.stmt(`SELECT m.*,(SELECT COUNT(*) FROM gmail_attachments a WHERE a.account_id=m.account_id AND a.message_id=m.id) attachment_count
       FROM gmail_messages m JOIN (
       SELECT account_id,thread_id,MAX(internal_date) internal_date FROM gmail_messages WHERE account_id=? GROUP BY account_id,thread_id
@@ -1653,6 +1665,26 @@ export class MailDatabase {
       .filter((rule) => rule.enabled && rule.execution !== 'server' && mailRuleTrigger(rule) === 'archive')
       .map((rule) => ({ rule, threadIds: this.matchingThreadIdsForRule(rule, threadIds) }))
       .filter((match) => match.threadIds.length > 0)
+  }
+
+  dueScheduledRules(now = Date.now()) {
+    return this.listRules().filter((rule) => {
+      const account = this.getAccount(rule.accountId)
+      return rule.enabled && rule.execution !== 'server' && rule.trigger === 'periodic' && rule.schedule && rule.nextRunAt && Date.parse(rule.nextRunAt) <= now && account && !account.archived && account.status !== 'paused'
+    })
+  }
+
+  /** Queue actions and advance the durable deadline atomically, including on restart. */
+  runScheduledRule(id: string, apply: (rule: MailRule, threadIds: string[]) => void, now = Date.now()) {
+    return this.transaction(() => {
+      const rule = this.dueScheduledRules(now).find((item) => item.id === id)
+      if (!rule?.schedule) return false
+      const threadIds = this.matchingThreadIdsForRule(rule)
+      apply(rule, threadIds)
+      this.recordRuleMatch(rule.id, threadIds.length)
+      this.stmt('UPDATE mail_rules SET next_run_at=? WHERE id=?').run(new Date(now + rule.schedule.intervalMinutes * 60_000).toISOString(), id)
+      return true
+    })
   }
 
   recordRuleMatch(id: string, count = 1) {

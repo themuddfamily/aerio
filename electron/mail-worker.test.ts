@@ -74,6 +74,8 @@ const mocks = vi.hoisted(() => {
   method('getDueDraft')
   method('matchingRulesForMessage', () => [])
   method('matchingArchiveRules', () => [])
+  method('dueScheduledRules', () => [])
+  method('runScheduledRule', () => false)
   method('hasLocalRules', () => true)
   db.ruleLedger = { claim: vi.fn(() => true), processed: vi.fn(() => false) }
   method('rawPath', () => 'C:\\content\\raw.eml')
@@ -264,6 +266,7 @@ vi.mock('./mail/mail-archive', () => ({ MailArchiveService: vi.fn(function (deps
 import './mail-worker'
 
 let nextId = 0
+let periodicTick: (() => void) | undefined
 function queueDeliveries(rows: any[]) {
   mocks.db.queuedDrafts.mockReturnValueOnce(rows).mockReturnValue([])
   mocks.db.getDueDraft.mockImplementation((id: string) => rows.find((row) => row.id === id))
@@ -283,9 +286,36 @@ describe.sequential('mail worker protocol routing', () => {
     await expect(request({ type: 'accounts:list' })).resolves.toMatchObject({
       error: { code: 'worker-error', message: 'Database is not initialized' }
     })
+    const intervalSpy = vi.spyOn(globalThis, 'setInterval')
     const response = await request({ type: 'initialize', payload: { databasePath: 'mail.db', contentPath: 'C:\\content' } })
+    periodicTick = intervalSpy.mock.calls.find(([callback]) => typeof callback === 'function' && callback.name === 'processScheduledRules')?.[0] as (() => void) | undefined
+    intervalSpy.mockRestore()
     expect(response).toMatchObject({ kind: 'response', result: undefined })
     expect(mocks.MailDatabase).toHaveBeenCalledWith('mail.db', 'C:\\content')
+  })
+
+  it('evaluates periodic rules on its timer and emits operation events after the durable run', () => {
+    const rule = { id: 'periodic', accountId: 'account-1', actions: [{ action: 'star' }] }
+    mocks.db.dueScheduledRules.mockReturnValueOnce([rule])
+    mocks.db.runScheduledRule.mockImplementationOnce((_id: string, apply: (rule: unknown, threadIds: string[]) => void) => {
+      apply(rule, ['thread-1'])
+      return true
+    })
+    mocks.db.applyLocalAction.mockClear()
+    expect(periodicTick).toBeTypeOf('function')
+    periodicTick!()
+    expect(mocks.db.runScheduledRule).toHaveBeenCalledWith('periodic', expect.any(Function))
+    expect(mocks.db.applyLocalAction).toHaveBeenCalledWith({ accountId: 'account-1', action: 'star', threadIds: ['thread-1'], labelId: undefined }, expect.any(String), 0)
+    expect(mocks.db.runScheduledRule.mock.invocationCallOrder.at(-1)).toBeLessThan(mocks.port.postMessage.mock.invocationCallOrder.at(-1)!)
+    // A failure after one action has produced buffered events publishes none.
+    mocks.db.dueScheduledRules.mockReturnValueOnce([rule])
+    mocks.db.runScheduledRule.mockImplementationOnce((_id: string, apply: (rule: unknown, threadIds: string[]) => void) => {
+      apply(rule, ['thread-1'])
+      throw new Error('transaction rolled back')
+    })
+    const eventCount = mocks.posted.filter((message) => message.kind === 'event').length
+    periodicTick!()
+    expect(mocks.posted.filter((message) => message.kind === 'event')).toHaveLength(eventCount)
   })
 
   it('exports original bytes and copies only the selected message without moving it for every provider', async () => {

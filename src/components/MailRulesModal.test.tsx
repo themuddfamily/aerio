@@ -122,6 +122,25 @@ describe('MailRulesModal', () => {
     await waitFor(() => expect(api.run).toHaveBeenCalledWith('archive-rule'))
   })
 
+  it('edits a periodic interval and scope and exposes a manual run for that scope', async () => {
+    api.save.mockImplementation(async (input: any) => rule({ ...input, id: 'periodic-rule', nextRunAt: '2026-10-21T12:00:00Z' }))
+    render(<MailRulesModal accounts={[account()]} labels={labels} onToast={vi.fn()} onClose={vi.fn()} />)
+    await screen.findByText('No rules yet')
+    fireEvent.click(screen.getByRole('button', { name: /New rule/ }))
+    fireEvent.change(screen.getByLabelText('Apply to'), { target: { value: 'periodic' } })
+    expect(screen.getByLabelText('Rule interval in minutes')).toHaveValue(60)
+    fireEvent.change(screen.getByLabelText('Rule interval in minutes'), { target: { value: '15' } })
+    fireEvent.change(screen.getByLabelText('Scheduled rule folder'), { target: { value: 'archive' } })
+    fireEvent.change(screen.getByPlaceholderText('e.g. Project updates'), { target: { value: 'Review archive' } })
+    fireEvent.change(screen.getByLabelText('Condition 1 value'), { target: { value: 'team@example.test' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save rule/ }))
+    await waitFor(() => expect(api.save).toHaveBeenCalledWith(expect.objectContaining({ trigger: 'periodic', schedule: { intervalMinutes: 15, folder: 'archive' } })))
+    expect(await screen.findByText('Review archive')).toBeInTheDocument()
+    expect(screen.getByText(/Every 15 minutes/)).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle('Run on existing Archive'))
+    await waitFor(() => expect(api.run).toHaveBeenCalledWith('periodic-rule'))
+  })
+
   it('offers the inbox category condition and the set-category action with the configured tabs', async () => {
     api.save.mockImplementation(async (input: any) => rule({ ...input, id: 'saved-rule' }))
     const tabs = vi.fn().mockResolvedValue({ tabs: [{ id: 'primary', name: 'Primary', enabled: true, builtIn: true }, { id: 'custom:receipts', name: 'Receipts', enabled: true, builtIn: false }] })

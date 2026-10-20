@@ -27,6 +27,12 @@ describe('Gmail filter mapping', () => {
       expect(mapping.issues).toContainEqual(expect.objectContaining({ part: 'rule', level: 'unsupported', message: expect.stringContaining('archive') }))
     }
   })
+  it('blocks periodic triggers for both server providers', () => {
+    for (const provider of ['gmail', 'microsoft'] as const) {
+      expect(mapMailRuleToServer(rule({ trigger: 'periodic', schedule: { intervalMinutes: 30, folder: 'inbox' } }), provider).issues)
+        .toContainEqual(expect.objectContaining({ part: 'rule', level: 'unsupported', message: expect.stringContaining('scheduled evaluation') }))
+    }
+  })
   it('builds an AND query, a negated "any" exception query, and label actions', () => {
     const { filter, mapping } = gmailFilterForRule(rule({
       conditions: [

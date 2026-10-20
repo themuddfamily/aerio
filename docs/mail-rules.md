@@ -1,4 +1,4 @@
-# Mail rules: local, outgoing, and server-side
+# Mail rules: local, outgoing, Archive, periodic, and server-side
 
 Open **Mail rules** from a message’s **Create rule from email…** command. Every rule belongs to one account and has conditions, optional "except if" exceptions, and actions. Each rule runs in exactly one place, and the rule list shows which:
 
@@ -30,6 +30,8 @@ Conditions use **all** or **any**. The rule is skipped when **any** exception ma
 
 Rules saved before this release keep their stored format. They read as incoming, locally executed rules with no exceptions. The database adds the `exceptions_json`, `trigger_mode`, `execution` and `server_rule_id` columns with `PRAGMA table_info` checks.
 
+Periodic scheduling adds nullable `schedule_json` and `next_run_at` columns with the same migration checks; existing rules gain no schedule.
+
 ## Incoming, outgoing, and Archive rules
 
 **Apply to** chooses the trigger:
@@ -39,6 +41,16 @@ Rules saved before this release keep their stored format. They read as incoming,
 - **Mail I archive** (archive): an explicit **Archive** action in Aerio for your own mailbox, including bulk selection and quick actions. Conditions and exceptions match each selected conversation's newest message before Archive changes its labels, so a source-folder condition still works. Matching actions run once per conversation after the archive operation is successfully queued. Archiving again is a new event and can run the rule again; it does not use the incoming/outgoing once-per-message ledger.
 
 Archive rules are local. Snoozing, rule-generated Archive actions, automatic archiving policies, provider sync, and archiving in another client do not fire this trigger. Shared/delegated mailbox actions do not run rules belonging to your own mailbox. This prevents recursive rules and keeps the trigger independent of the automatic archiving policy. **Run on existing Archive** evaluates current archived conversations (excluding Inbox, Sent, Drafts, Trash and Spam) without requiring a new Archive action. Undoing the original archive does not undo separate rule actions.
+
+## Periodic rules
+
+Choose **Periodically** in **Apply to**, set **Every (minutes)** from 1 minute to 7 days, and choose Inbox, Archive, Sent, or All mail except Trash/Spam/Drafts. Each pass evaluates each conversation's newest stored message with the same conditions, exceptions and ordered actions as other rules. It does not download missing message content to evaluate a rule.
+
+The first automatic pass is due one interval after saving an enabled rule. The worker checks deadlines at startup and every minute while Aerio is running, including in the tray. A rule overdue while Aerio was closed runs once on reopening, then starts its next interval; missed intervals are not replayed. The rule list displays the interval, folder and next deadline. **Run on existing…** performs a manual pass without moving the automatic deadline. Name or condition edits preserve the current deadline; changing the interval, folder or account, or re-enabling the rule, starts a new interval.
+
+Periodic rules execute locally and continue offline using stored messages. Provider changes join the durable operation queue and upload through normal processing when connected. Each pass commits its message changes, queued operations, match count and next deadline in one SQLite transaction. A failure rolls everything back and keeps the deadline due for retry on the next check; events are published after commit. Empty passes also advance the deadline. Disabled rules, archived accounts and paused accounts are skipped. Unpausing or reconnecting an overdue account allows one catch-up pass. Scheduled Archive actions never fire Archive-trigger rules, and scheduled rules are independent of automatic archiving policies.
+
+Rules may match again at each interval. Use folder/label conditions or exceptions when an action should stop a conversation matching future passes.
 
 Rule actions only add or remove labels, set the inbox category (**Set inbox category**, local classification that never replaces a manual move and queues nothing for the provider), or move, star, mark, or trash messages. They never send or forward mail, and rule-generated Archive actions do not fire Archive rules, so a rule can't trigger itself or another rule.
 
@@ -62,6 +74,7 @@ Entries are pruned after 180 days. **Run on existing mail** is an explicit, manu
 | Turn off | Not possible. Delete the filter instead. | `isEnabled`, mirrored onto the linked Aerio rule |
 | Outgoing rules | Not supported | Not supported |
 | Archive trigger | Local only | Local only |
+| Periodic trigger | Local only | Local only |
 | Unsupported | Starts/ends with (except an ends-with-`@domain` sender), Subject/body equals, headers other than `List-Id`, age, folder/label conditions, low or normal importance, Microsoft folders as targets, custom inbox tabs | Starts/ends with, "no attachments", age, folder conditions, inbox category conditions and actions, flagging (star), more than one move, mixing condition kinds in an "any" rule, repeating a condition kind in an "all" rule, mixing exception kinds |
 | Approximate (uploaded with a caveat) | Word-based matching, body words that also match the subject, `is:important`, inbox category → `category:` search and "Categorize as" | Display-name senders → `senderContains`, Cc → `recipientContains` (which also matches To), headers → `headerContains` (searches all headers) |
 
@@ -87,6 +100,7 @@ IMAP providers report server rules as unsupported. ManageSieve is not implemente
 - `electron/mail/rule-ledger.test.ts`: ledger de-duplication, schema migration, trigger and execution filtering against real SQLite.
 - `electron/mail/mail-settings-scopes.test.ts`, `electron/mail/oauth-vault.test.ts`: scope detection and refresh behavior.
 - `electron/mail-worker.test.ts`: outgoing processing and ledger skips during sync.
+- `electron/mail/periodic-rules.test.ts`: real SQLite deadline persistence, restart catch-up, durable operation queue, transaction rollback/retry, folder scopes, exceptions and account/rule eligibility.
 - `src/components/MailRulesModal.test.tsx`: editor and server-rule UI.
 - `src/lib/mail-rule-library.test.ts`, `src/components/MailRuleLibrary.test.tsx`: independent starter drafts, real matcher behavior, editable starter save flow, account destination filtering, and unavailable accounts.
 

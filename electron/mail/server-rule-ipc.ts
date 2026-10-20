@@ -30,7 +30,8 @@ export function validateMailRule(input: MailRuleInput): MailRuleInput {
   if (typeof input.accountId !== 'string' || !input.accountId || input.accountId.length > 200) throw new Error('Choose an account for this rule')
   if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200) throw new Error('Give this rule a name')
   if (typeof input.enabled !== 'boolean' || !['all', 'any'].includes(input.match)) throw new Error('Choose how this rule should match')
-  if (input.trigger !== undefined && !['incoming', 'outgoing', 'archive'].includes(input.trigger)) throw new Error('Choose when this rule runs')
+  if (input.trigger !== undefined && !['incoming', 'outgoing', 'archive', 'periodic'].includes(input.trigger)) throw new Error('Choose when this rule runs')
+  if (input.trigger === 'periodic' && (!input.schedule || !Number.isInteger(input.schedule.intervalMinutes) || input.schedule.intervalMinutes < 1 || input.schedule.intervalMinutes > 10_080 || !['inbox', 'archive', 'sent', 'all'].includes(input.schedule.folder))) throw new Error('Choose a folder and an interval between 1 minute and 7 days')
   const conditions = validateConditions(input.conditions, 'conditions', 1)
   const exceptions = input.exceptions === undefined ? [] : validateConditions(input.exceptions, 'exceptions', 0)
   if (!Array.isArray(input.actions) || input.actions.length < 1 || input.actions.length > 10) throw new Error('Add between one and ten actions')
@@ -40,7 +41,7 @@ export function validateMailRule(input: MailRuleInput): MailRuleInput {
     if (action.action === 'set-category' && !isMailCategoryId(action.category)) throw new Error('Choose an inbox category for the rule')
   }
   const { execution: _execution, serverRuleId: _serverRuleId, ...rest } = input
-  return { ...rest, name: input.name.trim(), conditions, exceptions, trigger: input.trigger ?? 'incoming' }
+  return { ...rest, schedule: input.trigger === 'periodic' ? { intervalMinutes: input.schedule!.intervalMinutes, folder: input.schedule!.folder } : undefined, name: input.name.trim(), conditions, exceptions, trigger: input.trigger ?? 'incoming' }
 }
 
 export interface ServerRuleIpcDeps {

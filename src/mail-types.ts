@@ -669,8 +669,12 @@ export interface MailRuleCondition {
   headerName?: string
 }
 
-/** incoming: newly received mail; outgoing: newly synced Sent mail; archive: explicit Archive commands. */
-export type MailRuleTrigger = 'incoming' | 'outgoing' | 'archive'
+/** incoming: new received mail; outgoing: new Sent copies; archive: Archive commands; periodic: scheduled local evaluation. */
+export type MailRuleTrigger = 'incoming' | 'outgoing' | 'archive' | 'periodic'
+export interface MailRuleSchedule {
+  intervalMinutes: number
+  folder: 'inbox' | 'archive' | 'sent' | 'all'
+}
 /** local: Aerio applies the rule; server: the provider runs its copy and Aerio skips it. */
 export type MailRuleExecution = 'local' | 'server'
 
@@ -693,6 +697,7 @@ export interface MailRuleInput {
   /** "Except if" clauses: the rule is skipped when any exception matches. */
   exceptions?: MailRuleCondition[]
   trigger?: MailRuleTrigger
+  schedule?: MailRuleSchedule
   execution?: MailRuleExecution
   /** Provider filter/rule id once the rule is uploaded to the server. */
   serverRuleId?: string
@@ -704,6 +709,8 @@ export interface MailRule extends Omit<MailRuleInput, 'id'> {
   updatedAt: string
   lastMatchedAt?: string
   matchCount: number
+  /** Owned by the worker; changing a schedule or enabling a rule starts a new interval. */
+  nextRunAt?: string
 }
 
 export interface MailRuleRunResult {

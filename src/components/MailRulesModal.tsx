@@ -25,6 +25,9 @@ const OPERATOR_LABELS: Record<MailRuleCondition['operator'], string> = {
   contains: 'contains', equals: 'equals', 'starts-with': 'starts with', 'ends-with': 'ends with', is: 'is', 'greater-than': 'more than', 'less-than': 'less than'
 }
 const AGE_OPERATOR_LABELS: Partial<Record<MailRuleCondition['operator'], string>> = { 'greater-than': 'older than', 'less-than': 'newer than' }
+const ruleFolderLabel = (rule: MailRuleInput) => rule.trigger === 'periodic'
+  ? ({ inbox: 'Inbox', archive: 'Archive', sent: 'Sent', all: 'All mail' })[rule.schedule?.folder ?? 'inbox']
+  : rule.trigger === 'outgoing' ? 'Sent' : rule.trigger === 'archive' ? 'Archive' : 'Inbox'
 
 // Changing the field keeps the comparison and value only when they still make sense.
 function changeConditionField(condition: MailRuleCondition, field: MailRuleCondition['field']): MailRuleCondition {
@@ -197,7 +200,7 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
     try {
       const result = await window.aerio.mail.rules.run(rule.id)
       await load()
-      const folder = rule.trigger === 'outgoing' ? 'Sent' : rule.trigger === 'archive' ? 'Archive' : 'Inbox'
+      const folder = ruleFolderLabel(rule)
       onToast(result.matched ? `Rule applied to ${result.matched.toLocaleString()} conversation${result.matched === 1 ? '' : 's'}` : `No existing ${folder} conversations matched`)
     } catch (error) {
       onToast(errorMessage(error, 'Rule could not be run'))
@@ -273,6 +276,7 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
     `${rule.actions.length} action${rule.actions.length === 1 ? '' : 's'}`,
     ...(rule.trigger === 'outgoing' ? ['Sent mail'] : []),
     ...(rule.trigger === 'archive' ? ['When archiving'] : []),
+    ...(rule.trigger === 'periodic' ? [`Every ${rule.schedule?.intervalMinutes ?? 60} minutes · ${ruleFolderLabel(rule)}`, ...(rule.nextRunAt ? [`Next: ${new Date(rule.nextRunAt).toLocaleString()}`] : [])] : []),
     ...(rule.execution === 'server' ? ['Runs on server'] : [])
   ].join(' · ')
 
@@ -323,7 +327,7 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
         {rules.map((rule) => <article key={rule.id} className={!rule.enabled ? 'disabled' : ''}>
           <label className="rule-toggle"><input type="checkbox" checked={rule.enabled} onChange={() => void toggle(rule)} /><span /></label>
           <span className="rule-copy"><strong>{rule.name}</strong><small>{ruleSummary(rule)}</small><small>{rule.matchCount ? `Matched ${rule.matchCount.toLocaleString()} time${rule.matchCount === 1 ? '' : 's'}` : 'Not matched yet'}</small></span>
-          <button className="icon-button" title={rule.trigger === 'outgoing' ? 'Run on existing Sent mail' : rule.trigger === 'archive' ? 'Run on existing Archive' : 'Run on existing Inbox'} disabled={busy || !rule.enabled} onClick={() => void run(rule)}><Play size={15} /></button>
+          <button className="icon-button" title={`Run on existing ${ruleFolderLabel(rule)}${rule.trigger === 'outgoing' ? ' mail' : ''}`} disabled={busy || !rule.enabled} onClick={() => void run(rule)}><Play size={15} /></button>
           {capabilities[rule.accountId]?.supported && <button className="icon-button" title={rule.execution === 'server' ? 'Update the server copy' : 'Run on the server'} disabled={busy} onClick={() => void upload(rule)}><Cloud size={15} /></button>}
           <button className="icon-button" title="Edit rule" onClick={() => { setPresetGuidance(undefined); setEditing({ ...rule }) }}><Pencil size={15} /></button>
           <button className="icon-button danger" title="Delete rule" onClick={() => void remove(rule)}><Trash2 size={15} /></button>
@@ -340,8 +344,15 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
           <label className="field"><span>Rule name</span><input autoFocus value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} placeholder="e.g. Project updates" /></label>
           <label className="field"><span>Account</span><select value={editing.accountId} disabled={Boolean(editing.id)} onChange={(event) => setEditing({ ...editing, accountId: event.target.value })}>{writableAccounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}</select></label>
         </div>
-        <label className="field"><span>Apply to</span><select aria-label="Apply to" value={editing.trigger ?? 'incoming'} disabled={editing.execution === 'server'} onChange={(event) => setEditing({ ...editing, trigger: event.target.value as MailRuleInput['trigger'] })}><option value="incoming">New mail I receive</option><option value="outgoing">Mail I send</option><option value="archive">Mail I archive</option></select></label>
+        <label className="field"><span>Apply to</span><select aria-label="Apply to" value={editing.trigger ?? 'incoming'} disabled={editing.execution === 'server'} onChange={(event) => setEditing({ ...editing, trigger: event.target.value as MailRuleInput['trigger'], schedule: event.target.value === 'periodic' ? editing.schedule ?? { intervalMinutes: 60, folder: 'inbox' } : undefined })}><option value="incoming">New mail I receive</option><option value="outgoing">Mail I send</option><option value="archive">Mail I archive</option><option value="periodic">Periodically</option></select></label>
         {editing.trigger === 'archive' && <p role="note">Runs when you use Archive in Aerio. Matches the newest message before archiving. Automatic archiving, snoozing, other clients, and rule actions do not trigger it.</p>}
+        {editing.trigger === 'periodic' && <section aria-label="Rule schedule">
+          <div className="rule-grid">
+            <label className="field"><span>Every (minutes)</span><input aria-label="Rule interval in minutes" type="number" min="1" max="10080" step="1" value={editing.schedule?.intervalMinutes ?? 60} onChange={(event) => setEditing({ ...editing, schedule: { folder: editing.schedule?.folder ?? 'inbox', intervalMinutes: Number(event.target.value) } })} /></label>
+            <label className="field"><span>Evaluate in</span><select aria-label="Scheduled rule folder" value={editing.schedule?.folder ?? 'inbox'} onChange={(event) => setEditing({ ...editing, schedule: { intervalMinutes: editing.schedule?.intervalMinutes ?? 60, folder: event.target.value as NonNullable<MailRuleInput['schedule']>['folder'] } })}><option value="inbox">Inbox</option><option value="archive">Archive</option><option value="sent">Sent</option><option value="all">All mail except Trash, Spam and Drafts</option></select></label>
+          </div>
+          <p role="note">Runs while Aerio is open, including offline. The first run is after one interval; missed runs are evaluated once when Aerio reopens. Run on existing mail starts a manual pass immediately.</p>
+        </section>}
         <section><header><span><strong>When a message matches</strong><small>Use {editing.match === 'all' ? 'every' : 'at least one'} condition</small></span><select value={editing.match} onChange={(event) => setEditing({ ...editing, match: event.target.value as 'all' | 'any' })}><option value="all">All conditions</option><option value="any">Any condition</option></select></header>
           {editing.conditions.map((condition, index) => <ConditionRow key={index} kind="Condition" index={index} condition={condition} destinations={conditionLabels} categories={categories} removable={editing.conditions.length > 1}
             onChange={(next) => updateCondition(index, next)} onRemove={() => setEditing({ ...editing, conditions: editing.conditions.filter((_, itemIndex) => itemIndex !== index) })} />)}
