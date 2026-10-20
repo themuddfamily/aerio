@@ -3,7 +3,7 @@ name: Windows build
 on:
   push:
     branches: [main]
-  pull_request:
+    paths: ['package.json']
   workflow_dispatch:
 
 permissions:
@@ -14,7 +14,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  version:
+    uses: ./.github/workflows/version-gate.yml
   build:
+    needs: version
+    if: needs.version.outputs.should_build == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7

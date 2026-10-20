@@ -3,6 +3,7 @@
 Reviewed: 2026-10-20. Aerio 0.5.0, commit `26d842d`.
 
 - All D01–D34 additions were approved for implementation on 2026-10-20. Checkboxes below now track verified implementation, not approval. Each completed feature is committed and pushed separately; unchecked items remain outstanding.
+- Build policy: do not bump any package version until all tasks are finished. Automatic GitHub builds require a package version change on `main`; ordinary commits and pull requests do not build. Existing runs were cancelled at the user's request. Do not dispatch replacement runs without authorization.
 - This is a starting review list based on current source, feature documents, previous REA evidence, and eM Client's current official documentation. It is not an exhaustive runtime comparison. Features advertised online may differ from the previously inspected eM Client 11.0.1201 package or require a particular plan.
 - REA MCP is connected and responded as `rea-agents` 6.5.0. This pass checked its connection; it reused the [earlier artifact evidence](em-client-parity-followup.md) rather than claiming a fresh binary analysis.
 

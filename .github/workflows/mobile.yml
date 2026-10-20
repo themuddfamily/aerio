@@ -1,17 +1,23 @@
 name: Aerio native mobile
 on:
-  workflow_dispatch:
   push:
-    paths: ['mobile/**', '.github/workflows/mobile.yml']
-  pull_request:
-    paths: ['mobile/**', '.github/workflows/mobile.yml']
+    branches: [main]
+    paths: ['package.json', 'mobile/package.json']
+  workflow_dispatch:
+
 permissions:
   contents: read
 concurrency:
   group: mobile-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  version:
+    uses: ./.github/workflows/version-gate.yml
+    with:
+      manifests: '["package.json", "mobile/package.json"]'
   checks:
+    needs: version
+    if: needs.version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -27,6 +33,8 @@ jobs:
       - run: npm run check
       - run: npx expo install --check
   ios-native:
+    needs: version
+    if: needs.version.outputs.should_build == 'true'
     runs-on: macos-26
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer

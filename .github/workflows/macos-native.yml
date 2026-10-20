@@ -1,16 +1,21 @@
 name: macOS native integrations
 on:
   push:
-    branches: [main, 'codex/native-validation-*']
-  pull_request:
+    branches: [main]
+    paths: ['package.json']
   workflow_dispatch:
+
 permissions:
   contents: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  version:
+    uses: ./.github/workflows/version-gate.yml
   native:
+    needs: version
+    if: needs.version.outputs.should_build == 'true'
     strategy:
       fail-fast: false
       matrix:

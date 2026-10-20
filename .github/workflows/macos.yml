@@ -2,8 +2,8 @@ name: macOS build
 
 on:
   push:
-    branches: [main, 'codex/native-validation-*']
-  pull_request:
+    branches: [main]
+    paths: ['package.json']
   workflow_dispatch:
 
 permissions:
@@ -14,7 +14,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  version:
+    uses: ./.github/workflows/version-gate.yml
   build:
+    needs: version
+    if: needs.version.outputs.should_build == 'true'
     strategy:
       fail-fast: false
       matrix:

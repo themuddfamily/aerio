@@ -95,3 +95,11 @@ Hosted evidence: [Linux x64](https://github.com/themuddfamily/aerio/actions/runs
 `.github/workflows/macos.yml` runs independent Apple Silicon (`macos-15`) and Intel (`macos-15-intel`) jobs with Node 24, shared unit/IMAP/desktop checks, native packaging verification and unpacked/ZIP/DMG audits. Both jobs pass and retain their architecture-specific artifacts; packaging never publishes a release. Runner labels follow [GitHub's runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). Current shared unit results are 1,001 passes on Linux/macOS and 1,000 on Windows (one Linux symlink fixture skipped).
 
 Windows-hosted parameterized tests prove policy and manifest handling. The hosted native jobs now additionally establish Keychain/Secret Service round trips, native container verification and tested packaged launches. They do not establish signing/notarization trust, physical Cmd+Q/Dock interactions, FUSE mounting, system DEB installation, a complete desktop login, notification delivery on every desktop or real hosted-provider compatibility. This assessment and the automated packaging/runtime milestones are complete within those evidence boundaries.
+
+## Build triggers (2026-10-20)
+
+Automatic platform, native-integration and mobile builds run only after an existing package's `version` changes on `main`. Desktop/native jobs watch `package.json`; mobile jobs watch both the root and `mobile/package.json`. Source-only pushes and pull requests do not start these workflows. A dependency-only manifest edit may run the small shared version check, but all build jobs remain skipped.
+
+The shared `version-gate.yml` compares the manifests at the beginning and end of the entire push, so a version bump followed by another commit in the same push still builds. It installs no project dependencies. New branches/packages do not count as version bumps. Explicit manual runs remain available. The existing signed Windows release workflow still requires a matching `v<version>` tag and its release preflight.
+
+During the current D01–D34 work, leave package versions unchanged until every task is finished. Running/queued GitHub jobs were cancelled; do not dispatch replacement builds without authorization. Local verification remains available.
