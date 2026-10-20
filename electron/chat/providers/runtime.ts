@@ -34,13 +34,15 @@ export class ProviderChatRuntime {
     try { return { available: true, providers, accounts: this.store.accounts(), rooms: this.store.rooms() } }
     catch (error) { return { available: true, detail: error instanceof Error ? error.message : 'Chat cache could not be opened', providers, accounts: [], rooms: [] } }
   }
-  broadcast() { if (!this.closed) this.options.changed({ type: 'snapshot', snapshot: this.snapshot() }) }
+  private suspend() { for (const adapter of this.adapters.values()) { try { void Promise.resolve(adapter.suspend?.()).catch(() => {}) } catch { /* Other providers can still suspend. */ } } }
+  broadcast() { if (!this.closed) { if (this.options.locked()) this.suspend(); this.options.changed({ type: 'snapshot', snapshot: this.snapshot() }) } }
   start() {
     this.timer = setInterval(() => { void this.refreshAll() }, 30_000); this.timer.unref?.()
     void this.refreshAll()
   }
   async refreshAll() {
-    if (this.closed || this.options.locked() || !this.options.online() || !this.snapshot().available) return
+    if (this.closed) return
+    if (this.options.locked() || !this.options.online() || !this.snapshot().available) { this.suspend(); return }
     for (const account of this.snapshot().accounts) if (!account.retryAt || Date.parse(account.retryAt) <= Date.now()) await this.refresh(account.id).catch(() => {})
   }
   private session(id: string): ProviderChatSession {
@@ -126,8 +128,9 @@ export class ProviderChatRuntime {
       this.networkReady(session)
       const page = await this.adapter(session).messages(session, room, options); this.guard(); this.active(id, epoch)
       if (options.cursor) return this.withPending(id, roomId, page, options.threadId)
-      this.store.savePage(id, roomId, page, options.threadId)
-      return this.withPending(id, roomId, page, options.threadId)
+      const saved = page.partial && cached ? { ...page, items: [...new Map([...cached.items, ...page.items].map((item) => [item.id, item])).values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp)).slice(-500) } : page
+      this.store.savePage(id, roomId, saved, options.threadId)
+      return this.withPending(id, roomId, saved, options.threadId)
     } catch (error) {
       if (this.closed || this.options.locked()) throw error
       this.active(id, epoch)
@@ -171,5 +174,5 @@ export class ProviderChatRuntime {
     this.guard(); this.active(id, epoch)
     this.store.saveRooms(id, this.store.rooms(id).map((item) => item.id === roomId ? { ...item, unread: 0 } : item)); this.broadcast()
   }
-  close() { this.closed = true; clearInterval(this.timer); this.store.close() }
+  close() { this.closed = true; clearInterval(this.timer); this.suspend(); this.store.close() }
 }

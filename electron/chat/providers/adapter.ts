@@ -12,6 +12,8 @@ export interface ProviderChatAdapter {
   send(session: ProviderChatSession, room: ProviderChatRoom, body: string, threadId?: string, clientRequestId?: string): Promise<ProviderChatMessage>
   markRead?(session: ProviderChatSession, room: ProviderChatRoom): Promise<void>
   disconnect?(session: ProviderChatSession): Promise<void>
+  /** Close persistent connections and discard volatile state while locked/offline or shutting down. */
+  suspend?(): void | Promise<void>
 }
 export class ProviderChatError extends Error {
   constructor(message: string, readonly kind: 'auth' | 'permission' | 'rate-limit' | 'network' | 'rejected' | 'uncertain', readonly retryAfter?: number) { super(message) }

@@ -92,3 +92,19 @@ it('deduplicates scoped identities and rejects reconnecting as another user', as
   await expect(runtime.connect('teams', {}, first.id)).rejects.toThrow('same Chat identity')
   expect(runtime.snapshot().accounts).toHaveLength(1)
 })
+it('suspends persistent adapters on lock, offline polling and shutdown', async () => {
+  const f = fixture(), suspend = vi.fn(); f.adapter.suspend = suspend
+  const runtime = f.open(); await runtime.connect('teams', {})
+  f.setLocked(true); runtime.broadcast(); expect(suspend).toHaveBeenCalledTimes(1)
+  f.setLocked(false); f.setOnline(false); await runtime.refreshAll(); expect(suspend).toHaveBeenCalledTimes(2)
+  runtime.close(); expect(suspend).toHaveBeenCalledTimes(3)
+})
+it('merges session-only history with encrypted cached history after reconnect instead of erasing it', async () => {
+  const f = fixture(), runtime = f.open(), account = await runtime.connect('teams', {})
+  await runtime.messages(account.id, 'room'); runtime.close()
+  const reopened = f.open()
+  vi.mocked(f.adapter.messages).mockResolvedValue({ items: [{ ...f.message, id: 'new', body: 'New session message' }], partial: true })
+  expect((await reopened.messages(account.id, 'room')).items.map((message) => message.body)).toEqual(['Sensitive message', 'New session message'])
+  vi.mocked(f.adapter.messages).mockResolvedValue({ items: [], partial: true })
+  expect((await reopened.messages(account.id, 'room')).items).toHaveLength(2)
+})

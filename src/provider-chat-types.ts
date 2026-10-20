@@ -8,9 +8,10 @@ export interface ProviderChatRoom {
   lastActivity?: string; canSend: boolean; canReadReceipt: boolean; threaded: boolean
   /** Opaque provider identifiers, validated by its adapter and retained by the desktop runtime. */
   resource: Record<string, string>
+  detail?: string
 }
 export interface ProviderChatMessage { id: string; senderId: string; sender: string; timestamp: string; body: string; own: boolean; deleted?: boolean; replyToId?: string; delivery?: 'sending' | 'sent' | 'failed' | 'review'; error?: string }
-export interface ProviderChatPage { items: ProviderChatMessage[]; cursor?: string; stale?: boolean; error?: string }
+export interface ProviderChatPage { items: ProviderChatMessage[]; cursor?: string; stale?: boolean; error?: string; /** Session-only history must be merged with the encrypted local page. */ partial?: boolean }
 export interface ProviderChatSnapshot { available: boolean; detail?: string; providers: ProviderChatDescriptor[]; accounts: ProviderChatAccount[]; rooms: ProviderChatRoom[] }
 export type ProviderChatEvent = { type: 'snapshot'; snapshot: ProviderChatSnapshot } | { type: 'messages'; accountId: string; roomId: string } | { type: 'open-room'; accountId: string; roomId: string }
 export interface ProviderChatApi {

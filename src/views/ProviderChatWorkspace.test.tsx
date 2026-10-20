@@ -4,9 +4,11 @@ import userEvent from '@testing-library/user-event'
 import { expect, it, vi } from 'vitest'
 import ProviderChatWorkspace from './ProviderChatWorkspace'
 import type { ProviderChatApi, ProviderChatSnapshot } from '../provider-chat-types'
+import { XmppChatAdapter } from '../../electron/chat/providers/xmpp'
 const snapshot: ProviderChatSnapshot = { available: true, providers: [
   { id: 'teams', name: 'Microsoft Teams', available: true, detail: 'Work or school account', fields: [{ key: 'channels', label: 'Include channels', type: 'checkbox' }] },
-  { id: 'slack', name: 'Slack', available: true, detail: 'Workspace token', fields: [{ key: 'token', label: 'User token', type: 'password', required: true }] }
+  { id: 'slack', name: 'Slack', available: true, detail: 'Workspace token', fields: [{ key: 'token', label: 'User token', type: 'password', required: true }] },
+  new XmppChatAdapter().descriptor()
 ], accounts: [{ id: 'a', provider: 'teams', remoteUserId: 'user', name: 'Alice', status: 'ready', notificationPreviews: false }], rooms: [{ accountId: 'a', id: 'r', name: 'Team room', kind: 'channel', unread: 1, canReadReceipt: true, canSend: true, threaded: true, resource: {} }] }
 function setup() {
   const api: ProviderChatApi = { snapshot: vi.fn(async () => snapshot), connect: vi.fn(async () => snapshot.accounts[0]), remove: vi.fn(async () => {}), refresh: vi.fn(async () => {}), messages: vi.fn(async () => ({ items: [{ id: 'm', senderId: 'bob', sender: 'Bob', timestamp: '2026-01-01T00:00:00Z', body: '<script>plain text</script>', own: false }] })), send: vi.fn(async () => ({ id: 'sent', senderId: 'user', sender: 'Alice', timestamp: '', body: 'hello', own: true })), markRead: vi.fn(async () => {}), preferences: vi.fn(async () => {}), onEvent: vi.fn(() => () => {}) }
@@ -41,4 +43,14 @@ it('retains draft after unconfirmed sends and surfaces the error', async () => {
   await f.user.click(screen.getByRole('button', { name: 'Send' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('Check Teams before resending')
   expect(screen.getByLabelText('Message')).toHaveValue('keep draft')
+})
+it('configures XMPP addresses, secure endpoint and existing rooms through the shared connector UI', async () => {
+  const f = setup()
+  await f.user.selectOptions(screen.getByLabelText('Provider'), 'xmpp')
+  await f.user.type(screen.getByLabelText('XMPP address'), 'alice@example.org')
+  await f.user.type(screen.getByLabelText('Password (leave blank to keep it when reconnecting)'), 'secret')
+  await f.user.type(screen.getByLabelText('Endpoint (optional; default STARTTLS on your XMPP domain)'), 'xmpps://example.org:5223')
+  await f.user.type(screen.getByLabelText('Existing MUC room addresses (comma separated)'), 'team@conference.example.org')
+  await f.user.click(screen.getByRole('button', { name: 'Connect account' }))
+  expect(f.api.connect).toHaveBeenCalledWith('xmpp', { jid: 'alice@example.org', password: 'secret', service: 'xmpps://example.org:5223', rooms: 'team@conference.example.org' }, undefined)
 })

@@ -44,6 +44,7 @@
     "test:tasks": "npm run build && tsx scripts/desktop-tasks-audit.mjs && tsx scripts/desktop-tasks-write-audit.mjs && tsx scripts/desktop-tasks-consent-audit.mjs && tsx scripts/desktop-microsoft-tasks-audit.mjs",
     "test:microsoft-tasks": "npm run build && tsx scripts/desktop-microsoft-tasks-audit.mjs",
     "test:imap": "npm run build:main && tsx scripts/imap-smtp-integration.mjs",
+    "test:xmpp": "tsx scripts/xmpp-prosody-audit.mjs",
     "test:chat": "npm run build && node scripts/desktop-chat-audit.mjs",
     "test:live": "tsx scripts/live-provider-runner.mjs",
     "test:desktop:checks": "npm run build && npm run audit:buttons && node scripts/desktop-button-audit.mjs && npm run test:context-menus && npm run audit:accessibility && node scripts/desktop-recovery-audit.mjs && node scripts/desktop-backup-audit.mjs && node scripts/desktop-app-lock-audit.mjs && node scripts/desktop-preferences-audit.mjs && tsx scripts/desktop-tasks-audit.mjs && tsx scripts/desktop-tasks-write-audit.mjs && tsx scripts/desktop-tasks-consent-audit.mjs && tsx scripts/desktop-microsoft-tasks-audit.mjs",
@@ -58,6 +59,7 @@
     "package:linux": "npm run verify:release && npm run verify:platform-config && npm run icons && npm run build && npm run verify:built-oauth && electron-builder --linux AppImage deb --x64 --publish never && npm run verify:platform-artifacts -- linux release x64"
   },
   "dependencies": {
+    "@xmpp/client": "0.14.0",
     "date-fns": "^4.4.0",
     "electron-updater": "^6.8.9",
     "entities": "^8.0.0",
@@ -76,6 +78,7 @@
     "tldts": "^7.4.10"
   },
   "devDependencies": {
+    "@types/xmpp__client": "0.14.1",
     "@axe-core/playwright": "^4.12.1",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
