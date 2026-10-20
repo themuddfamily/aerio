@@ -30,6 +30,17 @@ the request and discards late results. Both the main AI switch and Suggested
 replies feature switch must be enabled. Turning the setting off hides previews.
 **Reply with this** opens an editable draft and never sends it automatically.
 
+**Writing style per sending account (D03)** stores up to 2,000 characters of
+user-approved tone and formatting preferences for each account in AI settings.
+Draft generation uses the selected sending account; reply suggestions use the
+message account. Styles are included in provider requests and can be edited or
+cleared. Save AI settings to persist changes. For optional style learning,
+paste selected examples of your own sent mail (up to 12,000 characters), press
+Analyze, review/edit the result, then Use this style and Save. This never scans
+Sent, fetches other messages, or saves a generated style automatically. Samples
+are not persisted by Aerio. Analysis uses the saved provider/model and requires
+the drafting feature to be enabled.
+
 The summary dialog also offers **Whole conversation** (D06). It reads the cached
 thread and sends chronological subject/date/plain-text excerpts from up to its
 newest 100 messages, sharing a 48,000-character excerpt budget. Each message

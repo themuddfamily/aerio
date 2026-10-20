@@ -41,6 +41,14 @@ beforeEach(() => {
 })
 
 describe('AI assistant settings', () => {
+  it('persists isolated per-account styles and returns copies', () => {
+    store.configure({ ...settings, writingStyles: { account: 'Concise British English', other: 'Formal', empty: '', 'bad/key': 'ignore' } })
+    const reloaded = new AiAssistantStore(join(directory, 'ai.json'), join(directory, 'ai-key.dat'), encryption())
+    expect(reloaded.status().writingStyles).toEqual({ account: 'Concise British English', other: 'Formal' })
+    reloaded.status().writingStyles!.account = 'mutated'
+    expect(reloaded.writingStyle('account')).toBe('Concise British English')
+    expect(reloaded.writingStyle('unknown')).toBeUndefined()
+  })
   it('requires an independently persisted opt-in for on-display suggestions', async () => {
     expect(store.status().automaticReplies).toBe(false)
     store.configure({ ...settings, apiKey: 'sk-ant-secret' })
@@ -92,6 +100,25 @@ describe('AI assistant settings', () => {
 
 describe('AI assistant requests', () => {
   beforeEach(() => { store.configure({ ...settings, apiKey: 'sk-ant-secret' }) })
+
+  it('uses only the sending account style and learns solely from explicitly supplied examples', async () => {
+    store.configure({ ...settings, writingStyles: { account: 'Concise British English', other: 'Never expose this other style' } })
+    await invoke('ai:compose', 'styled', { accountId: 'account', instruction: 'Thank them', draft: '' })
+    const prompt = JSON.parse(String((fetchMock.mock.calls[0] as any)[1].body)).messages[0].content
+    expect(prompt).toContain('Concise British English')
+    expect(prompt).not.toContain('Never expose this other style')
+    expect(request).not.toHaveBeenCalled()
+    fetchMock.mockResolvedValueOnce(anthropicReply('Short sentences, friendly tone.'))
+    expect(await invoke('ai:learn-style', 'learn', 'Thanks for your help. Best wishes.')).toBe('Short sentences, friendly tone.')
+    expect(store.writingStyle('account')).toBe('Concise British English')
+    expect(request).not.toHaveBeenCalled()
+    const learning = JSON.parse(String((fetchMock.mock.calls[1] as any)[1].body)).messages[0].content
+    expect(learning).toContain('<<<UNTRUSTED style-samples')
+    expect(learning).toContain('Thanks for your help.')
+    await expect(invoke('ai:learn-style', 'empty', '')).rejects.toThrow(/Paste up to/)
+    await expect(invoke('ai:learn-style', 'oversize', 'x'.repeat(12001))).rejects.toThrow(/Paste up to/)
+    await expect(invoke('ai:compose', 'bad-account', { accountId: '../bad', instruction: 'Write', draft: '' })).rejects.toThrow(/valid sending account/)
+  })
 
   it('summarizes the entire cached thread only when conversation scope is requested', async () => {
     request.mockResolvedValueOnce({ id: 'thread', messages: [message, { ...message, id: 'two', date: '2026-10-02T09:00:00Z', text: 'Updated decision: do not pay.' }] })

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { KeyRound, Sparkles } from 'lucide-react'
 import { AI_DEFAULT_ANTHROPIC_MODEL, AI_FEATURE_DETAILS, AI_FEATURES, type AiAssistantSettingsInput, type AiAssistantStatus, type AiProviderId } from '../ai-assistant-types'
 import { friendlyAiError, notifyAiSettingsChanged } from '../lib/use-ai-assistant'
+import AiWritingStyles from './AiWritingStyles'
 
 /** Settings section for the optional, off-by-default AI assistant. */
 export default function AiAssistantSettings() {
@@ -14,7 +15,7 @@ export default function AiAssistantSettings() {
 
   const apply = (next: AiAssistantStatus) => {
     setStatus(next)
-    setForm({ enabled: next.enabled, automaticReplies: next.automaticReplies === true, provider: next.provider, model: next.model, baseUrl: next.baseUrl, features: { ...next.features }, includeSenderDetails: next.includeSenderDetails })
+    setForm({ enabled: next.enabled, automaticReplies: next.automaticReplies === true, writingStyles: next.writingStyles ?? {}, provider: next.provider, model: next.model, baseUrl: next.baseUrl, features: { ...next.features }, includeSenderDetails: next.includeSenderDetails })
   }
   useEffect(() => {
     let active = true
@@ -72,6 +73,7 @@ export default function AiAssistantSettings() {
               <small>{status.secureStorage ? 'Encrypted with your operating system’s secure storage and only used by Aerio’s background process. It is never shown again or stored with other settings.' : 'Secure credential storage is unavailable, so an API key cannot be saved. A local server without a key still works.'}</small>
             </label>
             {status.hasApiKey && <div className="settings-actions"><button className="button ghost" disabled={saving} onClick={() => void save({ clearApiKey: true })}><KeyRound size={16} /> Remove saved key</button></div>}
+            <AiWritingStyles status={status} value={form.writingStyles ?? {}} onChange={(writingStyles) => update({ writingStyles })} />
             <fieldset className="ai-settings-features">
               <legend>Features and the data each one sends to {form.provider === 'anthropic' ? 'Anthropic' : 'your server'}</legend>
               {AI_FEATURES.map((feature) => (

@@ -5,7 +5,7 @@ import type { MailMessageRef, MailThreadDetail } from '../../src/mail-types'
 import type { MailWorkerClient } from './worker-client'
 import { assertSecureCredentialStorage } from './secure-storage'
 import { AiRequestError, requestAiCompletion, validateAiBaseUrl, type AiPrompt } from './ai-provider'
-import { composePrompt, conversationSummaryPrompt, parseReplySuggestions, parseSearchSuggestion, repliesPrompt, sanitizeModelText, searchPrompt, summarizePrompt } from './ai-prompts'
+import { composePrompt, conversationSummaryPrompt, learnWritingStylePrompt, parseReplySuggestions, parseSearchSuggestion, repliesPrompt, sanitizeModelText, searchPrompt, summarizePrompt } from './ai-prompts'
 
 // The optional AI assistant is off by default. Non-secret settings live in a
 // small JSON file; the API key is encrypted with OS secure storage in its own
@@ -32,6 +32,9 @@ function normalizeSettings(value: unknown): StoredSettings {
   return {
     enabled: input.enabled === true,
     automaticReplies: input.automaticReplies === true,
+    writingStyles: Object.fromEntries(Object.entries(input.writingStyles && typeof input.writingStyles === 'object' ? input.writingStyles : {})
+      .filter(([id, style]) => /^[\w-]{1,100}$/.test(id) && typeof style === 'string' && style.trim()).slice(0, 100)
+      .map(([id, style]) => [id, sanitizeModelText(style, 2_000)])),
     provider: providers.includes(input.provider as AiProviderId) ? input.provider as AiProviderId : fallback.provider,
     model: typeof input.model === 'string' ? input.model : fallback.model,
     baseUrl: typeof input.baseUrl === 'string' ? input.baseUrl : fallback.baseUrl,
@@ -63,7 +66,7 @@ export class AiAssistantStore {
   }
 
   status(): AiAssistantStatus {
-    return { ...this.settings, features: { ...this.settings.features }, hasApiKey: existsSync(this.keyPath), secureStorage: this.secure() }
+    return { ...this.settings, writingStyles: { ...this.settings.writingStyles }, features: { ...this.settings.features }, hasApiKey: existsSync(this.keyPath), secureStorage: this.secure() }
   }
 
   configure(input: AiAssistantSettingsInput): AiAssistantStatus {
@@ -90,6 +93,10 @@ export class AiAssistantStore {
     if (!settings.enabled) throw new AiRequestError('Turn on AI assistance in Settings first', 'config')
     if (!settings.features[feature]) throw new AiRequestError('This AI feature is turned off in Settings', 'config')
     return { config: { provider: settings.provider, model: settings.model, baseUrl: settings.baseUrl, apiKey: this.apiKey() }, includeSenderDetails: settings.includeSenderDetails }
+  }
+
+  writingStyle(accountId?: string) {
+    return accountId && Object.hasOwn(this.settings.writingStyles ?? {}, accountId) ? this.settings.writingStyles![accountId] : undefined
   }
 }
 
@@ -142,14 +149,21 @@ export function registerAiAssistant(options: { worker(): MailWorkerClient; store
   ipcMain.handle('ai:replies', async (_event, requestId: unknown, ref: MailMessageRef, automatic: unknown = false) => {
     if (typeof automatic !== 'boolean') throw new Error('Invalid reply suggestion mode')
     if (automatic && !store.status().automaticReplies) throw new Error('Automatic reply suggestions are turned off in Settings')
-    return parseReplySuggestions(await run(requestId, 'replies', async (sender) => repliesPrompt(await messageFor(ref), sender)))
+    return parseReplySuggestions(await run(requestId, 'replies', async (sender) => repliesPrompt(await messageFor(ref), sender, store.writingStyle(ref.accountId))))
   })
   ipcMain.handle('ai:compose', async (_event, requestId: unknown, input: AiComposeInput) => {
     if (!input || typeof input.instruction !== 'string' || typeof input.draft !== 'string') throw new Error('Enter what you would like the assistant to write')
     if (!input.instruction.trim() && !input.draft.trim()) throw new Error('Enter an instruction or some draft text first')
-    const text = sanitizeModelText(await run(requestId, 'compose', async (sender) => composePrompt(input, input.replyTo ? { message: await messageFor(input.replyTo), includeSenderDetails: sender } : undefined)))
+    if (input.accountId !== undefined && !validId(input.accountId)) throw new Error('Choose a valid sending account')
+    const text = sanitizeModelText(await run(requestId, 'compose', async (sender) => composePrompt(input, input.replyTo ? { message: await messageFor(input.replyTo), includeSenderDetails: sender } : undefined, store.writingStyle(input.accountId))))
     if (!text) throw new Error('The AI assistant returned an empty draft')
     return text
+  })
+  ipcMain.handle('ai:learn-style', async (_event, requestId: unknown, sample: unknown) => {
+    if (typeof sample !== 'string' || !sample.trim() || sample.length > 12_000) throw new Error('Paste up to 12,000 characters of your selected sent messages')
+    const style = sanitizeModelText(await run(requestId, 'compose', async () => learnWritingStylePrompt(sample)), 2_000)
+    if (!style) throw new Error('The AI provider returned an empty writing style')
+    return style
   })
   ipcMain.handle('ai:search', async (_event, requestId: unknown, request: unknown) => {
     if (typeof request !== 'string' || !request.trim()) throw new Error('Describe the mail you are looking for')

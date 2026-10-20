@@ -11,8 +11,8 @@ export const AI_DEFAULT_OPENAI_BASE_URL = 'http://localhost:11434/v1'
 /** Shown in Settings and in every assistant dialog so the user knows exactly what leaves the computer. */
 export const AI_FEATURE_DETAILS: Record<AiFeature, { label: string; sends: string }> = {
   summarize: { label: 'Summarize emails', sends: 'The email’s subject, date, and plain-text body (up to 12,000 characters). Sender name and address only when “Include sender details” is on. Never recipients, attachments, headers, or HTML.' },
-  compose: { label: 'Draft and rephrase', sends: 'Your instruction and the text currently in the composer. The email you are replying to is added only when you tick “Include the email I’m replying to”.' },
-  replies: { label: 'Suggested replies', sends: 'The same email content as Summarize: subject, date, and plain-text body, plus sender details only when that option is on.' },
+  compose: { label: 'Draft and rephrase', sends: 'Your instruction, current draft and any saved writing style for the sending account. The email you are replying to is added only when you tick “Include the email I’m replying to”.' },
+  replies: { label: 'Suggested replies', sends: 'The same email content as Summarize: subject, date, and plain-text body, plus sender details only when that option is on, and any saved writing style for the message account.' },
   search: { label: 'Natural-language search', sends: 'Only the words you type into the Ask AI search box. No email content is sent.' }
 }
 
@@ -20,6 +20,7 @@ export interface AiAssistantStatus {
   enabled: boolean
   /** Explicit opt-in to sending displayed messages for reply suggestions. */
   automaticReplies?: boolean
+  writingStyles?: Record<string, string>
   provider: AiProviderId
   model: string
   /** Used by the OpenAI-compatible provider only. */
@@ -34,6 +35,7 @@ export interface AiAssistantStatus {
 export interface AiAssistantSettingsInput {
   enabled: boolean
   automaticReplies?: boolean
+  writingStyles?: Record<string, string>
   provider: AiProviderId
   model: string
   baseUrl: string
@@ -45,6 +47,7 @@ export interface AiAssistantSettingsInput {
 }
 
 export interface AiComposeInput {
+  accountId?: string
   instruction: string
   draft: string
   /** Optional email to give the model as untrusted context. */
@@ -62,6 +65,7 @@ export interface AiAssistantApi {
   summarize(requestId: string, ref: MailMessageRef, scope?: AiSummaryScope): Promise<string>
   suggestReplies(requestId: string, ref: MailMessageRef, automatic?: boolean): Promise<string[]>
   compose(requestId: string, input: AiComposeInput): Promise<string>
+  learnStyle(requestId: string, sample: string): Promise<string>
   search(requestId: string, request: string): Promise<{ query: string }>
   cancel(requestId: string): Promise<boolean>
 }

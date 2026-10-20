@@ -14,8 +14,8 @@ export const plainTextToEditorHtml = (value: string) => value.split('\n').map((l
  * Drafting and rephrasing panel for the composer. The generated text is only a
  * preview until the user chooses Replace or Insert; neither action sends.
  */
-export function MailAiComposeAssist({ status, editorRef, text, replyTo, onEditorChange, onClose }: {
-  status: AiAssistantStatus; editorRef: RefObject<HTMLDivElement | null>; text: string; replyTo?: MailMessageRef
+export function MailAiComposeAssist({ status, editorRef, text, replyTo, accountId, onEditorChange, onClose }: {
+  status: AiAssistantStatus; editorRef: RefObject<HTMLDivElement | null>; text: string; replyTo?: MailMessageRef; accountId?: string
   onEditorChange(): void; onClose(): void
 }) {
   const request = useAiRequest()
@@ -24,7 +24,7 @@ export function MailAiComposeAssist({ status, editorRef, text, replyTo, onEditor
   const [preview, setPreview] = useState('')
   const provider = aiProviderName(status)
   const generate = async () => {
-    const result = await request.start((id) => window.aerio.ai.compose(id, { instruction, draft: text, ...(includeReply && replyTo ? { replyTo } : {}) }))
+    const result = await request.start((id) => window.aerio.ai.compose(id, { instruction, draft: text, ...(accountId ? { accountId } : {}), ...(includeReply && replyTo ? { replyTo } : {}) }))
     if (result !== undefined) setPreview(result)
   }
   const apply = (mode: 'replace' | 'insert') => {
@@ -45,6 +45,7 @@ export function MailAiComposeAssist({ status, editorRef, text, replyTo, onEditor
     <div className="ai-quick-instructions">{QUICK_INSTRUCTIONS.map((value) => <button key={value} type="button" className="chip" onClick={() => setInstruction(value)}>{value}</button>)}</div>
     {replyTo && <label className="checkbox-row"><input type="checkbox" checked={includeReply} onChange={(event) => setIncludeReply(event.target.checked)} /> Include the email I’m replying to</label>}
     <small className="ai-disclosure">Sends to {provider} ({status.model}): {AI_FEATURE_DETAILS.compose.sends}</small>
+    {accountId && status.writingStyles?.[accountId] && <small>Also sends the saved writing style for this sending account. Edit it in AI assistance settings.</small>}
     {request.busy && <p role="status">Waiting for {provider}…</p>}
     {request.notice && <p role="status">{request.notice}</p>}
     {request.error && <p role="alert" className="message-tool-error">{request.error}</p>}
