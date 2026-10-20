@@ -9,7 +9,7 @@ if (process.platform !== 'darwin') throw new Error('iOS native validation requir
 const env = { ...process.env, EXPO_PUBLIC_NATIVE_AUDIT: '1', CI: '1' };
 run(process.execPath, ['node_modules/expo/bin/cli', 'prebuild', '--platform', 'ios', '--no-install'], { env, stdio: 'inherit' });
 run('pod', ['install', '--project-directory=ios'], { env, stdio: 'inherit' });
-run('xcodebuild', ['-workspace', 'ios/Aerio.xcworkspace', '-scheme', 'Aerio', '-configuration', 'Release', '-sdk', 'iphonesimulator', '-arch', process.arch === 'arm64' ? 'arm64' : 'x86_64', '-destination', 'generic/platform=iOS Simulator', '-derivedDataPath', 'build/ios', 'CODE_SIGNING_ALLOWED=NO', 'ONLY_ACTIVE_ARCH=YES'], { env, stdio: 'inherit' });
+run('xcodebuild', ['-workspace', 'ios/Aerio.xcworkspace', '-scheme', 'Aerio', '-configuration', 'Release', '-sdk', 'iphonesimulator', '-destination', 'generic/platform=iOS Simulator', '-derivedDataPath', 'build/ios', `ARCHS=${process.arch === 'arm64' ? 'arm64' : 'x86_64'}`, 'CODE_SIGNING_ALLOWED=NO', 'ONLY_ACTIVE_ARCH=YES'], { env, stdio: 'inherit' });
 const app = join(root, 'build/ios/Build/Products/Release-iphonesimulator/Aerio.app');
 if (!existsSync(app)) throw new Error('Xcode did not produce Aerio.app.');
 const runtimes = JSON.parse(run('xcrun', ['simctl', 'list', 'runtimes', '--json'])).runtimes.filter((item) => item.isAvailable && item.identifier.includes('.iOS-')).sort((a, b) => b.version.localeCompare(a.version, undefined, { numeric: true }));

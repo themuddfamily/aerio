@@ -44,7 +44,7 @@ npm run check
 npx expo install --check
 npx expo prebuild
 npm run android
-# macOS + Xcode:
+# macOS + Xcode 26.4 or later (Expo SDK 58 requirement):
 npm run ios
 ```
 

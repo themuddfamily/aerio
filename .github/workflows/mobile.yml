@@ -27,7 +27,9 @@ jobs:
       - run: npm run check
       - run: npx expo install --check
   ios-native:
-    runs-on: macos-15
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     timeout-minutes: 60
     defaults:
       run:
@@ -40,6 +42,7 @@ jobs:
           cache: npm
           cache-dependency-path: mobile/package-lock.json
       - run: npm ci
+      - run: xcodebuild -version
       - run: node scripts/ios-native-audit.mjs
       - uses: actions/upload-artifact@v7
         if: always()
