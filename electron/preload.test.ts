@@ -548,3 +548,16 @@ describe('message toolbar preload bridge', () => {
     expect(mocks.listeners.get('message-toolbar:changed')).toHaveLength(0)
   })
 })
+
+describe('application profile preload bridge', () => {
+  it('exposes profile identity operations without exposing arbitrary filesystem paths', async () => {
+    await api().appProfiles.list()
+    await api().appProfiles.create('Work')
+    await api().appProfiles.rename('default', 'Personal')
+    await api().appProfiles.switch('default')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('app-profiles:list')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('app-profiles:create', 'Work')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('app-profiles:rename', 'default', 'Personal')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('app-profiles:switch', 'default')
+  })
+})

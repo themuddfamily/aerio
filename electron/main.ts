@@ -1,3 +1,4 @@
+import { AppProfileRegistry, configureProfilePaths, registerAppProfiles, selectedProfileDirectory } from './app-profiles'
 import { MailUnifiedViewsStore, registerMailUnifiedViews } from './mail/unified-views'
 import { registerMessageToolbar } from './message-toolbar'
 import { normalizeMessageToolbar } from '../src/lib/message-toolbar'
@@ -153,7 +154,7 @@ import { CHAT_SERVICE_SCHEME } from './chat/service-host'
 import { initializeMeetingHosts, type MeetingHosts } from './productivity/meeting-host-ipc'
 import { parseMeetingHostEnvironment } from './productivity/meeting-host-providers'
 import { registerMcpAutomation } from './mcp/automation-ipc'
-import { isMcpBridgeLaunch, mcpLaunchCommand, startMcpBridgeMode } from './mcp/bridge-mode'
+import { bridgeEndpoint, isMcpBridgeLaunch, mcpLaunchCommand, startMcpBridgeMode } from './mcp/bridge-mode'
 
 const builtInGoogleClientSecret = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET
 const builtInOAuthClients = parseOAuthEnvironment({
@@ -173,7 +174,25 @@ const builtInMeetingHostClients = parseMeetingHostEnvironment({
 
 // `--mcp` runs only the stdio automation bridge (E48); it must not claim the app's single-instance lock.
 const mcpBridgeMode = isMcpBridgeLaunch(process.argv)
+// Keep one lock at the installation's original data root, even when a profile has its own data directory.
+const profileRoot = app.getPath('userData')
 const hasSingleInstanceLock = !mcpBridgeMode && app.requestSingleInstanceLock()
+let appProfiles: AppProfileRegistry | undefined
+let profileStartupFailed = false
+if (hasSingleInstanceLock) {
+  try {
+    appProfiles = new AppProfileRegistry(profileRoot, process.argv)
+    configureProfilePaths(app, appProfiles.directory)
+  } catch (error) {
+    profileStartupFailed = true
+    dialog.showErrorBox('Aerio profile could not be opened', error instanceof Error ? error.message : String(error))
+    app.quit()
+  }
+}
+if (mcpBridgeMode && !bridgeEndpoint(process.argv, process.env)) {
+  try { configureProfilePaths(app, selectedProfileDirectory(profileRoot, process.argv)) }
+  catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); app.exit(2) }
+}
 const hideTestWindows = process.env.AERIO_TEST_HIDDEN === '1'
 
 if (mcpBridgeMode) void startMcpBridgeMode(app)
@@ -1688,6 +1707,17 @@ function registerIpc() {
     linked: linkedCloudStorage
   })
   registerCloudAttachments(ipcMain, () => cloudAttachments)
+  if (appProfiles) registerAppProfiles({ ipcMain, registry: appProfiles, argv: process.argv, locked: () => appLockStatus().locked,
+    canSwitch: () => {
+      if (appLockStatus().locked) throw new Error('Unlock Aerio before switching application profiles.')
+      return !BrowserWindow.getAllWindows().some((window) => window !== mainWindow && (window.isVisible() || new URL(window.webContents.getURL() || 'about:blank').searchParams.get('view') === 'message'))
+    },
+    restart: (args) => {
+      app.relaunch({ args })
+      // Acknowledge the IPC before the old renderer and its response channel close.
+      setTimeout(() => app.quit(), 100)
+    }
+  })
   registerMessageToolbar({ ipcMain, load: loadPreferences, save: savePreferences,
     broadcast: (commands) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('message-toolbar:changed', commands)) })
   ipcMain.handle('preferences:load', () => loadPreferences())
@@ -2299,7 +2329,7 @@ if (hasSingleInstanceLock) app.on('second-instance', () => {
   if (readyToOpenWindows) openMainWindow()
 })
 
-if (hasSingleInstanceLock) app.whenReady().then(async () => {
+if (hasSingleInstanceLock && !profileStartupFailed) app.whenReady().then(async () => {
   diagnostics = new DiagnosticLogger(join(app.getPath('userData'), 'logs', 'aerio.jsonl'))
   diagnostic({ level: 'info', component: 'app', event: 'startup', details: { version: app.getVersion(), packaged: app.isPackaged } })
   const menu = applicationMenuTemplate(process.platform, () => openMainWindow())

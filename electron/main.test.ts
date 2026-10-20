@@ -187,7 +187,7 @@ const mocks = vi.hoisted(() => {
     setReadResult(value: string | Buffer | Error) { readResult = value },
     setExistsResult(value: boolean | ((path: string) => boolean)) { existsResult = value },
     app: {
-      isPackaged: false, requestSingleInstanceLock: vi.fn(() => true), quit: vi.fn(), setAppUserModelId: vi.fn(),
+      isPackaged: false, setPath: vi.fn(), relaunch: vi.fn(), exit: vi.fn(), requestSingleInstanceLock: vi.fn(() => true), quit: vi.fn(), setAppUserModelId: vi.fn(),
       getPath: vi.fn(() => process.platform === 'win32' ? 'C:\\aerio-test' : '/tmp/aerio-test'), getAppPath: vi.fn(() => process.platform === 'win32' ? 'C:\\aerio' : '/tmp/aerio'), getVersion: vi.fn(() => '0.4.0'),
       on: vi.fn((event: string, handler: (...args: any[]) => any) => { appHandlers.set(event, handler) }),
       whenReady: vi.fn(() => Promise.resolve()), setLoginItemSettings: vi.fn((settings: { openAtLogin: boolean }) => { loginEnabled = settings.openAtLogin }),
@@ -195,7 +195,7 @@ const mocks = vi.hoisted(() => {
     },
     ipcMain: { handle: vi.fn((channel: string, handler: (...args: any[]) => any) => ipcHandlers.set(channel, handler)) },
     dialog: {
-      showOpenDialog: vi.fn(async () => dialogOpenResult), showSaveDialog: vi.fn(async () => dialogSaveResult)
+      showErrorBox: vi.fn(), showOpenDialog: vi.fn(async () => dialogOpenResult), showSaveDialog: vi.fn(async () => dialogSaveResult)
     },
     protocol: {
       registerSchemesAsPrivileged: vi.fn(),
@@ -219,7 +219,7 @@ const mocks = vi.hoisted(() => {
       constructor() { trays.push(this) }
     },
     fs: {
-      existsSync: vi.fn((path: string) => typeof existsResult === 'function' ? existsResult(path) : existsResult), mkdirSync: vi.fn(),
+      existsSync: vi.fn((path: string) => typeof existsResult === 'function' ? existsResult(path) : existsResult), mkdirSync: vi.fn(), renameSync: vi.fn(),
       copyFileSync: vi.fn(), unlinkSync: vi.fn(),
       readFileSync: vi.fn(() => { if (readResult instanceof Error) throw readResult; return readResult }),
       statSync: vi.fn(() => { if (statResult instanceof Error) throw statResult; return statResult }), writeFileSync: vi.fn()
@@ -336,6 +336,10 @@ describe.sequential('Electron main process', () => {
 
   it('boots storage, mail, updates, a secured renderer window, and the remote-image protocol', async () => {
     expect(mocks.app.requestSingleInstanceLock).toHaveBeenCalledOnce()
+    const profileRoot = process.platform === 'win32' ? 'C:\\aerio-test' : '/tmp/aerio-test'
+    expect(mocks.app.setPath).toHaveBeenCalledWith('userData', profileRoot)
+    expect(mocks.app.setPath).toHaveBeenCalledWith('sessionData', profileRoot)
+    expect(mocks.app.requestSingleInstanceLock.mock.invocationCallOrder[0]).toBeLessThan(mocks.app.setPath.mock.invocationCallOrder[0])
     expect(mocks.MailWorkerClient).toHaveBeenCalledOnce()
     expect(mocks.worker.request).toHaveBeenCalledWith(expect.objectContaining({ type: 'initialize' }))
     expect(mocks.updateManager.start).toHaveBeenCalledOnce()
@@ -429,6 +433,10 @@ describe.sequential('Electron main process', () => {
 
   it('wires external automation (MCP) to the app lock, draft validation, and the protected send path', async () => {
     expect(mocks.app.requestSingleInstanceLock).toHaveBeenCalledOnce()
+    const profileRoot = process.platform === 'win32' ? 'C:\\aerio-test' : '/tmp/aerio-test'
+    expect(mocks.app.setPath).toHaveBeenCalledWith('userData', profileRoot)
+    expect(mocks.app.setPath).toHaveBeenCalledWith('sessionData', profileRoot)
+    expect(mocks.app.requestSingleInstanceLock.mock.invocationCallOrder[0]).toBeLessThan(mocks.app.setPath.mock.invocationCallOrder[0])
     const options = mcpMocks.register.mock.calls[0][0]
     expect(options.userData).toBe(mocks.app.getPath())
     expect(options.launch).toEqual({ command: 'node', args: [expect.stringMatching(/dist-electron[\\/]mcp[\\/]bridge\.js$/)] })

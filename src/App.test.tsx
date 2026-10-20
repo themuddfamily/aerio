@@ -540,3 +540,24 @@ describe('Shared message toolbar preferences', () => {
     } finally { delete (api as typeof api & { messageToolbar?: unknown }).messageToolbar }
   })
 })
+
+
+describe('Application profile switching', () => {
+  it('flushes preferences and the local workspace before requesting a profile restart', async () => {
+    const switchProfile = vi.fn(async () => {})
+    Object.defineProperty(api, 'appProfiles', { configurable: true, value: {
+      list: async () => ({ currentId: 'default', profiles: [{ id: 'default', name: 'Personal', createdAt: '' }, { id: 'work', name: 'Work', createdAt: '' }] }),
+      switch: switchProfile
+    } })
+    try {
+      renderApp(); await screen.findByRole('region', { name: 'Mail mock' })
+      fireEvent.click(screen.getByRole('button', { name: 'Switch application profile' }))
+      await screen.findByRole('button', { name: 'Switch to Work' })
+      fireEvent.click(screen.getByRole('button', { name: 'Switch to Work' }))
+      await waitFor(() => expect(switchProfile).toHaveBeenCalledWith('work'))
+      expect(api.productivity.saveLocal).toHaveBeenCalledWith(localModules)
+      expect(api.savePreferences).toHaveBeenCalledWith(expect.objectContaining({ schemaVersion: 1 }))
+      expect(api.productivity.saveLocal.mock.invocationCallOrder.at(-1)).toBeLessThan(switchProfile.mock.invocationCallOrder[0])
+    } finally { delete (api as typeof api & { appProfiles?: unknown }).appProfiles }
+  })
+})

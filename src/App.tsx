@@ -8,6 +8,7 @@ import { applyTheme as applySavedTheme } from './lib/themes'
 import SettingsModal from './components/SettingsModal'
 import DuplicateCleanupModal from './components/DuplicateCleanupModal'
 import ProfileModal from './components/ProfileModal'
+import AppProfileSwitcher from './components/AppProfileSwitcher'
 import AppInfoModal from './components/AppInfoModal'
 import AppLockScreen from './components/AppLockScreen'
 import CalendarView from './views/CalendarView'
@@ -531,6 +532,11 @@ export default function App() {
             <button aria-label="Help" title={`Help and keyboard shortcuts${keyLabel('app.help') ? ` · ${keyLabel('app.help')}` : ''}`} onClick={() => setInfoOpen('help')}><HelpCircle size={20} /></button>
             {appLock.enabled && <button aria-label="Lock Aerio" title={`Lock Aerio${keyLabel('app.lock') ? ` · ${keyLabel('app.lock')}` : ''}`} onClick={() => void window.aerio.appLock.lock()}><LockKeyhole size={20} /></button>}
             <button aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)} onContextMenu={(event) => showContextMenu(event, [{ label: 'Open settings', icon: Settings, shortcut: keyLabel('app.settings'), action: () => setSettingsOpen(true) }], 'Settings')}><Settings size={20} /></button>
+            <AppProfileSwitcher onPrepareSwitch={async () => {
+              if (localRestoreActive.current) throw new Error('Wait for the local backup restore to finish before switching profiles.')
+              await Promise.all([window.aerio.savePreferences(preferences), window.aerio.productivity.saveLocal(localModules)])
+              clearTimeout(localSaveTimer.current)
+            }} />
             <button className="profile-button" aria-label={`Profile: ${profile.displayName}`} title="Your Aerio profile" onClick={() => setProfileOpen(true)} onContextMenu={(event) => showContextMenu(event, [
               { label: 'Open profile', icon: UserRound, action: () => setProfileOpen(true) }
             ], profile.displayName)}><span>{profile.avatarDataUrl ? <img src={profile.avatarDataUrl} alt="" /> : profileInitials}</span><i /></button>

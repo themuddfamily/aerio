@@ -3,6 +3,12 @@ import type { AerioDesktopApi, AppPreferences } from '../src/types'
 import type { ApplyMailActionInput, MailDraftInput, MailWorkerEvent, ImapAccountInput, MailQuery } from '../src/mail-types'
 
 const api: AerioDesktopApi = {
+  appProfiles: {
+    list: () => ipcRenderer.invoke('app-profiles:list'),
+    create: (name) => ipcRenderer.invoke('app-profiles:create', name),
+    rename: (id, name) => ipcRenderer.invoke('app-profiles:rename', id, name),
+    switch: (id) => ipcRenderer.invoke('app-profiles:switch', id)
+  },
   messageToolbar: {
     get: () => ipcRenderer.invoke('message-toolbar:get'),
     set: (commands) => ipcRenderer.invoke('message-toolbar:set', commands),
