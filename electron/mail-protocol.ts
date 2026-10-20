@@ -41,6 +41,8 @@ import type { MailSenderIdentity, MailSenderIdentityInput, MailSignature, MailSi
 import type { MailMergeJob, MailMergeJobInput, MailMergeJobSummary, MailMergeResolution } from '../src/mail-merge-types'
 
 export type MailWorkerCommand =
+  | { type: 'settings-sync:signatures-export' }
+  | { type: 'settings-sync:signatures-apply'; payload: import('../src/settings-sync-types').PortableSignatures; expected?: import('../src/settings-sync-types').PortableSignatures }
   | { type: 'initialize'; payload: { databasePath: string; contentPath: string; proxy?: import('./network-proxy-store').ProxyRuntimeConfig } }
   | { type: 'accounts:list' }
   | { type: 'accounts:upsert'; payload: MailAccountSummary }
@@ -144,6 +146,8 @@ export type MailWorkerCommand =
   | import('./mail/mailbox-owner-worker').MailboxOwnerCommand
 
 export type MailWorkerResult =
+  | import('../src/settings-sync-types').PortableSignatures
+  | { skippedAccounts: number; snapshot: import('../src/settings-sync-types').PortableSignatures }
   | void
   | import('../src/mail-folder-preference-types').MailFolderPreferences
   | boolean

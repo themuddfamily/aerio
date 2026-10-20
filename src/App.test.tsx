@@ -572,3 +572,17 @@ describe('Application profile switching', () => {
     } finally { delete (api as typeof api & { appProfiles?: unknown }).appProfiles }
   })
 })
+
+describe('Applying synchronized preferences', () => {
+  it('updates the workspace and preserves the received settings in subsequent autosaves', async () => {
+    let applied: ((preferences: AppPreferences) => void) | undefined
+    Object.defineProperty(api, 'settingsSync', { configurable: true, value: { onApplied: (callback: typeof applied) => { applied = callback; return vi.fn() } } })
+    try {
+      renderApp(); await screen.findByRole('region', { name: 'Mail mock' })
+      const next: AppPreferences = { ...preferences, settings: { ...preferences.settings, theme: 'light', density: 'compact' } }
+      act(() => applied?.(next))
+      await waitFor(() => expect(document.documentElement.dataset.theme).toBe('light'))
+      await waitFor(() => expect(api.savePreferences).toHaveBeenCalledWith(next))
+    } finally { delete (api as typeof api & { settingsSync?: unknown }).settingsSync }
+  })
+})

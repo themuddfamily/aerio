@@ -18,6 +18,18 @@ const api: AerioDesktopApi = {
       return () => ipcRenderer.removeListener('provider-chat:event', listener)
     }
   },
+  settingsSync: {
+    status: () => ipcRenderer.invoke('settings-sync:status'),
+    configure: (configuration) => ipcRenderer.invoke('settings-sync:configure', configuration),
+    sync: () => ipcRenderer.invoke('settings-sync:sync'),
+    resolve: (choice) => ipcRenderer.invoke('settings-sync:resolve', choice),
+    disconnect: () => ipcRenderer.invoke('settings-sync:disconnect'),
+    onApplied: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, preferences: AppPreferences) => callback(preferences)
+      ipcRenderer.on('settings-sync:applied', listener)
+      return () => ipcRenderer.removeListener('settings-sync:applied', listener)
+    }
+  },
   appProfiles: {
     list: () => ipcRenderer.invoke('app-profiles:list'),
     create: (name) => ipcRenderer.invoke('app-profiles:create', name),

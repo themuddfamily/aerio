@@ -312,6 +312,23 @@ export class MailIdentityStore {
     return signature
   }
 
+  /** Called inside the mail database transaction after validating a portable settings snapshot. */
+  applySynchronizedSignatures(data: import('../../src/settings-sync-types').PortableSignatures, accounts: MailAccountSummary[]) {
+    this.db.prepare('UPDATE mail_sender_identities SET new_signature_id=NULL,reply_signature_id=NULL').run()
+    this.db.prepare('DELETE FROM mail_signatures').run()
+    const timestamp = nowIso()
+    for (const signature of data.definitions) {
+      const html = sanitizeTemplateHtml(signature.html)
+      this.db.prepare('INSERT INTO mail_signatures(id,name,html,text,created_at,updated_at) VALUES(?,?,?,?,?,?)')
+        .run(signature.id, signature.name, html, templateTextFromHtml(html), timestamp, timestamp)
+    }
+    for (const mapped of data.assignments) for (const account of accounts.filter((account) => account.provider === mapped.provider && account.email.toLowerCase() === mapped.accountEmail)) {
+      this.ensurePrimary(account)
+      this.db.prepare('UPDATE mail_sender_identities SET new_signature_id=?,reply_signature_id=?,updated_at=? WHERE account_id=? AND email=? COLLATE NOCASE')
+        .run(mapped.newSignatureId ?? null, mapped.replySignatureId ?? null, timestamp, account.id, mapped.identityEmail)
+    }
+  }
+
   deleteSignature(id: string) {
     this.db.prepare('UPDATE mail_sender_identities SET new_signature_id=NULL WHERE new_signature_id=?').run(id)
     this.db.prepare('UPDATE mail_sender_identities SET reply_signature_id=NULL WHERE reply_signature_id=?').run(id)

@@ -5221,3 +5221,8 @@ button.mail-folder-twisty:hover { background: var(--surface-hover); color: var(-
 .application-profile-list li { display: flex; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .application-profile-list li > span { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
 .application-profile-list small { color: var(--muted); }
+
+.settings-sync-review { margin: 14px 0; padding: 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-2); }
+.settings-sync-review table { width: 100%; margin: 10px 0; border-collapse: collapse; font-size: 12px; }
+.settings-sync-review th, .settings-sync-review td { text-align: left; padding: 5px; border-bottom: 1px solid var(--line); }
+.settings-sync-review ul { max-height: 220px; overflow-y: auto; padding-left: 20px; font-size: 12px; }

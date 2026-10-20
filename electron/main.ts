@@ -1,3 +1,6 @@
+import { SettingsSyncService } from './settings-sync'
+import { settingsSyncAdapter } from './settings-sync-data'
+import { registerSettingsSync } from './settings-sync-ipc'
 import { RocketChatAdapter } from './chat/providers/rocketchat'
 import { SlackChatAdapter } from './chat/providers/slack'
 import { initializeProviderChat } from './chat/providers/main'
@@ -263,6 +266,7 @@ let profileBackups: ReturnType<typeof registerProfileBackup> | null = null
 let providerChatRuntime: ReturnType<typeof initializeProviderChat> | null = null
 let chatRuntime: ChatRuntime | null = null
 let mcpAutomation: ReturnType<typeof registerMcpAutomation> | null = null
+let settingsSync: SettingsSyncService | undefined
 let readyToOpenWindows = false
 const senderFaviconCache = new Map<string, { image: Buffer | null; expiresAt: number }>()
 const senderFaviconCandidateRequests = new Map<string, Promise<Buffer | null>>()
@@ -1741,6 +1745,23 @@ function registerIpc() {
       setTimeout(() => app.quit(), 100)
     }
   })
+  settingsSync = new SettingsSyncService({ directory: app.getPath('userData'), storage: safeStorage, locked: () => appLockStatus().locked,
+    adapter: settingsSyncAdapter({ load: loadPreferences, save: savePreferences, templates: () => mailTemplateStore!, worker: requireMailWorker,
+      applied: (preferences) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          try {
+            window.webContents.send('settings-sync:applied', preferences)
+            window.webContents.send('message-toolbar:changed', normalizeMessageToolbar(preferences.settings.messageToolbar))
+          } catch { /* A closing reader will load the stored settings next time. */ }
+        }
+        void requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' }).then((accounts) => {
+          for (const window of BrowserWindow.getAllWindows()) { try { window.webContents.send('mail:event', { type: 'accounts-changed', payload: accounts }) } catch { /* Closing reader. */ } }
+        }).catch(() => {})
+      }
+    })
+  })
+  registerSettingsSync(ipcMain, settingsSync)
+  settingsSync.start()
   registerMessageToolbar({ ipcMain, load: loadPreferences, save: savePreferences,
     broadcast: (commands) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('message-toolbar:changed', commands)) })
   ipcMain.handle('preferences:load', () => loadPreferences())
@@ -2713,6 +2734,7 @@ app.on('before-quit', () => {
   stopTrayMonitor()
   if (taskPolling) clearInterval(taskPolling)
   unifiedViewsStore?.close()
+  settingsSync?.close()
   calendarWeather?.close()
   calendarReminders?.close()
   taskExtras?.dispose()

@@ -13,6 +13,7 @@ import InboxCategorySettings from './InboxCategorySettings'
 import OpenPgpKeyManager from './OpenPgpKeyManager'
 import SmimeCertificateManager from './SmimeCertificateManager'
 import ProfileBackupSection from './ProfileBackupSection'
+import SettingsSyncSection from './SettingsSyncSection'
 import DavAccountsSection from './DavAccountsSection'
 import KeyboardShortcutsSection from './KeyboardShortcutsSection'
 import CloudStorageAccountsSection from './CloudStorageAccountsSection'
@@ -243,6 +244,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
           </div>
         </section>
         <ProfileBackupSection />
+        <SettingsSyncSection beforeSync={async () => { await window.aerio.savePreferences(preferences) }} />
         {onFindDuplicates && window.aerio.duplicates && <section className="settings-section">
           <div className="settings-icon"><CopyX size={18} /></div>
           <div className="settings-content">

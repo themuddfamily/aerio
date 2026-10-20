@@ -1,3 +1,4 @@
+import { applyPortableSignatures, capturePortableSignatures } from './mail/settings-sync-signatures'
 import { imapPinSupport } from '../src/mail-pin-sync-types'
 import { parentPort } from 'node:worker_threads'
 import { installNodeProxy } from './network-proxy-runtime'
@@ -1963,6 +1964,8 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   }
   if (command.type === 'identities:delete') return database.identities.delete(command.payload.id)
   if (command.type === 'identities:refresh') return refreshIdentities(command.payload.accountId)
+  if (command.type === 'settings-sync:signatures-export') return capturePortableSignatures(database)
+  if (command.type === 'settings-sync:signatures-apply') return applyPortableSignatures(database, command.payload, command.expected)
   if (command.type === 'signatures:list') return database.identities.listSignatures()
   if (command.type === 'signatures:save') return database.identities.saveSignature(command.payload)
   if (command.type === 'signatures:delete') return database.identities.deleteSignature(command.payload.id)

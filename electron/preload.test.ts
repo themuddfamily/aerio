@@ -572,3 +572,22 @@ describe('application profile preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('app-profiles:switch', 'default')
   })
 })
+
+describe('settings synchronization preload bridge', () => {
+  it('routes explicit sync/review actions and disposes applied listeners', async () => {
+    await api().settingsSync.status()
+    await api().settingsSync.configure({ enabled: false })
+    await api().settingsSync.sync()
+    await api().settingsSync.resolve('remote')
+    await api().settingsSync.disconnect()
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('settings-sync:status')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('settings-sync:configure', { enabled: false })
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('settings-sync:sync')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('settings-sync:resolve', 'remote')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('settings-sync:disconnect')
+    const changed = vi.fn(), unsubscribe = api().settingsSync.onApplied(changed)
+    mocks.listeners.get('settings-sync:applied')?.[0]({}, { schemaVersion: 1 })
+    expect(changed).toHaveBeenCalledWith({ schemaVersion: 1 })
+    unsubscribe(); expect(mocks.listeners.get('settings-sync:applied')).toHaveLength(0)
+  })
+})
