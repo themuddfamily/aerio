@@ -18,6 +18,8 @@ export const AI_FEATURE_DETAILS: Record<AiFeature, { label: string; sends: strin
 
 export interface AiAssistantStatus {
   enabled: boolean
+  /** Explicit opt-in to sending displayed messages for reply suggestions. */
+  automaticReplies?: boolean
   provider: AiProviderId
   model: string
   /** Used by the OpenAI-compatible provider only. */
@@ -31,6 +33,7 @@ export interface AiAssistantStatus {
 
 export interface AiAssistantSettingsInput {
   enabled: boolean
+  automaticReplies?: boolean
   provider: AiProviderId
   model: string
   baseUrl: string
@@ -57,7 +60,7 @@ export interface AiAssistantApi {
   status(): Promise<AiAssistantStatus>
   configure(input: AiAssistantSettingsInput): Promise<AiAssistantStatus>
   summarize(requestId: string, ref: MailMessageRef, scope?: AiSummaryScope): Promise<string>
-  suggestReplies(requestId: string, ref: MailMessageRef): Promise<string[]>
+  suggestReplies(requestId: string, ref: MailMessageRef, automatic?: boolean): Promise<string[]>
   compose(requestId: string, input: AiComposeInput): Promise<string>
   search(requestId: string, request: string): Promise<{ query: string }>
   cancel(requestId: string): Promise<boolean>

@@ -14,7 +14,7 @@ export default function AiAssistantSettings() {
 
   const apply = (next: AiAssistantStatus) => {
     setStatus(next)
-    setForm({ enabled: next.enabled, provider: next.provider, model: next.model, baseUrl: next.baseUrl, features: { ...next.features }, includeSenderDetails: next.includeSenderDetails })
+    setForm({ enabled: next.enabled, automaticReplies: next.automaticReplies === true, provider: next.provider, model: next.model, baseUrl: next.baseUrl, features: { ...next.features }, includeSenderDetails: next.includeSenderDetails })
   }
   useEffect(() => {
     let active = true
@@ -47,7 +47,7 @@ export default function AiAssistantSettings() {
       <div className="settings-icon"><Sparkles size={18} /></div>
       <div className="settings-content">
         <h3>AI assistance</h3>
-        <p>Optional summaries, drafting help, suggested replies, and natural-language search. Off by default; nothing is sent anywhere until you turn it on and choose an AI action. Suggestions are previews: they never send, move, or change mail unless you apply them yourself.</p>
+        <p>Optional summaries, drafting help, suggested replies, and natural-language search. Off by default. Automatic suggestions require a separate opt-in below. Suggestions are previews: they never send, move, or change mail unless you apply them yourself.</p>
         {!form || !status ? <small>{message || 'Reading AI assistance settings…'}</small> : <>
           <label className="toggle-row">
             <span><strong>Turn on AI assistance</strong><small>Adds AI actions to the message menu, the composer, and the search box.</small></span>
@@ -83,6 +83,10 @@ export default function AiAssistantSettings() {
               <label className="toggle-row">
                 <span><strong>Include sender details</strong><small>Adds the sender’s name and email address to summaries and suggestions. Off keeps addresses on this computer.</small></span>
                 <input type="checkbox" checked={form.includeSenderDetails} onChange={(event) => update({ includeSenderDetails: event.target.checked })} />
+              </label>
+              <label className="toggle-row">
+                <span><strong>Suggest replies when I open a message</strong><small>Off by default. When enabled, expanding a message automatically sends its subject, date and plain-text body to your AI provider, plus sender details only if allowed above. Recipients, attachments and HTML are excluded. Requires Suggested replies to be enabled. Replies stay as previews.</small></span>
+                <input type="checkbox" checked={form.automaticReplies === true} onChange={(event) => update({ automaticReplies: event.target.checked })} />
               </label>
             </fieldset>
           </>}

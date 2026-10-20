@@ -10,6 +10,7 @@ import OpenPgpMessageNotice from './OpenPgpMessageNotice'
 import SmimeMessageNotice from './SmimeMessageNotice'
 import SenderAvatar from './SenderAvatar'
 import TrackingProtectionNotice from './TrackingProtectionNotice'
+import MailAutomaticReplies from './MailAutomaticReplies'
 
 interface ThreadMessageAccordionProps {
   message: MailMessageDetail
@@ -17,6 +18,7 @@ interface ThreadMessageAccordionProps {
   children?: ReactNode
   onToggle(): void
   onReply?(): void
+  onReplyWithText?(text: string): void
   onLoadRemoteImages?(): void
   onMoreActions?(event: MouseEvent<HTMLButtonElement>): void
   onContextMenu?(event: MouseEvent<HTMLElement>): void
@@ -32,6 +34,7 @@ export default function ThreadMessageAccordion({
   children,
   onToggle,
   onReply,
+  onReplyWithText,
   onLoadRemoteImages,
   onMoreActions,
   onContextMenu
@@ -73,6 +76,7 @@ export default function ThreadMessageAccordion({
           {expanded && message.attachments.some(isCalendarAttachment) && <MeetingInvitationNotice accountId={message.accountId} messageId={message.id} />}
           {expanded && <OpenPgpMessageNotice message={message} />}
           {expanded && <SmimeMessageNotice message={message} />}
+          {expanded && <MailAutomaticReplies message={message} onReply={onReplyWithText} />}
           {message.sanitizedHtml && message.local?.format !== 'plain'
             ? <MessageHtml className="message-body mail-html" html={message.sanitizedHtml} />
             : <div className="message-body mail-text">{message.text}</div>}

@@ -2,9 +2,9 @@
 
 Aerio can use a large language model to summarize email, draft and rephrase
 messages, suggest replies, and turn a plain-language request into a mail
-search. The assistant is **off by default** and nothing is sent to any AI
-provider until you turn it on in **Settings › AI assistance** and then press an
-AI action button.
+search. The assistant is **off by default**. Manual tools run after you enable
+AI and press their action button. Separately opting into automatic reply
+suggestions allows displayed messages to be sent as described below.
 
 ## Features
 
@@ -21,6 +21,14 @@ feature can be switched off independently.
 
 Translation (LibreTranslate) and the manual **Create meeting / task from email**
 tools are separate and unchanged.
+
+**Automatic reply suggestions (D05)** are separately off by default. Enable
+**Suggest replies when I open a message** and save AI settings to opt in.
+Expanded messages then request reply previews after a short delay. This sends
+the same fields as manual reply suggestions; collapsing/navigating away cancels
+the request and discards late results. Both the main AI switch and Suggested
+replies feature switch must be enabled. Turning the setting off hides previews.
+**Reply with this** opens an editable draft and never sends it automatically.
 
 The summary dialog also offers **Whole conversation** (D06). It reads the cached
 thread and sends chronological subject/date/plain-text excerpts from up to its

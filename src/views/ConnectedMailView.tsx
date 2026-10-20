@@ -1234,6 +1234,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
               onLoadRemoteImages={remoteImages ? undefined : () => void loadRemoteImages()}
               onToggle={() => expansion.toggle(message.id)}
               onReply={selectedAccount?.archived || isLocalFoldersAccount(selectedAccount) ? undefined : () => setCompose({ reply: replyThreadFor(message) })}
+              onReplyWithText={selectedAccount?.archived || isLocalFoldersAccount(selectedAccount) ? undefined : (text) => setCompose({ reply: replyThreadFor(message), initialBody: text })}
               onMoreActions={(event) => showProviderMessageMenu(event, message)}
               onContextMenu={(event) => showProviderMessageMenu(event, message)}
             >

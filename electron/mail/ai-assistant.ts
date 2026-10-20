@@ -22,7 +22,7 @@ export interface AiKeyStorage {
 }
 
 const defaultFeatures = (): Record<AiFeature, boolean> => ({ summarize: true, compose: true, replies: true, search: true })
-export const defaultAiSettings = (): StoredSettings => ({ enabled: false, provider: 'anthropic', model: AI_DEFAULT_ANTHROPIC_MODEL, baseUrl: AI_DEFAULT_OPENAI_BASE_URL, features: defaultFeatures(), includeSenderDetails: false })
+export const defaultAiSettings = (): StoredSettings => ({ enabled: false, automaticReplies: false, provider: 'anthropic', model: AI_DEFAULT_ANTHROPIC_MODEL, baseUrl: AI_DEFAULT_OPENAI_BASE_URL, features: defaultFeatures(), includeSenderDetails: false })
 const providers: AiProviderId[] = ['anthropic', 'openai-compatible']
 
 function normalizeSettings(value: unknown): StoredSettings {
@@ -31,6 +31,7 @@ function normalizeSettings(value: unknown): StoredSettings {
   const features = input.features && typeof input.features === 'object' ? input.features : {} as Partial<Record<AiFeature, boolean>>
   return {
     enabled: input.enabled === true,
+    automaticReplies: input.automaticReplies === true,
     provider: providers.includes(input.provider as AiProviderId) ? input.provider as AiProviderId : fallback.provider,
     model: typeof input.model === 'string' ? input.model : fallback.model,
     baseUrl: typeof input.baseUrl === 'string' ? input.baseUrl : fallback.baseUrl,
@@ -138,7 +139,11 @@ export function registerAiAssistant(options: { worker(): MailWorkerClient; store
     if (!text) throw new Error('The AI assistant returned an empty summary')
     return text
   })
-  ipcMain.handle('ai:replies', async (_event, requestId: unknown, ref: MailMessageRef) => parseReplySuggestions(await run(requestId, 'replies', async (sender) => repliesPrompt(await messageFor(ref), sender))))
+  ipcMain.handle('ai:replies', async (_event, requestId: unknown, ref: MailMessageRef, automatic: unknown = false) => {
+    if (typeof automatic !== 'boolean') throw new Error('Invalid reply suggestion mode')
+    if (automatic && !store.status().automaticReplies) throw new Error('Automatic reply suggestions are turned off in Settings')
+    return parseReplySuggestions(await run(requestId, 'replies', async (sender) => repliesPrompt(await messageFor(ref), sender)))
+  })
   ipcMain.handle('ai:compose', async (_event, requestId: unknown, input: AiComposeInput) => {
     if (!input || typeof input.instruction !== 'string' || typeof input.draft !== 'string') throw new Error('Enter what you would like the assistant to write')
     if (!input.instruction.trim() && !input.draft.trim()) throw new Error('Enter an instruction or some draft text first')

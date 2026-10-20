@@ -41,6 +41,19 @@ beforeEach(() => {
 })
 
 describe('AI assistant settings', () => {
+  it('requires an independently persisted opt-in for on-display suggestions', async () => {
+    expect(store.status().automaticReplies).toBe(false)
+    store.configure({ ...settings, apiKey: 'sk-ant-secret' })
+    await expect(invoke('ai:replies', 'auto', ref, true)).rejects.toThrow(/Automatic reply suggestions are turned off/)
+    expect(fetchMock).not.toHaveBeenCalled()
+    store.configure({ ...settings, automaticReplies: true })
+    const reloaded = new AiAssistantStore(join(directory, 'ai.json'), join(directory, 'ai-key.dat'), encryption())
+    expect(reloaded.status().automaticReplies).toBe(true)
+    fetchMock.mockResolvedValueOnce(anthropicReply('{"replies":["Friday works"]}'))
+    expect(await invoke('ai:replies', 'allowed', ref, true)).toEqual(['Friday works'])
+    store.configure({ ...settings, automaticReplies: true, features: { ...features, replies: false } })
+    await expect(invoke('ai:replies', 'disabled', ref, true)).rejects.toThrow(/turned off in Settings/)
+  })
   it('is off by default and refuses every feature without contacting a provider', async () => {
     expect(store.status()).toMatchObject({ enabled: false, provider: 'anthropic', model: 'claude-sonnet-5-5', hasApiKey: false })
     await expect(invoke('ai:summarize', 'r1', ref)).rejects.toThrow(/Turn on AI assistance/)
