@@ -9,7 +9,7 @@ export const OAUTH_CALLBACK_HEADERS = {
 } as const
 
 type CallbackKind = 'success' | 'denied' | 'invalid-state' | 'not-found'
-type CallbackProvider = 'Google' | 'Microsoft' | 'Dropbox' | 'Zoom' | 'Webex'
+type CallbackProvider = 'Google' | 'Microsoft' | 'Dropbox' | 'Zoom' | 'Webex' | 'GoToMeeting'
 
 interface CallbackPageOptions {
   kind: CallbackKind

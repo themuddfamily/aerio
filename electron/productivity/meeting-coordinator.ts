@@ -23,7 +23,7 @@ import type { HostedMeeting, OnlineMeetingConnector, OnlineMeetingRequest } from
 // keep it on delete).
 
 export const MEETING_DETAILS_FENCE = '─'.repeat(20)
-const DETAILS_BLOCK = new RegExp(`\\n*${MEETING_DETAILS_FENCE}\\nJoin (?:Zoom|Webex) meeting\\n[\\s\\S]*?(?:\\n${MEETING_DETAILS_FENCE}|$)`, 'g')
+const DETAILS_BLOCK = new RegExp(`\\n*${MEETING_DETAILS_FENCE}\\nJoin (?:Zoom|Webex|GoToMeeting) meeting\\n[\\s\\S]*?(?:\\n${MEETING_DETAILS_FENCE}|$)`, 'g')
 
 export function meetingDetailsBlock(meeting: HostedMeeting) {
   const label = CONFERENCE_LABELS[meeting.provider]

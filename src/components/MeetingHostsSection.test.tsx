@@ -34,6 +34,14 @@ beforeEach(() => {
 })
 
 describe('MeetingHostsSection', () => {
+  it('shows GoToMeeting product-registration instructions and its own redirect', async () => {
+    api.status.mockResolvedValueOnce(snapshot({ provider: 'goto', configured: false, connected: false, scopes: [], redirectUri: 'http://localhost:47819/oauth/goto' }))
+    render(<MeetingHostsSection />)
+    const group = await screen.findByRole('group', { name: 'GoToMeeting app registration' })
+    expect(group).toHaveTextContent('developer.goto.com with GoTo Meeting product access')
+    expect(group).toHaveTextContent('http://localhost:47819/oauth/goto')
+    expect(group).not.toHaveTextContent('developer.webex.com')
+  })
   it('renders nothing without the bridge', () => {
     Object.defineProperty(window, 'aerio', { configurable: true, value: {} })
     const { container } = render(<MeetingHostsSection />)

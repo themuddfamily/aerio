@@ -2,9 +2,9 @@
 // their own OAuth consent, separate from the mail/calendar account the event belongs to. Tokens stay in the
 // main process (meeting-host-vault.dat, OS secure storage); the renderer sees only this status.
 
-export type MeetingHostProvider = 'zoom' | 'webex'
+export type MeetingHostProvider = 'zoom' | 'webex' | 'goto'
 
-export const MEETING_HOST_PROVIDERS: readonly MeetingHostProvider[] = ['zoom', 'webex']
+export const MEETING_HOST_PROVIDERS: readonly MeetingHostProvider[] = ['zoom', 'webex', 'goto']
 
 export interface MeetingHostAccount {
   provider: MeetingHostProvider

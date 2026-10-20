@@ -46,19 +46,20 @@ afterEach(() => {
 })
 
 describe('meeting-host IPC', () => {
-  it('reports both hosts and registers the real connectors behind the boundary', async () => {
+  it('reports hosts and registers the real connectors behind the boundary', async () => {
     const status = await invoke('meeting-hosts:status') as { accounts: { provider: string; configured: boolean; connected: boolean }[] }
     expect(status.accounts.map(({ provider, configured, connected }) => ({ provider, configured, connected }))).toEqual([
-      { provider: 'zoom', configured: true, connected: false }, { provider: 'webex', configured: false, connected: false }
+      { provider: 'zoom', configured: true, connected: false }, { provider: 'webex', configured: false, connected: false }, { provider: 'goto', configured: false, connected: false }
     ])
     expect(externalMeetingConnectors.zoom?.requiredScopes).toContain('meeting:write:meeting')
     expect(externalMeetingConnectors.webex?.requiredScopes).toContain('meeting:schedules_write')
+    expect(externalMeetingConnectors.goto?.provider).toBe('goto')
     expect(() => assertConferenceCreatable(calendar, 'zoom')).toThrow('Connect Zoom in Settings › Online meetings')
     expect(() => assertConferenceCreatable(calendar, 'webex')).toThrow(/no Webex app registration/)
   })
 
   it('validates input, broadcasts changes, and refuses account changes while Aerio is locked', async () => {
-    await expect(invoke('meeting-hosts:connect', 'skype')).rejects.toThrow('Choose Zoom or Webex')
+    await expect(invoke('meeting-hosts:connect', 'skype')).rejects.toThrow('Choose Zoom, Webex or GoToMeeting')
     await expect(invoke('meeting-hosts:configure', 'zoom', 'otherClient123', 'otherSecret456')).rejects.toThrow(/already includes its Zoom app registration/)
     await invoke('meeting-hosts:configure', 'webex', 'webexClientId123', 'webexClientSecret456')
     expect(electron.sent.at(-1)?.[0]).toBe('meeting-hosts:changed')

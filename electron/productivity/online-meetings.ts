@@ -18,7 +18,7 @@ export interface OnlineMeetingRequest {
 
 // A meeting created through a provider's own API. Never holds the host start link (it carries a host token).
 export interface HostedMeeting {
-  provider: 'zoom' | 'webex'
+  provider: import('../../src/meeting-host-types').MeetingHostProvider
   meetingId: string
   joinUrl: string
   // Number participants type into the client or phone ("123 4567 8901").
@@ -66,7 +66,8 @@ export class UnavailableMeetingConnector implements OnlineMeetingConnector {
 
 const connectorRegistry: Partial<Record<ConferenceProvider, OnlineMeetingConnector>> = {
   zoom: new UnavailableMeetingConnector('zoom'),
-  webex: new UnavailableMeetingConnector('webex')
+  webex: new UnavailableMeetingConnector('webex'),
+  goto: new UnavailableMeetingConnector('goto')
 }
 
 // Zoom and Webex start unavailable; the main process registers the real connectors once their vault is open.

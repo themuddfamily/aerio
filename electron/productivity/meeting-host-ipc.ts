@@ -3,6 +3,7 @@ import { BrowserWindow, ipcMain } from 'electron'
 import type { MeetingHostProvider, MeetingHostSnapshot } from '../../src/meeting-host-types'
 import { MEETING_HOST_PROVIDERS } from '../../src/meeting-host-types'
 import { ZoomMeetingConnector, WebexMeetingConnector } from './hosted-meeting-connectors'
+import { GoToMeetingConnector } from './goto-meeting'
 import { HostedMeetingCoordinator } from './meeting-coordinator'
 import { MeetingHostHttp } from './meeting-host-http'
 import type { BuiltInMeetingHostClients } from './meeting-host-providers'
@@ -48,17 +49,19 @@ export function initializeMeetingHosts(options: MeetingHostsOptions): MeetingHos
   const account = (provider: MeetingHostProvider) => () => vault.account(provider)
   const connectors = {
     zoom: new ZoomMeetingConnector(new MeetingHostHttp('zoom', vault), account('zoom')),
-    webex: new WebexMeetingConnector(new MeetingHostHttp('webex', vault), account('webex'))
+    webex: new WebexMeetingConnector(new MeetingHostHttp('webex', vault), account('webex')),
+    goto: new GoToMeetingConnector(new MeetingHostHttp('goto', vault), account('goto'))
   }
   registerExternalMeetingConnector(connectors.zoom)
   registerExternalMeetingConnector(connectors.webex)
+  registerExternalMeetingConnector(connectors.goto)
   const coordinator = new HostedMeetingCoordinator({ store, connector: (provider) => connectors[provider], log: options.log })
 
   const unlocked = () => {
     if (options.isLocked()) throw new Error('Unlock Aerio to change online meeting accounts')
   }
   const provider = (value: unknown) => {
-    if (!validProvider(value)) throw new Error('Choose Zoom or Webex')
+    if (!validProvider(value)) throw new Error('Choose Zoom, Webex or GoToMeeting')
     return value
   }
   ipcMain.handle('meeting-hosts:status', (): MeetingHostSnapshot => vault.status())

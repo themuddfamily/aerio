@@ -47,10 +47,13 @@ export class MeetingHostHttp {
   }
 
   async request<T>(method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, body?: unknown, options: { allowNotFound?: boolean } = {}): Promise<T | undefined> {
+    const target = new URL(url), base = new URL(MEETING_HOSTS[this.provider].apiBase)
+    if (target.origin !== base.origin || target.username || target.password || !(target.pathname === base.pathname || target.pathname.startsWith(base.pathname.replace(/\/$/, '') + '/'))) throw new MeetingHostRequestError('Invalid meeting provider resource URL', undefined, false)
     const send = async (token: string) => {
       try {
         return await this.fetch(url, {
           method,
+          redirect: 'error',
           headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           signal: AbortSignal.timeout(this.timeoutMs)

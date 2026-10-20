@@ -60,7 +60,7 @@ export default function MeetingHostsSection() {
       <div className="settings-icon"><Video size={18} /></div>
       <div className="settings-content">
         <h3>Online meetings</h3>
-        <p>Connect Zoom or Webex to add their meetings to Google and Microsoft calendar events. Aerio schedules the meeting with your account and writes the join link, passcode, and dial-in numbers into the event, so invitations include them. Changing the event’s title or time updates the meeting; deleting the event cancels it unless you choose to keep it.</p>
+        <p>Connect Zoom, Webex or GoToMeeting to add their meetings to Google and Microsoft calendar events. Aerio schedules the meeting with your account and writes the available join details into the event, so invitations include them. Changing the event’s title or time updates the meeting; deleting the event cancels it unless you choose to keep it.</p>
         <ul className="dav-account-list" aria-label="Online meeting accounts">
           {accounts.map((account) => {
             const label = CONFERENCE_LABELS[account.provider]
@@ -89,7 +89,7 @@ export default function MeetingHostsSection() {
               {account.needsReconnect && account.error && <small className="diagnostic-error">{account.error}</small>}
               {showForm && account.configSource !== 'built-in' && <div className="meeting-host-registration" role="group" aria-label={`${label} app registration`}>
                 <small>
-                  {account.provider === 'zoom' ? 'Create a user-managed OAuth app in the Zoom App Marketplace' : 'Create an integration on developer.webex.com'} with the redirect URL <code>{account.redirectUri}</code> and the scopes {account.scopes.join(', ')}.
+                  {account.provider === 'zoom' ? 'Create a user-managed OAuth app in the Zoom App Marketplace' : account.provider === 'goto' ? 'Create an OAuth client on developer.goto.com with GoTo Meeting product access' : 'Create an integration on developer.webex.com'} with the redirect URL <code>{account.redirectUri}</code>{account.scopes.length ? ` and the scopes ${account.scopes.join(', ')}` : ''}.
                 </small>
                 <div className="profile-backup-fields">
                   <label className="field-label">Client ID

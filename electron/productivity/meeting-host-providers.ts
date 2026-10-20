@@ -20,6 +20,8 @@ export interface MeetingHostDefinition {
   clientAuth: 'basic' | 'body'
   redirectPort: number
   redirectPath: string
+  /** Omit PKCE parameters only when the provider documents a confidential code grant without PKCE. */
+  pkce?: boolean
 }
 
 export const ZOOM_SCOPES = ['meeting:write:meeting', 'meeting:read:meeting', 'meeting:update:meeting', 'meeting:delete:meeting', 'user:read:user'] as const
@@ -27,6 +29,15 @@ export const ZOOM_SCOPES = ['meeting:write:meeting', 'meeting:read:meeting', 'me
 export const WEBEX_SCOPES = ['meeting:schedules_write', 'meeting:schedules_read', 'spark:people_read'] as const
 
 export const MEETING_HOSTS: Record<MeetingHostProvider, MeetingHostDefinition> = {
+  goto: {
+    provider: 'goto', label: 'GoToMeeting',
+    authorizeUrl: 'https://authentication.logmeininc.com/oauth/authorize',
+    tokenUrl: 'https://authentication.logmeininc.com/oauth/token',
+    profileUrl: 'https://api.getgo.com/identity/v1/Users/me',
+    apiBase: 'https://api.getgo.com/G2M/rest',
+    scopes: [], sendScopes: false, clientAuth: 'basic', pkce: false,
+    redirectPort: 47819, redirectPath: '/oauth/goto'
+  },
   zoom: {
     provider: 'zoom',
     label: 'Zoom',

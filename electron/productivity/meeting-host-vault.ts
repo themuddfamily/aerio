@@ -171,12 +171,12 @@ export class MeetingHostVault {
       const authorization = new URL(definition.authorizeUrl)
       authorization.search = new URLSearchParams({
         response_type: 'code', client_id: config.clientId, redirect_uri: callback.redirectUri, state,
-        code_challenge: challenge, code_challenge_method: 'S256',
+        ...(definition.pkce === false ? {} : { code_challenge: challenge, code_challenge_method: 'S256' }),
         ...(definition.sendScopes ? { scope: definition.scopes.join(' ') } : {})
       }).toString()
       await this.options.openExternal(authorization.toString())
       const code = await callback.code
-      const token = await this.tokenRequest(definition, config, { grant_type: 'authorization_code', code, redirect_uri: callback.redirectUri, code_verifier: verifier })
+      const token = await this.tokenRequest(definition, config, { grant_type: 'authorization_code', code, redirect_uri: callback.redirectUri, ...(definition.pkce === false ? {} : { code_verifier: verifier }) })
       if (!token.ok || !token.body.access_token || !token.body.refresh_token) {
         throw new Error(token.body.reason ?? token.body.error_description ?? token.body.message ?? `${definition.label} did not return renewable credentials`)
       }
@@ -214,18 +214,18 @@ export class MeetingHostVault {
           return
         }
         if (url.searchParams.get('state') !== state) {
-          sendOAuthCallbackPage(response, 400, { kind: 'invalid-state', provider: definition.label as 'Zoom' | 'Webex' })
+          sendOAuthCallbackPage(response, 400, { kind: 'invalid-state', provider: definition.label as 'Zoom' | 'Webex' | 'GoToMeeting' })
           fail?.(new Error(`${definition.label} returned an invalid OAuth state`))
           return
         }
         const returned = url.searchParams.get('code')
         const error = url.searchParams.get('error_description') ?? url.searchParams.get('error')
         if (!returned || error) {
-          sendOAuthCallbackPage(response, 400, { kind: 'denied', provider: definition.label as 'Zoom' | 'Webex' })
+          sendOAuthCallbackPage(response, 400, { kind: 'denied', provider: definition.label as 'Zoom' | 'Webex' | 'GoToMeeting' })
           fail?.(new Error(error ? `${definition.label} sign-in failed: ${error}` : `${definition.label} did not return an authorization code`))
           return
         }
-        sendOAuthCallbackPage(response, 200, { kind: 'success', provider: definition.label as 'Zoom' | 'Webex' })
+        sendOAuthCallbackPage(response, 200, { kind: 'success', provider: definition.label as 'Zoom' | 'Webex' | 'GoToMeeting' })
         settle?.(returned)
       })
       const timeout = setTimeout(() => { server.close(); fail?.(new Error(`${definition.label} sign-in timed out after five minutes`)) }, timeoutMs)
@@ -256,15 +256,15 @@ export class MeetingHostVault {
       body.set('client_id', config.clientId)
       body.set('client_secret', config.clientSecret)
     }
-    const response = await this.fetch(definition.tokenUrl, { method: 'POST', headers, body, signal: AbortSignal.timeout(30_000) })
+    const response = await this.fetch(definition.tokenUrl, { method: 'POST', headers, body, redirect: 'error', signal: AbortSignal.timeout(30_000) })
     return { ok: response.ok, status: response.status, body: await readJson<TokenResponse>(response) }
   }
 
   private async profile(definition: MeetingHostDefinition, accessToken: string) {
-    const response = await this.fetch(definition.profileUrl, { headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }, signal: AbortSignal.timeout(30_000) })
-    const body = await readJson<{ id?: string; email?: string; emails?: string[]; display_name?: string; displayName?: string; first_name?: string; last_name?: string; message?: string }>(response)
+    const response = await this.fetch(definition.profileUrl, { headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(30_000) })
+    const body = await readJson<{ id?: string; email?: string; emails?: string[]; userName?: string; display_name?: string; displayName?: string; first_name?: string; last_name?: string; message?: string }>(response)
     if (!response.ok || !body.id) throw new Error(body.message ?? `Could not read the ${definition.label} profile (${response.status})`)
-    const email = body.email ?? body.emails?.[0]
+    const email = body.email ?? body.emails?.[0] ?? body.userName
     const displayName = body.display_name ?? body.displayName ?? ([body.first_name, body.last_name].filter(Boolean).join(' ') || undefined)
     return { id: String(body.id), ...(email ? { email } : {}), ...(displayName ? { displayName } : {}) }
   }

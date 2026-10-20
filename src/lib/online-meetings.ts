@@ -11,11 +11,12 @@ export const CONFERENCE_LABELS: Record<ConferenceProvider, string> = {
   skype: 'Skype',
   zoom: 'Zoom',
   webex: 'Webex',
+  goto: 'GoToMeeting',
   other: 'Online meeting'
 }
 
 // Join links open without a prompt only on these hosts (and their subdomains); anything else asks first.
-const TRUSTED_JOIN_HOSTS = ['meet.google.com', 'teams.microsoft.com', 'teams.live.com', 'zoom.us', 'zoom.com', 'webex.com']
+const TRUSTED_JOIN_HOSTS = ['meet.google.com', 'teams.microsoft.com', 'teams.live.com', 'zoom.us', 'zoom.com', 'webex.com', 'gotomeeting.com', 'goto.com']
 
 export type JoinLinkCheck = { kind: 'trusted'; url: string } | { kind: 'untrusted'; url: string; host: string } | { kind: 'invalid' }
 
@@ -72,9 +73,9 @@ export interface ConferenceCapability {
 
 // Providers that create their meeting through their own API and then attach the join details to a calendar
 // event (E47). Each needs its own OAuth consent, connected in Settings > Online meetings.
-export const EXTERNAL_CONFERENCE_PROVIDERS: MeetingHostProvider[] = ['zoom', 'webex']
+export const EXTERNAL_CONFERENCE_PROVIDERS: MeetingHostProvider[] = ['zoom', 'webex', 'goto']
 
-export const isHostedConferenceProvider = (provider: ConferenceProvider | undefined): provider is MeetingHostProvider => provider === 'zoom' || provider === 'webex'
+export const isHostedConferenceProvider = (provider: ConferenceProvider | undefined): provider is MeetingHostProvider => provider === 'zoom' || provider === 'webex' || provider === 'goto'
 
 type CapabilityCalendar = { provider: 'gmail' | 'microsoft' | string; canWrite?: boolean; conferences?: CalendarConferenceSupport }
 
@@ -113,7 +114,7 @@ export function conferenceCapabilities(calendar: CapabilityCalendar | undefined,
   ]
 }
 
-const PROVIDERS = new Set<ConferenceProvider>(['googleMeet', 'teams', 'skype', 'zoom', 'webex', 'other'])
+const PROVIDERS = new Set<ConferenceProvider>(['googleMeet', 'teams', 'skype', 'zoom', 'webex', 'goto', 'other'])
 const STATUSES = new Set<EventConference['status']>(['pending', 'ready', 'failed', 'removed'])
 const optional = (value: unknown, max: number) => value === undefined || (typeof value === 'string' && value.length <= max)
 
