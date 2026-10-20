@@ -1,5 +1,6 @@
 import { Agent as HttpAgent, request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
+import { proxyEnvironment } from '../network-proxy-runtime'
 import type { ExchangeAuthMethod, ExchangeAuthPreference } from '../../src/exchange-types'
 import { authenticateMessage, negotiateMessage, NtlmError, parseChallengeMessage } from './ntlm'
 
@@ -135,7 +136,7 @@ export class EwsTransport {
 
   constructor(private readonly options: EwsTransportOptions) {
     this.url = assertSecureEndpoint(options.url)
-    const agentOptions = { keepAlive: true, maxSockets: 1, maxFreeSockets: 1, keepAliveMsecs: 30_000 }
+    const agentOptions = { keepAlive: true, maxSockets: 1, maxFreeSockets: 1, keepAliveMsecs: 30_000, proxyEnv: proxyEnvironment() }
     this.agent = this.url.protocol === 'https:' ? new HttpsAgent({ ...agentOptions, rejectUnauthorized: true }) : new HttpAgent(agentOptions)
     if (options.credentials.auth !== 'auto') this.method = options.credentials.auth
   }

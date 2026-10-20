@@ -335,6 +335,10 @@ const api: AerioDesktopApi = {
     search: (requestId, request) => ipcRenderer.invoke('ai:search', requestId, request),
     cancel: (requestId) => ipcRenderer.invoke('ai:cancel', requestId)
   },
+  networkProxy: {
+      status: () => ipcRenderer.invoke('network-proxy:status'),
+      configure: (input) => ipcRenderer.invoke('network-proxy:configure', input)
+    },
   openPgp: {
     status: () => ipcRenderer.invoke('openpgp:status'),
     generate: (input) => ipcRenderer.invoke('openpgp:generate', input),

@@ -7,6 +7,7 @@ import type { LocalModuleSnapshot } from '../productivity-types'
 import Modal from './Modal'
 import ThemeEditor from './ThemeEditor'
 import AiAssistantSettings from './AiAssistantSettings'
+import ProxySettings from './ProxySettings'
 import InboxCategorySettings from './InboxCategorySettings'
 import OpenPgpKeyManager from './OpenPgpKeyManager'
 import SmimeCertificateManager from './SmimeCertificateManager'
@@ -337,6 +338,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
           </div>
         </section>
         <AiAssistantSettings />
+        <ProxySettings />
         <InboxCategorySettings />
         <OpenPgpKeyManager />
         <SmimeCertificateManager />

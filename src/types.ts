@@ -288,6 +288,7 @@ export interface AerioDesktopApi {
   onComposeCommand(callback: () => void): () => void
   mail: import('./mail-types').MailDesktopApi
   ai: import('./ai-assistant-types').AiAssistantApi
+  networkProxy?: import('./network-proxy-types').NetworkProxyApi
   openPgp?: import('./openpgp-types').OpenPgpApi
   smime?: import('./smime-types').SmimeApi
   /** External automation through the local MCP bridge (E48). */

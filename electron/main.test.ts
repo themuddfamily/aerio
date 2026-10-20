@@ -245,6 +245,7 @@ vi.mock('./mail/oauth-vault', () => ({ OAuthVault: vi.fn(function () { return mo
 vi.mock('./mail/worker-client', () => ({ MailWorkerClient: mocks.MailWorkerClient }))
 vi.mock('./mail/ai-assistant', () => ({ AiAssistantStore: vi.fn(), registerAiAssistant: vi.fn() }))
 vi.mock('./mail/openpgp-keyring', () => ({ OpenPgpKeyring: vi.fn(function () { return mocks.openPgp }) }))
+vi.mock('./network-proxy', () => ({ initializeNetworkProxy: vi.fn(async () => ({ mode: 'system', server: '', bypass: '' })), fetchWithNetworkProxy: (...args: any[]) => (mocks.net.fetch as any)(...args) }))
 vi.mock('./mail/openpgp-ipc', () => ({ registerOpenPgp: vi.fn(), assertOpenPgpSendable: mocks.assertOpenPgpSendable }))
 vi.mock('./mail/smime-store', () => ({ SmimeStore: vi.fn(function () { return mocks.smime }) }))
 vi.mock('./mail/smime-ipc', () => ({ registerSmime: vi.fn(), assertSmimeSendable: mocks.assertSmimeSendable, protectOutgoingMessage: vi.fn() }))

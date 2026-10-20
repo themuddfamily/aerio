@@ -1,3 +1,4 @@
+import { proxyUrlForHost } from '../network-proxy-runtime'
 import { createHash } from 'node:crypto'
 import { ImapFlow, type ListResponse } from 'imapflow'
 import nodemailer from 'nodemailer'
@@ -51,6 +52,7 @@ export class ImapSmtpClient {
 
   private smtp() {
     return nodemailer.createTransport({
+      proxy: proxyUrlForHost(this.config.smtpHost),
       host: this.config.smtpHost,
       port: this.config.smtpPort,
       secure: this.config.smtpSecurity === 'tls',
@@ -68,6 +70,7 @@ export class ImapSmtpClient {
 
   private imap(verifyOnly = false) {
     return new ImapFlow({
+      proxy: proxyUrlForHost(this.config.imapHost),
       host: this.config.imapHost,
       port: this.config.imapPort,
       secure: this.config.imapSecurity === 'tls',

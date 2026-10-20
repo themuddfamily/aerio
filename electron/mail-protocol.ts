@@ -41,7 +41,7 @@ import type { MailSenderIdentity, MailSenderIdentityInput, MailSignature, MailSi
 import type { MailMergeJob, MailMergeJobInput, MailMergeJobSummary, MailMergeResolution } from '../src/mail-merge-types'
 
 export type MailWorkerCommand =
-  | { type: 'initialize'; payload: { databasePath: string; contentPath: string } }
+  | { type: 'initialize'; payload: { databasePath: string; contentPath: string; proxy?: import('./network-proxy-store').ProxyRuntimeConfig } }
   | { type: 'accounts:list' }
   | { type: 'accounts:upsert'; payload: MailAccountSummary }
   | { type: 'accounts:verify'; payload: { accountId: string } }

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { connect as netConnect, isIP, type Socket } from 'node:net'
 import { connect as tlsConnect, type ConnectionOptions, type TLSSocket } from 'node:tls'
 import type { Pop3AuthMethod, Pop3Security } from '../../src/pop3-types'
+import { openProxyTunnel } from '../network-proxy-tunnel'
 
 // A small POP3 client (RFC 1939, CAPA/RFC 2449, STLS/RFC 2595, AUTH/RFC 5034)
 // built on node:net and node:tls. It exposes only what Aerio's download model
@@ -116,11 +117,13 @@ export class Pop3Session {
     }
   }
 
-  private static connectSocket(options: Pop3ClientOptions) {
+  private static async connectSocket(options: Pop3ClientOptions) {
     const timeoutMs = options.timeoutMs ?? POP3_DEFAULT_TIMEOUT_MS
+    const tunnel = await openProxyTunnel(options.host, options.port, timeoutMs)
+    if (tunnel && options.security !== 'tls') return tunnel
     return new Promise<Socket | TLSSocket>((resolve, reject) => {
       const socket: Socket | TLSSocket = options.security === 'tls'
-        ? tlsConnect({ host: options.host, port: options.port, ...(isIP(options.host) ? {} : { servername: options.host }), ...(options.tls ?? {}) })
+        ? tlsConnect({ ...(tunnel ? { socket: tunnel } : { host: options.host, port: options.port }), ...(isIP(options.host) ? {} : { servername: options.host }), ...(options.tls ?? {}) })
         : netConnect({ host: options.host, port: options.port })
       const ready = options.security === 'tls' ? 'secureConnect' : 'connect'
       const timer = setTimeout(() => {

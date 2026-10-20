@@ -1,3 +1,4 @@
+import { installNodeProxy } from './network-proxy-runtime'
 import { parentPort } from 'node:worker_threads'
 import { createHash } from 'node:crypto'
 import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statfsSync, writeFileSync } from 'node:fs'
@@ -1634,6 +1635,7 @@ function emitNewMail(accountId: string, records: ParsedMailMessage[]) {
 
 async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'initialize') {
+    if (command.payload.proxy) installNodeProxy(command.payload.proxy)
     contentPath = command.payload.contentPath
     await stopAttachmentIndexing()
     database = new MailDatabase(command.payload.databasePath, contentPath)

@@ -9,7 +9,7 @@
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=24"
+    "node": ">=24.14"
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",

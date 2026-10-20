@@ -360,6 +360,15 @@ describe('preload bridge', () => {
     expect(Object.keys(ai).sort()).toEqual(['cancel', 'compose', 'configure', 'generateRule', 'learnStyle', 'search', 'status', 'suggestReplies', 'summarize'])
   })
 
+  it('exposes only proxy settings operations without returning credential runtime configuration', async () => {
+    await api().networkProxy.status()
+    const input = { mode: 'manual', server: 'http://proxy.test:8080', bypass: '', username: 'u', password: 'p' }
+    await api().networkProxy.configure(input)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('network-proxy:status')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('network-proxy:configure', input)
+    expect(Object.keys(api().networkProxy).sort()).toEqual(['configure', 'status'])
+  })
+
   it('exposes OpenPGP key management and message crypto with exact IPC channels', async () => {
     const openPgp = api().openPgp!
     const ref = { accountId: 'a', threadId: 't', messageId: 'm' }

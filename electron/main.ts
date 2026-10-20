@@ -1,3 +1,5 @@
+import { fetchWithNetworkProxy, initializeNetworkProxy } from './network-proxy'
+import type { ProxyRuntimeConfig } from './network-proxy-store'
 import { AppProfileRegistry, configureProfilePaths, registerAppProfiles, selectedProfileDirectory } from './app-profiles'
 import { MailUnifiedViewsStore, registerMailUnifiedViews } from './mail/unified-views'
 import { registerMessageToolbar } from './message-toolbar'
@@ -217,6 +219,7 @@ let failedUnlockAttempts = 0
 let unlockBlockedUntil = 0
 let oauthVault: OAuthVault | null = null
 let mailWorker: MailWorkerClient | null = null
+let networkProxyRuntime: ProxyRuntimeConfig | undefined
 let openPgpKeyring: OpenPgpKeyring | null = null
 let smimeStore: SmimeStore | null = null
 const accountProviders = new Map<string, MailAccountSummary['provider']>()
@@ -1081,7 +1084,8 @@ async function initializeMail() {
     type: 'initialize',
     payload: {
       databasePath: join(userData, 'aerio.sqlite'),
-      contentPath: join(userData, 'mail')
+      contentPath: join(userData, 'mail'),
+      proxy: networkProxyRuntime
     }
   })
   const accounts = await mailWorker.request<MailAccountSummary[]>({ type: 'accounts:list' })
@@ -1131,7 +1135,7 @@ async function loadSenderFaviconCandidate(domain: string) {
       const target = new URL('https://www.google.com/s2/favicons')
       target.searchParams.set('domain_url', `https://${domain}`)
       target.searchParams.set('sz', '64')
-      const response = await net.fetch(target.toString(), {
+      const response = await fetchWithNetworkProxy(target.toString(), {
         credentials: 'omit',
         headers: { 'User-Agent': 'Aerio sender icon resolver', Accept: 'image/png,image/x-icon,image/*' }
       })
@@ -1194,7 +1198,7 @@ function registerRemoteImageProtocol() {
       return await fetchRemoteImage(remote, {
         lookup: (hostname) => lookup(hostname, { all: true }),
         isPrivateAddress,
-        fetch: (target, init) => net.fetch(target, init)
+        fetch: (target, init) => fetchWithNetworkProxy(target, init)
       })
     } catch {
       return new Response('Invalid image URL', { status: 400 })
@@ -2330,6 +2334,12 @@ if (hasSingleInstanceLock) app.on('second-instance', () => {
 })
 
 if (hasSingleInstanceLock && !profileStartupFailed) app.whenReady().then(async () => {
+  try { networkProxyRuntime = await initializeNetworkProxy(() => applicationLocked) }
+  catch (error) {
+    dialog.showErrorBox('Network proxy unavailable', error instanceof Error ? error.message : 'Proxy settings could not be applied. No direct fallback was used.')
+    app.quit()
+    return
+  }
   diagnostics = new DiagnosticLogger(join(app.getPath('userData'), 'logs', 'aerio.jsonl'))
   diagnostic({ level: 'info', component: 'app', event: 'startup', details: { version: app.getVersion(), packaged: app.isPackaged } })
   const menu = applicationMenuTemplate(process.platform, () => openMainWindow())
