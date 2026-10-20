@@ -5180,3 +5180,13 @@ button.mail-folder-twisty:hover { background: var(--surface-hover); color: var(-
 .public-folder-name { flex: 1; min-width: 0; }
 .public-folder-subscribe { display: flex; align-items: center; gap: 4px; font-size: 10.5px; white-space: nowrap; }
 .delegate-list li { margin-bottom: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+
+.custom-theme-editor { margin-top: 16px; }
+.custom-theme-row { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.custom-theme-row > :first-child { margin-right: auto; }
+.theme-palette-fields { margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+.theme-color-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 12px 0; }
+.theme-color-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.theme-color-field input { width: 48px; height: 30px; padding: 2px; cursor: pointer; }
+.theme-preview { display: flex; flex-direction: column; gap: 8px; border: 1px solid; border-radius: 8px; padding: 12px; margin: 12px 0; }
+.theme-preview button { align-self: start; padding: 6px 12px; border: 0; border-radius: 6px; }

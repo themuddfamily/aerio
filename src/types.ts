@@ -195,6 +195,9 @@ export interface Note {
 
 export interface Settings {
   theme: ThemePreference
+  /** Saved palettes, restricted to known color tokens; see docs/custom-themes.md. */
+  customThemes?: import('./lib/themes').CustomTheme[]
+  customThemeId?: string
   density: DensityPreference
   closeToTray: boolean
   launchAtLogin?: boolean

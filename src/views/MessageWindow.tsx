@@ -1,3 +1,4 @@
+import { applyTheme } from '../lib/themes'
 import { Archive, AtSign, Clock3, Copy, Download, FileText, FolderInput, Forward, Inbox, LoaderCircle, Mail, MailOpen, Reply, ReplyAll, Star, Tag, Tags, Trash2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import MailComposeModal from '../components/MailComposeModal'
@@ -63,7 +64,7 @@ export default function MessageWindow() {
         window.aerio.mail.mail.thread(source.accountId, source.threadId)
       ]).then(([preferences, accountList, detail]) => {
       const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
-      document.documentElement.dataset.theme = preferences.settings.theme === 'system' ? dark ? 'dark' : 'light' : preferences.settings.theme
+      applyTheme(preferences.settings, document.documentElement, dark)
       document.documentElement.dataset.density = preferences.settings.density
       setAccounts(accountList)
       setThread(detail)

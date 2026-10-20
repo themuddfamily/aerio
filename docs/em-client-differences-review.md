@@ -35,7 +35,7 @@ Reviewed: 2026-10-20. Aerio 0.5.0, commit `26d842d`.
 
 ## Appearance and platforms
 
-- [ ] **D19 — Custom themes and a theme editor.** eM Client supports importing and editing themes. Aerio's theme preference exposes system, light, and dark. **Add:** saved custom palettes and theme import/export. Sources: [eM theme documentation](https://www.emclient.com/webdocumentation/en/10.0/emclient/Content/Settings/Themes.htm), [Aerio preferences](../src/types.ts).
+- [x] **D19 — Custom themes and a theme editor.** eM Client supports importing and editing themes. Aerio's theme preference exposes system, light, and dark. **Add:** saved custom palettes and theme import/export. Sources: [eM theme documentation](https://www.emclient.com/webdocumentation/en/10.0/emclient/Content/Settings/Themes.htm), [Aerio preferences](../src/types.ts).
 - [ ] **D20 — iOS and Android apps.** eM Client distributes mobile apps. Aerio's package targets are desktop only. **Add:** mobile companion apps; this is a substantial separate project. Sources: [eM platforms](https://www.emclient.com/features-overview), [Aerio package targets](../package.json).
 
 ## Further differences from the eM Client 11 release review
@@ -75,3 +75,4 @@ The eM Client side of D21–D34 is documented in the [official version 11 announ
 
 - **D06:** Message/conversation scope selector, chronological cached excerpts, privacy disclosure, bounded context, cancellation and invalid-scope checks. Verified: 23 targeted AI tests and TypeScript checks. See [AI details](ai-assistance.md).
 - **D31:** Eight editable rule starters with guidance; selecting a starter creates a disabled draft and never saves/runs it. Verified: 20 library/UI/regression tests and TypeScript checks. See [rule library](mail-rules.md).
+- **D19:** Saved custom palettes with an editor, preview, validated JSON import/export and persistent workspace/message-window application. Verified: theme/Settings/message-window tests; built-in themes restore all tokens. See [custom themes](custom-themes.md).

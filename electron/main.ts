@@ -1,3 +1,4 @@
+import { normalizeThemeSettings } from '../src/lib/themes'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, safeStorage, shell, Tray } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
@@ -256,6 +257,7 @@ function preferencesFromUnknown(value: unknown): AppPreferences | undefined {
     settings: {
       ...defaultSettings,
       theme: candidate.theme as Settings['theme'],
+      ...normalizeThemeSettings(candidate),
       density: candidate.density as Settings['density'],
       closeToTray: candidate.closeToTray,
       launchAtLogin: typeof candidate.launchAtLogin === 'boolean' ? candidate.launchAtLogin : defaultSettings.launchAtLogin,

@@ -4,6 +4,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TitleBar from './components/TitleBar'
+import { applyTheme as applySavedTheme } from './lib/themes'
 import SettingsModal from './components/SettingsModal'
 import DuplicateCleanupModal from './components/DuplicateCleanupModal'
 import ProfileModal from './components/ProfileModal'
@@ -332,9 +333,7 @@ export default function App() {
     if (!preferences) return
     const media = window.matchMedia('(prefers-color-scheme: dark)')
     const applyTheme = () => {
-      document.documentElement.dataset.theme = preferences.settings.theme === 'system'
-        ? media.matches ? 'dark' : 'light'
-        : preferences.settings.theme
+      applySavedTheme(preferences.settings, document.documentElement, media.matches)
     }
     applyTheme()
     document.documentElement.dataset.density = preferences.settings.density
@@ -526,10 +525,10 @@ export default function App() {
         <main className="app-main">
           <header className="global-bar">
             <span className={`save-indicator ${saveStatus}`} aria-live="polite">{saveStatus === 'saved' ? 'All changes saved' : 'Saving…'}</span>
-            <button className="theme-quick" aria-label="Toggle theme" title="Toggle theme" onClick={() => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: preferences.settings.theme === 'dark' ? 'light' : 'dark' } })} onContextMenu={(event) => showContextMenu(event, [
-              { label: 'System theme', icon: Settings, checked: preferences.settings.theme === 'system', action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: 'system' } }) },
-              { label: 'Light theme', icon: Sun, checked: preferences.settings.theme === 'light', action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: 'light' } }) },
-              { label: 'Dark theme', icon: Moon, checked: preferences.settings.theme === 'dark', action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: 'dark' } }) }
+            <button className="theme-quick" aria-label="Toggle theme" title="Toggle theme" onClick={() => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', customThemeId: undefined } })} onContextMenu={(event) => showContextMenu(event, [
+              { label: 'System theme', icon: Settings, checked: !preferences.settings.customThemeId && preferences.settings.theme === 'system', action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: 'system', customThemeId: undefined } }) },
+              { label: 'Light theme', icon: Sun, checked: !preferences.settings.customThemeId && preferences.settings.theme === 'light', action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: 'light', customThemeId: undefined } }) },
+              { label: 'Dark theme', icon: Moon, checked: !preferences.settings.customThemeId && preferences.settings.theme === 'dark', action: () => setPreferences({ ...preferences, settings: { ...preferences.settings, theme: 'dark', customThemeId: undefined } }) }
             ], 'Theme')}>
               {preferences.settings.theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
             </button>

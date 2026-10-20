@@ -5,6 +5,7 @@ import type { MailDiagnosticHealth, MailReadReceiptPolicy } from '../mail-types'
 import { normalizeReadReceiptPolicy } from '../lib/mail-send-options'
 import type { LocalModuleSnapshot } from '../productivity-types'
 import Modal from './Modal'
+import ThemeEditor from './ThemeEditor'
 import AiAssistantSettings from './AiAssistantSettings'
 import InboxCategorySettings from './InboxCategorySettings'
 import OpenPgpKeyManager from './OpenPgpKeyManager'
@@ -274,9 +275,10 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
             <p>Choose a theme and how much information appears at once.</p>
             <div className="segmented wide">
               {(['system', 'light', 'dark'] as ThemePreference[]).map((theme) => (
-                <button key={theme} className={preferences.settings.theme === theme ? 'active' : ''} aria-pressed={preferences.settings.theme === theme} onClick={() => setSettings({ theme })}>{theme}</button>
+                <button key={theme} className={!preferences.settings.customThemeId && preferences.settings.theme === theme ? 'active' : ''} aria-pressed={!preferences.settings.customThemeId && preferences.settings.theme === theme} onClick={() => setSettings({ theme, customThemeId: undefined })}>{theme}</button>
               ))}
             </div>
+            <ThemeEditor settings={preferences.settings} onChange={setSettings} />
             <div className="segmented wide">
               {(['comfortable', 'compact'] as DensityPreference[]).map((density) => (
                 <button key={density} className={preferences.settings.density === density ? 'active' : ''} aria-pressed={preferences.settings.density === density} onClick={() => setSettings({ density })}>{density}</button>
