@@ -86,7 +86,7 @@ export interface EventAttendee extends EventParticipant {
   rsvp?: boolean
 }
 
-export type ConferenceProvider = 'googleMeet' | 'teams' | 'skype' | 'zoom' | 'webex' | 'goto' | 'meetn' | 'other'
+export type ConferenceProvider = 'googleMeet' | 'teams' | 'skype' | 'zoom' | 'webex' | 'goto' | 'meetn' | 'icewarp' | 'other'
 
 export interface EventConference {
   provider: ConferenceProvider

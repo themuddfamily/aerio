@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { KeyRound, LogIn, Unplug, Video } from 'lucide-react'
 import type { MeetingAccount, MeetingHostAccount, MeetingHostProvider, MeetingHostSnapshot } from '../meeting-host-types'
 import MeetnRoomSettings from './MeetnRoomSettings'
+import IceWarpMeetingSettings from './IceWarpMeetingSettings'
 import { CONFERENCE_LABELS } from '../lib/online-meetings'
 
 const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : fallback
@@ -65,6 +66,7 @@ export default function MeetingHostsSection() {
         <ul className="dav-account-list" aria-label="Online meeting accounts">
           {accounts.map((account) => {
             if (account.provider === 'meetn') return <MeetnRoomSettings key="meetn" account={account} api={api} changed={(snapshot) => setAccounts(snapshot.accounts)} />
+            if (account.provider === 'icewarp') return <IceWarpMeetingSettings key="icewarp" account={account} api={api} changed={(snapshot) => setAccounts(snapshot.accounts)} />
             const label = CONFERENCE_LABELS[account.provider]
             const showForm = editing === account.provider || !account.configured
             const form = formFor(account.provider)

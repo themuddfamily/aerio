@@ -3,7 +3,7 @@
 // main process (meeting-host-vault.dat, OS secure storage); the renderer sees only this status.
 
 export type MeetingHostProvider = 'zoom' | 'webex' | 'goto'
-export type HostedMeetingProvider = MeetingHostProvider | 'meetn'
+export type HostedMeetingProvider = MeetingHostProvider | 'meetn' | 'icewarp'
 
 export const MEETING_HOST_PROVIDERS: readonly MeetingHostProvider[] = ['zoom', 'webex', 'goto']
 
@@ -36,7 +36,17 @@ export interface MeetnRoomAccount {
   room?: string
   joinUrl?: string
 }
-export type MeetingAccount = MeetingHostAccount | MeetnRoomAccount
+export interface IceWarpMeetingAccount {
+  provider: 'icewarp'
+  configured: true
+  connected: boolean
+  secureStorage: boolean
+  server?: string
+  email?: string
+  error?: string
+}
+export interface IceWarpMeetingConnectInput { server: string; token: string }
+export type MeetingAccount = MeetingHostAccount | MeetnRoomAccount | IceWarpMeetingAccount
 
 // Per-meeting choice, keyed by the conference request id.
 export interface HostedMeetingOptions {
@@ -47,6 +57,8 @@ export interface HostedMeetingOptions {
 }
 
 export interface MeetingHostApi {
+  connectIceWarp(input: IceWarpMeetingConnectInput): Promise<MeetingHostSnapshot>
+  disconnectIceWarp(): Promise<MeetingHostSnapshot>
   setMeetnRoom(room: string): Promise<MeetingHostSnapshot>
   status(): Promise<MeetingHostSnapshot>
   configure(provider: MeetingHostProvider, clientId: string, clientSecret: string): Promise<MeetingHostSnapshot>

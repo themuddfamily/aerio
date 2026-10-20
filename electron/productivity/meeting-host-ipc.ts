@@ -5,6 +5,8 @@ import { MEETING_HOST_PROVIDERS } from '../../src/meeting-host-types'
 import { ZoomMeetingConnector, WebexMeetingConnector } from './hosted-meeting-connectors'
 import { GoToMeetingConnector } from './goto-meeting'
 import { MeetnRoomStore, MeetnRoomConnector } from './meetn-room'
+import { IceWarpMeetingStore, IceWarpMeetingConnector } from './icewarp-meetings'
+import type { IceWarpMeetingConnectInput } from '../../src/meeting-host-types'
 import { HostedMeetingCoordinator } from './meeting-coordinator'
 import { MeetingHostHttp } from './meeting-host-http'
 import type { BuiltInMeetingHostClients } from './meeting-host-providers'
@@ -26,6 +28,7 @@ export interface MeetingHostsOptions {
   builtIn: BuiltInMeetingHostClients
   openExternal(url: string): Promise<void>
   isLocked(): boolean
+  fetch?: typeof fetch
   log?(event: string, details: Record<string, unknown>): void
 }
 
@@ -47,19 +50,22 @@ export function initializeMeetingHosts(options: MeetingHostsOptions): MeetingHos
     changed: broadcast
   })
   const meetn = new MeetnRoomStore(join(options.userData, 'meetn-room.json'))
-  const snapshot = (): MeetingHostSnapshot => ({ accounts: [...vault.status().accounts, meetn.status()] })
+  const icewarp = new IceWarpMeetingStore(join(options.userData, 'icewarp-meetings.dat'), options.storage, options.isLocked, options.fetch)
+  const snapshot = (): MeetingHostSnapshot => ({ accounts: [...vault.status().accounts, meetn.status(), icewarp.status()] })
   const store = new MeetingLinkStore(options.databasePath)
   const account = (provider: MeetingHostProvider) => () => vault.account(provider)
   const connectors = {
     zoom: new ZoomMeetingConnector(new MeetingHostHttp('zoom', vault), account('zoom')),
     webex: new WebexMeetingConnector(new MeetingHostHttp('webex', vault), account('webex')),
     goto: new GoToMeetingConnector(new MeetingHostHttp('goto', vault), account('goto')),
-    meetn: new MeetnRoomConnector(meetn)
+    meetn: new MeetnRoomConnector(meetn),
+    icewarp: new IceWarpMeetingConnector(icewarp)
   }
   registerExternalMeetingConnector(connectors.zoom)
   registerExternalMeetingConnector(connectors.webex)
   registerExternalMeetingConnector(connectors.goto)
   registerExternalMeetingConnector(connectors.meetn)
+  registerExternalMeetingConnector(connectors.icewarp)
   const coordinator = new HostedMeetingCoordinator({ store, connector: (provider) => connectors[provider], log: options.log })
 
   const unlocked = () => {
@@ -70,6 +76,8 @@ export function initializeMeetingHosts(options: MeetingHostsOptions): MeetingHos
     return value
   }
   ipcMain.handle('meeting-hosts:status', snapshot)
+  ipcMain.handle('meeting-hosts:icewarp-connect', async (_event, input: IceWarpMeetingConnectInput) => { unlocked(); await icewarp.connect(input); unlocked(); broadcast(); return snapshot() })
+  ipcMain.handle('meeting-hosts:icewarp-disconnect', () => { unlocked(); icewarp.disconnect(); broadcast(); return snapshot() })
   ipcMain.handle('meeting-hosts:meetn-room', (_event, value: unknown) => { unlocked(); meetn.set(value); broadcast(); return snapshot() })
   ipcMain.handle('meeting-hosts:configure', (_event, value: unknown, clientId: unknown, clientSecret: unknown) => {
     unlocked()

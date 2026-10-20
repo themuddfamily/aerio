@@ -381,6 +381,13 @@ describe('preload bridge', () => {
     expect(Object.keys(api().networkProxy).sort()).toEqual(['configure', 'status'])
   })
 
+  it('exposes separate IceWarp conference connection operations without a credential-read API', async () => {
+    await api().meetingHosts.connectIceWarp({ server: 'https://icewarp.example.test', token: 'private-token' })
+    await api().meetingHosts.disconnectIceWarp()
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('meeting-hosts:icewarp-connect', { server: 'https://icewarp.example.test', token: 'private-token' })
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('meeting-hosts:icewarp-disconnect')
+  })
+
   it('exposes OpenPGP key management and message crypto with exact IPC channels', async () => {
     const openPgp = api().openPgp!
     const ref = { accountId: 'a', threadId: 't', messageId: 'm' }

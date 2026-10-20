@@ -13,6 +13,7 @@ export const CONFERENCE_LABELS: Record<ConferenceProvider, string> = {
   webex: 'Webex',
   goto: 'GoToMeeting',
   meetn: 'Meetn',
+  icewarp: 'IceWarp',
   other: 'Online meeting'
 }
 
@@ -74,9 +75,9 @@ export interface ConferenceCapability {
 
 // Providers that create their meeting through their own API and then attach the join details to a calendar
 // event (E47). Each needs its own OAuth consent, connected in Settings > Online meetings.
-export const EXTERNAL_CONFERENCE_PROVIDERS: HostedMeetingProvider[] = ['zoom', 'webex', 'goto', 'meetn']
+export const EXTERNAL_CONFERENCE_PROVIDERS: HostedMeetingProvider[] = ['zoom', 'webex', 'goto', 'meetn', 'icewarp']
 
-export const isHostedConferenceProvider = (provider: ConferenceProvider | undefined): provider is HostedMeetingProvider => provider === 'zoom' || provider === 'webex' || provider === 'goto' || provider === 'meetn'
+export const isHostedConferenceProvider = (provider: ConferenceProvider | undefined): provider is HostedMeetingProvider => provider === 'zoom' || provider === 'webex' || provider === 'goto' || provider === 'meetn' || provider === 'icewarp'
 
 type CapabilityCalendar = { provider: 'gmail' | 'microsoft' | string; canWrite?: boolean; conferences?: CalendarConferenceSupport }
 
@@ -115,7 +116,7 @@ export function conferenceCapabilities(calendar: CapabilityCalendar | undefined,
   ]
 }
 
-const PROVIDERS = new Set<ConferenceProvider>(['googleMeet', 'teams', 'skype', 'zoom', 'webex', 'goto', 'meetn', 'other'])
+const PROVIDERS = new Set<ConferenceProvider>(['googleMeet', 'teams', 'skype', 'zoom', 'webex', 'goto', 'meetn', 'icewarp', 'other'])
 const STATUSES = new Set<EventConference['status']>(['pending', 'ready', 'failed', 'removed'])
 const optional = (value: unknown, max: number) => value === undefined || (typeof value === 'string' && value.length <= max)
 

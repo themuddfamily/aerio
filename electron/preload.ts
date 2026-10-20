@@ -213,6 +213,8 @@ const api: AerioDesktopApi = {
     removeCalendar: (calendarId) => ipcRenderer.invoke('interchange:calendar-remove', calendarId)
   },
   meetingHosts: {
+    connectIceWarp: (input) => ipcRenderer.invoke('meeting-hosts:icewarp-connect', input),
+    disconnectIceWarp: () => ipcRenderer.invoke('meeting-hosts:icewarp-disconnect'),
     setMeetnRoom: (room) => ipcRenderer.invoke('meeting-hosts:meetn-room', room),
     status: () => ipcRenderer.invoke('meeting-hosts:status'),
     configure: (provider, clientId, clientSecret) => ipcRenderer.invoke('meeting-hosts:configure', provider, clientId, clientSecret),
