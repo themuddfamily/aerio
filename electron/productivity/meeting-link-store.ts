@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import type { MeetingHostProvider } from '../../src/meeting-host-types'
+import type { HostedMeetingProvider } from '../../src/meeting-host-types'
 import type { HostedMeeting, OnlineMeetingRequest } from './online-meetings'
 
 // Zoom and Webex meetings Aerio created, keyed by the conference request id (E47). Shares productivity.sqlite
@@ -14,7 +14,7 @@ export type MeetingLinkState = 'creating' | 'created' | 'cancelled' | 'detached'
 
 export interface MeetingLink {
   requestId: string
-  provider: MeetingHostProvider
+  provider: HostedMeetingProvider
   state: MeetingLinkState
   request: OnlineMeetingRequest
   meeting?: HostedMeeting
@@ -28,7 +28,7 @@ export interface MeetingLink {
 
 interface LinkRow {
   request_id: string
-  provider: MeetingHostProvider
+  provider: HostedMeetingProvider
   state: MeetingLinkState
   request_json: string
   meeting_json: string | null
@@ -100,7 +100,7 @@ export class MeetingLinkStore {
   }
 
   // Recorded before the provider call, so a crash or lost response leaves evidence of the attempt.
-  begin(requestId: string, provider: MeetingHostProvider, request: OnlineMeetingRequest) {
+  begin(requestId: string, provider: HostedMeetingProvider, request: OnlineMeetingRequest) {
     this.db.prepare(`
       INSERT INTO online_meeting_links(request_id,provider,state,request_json,updated_at) VALUES(?,?,'creating',?,?)
       ON CONFLICT(request_id) DO UPDATE SET request_json=excluded.request_json,updated_at=excluded.updated_at

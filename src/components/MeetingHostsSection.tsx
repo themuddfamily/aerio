@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { KeyRound, LogIn, Unplug, Video } from 'lucide-react'
-import type { MeetingHostAccount, MeetingHostProvider, MeetingHostSnapshot } from '../meeting-host-types'
+import type { MeetingAccount, MeetingHostAccount, MeetingHostProvider, MeetingHostSnapshot } from '../meeting-host-types'
+import MeetnRoomSettings from './MeetnRoomSettings'
 import { CONFERENCE_LABELS } from '../lib/online-meetings'
 
 const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : fallback
@@ -16,7 +17,7 @@ function statusText(account: MeetingHostAccount) {
 /** Settings section for the Zoom and Webex accounts that host online meetings (E47). */
 export default function MeetingHostsSection() {
   const api = window.aerio.meetingHosts
-  const [accounts, setAccounts] = useState<MeetingHostAccount[]>([])
+  const [accounts, setAccounts] = useState<MeetingAccount[]>([])
   const [busy, setBusy] = useState<string>()
   const [confirmDisconnect, setConfirmDisconnect] = useState<MeetingHostProvider>()
   const [editing, setEditing] = useState<MeetingHostProvider>()
@@ -63,6 +64,7 @@ export default function MeetingHostsSection() {
         <p>Connect Zoom, Webex or GoToMeeting to add their meetings to Google and Microsoft calendar events. Aerio schedules the meeting with your account and writes the available join details into the event, so invitations include them. Changing the event’s title or time updates the meeting; deleting the event cancels it unless you choose to keep it.</p>
         <ul className="dav-account-list" aria-label="Online meeting accounts">
           {accounts.map((account) => {
+            if (account.provider === 'meetn') return <MeetnRoomSettings key="meetn" account={account} api={api} changed={(snapshot) => setAccounts(snapshot.accounts)} />
             const label = CONFERENCE_LABELS[account.provider]
             const showForm = editing === account.provider || !account.configured
             const form = formFor(account.provider)

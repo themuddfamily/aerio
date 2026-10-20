@@ -3,6 +3,7 @@
 // main process (meeting-host-vault.dat, OS secure storage); the renderer sees only this status.
 
 export type MeetingHostProvider = 'zoom' | 'webex' | 'goto'
+export type HostedMeetingProvider = MeetingHostProvider | 'meetn'
 
 export const MEETING_HOST_PROVIDERS: readonly MeetingHostProvider[] = ['zoom', 'webex', 'goto']
 
@@ -26,18 +27,27 @@ export interface MeetingHostAccount {
 }
 
 export interface MeetingHostSnapshot {
-  accounts: MeetingHostAccount[]
+  accounts: MeetingAccount[]
 }
+export interface MeetnRoomAccount {
+  provider: 'meetn'
+  configured: true
+  connected: boolean
+  room?: string
+  joinUrl?: string
+}
+export type MeetingAccount = MeetingHostAccount | MeetnRoomAccount
 
 // Per-meeting choice, keyed by the conference request id.
 export interface HostedMeetingOptions {
-  provider: MeetingHostProvider
+  provider: HostedMeetingProvider
   // Cancel the provider meeting when its calendar event is deleted in Aerio (default true).
   cancelOnDelete: boolean
   meetingId?: string
 }
 
 export interface MeetingHostApi {
+  setMeetnRoom(room: string): Promise<MeetingHostSnapshot>
   status(): Promise<MeetingHostSnapshot>
   configure(provider: MeetingHostProvider, clientId: string, clientSecret: string): Promise<MeetingHostSnapshot>
   connect(provider: MeetingHostProvider): Promise<MeetingHostSnapshot>

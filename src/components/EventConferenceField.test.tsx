@@ -103,6 +103,14 @@ describe('EventConferenceField', () => {
     expect(onChange).toHaveBeenCalledWith({ ...zoom, status: 'removed' })
   })
 
+  it('explains that a shared Meetn room remains available when an event is deleted', async () => {
+    ;(window as { aerio?: unknown }).aerio = { meetingHosts: { meetingOptions: vi.fn(async () => ({ provider: 'meetn', cancelOnDelete: true, meetingId: 'team' })) } }
+    const meeting = { provider: 'meetn' as const, status: 'ready' as const, requestId: '0123456789abcdef', joinUrl: 'https://meetn.com/team' }
+    render(<EventConferenceField value={meeting} original={meeting} capabilities={googleCapabilities} canRemove onChange={vi.fn()} />)
+    expect(await screen.findByText(/your shared Meetn room remains available/)).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /Cancel.*Meetn/ })).not.toBeInTheDocument()
+  })
+
   it('offers a connected Zoom account next to the calendar’s own meetings', async () => {
     const user = userEvent.setup()
     const onChange = vi.fn()

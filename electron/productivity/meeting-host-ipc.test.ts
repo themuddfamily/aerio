@@ -49,7 +49,7 @@ describe('meeting-host IPC', () => {
   it('reports hosts and registers the real connectors behind the boundary', async () => {
     const status = await invoke('meeting-hosts:status') as { accounts: { provider: string; configured: boolean; connected: boolean }[] }
     expect(status.accounts.map(({ provider, configured, connected }) => ({ provider, configured, connected }))).toEqual([
-      { provider: 'zoom', configured: true, connected: false }, { provider: 'webex', configured: false, connected: false }, { provider: 'goto', configured: false, connected: false }
+      { provider: 'zoom', configured: true, connected: false }, { provider: 'webex', configured: false, connected: false }, { provider: 'goto', configured: false, connected: false }, { provider: 'meetn', configured: true, connected: false }
     ])
     expect(externalMeetingConnectors.zoom?.requiredScopes).toContain('meeting:write:meeting')
     expect(externalMeetingConnectors.webex?.requiredScopes).toContain('meeting:schedules_write')
@@ -65,11 +65,21 @@ describe('meeting-host IPC', () => {
     expect(electron.sent.at(-1)?.[0]).toBe('meeting-hosts:changed')
     locked = true
     await expect(invoke('meeting-hosts:configure', 'webex', 'webexClientId123', 'webexClientSecret456')).rejects.toThrow(/Unlock Aerio/)
+    await expect(invoke('meeting-hosts:meetn-room', 'my-room')).rejects.toThrow(/Unlock Aerio/)
     await expect(invoke('meeting-hosts:connect', 'zoom')).rejects.toThrow(/Unlock Aerio/)
     await expect(invoke('meeting-hosts:disconnect', 'zoom')).rejects.toThrow(/Unlock Aerio/)
     await expect(invoke('meeting-hosts:meeting-options', 'bad id!')).rejects.toThrow(/Invalid meeting request/)
     await expect(invoke('meeting-hosts:meeting-options', '0123456789abcdef')).resolves.toBeNull()
     await expect(invoke('meeting-hosts:set-cancel-on-delete', '0123456789abcdef', 'no')).rejects.toThrow(/Invalid meeting option/)
     await expect(invoke('meeting-hosts:set-cancel-on-delete', '0123456789abcdef', false)).rejects.toThrow(/no longer linked/)
+  })
+  it('persists an existing Meetn room and broadcasts connection changes without OAuth', async () => {
+    const connected = await invoke('meeting-hosts:meetn-room', 'https://meetn.com/my-room') as { accounts: unknown[] }
+    expect(connected.accounts).toContainEqual({ provider: 'meetn', configured: true, connected: true, room: 'my-room', joinUrl: 'https://meetn.com/my-room' })
+    expect(externalMeetingConnectors.meetn?.capability(calendar).available).toBe(true)
+    expect(electron.sent.at(-1)?.[0]).toBe('meeting-hosts:changed')
+    const disconnected = await invoke('meeting-hosts:meetn-room', '') as { accounts: unknown[] }
+    expect(disconnected.accounts).toContainEqual({ provider: 'meetn', configured: true, connected: false })
+    await expect(invoke('meeting-hosts:meetn-room', 'https://hostile.test/room')).rejects.toThrow(/public https/)
   })
 })

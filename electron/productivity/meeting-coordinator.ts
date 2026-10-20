@@ -1,6 +1,6 @@
 import type { CalendarEvent, EventConference } from '../../src/types'
 import type { SyncedCalendar, SyncedCalendarEvent } from '../../src/productivity-types'
-import type { HostedMeetingOptions, MeetingHostProvider } from '../../src/meeting-host-types'
+import type { HostedMeetingOptions, HostedMeetingProvider } from '../../src/meeting-host-types'
 import { CONFERENCE_LABELS, conferenceWrite, isHostedConferenceProvider } from '../../src/lib/online-meetings'
 import { isUncertainOutcome } from './meeting-host-http'
 import type { MeetingLink, MeetingLinkStore } from './meeting-link-store'
@@ -23,7 +23,7 @@ import type { HostedMeeting, OnlineMeetingConnector, OnlineMeetingRequest } from
 // keep it on delete).
 
 export const MEETING_DETAILS_FENCE = '─'.repeat(20)
-const DETAILS_BLOCK = new RegExp(`\\n*${MEETING_DETAILS_FENCE}\\nJoin (?:Zoom|Webex|GoToMeeting) meeting\\n[\\s\\S]*?(?:\\n${MEETING_DETAILS_FENCE}|$)`, 'g')
+const DETAILS_BLOCK = new RegExp(`\\n*${MEETING_DETAILS_FENCE}\\nJoin (?:Zoom|Webex|GoToMeeting|Meetn) meeting\\n[\\s\\S]*?(?:\\n${MEETING_DETAILS_FENCE}|$)`, 'g')
 
 export function meetingDetailsBlock(meeting: HostedMeeting) {
   const label = CONFERENCE_LABELS[meeting.provider]
@@ -96,7 +96,7 @@ export interface PreparedMeetingWrite {
 
 export interface HostedMeetingCoordinatorOptions {
   store: MeetingLinkStore
-  connector(provider: MeetingHostProvider): OnlineMeetingConnector | undefined
+  connector(provider: HostedMeetingProvider): OnlineMeetingConnector | undefined
   log?(event: string, details: Record<string, unknown>): void
 }
 
@@ -107,7 +107,7 @@ export class HostedMeetingCoordinator {
     return this.options.store
   }
 
-  private connector(provider: MeetingHostProvider) {
+  private connector(provider: HostedMeetingProvider) {
     const connector = this.options.connector(provider)
     if (!connector) throw new Error(`${CONFERENCE_LABELS[provider]} meetings are not available in this build`)
     return connector
@@ -163,7 +163,7 @@ export class HostedMeetingCoordinator {
     return { event: input }
   }
 
-  private assertCreatable(calendar: SyncedCalendar, provider: MeetingHostProvider, event: CalendarEvent) {
+  private assertCreatable(calendar: SyncedCalendar, provider: HostedMeetingProvider, event: CalendarEvent) {
     const label = CONFERENCE_LABELS[provider]
     const capability = this.connector(provider).capability(calendar)
     if (!capability.available) throw new Error(capability.reason ?? `${label} meetings cannot be added to this calendar`)
@@ -173,7 +173,7 @@ export class HostedMeetingCoordinator {
     }
   }
 
-  private async ensureMeeting(calendar: SyncedCalendar, provider: MeetingHostProvider, request: OnlineMeetingRequest): Promise<HostedMeeting> {
+  private async ensureMeeting(calendar: SyncedCalendar, provider: HostedMeetingProvider, request: OnlineMeetingRequest): Promise<HostedMeeting> {
     const label = CONFERENCE_LABELS[provider]
     const connector = this.connector(provider)
     const link = this.store.get(request.requestId)

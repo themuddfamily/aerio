@@ -4,6 +4,7 @@ import type { MeetingHostProvider, MeetingHostSnapshot } from '../../src/meeting
 import { MEETING_HOST_PROVIDERS } from '../../src/meeting-host-types'
 import { ZoomMeetingConnector, WebexMeetingConnector } from './hosted-meeting-connectors'
 import { GoToMeetingConnector } from './goto-meeting'
+import { MeetnRoomStore, MeetnRoomConnector } from './meetn-room'
 import { HostedMeetingCoordinator } from './meeting-coordinator'
 import { MeetingHostHttp } from './meeting-host-http'
 import type { BuiltInMeetingHostClients } from './meeting-host-providers'
@@ -36,8 +37,8 @@ export interface MeetingHosts {
 
 export function initializeMeetingHosts(options: MeetingHostsOptions): MeetingHosts {
   const broadcast = () => {
-    const snapshot = vault.status()
-    for (const window of BrowserWindow.getAllWindows()) window.webContents.send('meeting-hosts:changed', snapshot)
+    const current = snapshot()
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send('meeting-hosts:changed', current)
   }
   const vault: MeetingHostVault = new MeetingHostVault(join(options.userData, 'meeting-host-vault.dat'), {
     storage: options.storage,
@@ -45,16 +46,20 @@ export function initializeMeetingHosts(options: MeetingHostsOptions): MeetingHos
     openExternal: options.openExternal,
     changed: broadcast
   })
+  const meetn = new MeetnRoomStore(join(options.userData, 'meetn-room.json'))
+  const snapshot = (): MeetingHostSnapshot => ({ accounts: [...vault.status().accounts, meetn.status()] })
   const store = new MeetingLinkStore(options.databasePath)
   const account = (provider: MeetingHostProvider) => () => vault.account(provider)
   const connectors = {
     zoom: new ZoomMeetingConnector(new MeetingHostHttp('zoom', vault), account('zoom')),
     webex: new WebexMeetingConnector(new MeetingHostHttp('webex', vault), account('webex')),
-    goto: new GoToMeetingConnector(new MeetingHostHttp('goto', vault), account('goto'))
+    goto: new GoToMeetingConnector(new MeetingHostHttp('goto', vault), account('goto')),
+    meetn: new MeetnRoomConnector(meetn)
   }
   registerExternalMeetingConnector(connectors.zoom)
   registerExternalMeetingConnector(connectors.webex)
   registerExternalMeetingConnector(connectors.goto)
+  registerExternalMeetingConnector(connectors.meetn)
   const coordinator = new HostedMeetingCoordinator({ store, connector: (provider) => connectors[provider], log: options.log })
 
   const unlocked = () => {
@@ -64,24 +69,26 @@ export function initializeMeetingHosts(options: MeetingHostsOptions): MeetingHos
     if (!validProvider(value)) throw new Error('Choose Zoom, Webex or GoToMeeting')
     return value
   }
-  ipcMain.handle('meeting-hosts:status', (): MeetingHostSnapshot => vault.status())
+  ipcMain.handle('meeting-hosts:status', snapshot)
+  ipcMain.handle('meeting-hosts:meetn-room', (_event, value: unknown) => { unlocked(); meetn.set(value); broadcast(); return snapshot() })
   ipcMain.handle('meeting-hosts:configure', (_event, value: unknown, clientId: unknown, clientSecret: unknown) => {
     unlocked()
-    return vault.configure(provider(value), clientId, clientSecret)
+    vault.configure(provider(value), clientId, clientSecret)
+    return snapshot()
   })
   ipcMain.handle('meeting-hosts:connect', async (_event, value: unknown) => {
     unlocked()
     const host = provider(value)
     await vault.authorize(host)
     options.log?.('meeting-host-connected', { provider: host })
-    return vault.status()
+    return snapshot()
   })
   ipcMain.handle('meeting-hosts:disconnect', async (_event, value: unknown) => {
     unlocked()
     const host = provider(value)
-    const snapshot = await vault.disconnect(host)
+    await vault.disconnect(host)
     options.log?.('meeting-host-disconnected', { provider: host })
-    return snapshot
+    return snapshot()
   })
   ipcMain.handle('meeting-hosts:meeting-options', (_event, requestId: unknown) => {
     if (!validRequestId(requestId)) throw new Error('Invalid meeting request')

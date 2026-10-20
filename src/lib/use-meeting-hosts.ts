@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import type { MeetingHostAccount } from '../meeting-host-types'
+import type { MeetingAccount } from '../meeting-host-types'
 
 // Zoom and Webex connection status (E47), kept current while mounted. Empty when the bridge is unavailable.
-export function useMeetingHosts(): MeetingHostAccount[] {
+export function useMeetingHosts(): MeetingAccount[] {
   const api = typeof window === 'undefined' ? undefined : window.aerio?.meetingHosts
-  const [accounts, setAccounts] = useState<MeetingHostAccount[]>([])
+  const [accounts, setAccounts] = useState<MeetingAccount[]>([])
   useEffect(() => {
     if (!api) return
     let active = true

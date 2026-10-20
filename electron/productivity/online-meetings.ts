@@ -18,7 +18,7 @@ export interface OnlineMeetingRequest {
 
 // A meeting created through a provider's own API. Never holds the host start link (it carries a host token).
 export interface HostedMeeting {
-  provider: import('../../src/meeting-host-types').MeetingHostProvider
+  provider: import('../../src/meeting-host-types').HostedMeetingProvider
   meetingId: string
   joinUrl: string
   // Number participants type into the client or phone ("123 4567 8901").

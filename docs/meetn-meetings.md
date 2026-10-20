@@ -1,0 +1,11 @@
+# Meetn room integration
+
+Meetn uses a permanent room such as `https://meetn.com/your-room`. Create your room in Meetn, then open **Settings → Online meetings → Meetn** and save its room name or exact public link. No OAuth client, password or host-session token is requested. This follows [Meetn's permanent-room model](https://meetn.com/) and [eM Client's documented room-name setup](https://www.emclient.com/em-with-meetn).
+
+Choose **Add Meetn** on a timed single event in a writable Google or Microsoft calendar. Aerio attaches your configured room to the event notes/location; the calendar sends the invitation normally. Title/time edits keep the same room. Changing your configured room affects new meetings only: existing linked events keep their original room link, including after Aerio restarts.
+
+All events using a room share that room and link. Removing a meeting from an event or deleting its event removes the calendar invitation/link; it never deletes or disables the permanent room. The event editor explains this and omits the provider-cancellation checkbox. Disconnecting the room in Settings forgets the local choice and leaves existing invitations/rooms intact. Create, administer, restrict access to, and delete rooms in Meetn itself. Aerio does not claim a remote create/update/delete API for permanent rooms.
+
+Only a single room name or exact HTTPS `meetn.com` link is accepted; credentials, query strings, fragments, alternate hosts, ports and nested paths are rejected. The per-profile room selection is stored in `meetn-room.json`; it contains only the public name/link and is not included in settings sync or profile backups. Re-enter it on another installation. Local/DAV-calendar hosting, recurring and all-day events follow the existing hosted-meeting coordinator limitations.
+
+Verification covers room normalization and malformed stored configuration, settings/IPC and app-lock controls, calendar capability and invite links, durable coordinator restart, preserving an old event's room after a settings change, and removal without deleting a shared room. No live Meetn account or room was created during tests; room existence/ownership is the user's existing Meetn configuration.

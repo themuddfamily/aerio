@@ -23,6 +23,7 @@ function HostedMeetingDeleteOption({ requestId, label }: { requestId: string; la
     return () => { active = false }
   }, [api, requestId])
   if (!api || !options) return null
+  if (options.provider === 'meetn') return <p className="recurrence-note">Deleting this event removes its invitation; your shared Meetn room remains available.</p>
   const change = async (cancelOnDelete: boolean) => {
     setError('')
     try { setOptions(await api.setCancelOnDelete(requestId, cancelOnDelete)) }

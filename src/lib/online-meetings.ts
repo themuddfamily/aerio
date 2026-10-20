@@ -1,6 +1,6 @@
 import type { CalendarEvent, ConferenceProvider, EventConference } from '../types'
 import type { CalendarConferenceSupport } from '../productivity-types'
-import type { MeetingHostAccount, MeetingHostProvider } from '../meeting-host-types'
+import type { MeetingAccount, HostedMeetingProvider } from '../meeting-host-types'
 
 // Online meetings (E25): provider labels, capability reporting, join-link safety, and the pure rules connectors
 // use to decide whether a write creates, keeps, or removes a conference.
@@ -12,11 +12,12 @@ export const CONFERENCE_LABELS: Record<ConferenceProvider, string> = {
   zoom: 'Zoom',
   webex: 'Webex',
   goto: 'GoToMeeting',
+  meetn: 'Meetn',
   other: 'Online meeting'
 }
 
 // Join links open without a prompt only on these hosts (and their subdomains); anything else asks first.
-const TRUSTED_JOIN_HOSTS = ['meet.google.com', 'teams.microsoft.com', 'teams.live.com', 'zoom.us', 'zoom.com', 'webex.com', 'gotomeeting.com', 'goto.com']
+const TRUSTED_JOIN_HOSTS = ['meet.google.com', 'teams.microsoft.com', 'teams.live.com', 'zoom.us', 'zoom.com', 'webex.com', 'gotomeeting.com', 'goto.com', 'meetn.com']
 
 export type JoinLinkCheck = { kind: 'trusted'; url: string } | { kind: 'untrusted'; url: string; host: string } | { kind: 'invalid' }
 
@@ -73,26 +74,26 @@ export interface ConferenceCapability {
 
 // Providers that create their meeting through their own API and then attach the join details to a calendar
 // event (E47). Each needs its own OAuth consent, connected in Settings > Online meetings.
-export const EXTERNAL_CONFERENCE_PROVIDERS: MeetingHostProvider[] = ['zoom', 'webex', 'goto']
+export const EXTERNAL_CONFERENCE_PROVIDERS: HostedMeetingProvider[] = ['zoom', 'webex', 'goto', 'meetn']
 
-export const isHostedConferenceProvider = (provider: ConferenceProvider | undefined): provider is MeetingHostProvider => provider === 'zoom' || provider === 'webex' || provider === 'goto'
+export const isHostedConferenceProvider = (provider: ConferenceProvider | undefined): provider is HostedMeetingProvider => provider === 'zoom' || provider === 'webex' || provider === 'goto' || provider === 'meetn'
 
 type CapabilityCalendar = { provider: 'gmail' | 'microsoft' | string; canWrite?: boolean; conferences?: CalendarConferenceSupport }
 
 // Whether a Zoom or Webex meeting can be added to an event on this calendar, given the meeting-host account.
 // The main process and the editor both use this, so they always give the same reason.
-export function hostedConferenceCapability(provider: MeetingHostProvider, calendar: CapabilityCalendar | undefined, account: MeetingHostAccount | undefined): ConferenceCapability {
+export function hostedConferenceCapability(provider: HostedMeetingProvider, calendar: CapabilityCalendar | undefined, account: MeetingAccount | undefined): ConferenceCapability {
   const label = CONFERENCE_LABELS[provider]
   let reason: string | undefined
   if (!calendar || (calendar.provider !== 'gmail' && calendar.provider !== 'microsoft')) reason = `${label} meetings can be added to Google and Microsoft calendars`
   else if (!calendar.canWrite) reason = `Reconnect this ${calendar.provider === 'gmail' ? 'Google' : 'Microsoft'} account once to enable Calendar editing`
   else if (account && !account.configured) reason = `This Aerio build has no ${label} app registration; add one in Settings › Online meetings`
-  else if (account?.needsReconnect) reason = `${label} access was revoked or expired; reconnect ${label} in Settings › Online meetings`
+  else if (account && 'needsReconnect' in account && account.needsReconnect) reason = `${label} access was revoked or expired; reconnect ${label} in Settings › Online meetings`
   else if (!account?.connected) reason = `Connect ${label} in Settings › Online meetings`
   return { provider, label, available: !reason, ...(reason ? { reason } : {}) }
 }
 
-export function conferenceCapabilities(calendar: CapabilityCalendar | undefined, hosts: readonly MeetingHostAccount[] = []): ConferenceCapability[] {
+export function conferenceCapabilities(calendar: CapabilityCalendar | undefined, hosts: readonly MeetingAccount[] = []): ConferenceCapability[] {
   if (!calendar || (calendar.provider !== 'gmail' && calendar.provider !== 'microsoft')) {
     return [{ provider: 'other', label: CONFERENCE_LABELS.other, available: false, reason: 'Online meetings need a Google or Microsoft calendar' }]
   }
@@ -114,7 +115,7 @@ export function conferenceCapabilities(calendar: CapabilityCalendar | undefined,
   ]
 }
 
-const PROVIDERS = new Set<ConferenceProvider>(['googleMeet', 'teams', 'skype', 'zoom', 'webex', 'goto', 'other'])
+const PROVIDERS = new Set<ConferenceProvider>(['googleMeet', 'teams', 'skype', 'zoom', 'webex', 'goto', 'meetn', 'other'])
 const STATUSES = new Set<EventConference['status']>(['pending', 'ready', 'failed', 'removed'])
 const optional = (value: unknown, max: number) => value === undefined || (typeof value === 'string' && value.length <= max)
 
