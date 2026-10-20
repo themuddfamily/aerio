@@ -31,7 +31,7 @@ Status: implemented behind a closed gate (E30). Chat navigation stays hidden for
 4. Recovery-key setup on one device and history restore on a new device from server key backup.
 5. Lost-response retry with the same transaction ID producing a single event on that server.
 
-No harness writes the `interoperability` record yet; it must come from an opt-in run against a configured homeserver, with sanitized results. Aerio's automated tests never contact a real homeserver.
+The opt-in [hosted acceptance harness](matrix-hosted-acceptance.md) now collects sanitized, version-bound release evidence only after its full hosted sequence passes. No hosted result has been recorded, and it never edits `chat-gate.json`. Ordinary automated tests never contact a real homeserver; hosted runs require explicitly configured disposable accounts.
 
 ## Automated evidence
 

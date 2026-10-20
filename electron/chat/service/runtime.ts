@@ -55,6 +55,7 @@ export type ChatServiceCommand =
   | { type: 'media-config' }
   | { type: 'devices' }
   | { type: 'verify-own' }
+  | { type: 'verify-user'; userId: string; deviceId: string }
   | { type: 'verification'; requestId: string; action: 'accept' | 'start-sas' | 'confirm' | 'mismatch' | 'cancel' }
   | { type: 'recovery-key'; key: string }
   | { type: 'setup-recovery' }
@@ -149,6 +150,11 @@ export class ChatServiceRuntime {
       case 'verify-own': {
         const crypto = this.requireCrypto()
         return this.track(await crypto.requestOwnUserVerification())
+      }
+      case 'verify-user': {
+        if (typeof command.userId !== 'string' || command.userId.length > 255 || !/^@[a-z0-9._=\-/+]+:[A-Za-z0-9.\-[\]:]+$/i.test(command.userId) || typeof command.deviceId !== 'string' || !command.deviceId || command.deviceId.length > 255 || /[\s/\x00-\x1f\x7f]/.test(command.deviceId)) throw new ChatServiceError({ kind: 'rejected', message: 'Choose a valid Matrix user and device to verify' })
+        if (command.userId === this.requireClient().config.userId) throw new ChatServiceError({ kind: 'rejected', message: 'Use verification of your own devices for this user' })
+        return this.track(await this.requireCrypto().requestDeviceVerification(command.userId, command.deviceId))
       }
       case 'verification': return this.verificationAction(command.requestId, command.action)
       case 'recovery-key': return this.restoreRecovery(command.key)
