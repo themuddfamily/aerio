@@ -15,7 +15,7 @@ Spotlight is a separate operating-system index outside Aerio's encrypted stores.
 
 ## Implementation and validation
 
-`native/macos/spotlight.mm` calls `CSSearchableIndex`, `CSSearchableItem`, attribute sets and `CSSearchQuery` through a macOS-only Node-API module. The normal macOS build compiles it using Xcode command-line tools, packages it in `Contents/Resources/native`, and registers the Spotlight activity type and URL scheme in the bundle. Windows/Linux report this integration unavailable and do not load Apple APIs.
+`native/macos/spotlight.mm` calls `CSSearchableIndex`, `CSSearchableItem`, attribute sets and `CSSearchQuery` through a macOS-only Node-API module. Native completions enter Node through its documented [thread-safe callback bridge](https://nodejs.org/api/n-api.html#napi_create_threadsafe_function), which provides the callback scope needed to settle deferred promises and run their continuations. The normal macOS build compiles it using Xcode command-line tools, packages it in `Contents/Resources/native`, and registers the Spotlight activity type and URL scheme in the bundle. Windows/Linux report this integration unavailable and do not load Apple APIs.
 
 Tests cover disabled defaults, explicit account selection, every-page scoping, exclusion of foreign/draft/trashed rows, preview opt-in, opaque stable IDs, deletion/scope replacement, empty-scope behavior, worker/native lock races, restoration after unlock, native failures, IPC isolation and the preload/UI bridge.
 

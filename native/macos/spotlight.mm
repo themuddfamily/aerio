@@ -2,26 +2,38 @@
 #import <CoreSpotlight/CoreSpotlight.h>
 #include <node_api.h>
 #include <string>
+#include <memory>
+#include <atomic>
 
-static bool alive = true;
+static std::atomic<bool> alive{true};
+static napi_threadsafe_function completion;
+struct Completion { napi_deferred deferred; id value; NSError *error; };
 static NSMutableSet<CSSearchQuery *> *queries;
 static std::string Text(napi_env env, napi_value value) {
   napi_valuetype type; if (napi_typeof(env, value, &type) != napi_ok || type != napi_string) return {};
   size_t length = 0; napi_get_value_string_utf8(env, value, nullptr, 0, &length); if (length > 2 * 1024 * 1024) return {};
   std::string result(length + 1, '\0'); napi_get_value_string_utf8(env, value, result.data(), result.size(), &length); result.resize(length); return result;
 }
-static void Reply(napi_env env, napi_deferred deferred, id value, NSError *error) {
+// Deferred promises resolve within Node's callback scope so their continuations
+// run even when the native completion arrives through Cocoa's run loop.
+static void Complete(napi_env env, napi_value, void *, void *data) {
+  std::unique_ptr<Completion> item(static_cast<Completion *>(data));
+  if (!env || !alive) return;
+  napi_value result;
+  if (item->error) {
+    napi_value message; napi_create_string_utf8(env, "macOS Spotlight could not complete this operation. Check Spotlight availability and retry.", NAPI_AUTO_LENGTH, &message); napi_create_error(env, nullptr, message, &result); napi_reject_deferred(env, item->deferred, result);
+  } else {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:item->value ?: @{} options:NSJSONWritingFragmentsAllowed error:nil];
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    napi_create_string_utf8(env, json.UTF8String ?: "{}", NAPI_AUTO_LENGTH, &result); napi_resolve_deferred(env, item->deferred, result);
+  }
+}
+static void Reply(napi_env, napi_deferred deferred, id value, NSError *error) {
+  // Keep TSFN access/release serialized on Cocoa's main thread.
   dispatch_async(dispatch_get_main_queue(), ^{
-    if (!alive) return;
-    napi_handle_scope scope; napi_open_handle_scope(env, &scope); napi_value result;
-    if (error) {
-      napi_value message; napi_create_string_utf8(env, "macOS Spotlight could not complete this operation. Check Spotlight availability and retry.", NAPI_AUTO_LENGTH, &message); napi_create_error(env, nullptr, message, &result); napi_reject_deferred(env, deferred, result);
-    } else {
-      NSData *data = [NSJSONSerialization dataWithJSONObject:value ?: @{} options:NSJSONWritingFragmentsAllowed error:nil];
-      NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-      napi_create_string_utf8(env, json.UTF8String ?: "{}", NAPI_AUTO_LENGTH, &result); napi_resolve_deferred(env, deferred, result);
-    }
-    napi_close_handle_scope(env, scope);
+    if (!alive || !completion) return;
+    Completion *item = new Completion{deferred, value, error};
+    if (napi_call_threadsafe_function(completion, item, napi_tsfn_nonblocking) != napi_ok) delete item;
   });
 }
 static napi_value Perform(napi_env env, napi_callback_info info) {
@@ -67,9 +79,12 @@ static napi_value Perform(napi_env env, napi_callback_info info) {
   } else { Reply(env, deferred, nil, [NSError errorWithDomain:@"Aerio" code:1 userInfo:nil]); }
   return promise;
 }
-static void Cleanup(void *) { alive = false; for (CSSearchQuery *query in queries) [query cancel]; [queries removeAllObjects]; }
+static void Cleanup(void *) { alive = false; if (completion) { napi_release_threadsafe_function(completion, napi_tsfn_abort); completion = nullptr; } for (CSSearchQuery *query in queries) [query cancel]; [queries removeAllObjects]; }
 static napi_value Init(napi_env env, napi_value exports) {
   alive = true; queries = [NSMutableSet new];
+  napi_value name; napi_create_string_utf8(env, "AerioSpotlightCompletion", NAPI_AUTO_LENGTH, &name);
+  if (napi_create_threadsafe_function(env, nullptr, nullptr, name, 0, 1, nullptr, nullptr, nullptr, Complete, &completion) != napi_ok) { napi_throw_error(env, nullptr, "Spotlight completion registration failed"); return nullptr; }
+  napi_unref_threadsafe_function(env, completion);
   napi_property_descriptor properties[] = {{"perform", 0, Perform, 0, 0, 0, napi_default, 0}}; napi_define_properties(env, exports, 1, properties);
   napi_value available; napi_get_boolean(env, [CSSearchableIndex isIndexingAvailable], &available); napi_set_named_property(env, exports, "available", available);
   napi_add_env_cleanup_hook(env, Cleanup, nullptr); return exports;
