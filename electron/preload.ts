@@ -326,7 +326,6 @@ const api: AerioDesktopApi = {
     compose: (requestId, input) => ipcRenderer.invoke('ai:compose', requestId, input),
     learnStyle: (requestId, sample) => ipcRenderer.invoke('ai:learn-style', requestId, sample),
     generateRule: (requestId, input) => ipcRenderer.invoke('ai:generate-rule', requestId, input),
-      generateRule: (requestId, input) => ipcRenderer.invoke('ai:generate-rule', requestId, input),
     search: (requestId, request) => ipcRenderer.invoke('ai:search', requestId, request),
     cancel: (requestId) => ipcRenderer.invoke('ai:cancel', requestId)
   },
