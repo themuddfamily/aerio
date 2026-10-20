@@ -34,7 +34,15 @@ const waitFor = async (check, message, timeout = 60_000) => {
 }
 try {
   application = await electron.launch({ executablePath: join(bundle, 'Contents/MacOS/Aerio'), args: [`--user-data-dir=${directory}`], env: desktopAuditEnvironment(), timeout: 30_000 })
-  page = await application.firstWindow(); await page.getByRole('button', { name: 'Settings', exact: true }).waitFor(); await page.context().setOffline(true)
+  // The crypto persistence probe creates and destroys a sandboxed service view
+  // during startup. Wait for the actual application window, including when a
+  // just-created blank service view was the first Playwright page.
+  for (let attempt = 0; attempt < 8; attempt++) {
+    page = application.windows().find((candidate) => !candidate.isClosed() && !candidate.url().startsWith('aerio-chat-service:')) ?? await application.waitForEvent('window', { timeout: 30_000 })
+    try { await page.getByRole('button', { name: 'Settings', exact: true }).waitFor({ timeout: 15_000 }); break }
+    catch (error) { if (!page.isClosed() || attempt === 7) throw error }
+  }
+  await page.context().setOffline(true)
   await auditMacAppleScript(application, page)
   if (onlyAppleScript) console.log('PASS: packaged native inbound AppleScript automation. Spotlight was not requested by this audit mode.')
   else {
