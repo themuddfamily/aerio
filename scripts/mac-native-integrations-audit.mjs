@@ -54,7 +54,7 @@ try {
   const profile = await application.evaluate(({ app }) => app.getPath('userData'))
   const domain = `com.aerio.spotlight.${createHash('sha256').update(profile).digest('hex').slice(0, 24)}`
   const query = (title) => application.evaluate(async ({ app }, { domain, title }) => {
-    const { createRequire } = await import('node:module')
+    const { createRequire } = process.getBuiltinModule('node:module')
     const native = createRequire(app.getAppPath() + '/package.json')(process.resourcesPath + '/native/spotlight.node')
     return JSON.parse(await native.perform('query', JSON.stringify({ domain, title })))
   }, { domain, title })
