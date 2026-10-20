@@ -2,6 +2,7 @@ import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { MailIdentityStore } from './identity-store'
+import { ReplyFilingStore } from './reply-filing'
 import type {
   ApplyMailActionInput,
   MailAccountSummary,
@@ -118,6 +119,7 @@ export class MailDatabase {
   readonly contentPath: string
   private readonly db: DatabaseSync
   readonly identities: MailIdentityStore
+  readonly replyFiling: ReplyFilingStore
   readonly openPgp: MailDraftOpenPgpStore
   readonly smime: MailDraftSmimeStore
   private statements = new Map<string, StatementSync>()
@@ -144,6 +146,7 @@ export class MailDatabase {
     this.db = new DatabaseSync(databasePath, { timeout: 5_000 })
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;')
     this.migrate()
+    this.replyFiling = new ReplyFilingStore(this.db, (callback) => this.transaction(callback))
     this.mailboxOwners = new MailboxOwnerStore(this.db, this)
     this.identities = new MailIdentityStore(this.db)
     this.openPgp = new MailDraftOpenPgpStore(this.db)
@@ -520,6 +523,8 @@ export class MailDatabase {
       error: row.error ? String(row.error) : undefined,
       signature: String(row.signature ?? ''),
       notifications: Boolean(row.notifications),
+      saveRepliesWithOriginal: this.replyFiling.enabled(String(row.id)),
+      replyFilingIssues: this.replyFiling.issues(String(row.id)),
       syncEnabled: Boolean(row.sync_enabled)
     }))
   }
@@ -544,7 +549,10 @@ export class MailDatabase {
   }
 
   updateAccountSettings(input: MailAccountSettingsInput) {
-    if (!this.getAccount(input.accountId)) throw new Error('Account not found')
+    const account = this.getAccount(input.accountId)
+    if (!account) throw new Error('Account not found')
+    if (input.saveRepliesWithOriginal && (account.provider === 'pop3' || account.provider === 'local')) throw new Error('Reply filing requires a synchronized server Sent folder')
+    if (input.saveRepliesWithOriginal !== undefined) this.replyFiling.configure(input.accountId, input.saveRepliesWithOriginal)
     this.stmt('UPDATE gmail_accounts SET display_name=?,color=?,signature=?,notifications=?,sync_enabled=?,updated_at=? WHERE id=?')
       .run(input.displayName.trim(), input.color, input.signature, input.notifications ? 1 : 0, input.syncEnabled ? 1 : 0, nowIso(), input.accountId)
     return this.getAccount(input.accountId)!

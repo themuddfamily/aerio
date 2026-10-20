@@ -41,6 +41,8 @@ export interface MailCredentialStatus {
 }
 
 export interface MailAccountSummary {
+  saveRepliesWithOriginal?: boolean
+  replyFilingIssues?: { subject: string; reason: string }[]
   id: string
   provider: MailProviderId
   email: string
@@ -605,6 +607,7 @@ export interface MailDraftResult {
 }
 
 export interface MailAccountSettingsInput {
+  saveRepliesWithOriginal?: boolean
   accountId: string
   displayName: string
   color: string

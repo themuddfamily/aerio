@@ -421,7 +421,7 @@ async function parseRawAndStore(accountId: string, message: {
     cc: addressList(parsed.cc),
     subject: parsed.subject ?? '(No subject)',
     messageIdHeader: parsed.messageId,
-    references: parsed.references?.split(/\s+/).filter(Boolean) ?? [],
+    references: parsed.references?.split(/\s+/).filter(Boolean) ?? (parsed.inReplyTo ? [parsed.inReplyTo] : []),
     snippet: message.snippet ?? (parsed.text ?? '').replace(/\s+/g, ' ').slice(0, 240),
     text: parsed.text ?? '',
     html: parsed.html ?? '',
@@ -1618,6 +1618,13 @@ function applyRulesToNewMail(records: ParsedMailMessage[]) {
 }
 
 function emitNewMail(accountId: string, records: ParsedMailMessage[]) {
+  if (database && !database.getAccount(accountId)?.archived) {
+    database.replyFiling?.observe(records)
+    const provider = database.getAccount(accountId)?.provider ?? 'gmail'
+    const filing = database.replyFiling?.process(accountId, provider, (input, messageId) => database!.applyLocalAction(input, crypto.randomUUID(), 0, [messageId])) ?? []
+    for (const operation of filing) emit({ type: 'operation', payload: operation })
+    if (filing.length) emit({ type: 'mail-changed', payload: { accountId } })
+  }
   const silenced = applyRulesToNewMail(records)
   if (records.length) processReplyWatches(true)
   if (!database?.getAccount(accountId)?.notifications) return

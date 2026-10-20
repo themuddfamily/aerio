@@ -37,6 +37,17 @@ beforeEach(() => {
   api.mail.sync.rebuild.mockResolvedValue(undefined)
 })
 
+it('saves an explicit reply filing preference and shows pending filing explanations', async () => {
+  const user = userEvent.setup()
+  render(<MailAccountSettingsModal account={account({ replyFilingIssues: [{ subject: 'Re: Planning', reason: 'Waiting for the original message.' }] })} onSaved={vi.fn()} onClose={vi.fn()} onToast={vi.fn()} />)
+  expect(screen.getByRole('region', { name: 'Reply filing notices' })).toHaveTextContent('Re: Planning')
+  const preference = screen.getByRole('checkbox', { name: /Save sent replies beside the original messages/ })
+  expect(preference).not.toBeChecked()
+  await user.click(preference)
+  await user.click(screen.getByRole('button', { name: /Save changes/ }))
+  await waitFor(() => expect(api.mail.accounts.update).toHaveBeenCalledWith(expect.objectContaining({ saveRepliesWithOriginal: true })))
+})
+
 describe('MailAccountSettingsModal', () => {
   it('edits and saves account identity, colour, signature, synchronization, and alerts', async () => {
     const user = userEvent.setup()

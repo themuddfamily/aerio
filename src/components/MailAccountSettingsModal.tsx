@@ -25,6 +25,7 @@ export default function MailAccountSettingsModal({ account, onSaved, onClose, on
   const [signature, setSignature] = useState(account.signature)
   const [notifications, setNotifications] = useState(account.notifications)
   const [syncEnabled, setSyncEnabled] = useState(account.syncEnabled)
+  const [saveRepliesWithOriginal, setSaveRepliesWithOriginal] = useState(account.saveRepliesWithOriginal === true)
   const [busy, setBusy] = useState<'save' | 'verify' | 'reconnect' | 'server' | 'rebuild'>()
   const [server, setServer] = useState<ImapServerSettings>()
   const [password, setPassword] = useState('')
@@ -39,7 +40,7 @@ export default function MailAccountSettingsModal({ account, onSaved, onClose, on
   const save = async () => {
     setBusy('save')
     try {
-      const updated = await window.aerio.mail.accounts.update({ accountId: account.id, displayName, color, signature, notifications, syncEnabled })
+      const updated = await window.aerio.mail.accounts.update({ accountId: account.id, displayName, color, signature, notifications, syncEnabled, saveRepliesWithOriginal })
       onSaved(updated)
       onToast('Account settings saved')
       onClose()
@@ -135,6 +136,8 @@ export default function MailAccountSettingsModal({ account, onSaved, onClose, on
         <h3>Synchronization and alerts</h3>
         <label className="toggle-row"><span><strong>Synchronize this account</strong><small>Check for new mail in the background.</small></span><input type="checkbox" checked={syncEnabled} onChange={(event) => setSyncEnabled(event.target.checked)} /></label>
         <label className="toggle-row"><span><strong>New-mail notifications</strong><small>Requires desktop notifications in Aerio settings.</small></span><input type="checkbox" checked={notifications} onChange={(event) => setNotifications(event.target.checked)} /></label>
+        <label className="toggle-row"><span><strong>Save sent replies beside the original messages</strong><small>After synchronization, file new sent replies in the original’s cached folder. Gmail retains Sent and applies the original’s Inbox/user labels. Other providers move just the sent copy. Applies to newly synchronized sent replies, including replies from other clients. POP3 and local archives are unsupported. An uncached or ambiguous original waits for download or manual filing; sending is never repeated.</small></span><input type="checkbox" checked={saveRepliesWithOriginal} disabled={account.provider === 'pop3' || account.provider === 'local' || account.archived} onChange={(event) => setSaveRepliesWithOriginal(event.target.checked)} /></label>
+        {(account.replyFilingIssues?.length ?? 0) > 0 && <section aria-label="Reply filing notices"><h3>Replies awaiting filing</h3>{account.replyFilingIssues!.map((item, index) => <p key={index}><strong>{item.subject}</strong>: {item.reason}</p>)}</section>}
       </section>
       {window.aerio.mail.offline && <MailOfflineSyncSection account={account} onToast={onToast} />}
       <section>
