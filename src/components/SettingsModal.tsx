@@ -19,6 +19,7 @@ import KeyboardShortcutsSection from './KeyboardShortcutsSection'
 import CloudStorageAccountsSection from './CloudStorageAccountsSection'
 import MeetingHostsSection from './MeetingHostsSection'
 import McpAutomationSection from './McpAutomationSection'
+import SpotlightSettings from './SpotlightSettings'
 
 const readReceiptChoices: [MailReadReceiptPolicy, string][] = [['never', 'Never send'], ['ask', 'Ask me'], ['always', 'Always send']]
 
@@ -342,6 +343,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
           </div>
         </section>
         <AiAssistantSettings />
+        <SpotlightSettings />
         <ProxySettings />
         <InboxCategorySettings />
         <OpenPgpKeyManager />

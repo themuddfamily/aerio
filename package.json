@@ -146,8 +146,9 @@
       "category": "public.app-category.productivity",
       "darkModeSupport": true,
       "hardenedRuntime": true,
-      "extendInfo": { "NSUserNotificationAlertStyle": "alert", "NSAppleScriptEnabled": true, "OSAScriptingDefinition": "Aerio.sdef" },
-      "extraResources": [{ "from": "build/native/apple-script.node", "to": "native/apple-script.node" }, { "from": "native/macos/Aerio.sdef", "to": "Aerio.sdef" }],
+      "extendInfo": { "NSUserNotificationAlertStyle": "alert", "NSAppleScriptEnabled": true, "OSAScriptingDefinition": "Aerio.sdef", "NSUserActivityTypes": ["com.apple.corespotlightitem"] },
+      "extraResources": [{ "from": "build/native/apple-script.node", "to": "native/apple-script.node" }, { "from": "native/macos/Aerio.sdef", "to": "Aerio.sdef" }, { "from": "build/native/spotlight.node", "to": "native/spotlight.node" }],
+      "protocols": [{ "name": "Aerio Spotlight", "schemes": ["aerio"] }],
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
       "target": [
         "dmg",

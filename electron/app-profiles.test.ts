@@ -65,4 +65,18 @@ describe('isolated application profiles', () => {
     expect(new AppProfileRegistry(registry.root).currentId).toBe(work.id)
     expect(() => handlers.get('app-profiles:switch')!(null, work.id)).toThrow(/already switching/)
   })
+  it('awaits native privacy cleanup before changing profile and preserves selection when cleanup fails', async () => {
+    const registry = new AppProfileRegistry(temp()), handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
+    const work = registry.create('Work').profiles.find((profile) => profile.name === 'Work')!, restart = vi.fn(), failed = vi.fn()
+    let finish!: () => void
+    const beforeSwitch = vi.fn(() => new Promise<void>((resolve) => { finish = resolve }))
+    registerAppProfiles({ ipcMain: { handle: (channel, handler) => { handlers.set(channel, handler) } }, registry, argv: ['electron', '.'], restart, canSwitch: () => true, beforeSwitch, switchFailed: failed })
+    const pending = handlers.get('app-profiles:switch')!(null, work.id)
+    await Promise.resolve(); expect(restart).not.toHaveBeenCalled(); expect(new AppProfileRegistry(registry.root).currentId).toBe('default')
+    finish(); await pending; expect(restart).toHaveBeenCalled(); expect(new AppProfileRegistry(registry.root).currentId).toBe(work.id)
+    const second = new AppProfileRegistry(temp()), other = second.create('Work').profiles.find((profile) => profile.name === 'Work')!
+    registerAppProfiles({ ipcMain: { handle: (channel, handler) => { handlers.set(channel, handler) } }, registry: second, argv: ['electron', '.'], restart, canSwitch: () => true, beforeSwitch: async () => { throw new Error('purge failed') }, switchFailed: failed })
+    await expect(handlers.get('app-profiles:switch')!(null, other.id)).rejects.toThrow('purge failed')
+    expect(new AppProfileRegistry(second.root).currentId).toBe('default'); expect(failed).toHaveBeenCalled()
+  })
 })

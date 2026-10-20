@@ -3,6 +3,16 @@ import type { AerioDesktopApi, AppPreferences } from '../src/types'
 import type { ApplyMailActionInput, MailDraftInput, MailWorkerEvent, ImapAccountInput, MailQuery } from '../src/mail-types'
 
 const api: AerioDesktopApi = {
+  spotlight: {
+    status: () => ipcRenderer.invoke('spotlight:status'),
+    save: (settings) => ipcRenderer.invoke('spotlight:save', settings),
+    refresh: () => ipcRenderer.invoke('spotlight:refresh'),
+    onChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, status: import('../src/spotlight-types').SpotlightStatus) => callback(status)
+      ipcRenderer.on('spotlight:changed', listener)
+      return () => ipcRenderer.removeListener('spotlight:changed', listener)
+    }
+  },
   providerChat: {
     snapshot: () => ipcRenderer.invoke('provider-chat:snapshot'),
     connect: (provider, input, accountId) => ipcRenderer.invoke('provider-chat:connect', provider, input, accountId),

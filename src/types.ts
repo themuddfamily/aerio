@@ -271,9 +271,9 @@ export interface AppLockControls {
 }
 
 export interface AerioDesktopApi {
+  providerChat?: import('./provider-chat-types').ProviderChatApi
   taskDelegations?: import('./task-delegation-types').TaskDelegationApi
   settingsSync?: import('./settings-sync-types').SettingsSyncApi
-  providerChat?: import('./provider-chat-types').ProviderChatApi
   appProfiles?: import('./app-profile-types').AppProfilesApi
   messageToolbar?: import('./lib/message-toolbar').MessageToolbarApi
   calendarWeather?: import('./calendar-weather-types').CalendarWeatherApi
@@ -297,6 +297,7 @@ export interface AerioDesktopApi {
   smime?: import('./smime-types').SmimeApi
   /** External automation through the local MCP bridge (E48). */
   mcp?: import('./mcp-types').McpAutomationApi
+  spotlight?: import('./spotlight-types').SpotlightApi
   interchange: import('./interchange-types').InterchangeDesktopApi
   dav: import('./dav-types').DavDesktopApi
   /** Zoom and Webex meeting-host accounts (E47). */

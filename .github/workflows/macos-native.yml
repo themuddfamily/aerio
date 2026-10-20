@@ -32,8 +32,8 @@ jobs:
         run: npx electron-builder --mac dir --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      - name: Audit inbound AppleScript on the packaged app
-        run: npx tsx scripts/mac-native-integrations-audit.mjs --applescript-only
+      - name: Audit native AppleScript and Spotlight on the packaged app
+        run: npx tsx scripts/mac-native-integrations-audit.mjs
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

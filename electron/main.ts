@@ -1,15 +1,19 @@
+import { initializeProviderChat } from './chat/providers/main'
 import { initializeAppleScript } from './apple-script'
+import { createRequire } from 'node:module'
+import { SpotlightRuntime, spotlightIdFromUrl, type SpotlightNative } from './spotlight'
+import { SpotlightStore, spotlightDomain } from './spotlight-store'
+import { registerSpotlightIpc } from './spotlight-ipc'
+import { TeamsChatAdapter } from './chat/providers/teams'
+import { SlackChatAdapter } from './chat/providers/slack'
+import { RocketChatAdapter } from './chat/providers/rocketchat'
 import { XmppChatAdapter } from './chat/providers/xmpp'
-import { registerTaskDelegations } from './task-delegations-ipc'
 import { IceWarpChatAdapter } from './chat/providers/icewarp'
+import { registerTaskDelegations } from './task-delegations-ipc'
 import { SettingsSyncService } from './settings-sync'
 import { settingsSyncAdapter } from './settings-sync-data'
 import { registerSettingsSync } from './settings-sync-ipc'
-import { RocketChatAdapter } from './chat/providers/rocketchat'
-import { SlackChatAdapter } from './chat/providers/slack'
-import { initializeProviderChat } from './chat/providers/main'
-import { TeamsChatAdapter } from './chat/providers/teams'
-import { AppProfileRegistry, configureProfilePaths, registerAppProfiles, selectedProfileDirectory } from './app-profiles'
+import { AppProfileRegistry, configureProfilePaths, profileDirectory, registerAppProfiles, selectedProfileDirectory } from './app-profiles'
 import { MailUnifiedViewsStore, registerMailUnifiedViews } from './mail/unified-views'
 import { registerMessageToolbar } from './message-toolbar'
 import { MailNotificationService } from './mail-notifications'
@@ -272,11 +276,26 @@ let aiAssistantRuntime: ReturnType<typeof registerAiAssistant> | undefined
 let chatRuntime: ChatRuntime | null = null
 let mcpAutomation: ReturnType<typeof registerMcpAutomation> | null = null
 let appleScriptAutomation: ReturnType<typeof initializeAppleScript> | null = null
+let spotlightRuntime: SpotlightRuntime | null = null
+let pendingSpotlightId: string | undefined
 let settingsSync: SettingsSyncService | undefined
 let readyToOpenWindows = false
 const senderFaviconCache = new Map<string, { image: Buffer | null; expiresAt: number }>()
 const senderFaviconCandidateRequests = new Map<string, Promise<Buffer | null>>()
 const senderFaviconResolutionRequests = new Map<string, Promise<Buffer | null>>()
+if (process.platform === 'darwin' && hasSingleInstanceLock) {
+  const openIndexed = (id: string) => {
+    if (spotlightRuntime && readyToOpenWindows) void spotlightRuntime.open(id).catch(() => {})
+    else pendingSpotlightId = id
+  }
+  app.on('open-url', (event, url) => { const id = spotlightIdFromUrl(url); if (id) { event.preventDefault(); openIndexed(id) } })
+  app.on('continue-activity', (event, type, userInfo) => {
+    if (type !== 'com.apple.corespotlightitem' || !userInfo || typeof userInfo !== 'object') return
+    const value = userInfo as Record<string, unknown>, id = value.kCSSearchableItemActivityIdentifier ?? value.CSSearchableItemActivityIdentifier
+    const parsed = typeof id === 'string' ? spotlightIdFromUrl(`aerio://spotlight/${id}`) : undefined
+    if (parsed) { event.preventDefault(); openIndexed(parsed) }
+  })
+}
 
 function diagnostic(record: Omit<DiagnosticRecord, 'timestamp'>) {
   diagnostics?.log(record)
@@ -1100,6 +1119,7 @@ async function initializeMail() {
         details: event.payload as unknown as Record<string, unknown>
       })
       if (event.type === 'new-mail') showNewMailNotification(event.payload)
+      if (['mail-changed', 'accounts-changed', 'draft-delivery'].includes(event.type)) spotlightRuntime?.mailChanged()
       if (event.type === 'accounts-changed') for (const account of event.payload) if (account.provider === 'exchange' && account.status === 'needs-auth') exchangeService?.markNeedsAuth(account.id)
       if (event.type === 'reply-watch') showReplyWatchNotification(event.payload)
       mainWindow?.webContents.send('mail:event', event)
@@ -1327,6 +1347,7 @@ function publishAppLockStatus() {
   providerChatRuntime?.broadcast()
   chatRuntime?.lockChanged(status.locked)
   mcpAutomation?.lockChanged()
+  spotlightRuntime?.lockChanged()
   return status
 }
 
@@ -1742,6 +1763,8 @@ function registerIpc() {
   })
   registerCloudAttachments(ipcMain, () => cloudAttachments)
   if (appProfiles) registerAppProfiles({ ipcMain, registry: appProfiles, argv: process.argv, locked: () => appLockStatus().locked,
+    beforeSwitch: () => spotlightRuntime?.beforeProfileSwitch() ?? Promise.resolve(),
+    switchFailed: () => spotlightRuntime?.profileSwitchCancelled(),
     canSwitch: () => {
       if (appLockStatus().locked) throw new Error('Unlock Aerio before switching application profiles.')
       return !BrowserWindow.getAllWindows().some((window) => window !== mainWindow && (window.isVisible() || new URL(window.webContents.getURL() || 'about:blank').searchParams.get('view') === 'message'))
@@ -2542,7 +2565,19 @@ if (hasSingleInstanceLock && !profileStartupFailed) app.whenReady().then(async (
         addonPath: join(app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'build'), 'native', 'apple-script.node'),
         runtime: () => mcpAutomation, locked: () => appLockStatus().locked })
     } catch { diagnostic({ level: 'error', component: 'app', event: 'applescript-unavailable', message: 'The native AppleScript integration could not be loaded.' }) }
+    let native: SpotlightNative | undefined
+    try { native = createRequire(import.meta.url)(join(app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'build'), 'native', 'spotlight.node')) as SpotlightNative } catch { /* Report the missing native component in Settings. */ }
+    spotlightRuntime = new SpotlightRuntime({
+      store: new SpotlightStore(join(app.getPath('userData'), 'mac-spotlight.sqlite'), app.getPath('userData')), native,
+      inactiveDomains: appProfiles?.snapshot().profiles.filter((profile) => profile.id !== appProfiles?.currentId).map((profile) => spotlightDomain(profileDirectory(profileRoot, profile.id))),
+      unavailableReason: native?.available ? undefined : 'The native Spotlight component is unavailable in this build or system.',
+      worker: requireMailWorker, locked: () => appLockStatus().locked,
+      changed: (status) => BrowserWindow.getAllWindows().filter((window) => !chatRuntime?.isServiceSender(window.webContents.id)).forEach((window) => window.webContents.send('spotlight:changed', status)),
+      openMainWindow: () => openMainWindow(), openMessage: (input) => createMessageWindow(input)
+    })
+    spotlightRuntime.start()
   }
+  registerSpotlightIpc({ ipc: ipcMain, runtime: () => spotlightRuntime, isServiceSender: (id) => chatRuntime?.isServiceSender(id) ?? false, locked: () => appLockStatus().locked })
   registerMailArchiving({ ipcMain, worker: requireMailWorker, isLocked: () => appLockStatus().locked })
   registerMailInboxCategories({ ipcMain, worker: requireMailWorker })
   profileBackups = registerProfileBackup({
@@ -2723,6 +2758,7 @@ if (hasSingleInstanceLock && !profileStartupFailed) app.whenReady().then(async (
   registerRemoteImageProtocol()
   readyToOpenWindows = true
   createWindow()
+  if (pendingSpotlightId && spotlightRuntime) { const id = pendingSpotlightId; pendingSpotlightId = undefined; void spotlightRuntime.open(id).catch(() => {}) }
   void taskService.poll().catch(() => {})
   if (!hideTestWindows) createTray()
   updates = new UpdateManager(
@@ -2758,6 +2794,7 @@ app.on('before-quit', () => {
   void chatRuntime?.dispose().catch(() => {})
   void mcpAutomation?.stop().catch(() => {})
   appleScriptAutomation?.close()
+  void spotlightRuntime?.close().catch(() => {})
   void taskService?.close().catch(() => {})
   updates?.stop()
   interchangeService?.dispose()

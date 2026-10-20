@@ -95,9 +95,10 @@ export function configureProfilePaths(app: { setPath(name: 'userData' | 'session
   app.setPath('userData', directory)
   app.setPath('sessionData', directory)
 }
-export function registerAppProfiles({ ipcMain, registry, argv, restart, canSwitch, locked }: {
+export function registerAppProfiles({ ipcMain, registry, argv, restart, canSwitch, locked, beforeSwitch, switchFailed }: {
   ipcMain: { handle(channel: string, handler: (event: unknown, ...args: unknown[]) => unknown): void }
   registry: AppProfileRegistry; argv: string[]; restart(args: string[]): void; canSwitch(): boolean; locked?(): boolean
+  beforeSwitch?(): Promise<void>; switchFailed?(): void
 }) {
   let switching = false
   const requireUnlocked = () => { if (locked?.()) throw new Error('Unlock Aerio to manage application profiles.') }
@@ -109,6 +110,16 @@ export function registerAppProfiles({ ipcMain, registry, argv, restart, canSwitc
     if (switching) throw new Error('Aerio is already switching application profiles.')
     if (id === registry.currentId) return
     if (!canSwitch()) throw new Error('Close other Aerio windows before switching application profiles.')
+    if (!registry.snapshot().profiles.some((profile) => profile.id === id)) throw new Error('Application profile not found.')
+    if (beforeSwitch) {
+      switching = true
+      return Promise.resolve().then(beforeSwitch).then(() => {
+        requireUnlocked()
+        if (!canSwitch()) throw new Error('Close other Aerio windows before switching application profiles.')
+        registry.select(id)
+        try { restart(profileLaunchArgs(argv, id as string)) } catch (error) { registry.select(registry.currentId); throw error }
+      }).catch((error) => { switching = false; switchFailed?.(); throw error })
+    }
     registry.select(id)
     try { restart(profileLaunchArgs(argv, id as string)); switching = true }
     catch (error) { registry.select(registry.currentId); throw error }
