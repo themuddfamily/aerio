@@ -1,3 +1,4 @@
+import { IceWarpChatAdapter } from './chat/providers/icewarp'
 import { SettingsSyncService } from './settings-sync'
 import { settingsSyncAdapter } from './settings-sync-data'
 import { registerSettingsSync } from './settings-sync-ipc'
@@ -2504,7 +2505,7 @@ if (hasSingleInstanceLock && !profileStartupFailed) app.whenReady().then(async (
       authorize: (expected, scopes) => requireVault().authorizeMicrosoft(expected, { additionalScopes: scopes }),
       token: (accountId) => requireVault().microsoftAccessToken(accountId),
       scopes: (accountId) => requireVault().grantedScopes(accountId, 'microsoft')
-    }), new SlackChatAdapter(), new RocketChatAdapter()],
+    }), new SlackChatAdapter(), new RocketChatAdapter(), new IceWarpChatAdapter()],
     locked: () => appLockStatus().locked, online: () => taskNetworkOnline && net.isOnline(),
     notificationsEnabled: () => Boolean(loadPreferences().settings.notifications), quietNotifications: hideTestWindows,
     isServiceSender: (id) => chatRuntime?.isServiceSender(id) ?? false, openMainWindow: () => openMainWindow()

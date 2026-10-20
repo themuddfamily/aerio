@@ -22,7 +22,7 @@ Reviewed: 2026-10-20. Aerio 0.5.0, commit `26d842d`.
 - [x] **D09 — Slack chat.** eM Client advertises Slack messaging; Aerio has no Slack chat connector in its current implementation. **Add:** Slack workspaces, conversations, and channels. Sources: [eM chat](https://www.emclient.com/features-chat), [Aerio chat design](chat-implementation-proposal.md).
 - [ ] **D10 — Jabber/XMPP chat.** eM Client advertises XMPP; Aerio implements Matrix. **Add:** an XMPP account connector. Sources: [eM chat](https://www.emclient.com/features-chat), [Aerio chat design](chat-implementation-proposal.md).
 - [x] **D11 — Rocket.Chat messaging.** eM Client advertises Rocket.Chat; Aerio has no corresponding connector. **Add:** a Rocket.Chat account connector. Sources: [eM chat](https://www.emclient.com/features-chat), [Aerio chat design](chat-implementation-proposal.md).
-- [ ] **D12 — IceWarp TeamChat.** eM Client advertises IceWarp TeamChat; Aerio has no corresponding connector. **Add:** an IceWarp TeamChat connector. Sources: [eM chat](https://www.emclient.com/features-chat), [Aerio chat design](chat-implementation-proposal.md).
+- [x] **D12 — IceWarp TeamChat.** eM Client advertises IceWarp TeamChat; Aerio has no corresponding connector. **Add:** an IceWarp TeamChat connector. Sources: [eM chat](https://www.emclient.com/features-chat), [Aerio chat design](chat-implementation-proposal.md).
 
 ## Calendar and tasks
 
@@ -107,3 +107,6 @@ The eM Client side of D21–D34 is documented in the [official version 11 announ
 - **D17:** Existing permanent Meetn room connection by name/public link, timed Google/Microsoft invitation integration, preserved per-event links after configuration changes and restart, safe removal without deleting the shared room. This matches the documented permanent-room model; no remote room-lifecycle API is claimed. Verified: store/SQLite coordinator/settings/IPC/editor/capability tests and TypeScript checks. See [Meetn room behavior](meetn-meetings.md).
 
 - **D01:** In-app multi-turn assistant with account-scoped bounded mail search/read/folder tools, actual Brave public-page context/citations and editable mail-organization proposals applied only through a separate one-use review. Explicit per-turn public query prevents model/mail content from choosing external disclosures; lock/reset/cancellation/limits protect transient context. Verified: 70 focused AI/UI/preload tests, App/main regressions and native Electron compatible-provider multi-turn/clear/public-query audit. Live Brave interoperability unverified. See [conversational assistant](conversational-ai-assistant.md).
+
+
+- **D12:** Official IceWarp TeamChat token/password-exchange connector for active joined rooms, paged posts/comments and permission-checked text sending; HTTPS-only fixed user API, token-only persistence, cross-server reconnect rejection and reviewed uncertain delivery. Verified: 11 controlled API tests plus shared runtime regressions. No live-server/DM/upload/read-marker claim. See [IceWarp TeamChat](icewarp-teamchat.md).
