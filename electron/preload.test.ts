@@ -349,6 +349,8 @@ describe('preload bridge', () => {
     await ai.suggestReplies('r2', ref)
     await ai.compose('r3', { instruction: 'Shorter', draft: 'Hi' })
     await ai.learnStyle('style', 'A writing sample')
+    await ai.detectPlanning('planning', ref, 'Europe/London')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('ai:detect-planning', 'planning', ref, 'Europe/London')
     await ai.generateRule('rule', { accountId: 'account-1', description: 'Star invoices' })
     await ai.search('r4', 'invoices')
     await ai.cancel('r4')
@@ -357,7 +359,7 @@ describe('preload bridge', () => {
     }
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('ai:learn-style', 'style', 'A writing sample')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('ai:generate-rule', 'rule', { accountId: 'account-1', description: 'Star invoices' })
-    expect(Object.keys(ai).sort()).toEqual(['cancel', 'compose', 'configure', 'generateRule', 'learnStyle', 'search', 'status', 'suggestReplies', 'summarize'])
+    expect(Object.keys(ai).sort()).toEqual(['cancel', 'compose', 'configure', 'detectPlanning', 'generateRule', 'learnStyle', 'search', 'status', 'suggestReplies', 'summarize'])
   })
 
   it('exposes only proxy settings operations without returning credential runtime configuration', async () => {

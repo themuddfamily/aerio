@@ -11,6 +11,7 @@ import SmimeMessageNotice from './SmimeMessageNotice'
 import SenderAvatar from './SenderAvatar'
 import TrackingProtectionNotice from './TrackingProtectionNotice'
 import MailAutomaticReplies from './MailAutomaticReplies'
+import MailAiPlanning from './MailAiPlanning'
 
 interface ThreadMessageAccordionProps {
   message: MailMessageDetail
@@ -19,6 +20,7 @@ interface ThreadMessageAccordionProps {
   onToggle(): void
   onReply?(): void
   onReplyWithText?(text: string): void
+  onToast?(message: string): void
   onLoadRemoteImages?(): void
   onMoreActions?(event: MouseEvent<HTMLButtonElement>): void
   onContextMenu?(event: MouseEvent<HTMLElement>): void
@@ -35,6 +37,7 @@ export default function ThreadMessageAccordion({
   onToggle,
   onReply,
   onReplyWithText,
+  onToast,
   onLoadRemoteImages,
   onMoreActions,
   onContextMenu
@@ -77,6 +80,7 @@ export default function ThreadMessageAccordion({
           {expanded && <OpenPgpMessageNotice message={message} />}
           {expanded && <SmimeMessageNotice message={message} />}
           {expanded && <MailAutomaticReplies message={message} onReply={onReplyWithText} />}
+          {expanded && onToast && <MailAiPlanning message={message} onToast={onToast} />}
           {message.sanitizedHtml && message.local?.format !== 'plain'
             ? <MessageHtml className="message-body mail-html" html={message.sanitizedHtml} />
             : <div className="message-body mail-text">{message.text}</div>}

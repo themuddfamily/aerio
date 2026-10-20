@@ -15,7 +15,7 @@ export default function AiAssistantSettings() {
 
   const apply = (next: AiAssistantStatus) => {
     setStatus(next)
-    setForm({ enabled: next.enabled, automaticReplies: next.automaticReplies === true, writingStyles: next.writingStyles ?? {}, provider: next.provider, model: next.model, baseUrl: next.baseUrl, features: { ...next.features }, includeSenderDetails: next.includeSenderDetails })
+    setForm({ enabled: next.enabled, automaticReplies: next.automaticReplies === true, automaticPlanning: next.automaticPlanning === true, writingStyles: next.writingStyles ?? {}, provider: next.provider, model: next.model, baseUrl: next.baseUrl, features: { ...next.features }, includeSenderDetails: next.includeSenderDetails })
   }
   useEffect(() => {
     let active = true
@@ -90,6 +90,7 @@ export default function AiAssistantSettings() {
                 <span><strong>Suggest replies when I open a message</strong><small>Off by default. When enabled, expanding a message automatically sends its subject, date and plain-text body to your AI provider, plus sender details only if allowed above. Recipients, attachments and HTML are excluded. Requires Suggested replies to be enabled. Replies stay as previews.</small></span>
                 <input type="checkbox" checked={form.automaticReplies === true} onChange={(event) => update({ automaticReplies: event.target.checked })} />
               </label>
+              <label className="toggle-row"><span><strong>Detect tasks and events when I open a message</strong><small>Off by default. Sends the displayed message’s subject/date/plain text and current date/time zone to your AI provider, plus sender details only if allowed above. Suggestions open an editable form; nothing is created until you press Create. Requires Detect tasks and events above.</small></span><input type="checkbox" checked={form.automaticPlanning === true} onChange={(event) => update({ automaticPlanning: event.target.checked })} /></label>
             </fieldset>
           </>}
           <div className="settings-actions">

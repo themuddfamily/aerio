@@ -1,4 +1,5 @@
 import { ipcMain, safeStorage } from 'electron'
+import { planningPrompt, parsePlanningSuggestions } from './ai-planning'
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { AI_DEFAULT_ANTHROPIC_MODEL, AI_DEFAULT_OPENAI_BASE_URL, AI_FEATURES, type AiAssistantSettingsInput, type AiAssistantStatus, type AiComposeInput, type AiFeature, type AiProviderId } from '../../src/ai-assistant-types'
 import type { MailAccountSummary, MailLabel, MailMessageRef, MailThreadDetail } from '../../src/mail-types'
@@ -22,8 +23,8 @@ export interface AiKeyStorage {
   decryptString(value: Buffer): string
 }
 
-const defaultFeatures = (): Record<AiFeature, boolean> => ({ summarize: true, compose: true, replies: true, search: true, rules: true })
-export const defaultAiSettings = (): StoredSettings => ({ enabled: false, automaticReplies: false, provider: 'anthropic', model: AI_DEFAULT_ANTHROPIC_MODEL, baseUrl: AI_DEFAULT_OPENAI_BASE_URL, features: defaultFeatures(), includeSenderDetails: false })
+const defaultFeatures = (): Record<AiFeature, boolean> => ({ summarize: true, compose: true, replies: true, search: true, rules: true, planning: true })
+export const defaultAiSettings = (): StoredSettings => ({ enabled: false, automaticReplies: false, automaticPlanning: false, provider: 'anthropic', model: AI_DEFAULT_ANTHROPIC_MODEL, baseUrl: AI_DEFAULT_OPENAI_BASE_URL, features: defaultFeatures(), includeSenderDetails: false })
 const providers: AiProviderId[] = ['anthropic', 'openai-compatible']
 
 function normalizeSettings(value: unknown): StoredSettings {
@@ -33,6 +34,7 @@ function normalizeSettings(value: unknown): StoredSettings {
   return {
     enabled: input.enabled === true,
     automaticReplies: input.automaticReplies === true,
+    automaticPlanning: input.automaticPlanning === true,
     writingStyles: Object.fromEntries(Object.entries(input.writingStyles && typeof input.writingStyles === 'object' ? input.writingStyles : {})
       .filter(([id, style]) => /^[\w-]{1,100}$/.test(id) && typeof style === 'string' && style.trim()).slice(0, 100)
       .map(([id, style]) => [id, sanitizeModelText(style, 2_000)])),
@@ -129,6 +131,12 @@ export function registerAiAssistant(options: { worker(): MailWorkerClient; store
   }
 
   ipcMain.handle('ai:status', () => store.status())
+  ipcMain.handle('ai:detect-planning', async (_event, requestId: unknown, ref: MailMessageRef, timeZone: unknown) => {
+    if (!store.status().automaticPlanning) throw new Error('Automatic task/event detection is turned off in Settings')
+    if (typeof timeZone !== 'string' || timeZone.length > 100) throw new Error('Invalid scheduling time zone')
+    try { new Intl.DateTimeFormat('en', { timeZone }).format() } catch { throw new Error('Invalid scheduling time zone') }
+    return parsePlanningSuggestions(await run(requestId, 'planning', async (sender) => planningPrompt(await messageFor(ref), sender, timeZone)))
+  })
   ipcMain.handle('ai:configure', (_event, input: AiAssistantSettingsInput) => store.configure(input))
   ipcMain.handle('ai:cancel', (_event, requestId: unknown) => {
     const controller = validId(requestId) ? active.get(requestId) : undefined

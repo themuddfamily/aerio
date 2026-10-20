@@ -7,7 +7,7 @@ import { notifyAiSettingsChanged } from '../lib/use-ai-assistant'
 import type { AiAssistantStatus } from '../ai-assistant-types'
 import type { MailMessageDetail } from '../mail-types'
 
-const status: AiAssistantStatus = { enabled: true, automaticReplies: false, provider: 'anthropic', model: 'test', baseUrl: '', hasApiKey: true, secureStorage: true, features: { replies: true, summarize: true, compose: true, search: true, rules: true }, includeSenderDetails: false }
+const status: AiAssistantStatus = { enabled: true, automaticReplies: false, provider: 'anthropic', model: 'test', baseUrl: '', hasApiKey: true, secureStorage: true, features: { replies: true, summarize: true, compose: true, search: true, rules: true, planning: true }, includeSenderDetails: false }
 const message = { accountId: 'a', threadId: 't', id: 'one', text: 'Would Friday work?' } as MailMessageDetail
 const ai = { status: vi.fn(), suggestReplies: vi.fn(), cancel: vi.fn() }
 beforeEach(() => {

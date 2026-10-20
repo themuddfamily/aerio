@@ -2,9 +2,9 @@ import type { MailMessageRef, MailRuleInput } from './mail-types'
 
 export type AiProviderId = 'anthropic' | 'openai-compatible'
 export type AiSummaryScope = 'message' | 'conversation'
-export type AiFeature = 'summarize' | 'compose' | 'replies' | 'search' | 'rules'
+export type AiFeature = 'summarize' | 'compose' | 'replies' | 'search' | 'rules' | 'planning'
 
-export const AI_FEATURES: AiFeature[] = ['summarize', 'compose', 'replies', 'search', 'rules']
+export const AI_FEATURES: AiFeature[] = ['summarize', 'compose', 'replies', 'search', 'rules', 'planning']
 export const AI_DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-5-5'
 export const AI_DEFAULT_OPENAI_BASE_URL = 'http://localhost:11434/v1'
 
@@ -14,13 +14,15 @@ export const AI_FEATURE_DETAILS: Record<AiFeature, { label: string; sends: strin
   compose: { label: 'Draft and rephrase', sends: 'Your instruction, current draft and any saved writing style for the sending account. The email you are replying to is added only when you tick “Include the email I’m replying to”.' },
   replies: { label: 'Suggested replies', sends: 'The same email content as Summarize: subject, date, and plain-text body, plus sender details only when that option is on, and any saved writing style for the message account.' },
   search: { label: 'Natural-language search', sends: 'Only the words you type into the Ask AI search box. No email content is sent.' },
-  rules: { label: 'Create mail rules', sends: 'Only your rule description and Aerio’s supported rule format. No emails, account details, folder list, or saved rules are sent. Folder names you type in the description are included.' }
+  rules: { label: 'Create mail rules', sends: 'Only your rule description and Aerio’s supported rule format. No emails, account details, folder list, or saved rules are sent. Folder names you type in the description are included.' },
+  planning: { label: 'Detect tasks and events', sends: 'The displayed message’s subject, date and plain-text body, plus sender details only when enabled. Also the current date and your time zone. No recipients, attachments, HTML or other messages.' }
 }
 
 export interface AiAssistantStatus {
   enabled: boolean
   /** Explicit opt-in to sending displayed messages for reply suggestions. */
   automaticReplies?: boolean
+  automaticPlanning?: boolean
   writingStyles?: Record<string, string>
   provider: AiProviderId
   model: string
@@ -36,6 +38,7 @@ export interface AiAssistantStatus {
 export interface AiAssistantSettingsInput {
   enabled: boolean
   automaticReplies?: boolean
+  automaticPlanning?: boolean
   writingStyles?: Record<string, string>
   provider: AiProviderId
   model: string
@@ -68,6 +71,9 @@ export interface AiAssistantApi {
   compose(requestId: string, input: AiComposeInput): Promise<string>
   learnStyle(requestId: string, sample: string): Promise<string>
   generateRule(requestId: string, input: { accountId: string; description: string }): Promise<MailRuleInput>
+  detectPlanning(requestId: string, ref: MailMessageRef, timeZone: string): Promise<AiPlanningSuggestion[]>
   search(requestId: string, request: string): Promise<{ query: string }>
   cancel(requestId: string): Promise<boolean>
 }
+
+export type AiPlanningSuggestion = { kind: 'task'; title: string; notes: string; due?: string } | { kind: 'event'; title: string; notes: string; start: string; end: string }

@@ -25,6 +25,18 @@ feature can be switched off independently.
 Translation (LibreTranslate) and the manual **Create meeting / task from email**
 tools are separate and unchanged.
 
+**Automatic task/event detection (D04)** has a separate off-by-default switch,
+**Detect tasks and events when I open a message**. It also requires the Detect
+tasks and events feature switch. Expanded messages send the same limited email
+fields as summaries, plus the current date and local time zone, after a short
+delay. Strictly validated suggestions contain only task/event titles, notes,
+dates and times; the model cannot create anything. Ambiguous event times should
+be omitted. Review task/event opens the normal editable creation form with
+those fields prefilled. Check dates, destination calendar and attendees, then
+press Create explicitly. Collapsing/navigating away cancels analysis. Turning
+either switch off hides suggestions. Models can misinterpret dates; this is a
+review aid rather than an authoritative schedule.
+
 **Automatic reply suggestions (D05)** are separately off by default. Enable
 **Suggest replies when I open a message** and save AI settings to opt in.
 Expanded messages then request reply previews after a short delay. This sends

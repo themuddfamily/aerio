@@ -24,8 +24,9 @@ export function useAiAssistantStatus() {
   const [status, setStatus] = useState<AiAssistantStatus>()
   useEffect(() => {
     let active = true
-    void window.aerio?.ai?.status?.().then((value) => { if (active) setStatus(value) }).catch(() => undefined)
-    const listener = (event: Event) => setStatus((event as CustomEvent<AiAssistantStatus>).detail)
+    let changed = false
+    void window.aerio?.ai?.status?.().then((value) => { if (active && !changed) setStatus(value) }).catch(() => undefined)
+    const listener = (event: Event) => { changed = true; setStatus((event as CustomEvent<AiAssistantStatus>).detail) }
     window.addEventListener(SETTINGS_EVENT, listener)
     return () => { active = false; window.removeEventListener(SETTINGS_EVENT, listener) }
   }, [])

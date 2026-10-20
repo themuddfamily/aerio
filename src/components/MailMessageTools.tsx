@@ -9,6 +9,7 @@ import MailUnsubscribeDialog from './MailUnsubscribeDialog'
 import Modal from './Modal'
 import { MailReplyWatchesModal, canWatchMessage } from './MailReplyWatches'
 import MailAiAssistDialog from './MailAiAssistDialog'
+import type { AiPlanningSuggestion } from '../ai-assistant-types'
 import { aiFeatureAvailable, useAiAssistantStatus } from '../lib/use-ai-assistant'
 
 type Tool = 'categories' | 'copy' | 'meeting' | 'task' | 'rule' | 'note' | 'translate' | 'format' | 'properties' | 'unsubscribe' | 'watch' | 'ai-summary' | 'ai-replies'
@@ -61,14 +62,15 @@ export function useMailMessageTools({ accounts, onToast, collapseAll, expandAll,
   return { items, dialog: dialog && <MessageToolDialog key={`${dialog.tool}:${dialog.message.accountId}:${dialog.message.id}`} {...dialog} accounts={accounts} onToast={onToast} onUpdated={onUpdated} onClose={() => setDialog(undefined)} /> }
 }
 
-function MessageToolDialog({ tool, message, accounts, onToast, onUpdated, onClose }: {
+export function MessageToolDialog({ tool, message, accounts, onToast, onUpdated, onClose, suggestion }: {
   tool: Tool; message: MailMessageDetail; accounts: MailAccountSummary[]; onToast(message: string): void
   onUpdated(message: MailMessageDetail, local: MailMessageLocalData): void; onClose(): void
+  suggestion?: AiPlanningSuggestion
 }) {
   const local = message.local ?? defaultLocal
   const ref = messageRef(message)
-  const [title, setTitle] = useState(message.subject || 'Email')
-  const [content, setContent] = useState(tool === 'note' ? '' : message.text)
+  const [title, setTitle] = useState(suggestion?.title ?? (message.subject || 'Email'))
+  const [content, setContent] = useState(suggestion?.notes ?? (tool === 'note' ? '' : message.text))
   const [categories, setCategories] = useState(local.categories.join(', '))
   const [format, setFormat] = useState(local.format)
   const [fontSize, setFontSize] = useState(local.fontSize)
@@ -77,9 +79,9 @@ function MessageToolDialog({ tool, message, accounts, onToast, onUpdated, onClos
   const [calendars, setCalendars] = useState<SyncedCalendar[]>([])
   const [calendarId, setCalendarId] = useState('')
   const [notes, setNotes] = useState<Note[]>([])
-  const [start, setStart] = useState(localTime(new Date(Date.now() + 60 * 60_000)))
-  const [end, setEnd] = useState(localTime(new Date(Date.now() + 2 * 60 * 60_000)))
-  const [due, setDue] = useState('')
+  const [start, setStart] = useState(suggestion?.kind === 'event' ? localTime(new Date(suggestion.start)) : localTime(new Date(Date.now() + 60 * 60_000)))
+  const [end, setEnd] = useState(suggestion?.kind === 'event' ? localTime(new Date(suggestion.end)) : localTime(new Date(Date.now() + 2 * 60 * 60_000)))
+  const [due, setDue] = useState(suggestion?.kind === 'task' ? suggestion.due ?? '' : '')
   const account = accounts.find((item) => item.id === message.accountId)
   const [attendees, setAttendees] = useState([...new Set([message.fromEmail, ...message.to, ...message.cc].filter((email) => email.toLowerCase() !== account?.email.toLowerCase()))].join(', '))
   const [endpoint, setEndpoint] = useState(() => window.localStorage.getItem('aerio-translation-endpoint') || 'https://libretranslate.com')
