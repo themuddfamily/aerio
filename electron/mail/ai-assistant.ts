@@ -8,13 +8,14 @@ import { assertSecureCredentialStorage } from './secure-storage'
 import { AiRequestError, requestAiCompletion, validateAiBaseUrl, type AiPrompt } from './ai-provider'
 import { composePrompt, conversationSummaryPrompt, learnWritingStylePrompt, parseReplySuggestions, parseSearchSuggestion, repliesPrompt, sanitizeModelText, searchPrompt, summarizePrompt } from './ai-prompts'
 import { aiRulePrompt, parseAiRulePreview } from './ai-rule-preview'
+import { AiConversationService } from './ai-conversation'
 
 // The optional AI assistant is off by default. Non-secret settings live in a
 // small JSON file; the API key is encrypted with OS secure storage in its own
-// file and never crosses to the renderer. Every handler returns preview text
-// only and only ever reads mail from the worker.
+// file and never crosses to the renderer. Model requests only read mail;
+// conversational organization uses a separate, user-reviewed Apply endpoint.
 
-type StoredSettings = Omit<AiAssistantStatus, 'hasApiKey' | 'secureStorage'>
+type StoredSettings = Omit<AiAssistantStatus, 'hasApiKey' | 'hasWebSearchKey' | 'secureStorage'>
 
 export interface AiKeyStorage {
   isEncryptionAvailable(): boolean
@@ -23,7 +24,7 @@ export interface AiKeyStorage {
   decryptString(value: Buffer): string
 }
 
-const defaultFeatures = (): Record<AiFeature, boolean> => ({ summarize: true, compose: true, replies: true, search: true, rules: true, planning: true })
+const defaultFeatures = (): Record<AiFeature, boolean> => ({ summarize: true, compose: true, replies: true, search: true, rules: true, planning: true, conversation: true })
 export const defaultAiSettings = (): StoredSettings => ({ enabled: false, automaticReplies: false, automaticPlanning: false, provider: 'anthropic', model: AI_DEFAULT_ANTHROPIC_MODEL, baseUrl: AI_DEFAULT_OPENAI_BASE_URL, features: defaultFeatures(), includeSenderDetails: false })
 const providers: AiProviderId[] = ['anthropic', 'openai-compatible']
 
@@ -69,7 +70,14 @@ export class AiAssistantStore {
   }
 
   status(): AiAssistantStatus {
-    return { ...this.settings, writingStyles: { ...this.settings.writingStyles }, features: { ...this.settings.features }, hasApiKey: existsSync(this.keyPath), secureStorage: this.secure() }
+    return { ...this.settings, writingStyles: { ...this.settings.writingStyles }, features: { ...this.settings.features }, hasApiKey: existsSync(this.keyPath), hasWebSearchKey: existsSync(`${this.keyPath}.web-search`), secureStorage: this.secure() }
+  }
+
+  webSearchKey() {
+    const path = `${this.keyPath}.web-search`
+    if (!existsSync(path)) return undefined
+    assertSecureCredentialStorage(this.storage)
+    try { return this.storage.decryptString(Buffer.from(readFileSync(path, 'utf8'), 'base64')) || undefined } catch { throw new Error('The saved Brave Search token cannot be decrypted') }
   }
 
   configure(input: AiAssistantSettingsInput): AiAssistantStatus {
@@ -79,6 +87,18 @@ export class AiAssistantStore {
     next.baseUrl = next.baseUrl.trim()
     if (next.model && !/^[\w.:/@-]{1,200}$/.test(next.model)) throw new Error('Enter a model name using letters, numbers, and . : / @ - _')
     if (next.provider === 'openai-compatible') validateAiBaseUrl(next.baseUrl)
+    // Validate both replacements before writing either credential.
+    for (const [value, name] of [[input.apiKey, 'API key'], [input.webSearchApiKey, 'Brave Search token']] as const) {
+      if (typeof value !== 'string' || !value.trim()) continue
+      if (value.trim().length > 500 || /\s/.test(value.trim())) throw new Error(`The ${name} looks invalid`)
+      assertSecureCredentialStorage(this.storage)
+    }
+    if (typeof input.webSearchApiKey === 'string' && input.webSearchApiKey.trim()) {
+      const key = input.webSearchApiKey.trim()
+      if (key.length > 500 || /\s/.test(key)) throw new Error('The Brave Search token looks invalid')
+      assertSecureCredentialStorage(this.storage)
+      writeAtomic(`${this.keyPath}.web-search`, this.storage.encryptString(key).toString('base64'))
+    } else if (input.clearWebSearchApiKey) rmSync(`${this.keyPath}.web-search`, { force: true })
     if (typeof input.apiKey === 'string' && input.apiKey.trim()) {
       const key = input.apiKey.trim()
       if (key.length > 500 || /\s/.test(key)) throw new Error('The API key looks invalid')
@@ -106,9 +126,15 @@ export class AiAssistantStore {
 const validId = (value: unknown): value is string => typeof value === 'string' && /^[\w-]{1,100}$/.test(value)
 const validRef = (ref: MailMessageRef) => ref && [ref.accountId, ref.threadId, ref.messageId].every((id) => typeof id === 'string' && id.length > 0 && id.length < 1024)
 
-export function registerAiAssistant(options: { worker(): MailWorkerClient; store: AiAssistantStore; fetch?: typeof fetch; timeoutMs?: number }) {
+export function registerAiAssistant(options: { worker(): MailWorkerClient; store: AiAssistantStore; fetch?: typeof fetch; timeoutMs?: number; locked?(): boolean }) {
   const { store } = options
   const active = new Map<string, AbortController>()
+  const conversation = new AiConversationService({
+    worker: options.worker, locked: options.locked ?? (() => false),
+    access: () => ({ includeSenderDetails: store.providerFor('conversation').includeSenderDetails }),
+    webKey: () => store.webSearchKey(), fetch: options.fetch,
+    complete: (prompt, signal) => requestAiCompletion(store.providerFor('conversation').config, prompt, signal, options.fetch ?? fetch, options.timeoutMs)
+  })
   const messageFor = async (ref: MailMessageRef) => {
     if (!validRef(ref)) throw new Error('Invalid message reference')
     // Read-only: the assistant never issues any other worker command.
@@ -137,12 +163,20 @@ export function registerAiAssistant(options: { worker(): MailWorkerClient; store
     try { new Intl.DateTimeFormat('en', { timeZone }).format() } catch { throw new Error('Invalid scheduling time zone') }
     return parsePlanningSuggestions(await run(requestId, 'planning', async (sender) => planningPrompt(await messageFor(ref), sender, timeZone)))
   })
-  ipcMain.handle('ai:configure', (_event, input: AiAssistantSettingsInput) => store.configure(input))
+  ipcMain.handle('ai:configure', (_event, input: AiAssistantSettingsInput) => {
+    const status = store.configure(input)
+    conversation.reset()
+    return status
+  })
   ipcMain.handle('ai:cancel', (_event, requestId: unknown) => {
     const controller = validId(requestId) ? active.get(requestId) : undefined
     controller?.abort()
-    return Boolean(controller)
+    return conversation.cancel(typeof requestId === 'string' ? requestId : '') || Boolean(controller)
   })
+  ipcMain.handle('ai:conversation:state', () => conversation.state())
+  ipcMain.handle('ai:conversation:clear', () => conversation.clear())
+  ipcMain.handle('ai:conversation:turn', (_event, requestId: string, input: import('../../src/ai-conversation-types').AiConversationTurnInput) => conversation.turn(requestId, input))
+  ipcMain.handle('ai:conversation:apply', (_event, input: import('../../src/ai-conversation-types').AiOrganizeReview) => conversation.apply(input))
   ipcMain.handle('ai:summarize', async (_event, requestId: unknown, ref: MailMessageRef, scope: unknown = 'message') => {
     if (scope !== 'message' && scope !== 'conversation') throw new Error('Choose message or conversation summary')
     const text = sanitizeModelText(await run(requestId, 'summarize', async (sender) => {
@@ -189,4 +223,5 @@ export function registerAiAssistant(options: { worker(): MailWorkerClient; store
     const labels = await options.worker().request<MailLabel[]>({ type: 'labels:list', payload: { accountIds: [input.accountId] } })
     return parseAiRulePreview(response, input.accountId, labels)
   })
+  return { lockChanged: () => conversation.lockChanged() }
 }

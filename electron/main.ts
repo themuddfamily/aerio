@@ -264,6 +264,7 @@ let messageLocalStore: MessageLocalStore | null = null
 let mailTemplateStore: MailTemplateStore | null = null
 let profileBackups: ReturnType<typeof registerProfileBackup> | null = null
 let providerChatRuntime: ReturnType<typeof initializeProviderChat> | null = null
+let aiAssistantRuntime: ReturnType<typeof registerAiAssistant> | undefined
 let chatRuntime: ChatRuntime | null = null
 let mcpAutomation: ReturnType<typeof registerMcpAutomation> | null = null
 let settingsSync: SettingsSyncService | undefined
@@ -1315,6 +1316,7 @@ function verifyAppLockPassphrase(passphrase: unknown, record = loadAppLockRecord
 function publishAppLockStatus() {
   const status = appLockStatus()
   if (status.locked) mailNotificationService?.clear()
+  aiAssistantRuntime?.lockChanged()
   BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('app-lock:status-changed', status))
   // Locking clears Chat's decrypted renderer state and transient verification emoji; unlocking opens a pending notification route.
   providerChatRuntime?.broadcast()
@@ -1689,7 +1691,7 @@ function registerIpc() {
   registerMessageTools({ worker: requireMailWorker, productivity: requireProductivityStore, local: messageLocalStore, changed: (local) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('productivity:changed', { local })
   } })
-  registerAiAssistant({ worker: requireMailWorker, store: new AiAssistantStore(join(app.getPath('userData'), 'ai-assistant.json'), join(app.getPath('userData'), 'ai-assistant-key.dat')) })
+  aiAssistantRuntime = registerAiAssistant({ worker: requireMailWorker, locked: () => appLockStatus().locked, store: new AiAssistantStore(join(app.getPath('userData'), 'ai-assistant.json'), join(app.getPath('userData'), 'ai-assistant-key.dat')) })
   const automaticReplies = new AutomaticRepliesService({
     account: async (accountId) => (await requireMailWorker().request<MailAccountSummary[]>({ type: 'accounts:list' })).find((item) => item.id === accountId),
     googleToken: (accountId) => requireVault().accessToken(accountId),

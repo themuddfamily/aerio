@@ -2,9 +2,9 @@ import type { MailMessageRef, MailRuleInput } from './mail-types'
 
 export type AiProviderId = 'anthropic' | 'openai-compatible'
 export type AiSummaryScope = 'message' | 'conversation'
-export type AiFeature = 'summarize' | 'compose' | 'replies' | 'search' | 'rules' | 'planning'
+export type AiFeature = 'summarize' | 'compose' | 'replies' | 'search' | 'rules' | 'planning' | 'conversation'
 
-export const AI_FEATURES: AiFeature[] = ['summarize', 'compose', 'replies', 'search', 'rules', 'planning']
+export const AI_FEATURES: AiFeature[] = ['summarize', 'compose', 'replies', 'search', 'rules', 'planning', 'conversation']
 export const AI_DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-5-5'
 export const AI_DEFAULT_OPENAI_BASE_URL = 'http://localhost:11434/v1'
 
@@ -15,7 +15,8 @@ export const AI_FEATURE_DETAILS: Record<AiFeature, { label: string; sends: strin
   replies: { label: 'Suggested replies', sends: 'The same email content as Summarize: subject, date, and plain-text body, plus sender details only when that option is on, and any saved writing style for the message account.' },
   search: { label: 'Natural-language search', sends: 'Only the words you type into the Ask AI search box. No email content is sent.' },
   rules: { label: 'Create mail rules', sends: 'Only your rule description and Aerio’s supported rule format. No emails, account details, folder list, or saved rules are sent. Folder names you type in the description are included.' },
-  planning: { label: 'Detect tasks and events', sends: 'The displayed message’s subject, date and plain-text body, plus sender details only when enabled. Also the current date and your time zone. No recipients, attachments, HTML or other messages.' }
+  planning: { label: 'Detect tasks and events', sends: 'The displayed message’s subject, date and plain-text body, plus sender details only when enabled. Also the current date and your time zone. No recipients, attachments, HTML or other messages.' },
+  conversation: { label: 'Conversational assistant', sends: 'Your conversation and results from the read tools you allow. Mail access is limited to accounts you select: up to 20 subjects/dates per search and 3 plain-text messages per read, plus sender details only when enabled. Web browsing sends search queries to Brave Search and its extracted page content to your model. No recipients, attachments, HTML or automatic mail changes.' }
 }
 
 export interface AiAssistantStatus {
@@ -29,6 +30,7 @@ export interface AiAssistantStatus {
   /** Used by the OpenAI-compatible provider only. */
   baseUrl: string
   hasApiKey: boolean
+  hasWebSearchKey?: boolean
   features: Record<AiFeature, boolean>
   includeSenderDetails: boolean
   /** False when the operating system cannot encrypt the API key; keys cannot be saved then. */
@@ -48,6 +50,8 @@ export interface AiAssistantSettingsInput {
   /** A new API key. Omit or leave empty to keep the stored key. */
   apiKey?: string
   clearApiKey?: boolean
+  webSearchApiKey?: string
+  clearWebSearchApiKey?: boolean
 }
 
 export interface AiComposeInput {
@@ -64,6 +68,7 @@ export interface AiComposeInput {
  * `requestId` lets the renderer cancel an in-flight request.
  */
 export interface AiAssistantApi {
+  conversation: import('./ai-conversation-types').AiConversationApi
   status(): Promise<AiAssistantStatus>
   configure(input: AiAssistantSettingsInput): Promise<AiAssistantStatus>
   summarize(requestId: string, ref: MailMessageRef, scope?: AiSummaryScope): Promise<string>

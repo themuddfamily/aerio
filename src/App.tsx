@@ -11,6 +11,7 @@ import SettingsModal from './components/SettingsModal'
 import DuplicateCleanupModal from './components/DuplicateCleanupModal'
 import ProfileModal from './components/ProfileModal'
 import AppProfileSwitcher from './components/AppProfileSwitcher'
+import AiAssistantLauncher from './components/AiAssistantLauncher'
 import AppInfoModal from './components/AppInfoModal'
 import AppLockScreen from './components/AppLockScreen'
 import CalendarView from './views/CalendarView'
@@ -542,6 +543,7 @@ export default function App() {
             })}
           </div>
           <div className="rail-bottom">
+            <AiAssistantLauncher accounts={connectedAccounts} />
             <button aria-label="What’s new" title="What’s new" onClick={() => setInfoOpen('whats-new')}><Sparkles size={20} /></button>
             <button aria-label="Help" title={`Help and keyboard shortcuts${keyLabel('app.help') ? ` · ${keyLabel('app.help')}` : ''}`} onClick={() => setInfoOpen('help')}><HelpCircle size={20} /></button>
             {appLock.enabled && <button aria-label="Lock Aerio" title={`Lock Aerio${keyLabel('app.lock') ? ` · ${keyLabel('app.lock')}` : ''}`} onClick={() => void window.aerio.appLock.lock()}><LockKeyhole size={20} /></button>}

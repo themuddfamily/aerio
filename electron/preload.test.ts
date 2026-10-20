@@ -359,7 +359,17 @@ describe('preload bridge', () => {
     }
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('ai:learn-style', 'style', 'A writing sample')
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('ai:generate-rule', 'rule', { accountId: 'account-1', description: 'Star invoices' })
-    expect(Object.keys(ai).sort()).toEqual(['cancel', 'compose', 'configure', 'detectPlanning', 'generateRule', 'learnStyle', 'search', 'status', 'suggestReplies', 'summarize'])
+    expect(Object.keys(ai).sort()).toEqual(['cancel', 'compose', 'configure', 'conversation', 'detectPlanning', 'generateRule', 'learnStyle', 'search', 'status', 'suggestReplies', 'summarize'])
+    await ai.conversation.state()
+    await ai.conversation.clear()
+    const turn = { conversationId: 'c', message: 'Hello', allowMail: false, accountIds: [], allowWeb: false }
+    await ai.conversation.turn('turn', turn)
+    const review = { proposalId: 'p', action: 'archive' as const, targetRefs: ['mail:0'] }
+    await ai.conversation.apply(review)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('ai:conversation:state')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('ai:conversation:clear')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('ai:conversation:turn', 'turn', turn)
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('ai:conversation:apply', review)
   })
 
   it('exposes only proxy settings operations without returning credential runtime configuration', async () => {
@@ -560,6 +570,7 @@ describe('message toolbar preload bridge', () => {
   })
 })
 
+
 describe('application profile preload bridge', () => {
   it('exposes profile identity operations without exposing arbitrary filesystem paths', async () => {
     await api().appProfiles.list()
@@ -572,6 +583,7 @@ describe('application profile preload bridge', () => {
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('app-profiles:switch', 'default')
   })
 })
+
 
 describe('settings synchronization preload bridge', () => {
   it('routes explicit sync/review actions and disposes applied listeners', async () => {

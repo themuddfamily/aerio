@@ -1,0 +1,11 @@
+.ai-conversation-body { display: grid; gap: 12px; padding: 16px 20px; max-height: 68vh; overflow: auto; }
+.ai-conversation-body > p, .ai-conversation-scope small { color: var(--muted); font-size: 11px; }
+.ai-conversation-scope { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.ai-conversation-transcript { display: grid; gap: 12px; }
+.ai-conversation-transcript article { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.ai-conversation-transcript article.user { margin-left: 28px; background: var(--accent-soft); }
+.ai-conversation-transcript article p { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.ai-conversation-transcript a { color: var(--accent); overflow-wrap: anywhere; }
+.ai-conversation-review { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); }
+.ai-conversation-review .toggle-row small { display: block; color: var(--muted); }
+.ai-conversation-body textarea { min-height: 72px; resize: vertical; }

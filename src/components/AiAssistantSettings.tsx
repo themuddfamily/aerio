@@ -9,6 +9,7 @@ export default function AiAssistantSettings() {
   const [status, setStatus] = useState<AiAssistantStatus>()
   const [form, setForm] = useState<Omit<AiAssistantSettingsInput, 'apiKey' | 'clearApiKey'>>()
   const [apiKey, setApiKey] = useState('')
+  const [webKey, setWebKey] = useState('')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [messageIsError, setMessageIsError] = useState(false)
@@ -25,13 +26,13 @@ export default function AiAssistantSettings() {
     return () => { active = false }
   }, [])
 
-  const save = async (extra: Pick<AiAssistantSettingsInput, 'apiKey' | 'clearApiKey'> = {}) => {
+  const save = async (extra: Pick<AiAssistantSettingsInput, 'apiKey' | 'clearApiKey' | 'clearWebSearchApiKey'> = {}) => {
     if (!form) return
     setSaving(true); setMessage('')
     try {
-      const next = await window.aerio.ai.configure({ ...form, ...extra })
+      const next = await window.aerio.ai.configure({ ...form, ...(webKey.trim() && !extra.clearWebSearchApiKey ? { webSearchApiKey: webKey.trim() } : {}), ...extra })
       apply(next)
-      setApiKey('')
+      setApiKey(''); setWebKey('')
       notifyAiSettingsChanged(next)
       setMessageIsError(false)
       setMessage(extra.clearApiKey ? 'API key removed.' : next.enabled ? 'AI assistance settings saved.' : 'AI assistance is off. Nothing is sent to an AI provider.')
@@ -73,6 +74,8 @@ export default function AiAssistantSettings() {
               <small>{status.secureStorage ? 'Encrypted with your operating system’s secure storage and only used by Aerio’s background process. It is never shown again or stored with other settings.' : 'Secure credential storage is unavailable, so an API key cannot be saved. A local server without a key still works.'}</small>
             </label>
             {status.hasApiKey && <div className="settings-actions"><button className="button ghost" disabled={saving} onClick={() => void save({ clearApiKey: true })}><KeyRound size={16} /> Remove saved key</button></div>}
+            <label className="field"><span>Brave Search token</span><input aria-label="Brave Search token" type="password" autoComplete="new-password" value={webKey} disabled={!status.secureStorage || saving} onChange={(event) => setWebKey(event.target.value)} placeholder={status.hasWebSearchKey ? 'Saved — enter a new token to replace it' : 'Optional: enables public-web research in the assistant'} /><small>Used only when you allow web browsing in the conversational assistant. Queries go to Brave Search; extracted public-page content goes to your model. Stored with OS encryption and never returned to the window.</small></label>
+            {status.hasWebSearchKey && <button className="button ghost" disabled={saving} onClick={() => { setWebKey(''); void save({ clearWebSearchApiKey: true }) }}>Remove Brave Search token</button>}
             <AiWritingStyles status={status} value={form.writingStyles ?? {}} onChange={(writingStyles) => update({ writingStyles })} />
             <fieldset className="ai-settings-features">
               <legend>Features and the data each one sends to {form.provider === 'anthropic' ? 'Anthropic' : 'your server'}</legend>

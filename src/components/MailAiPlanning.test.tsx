@@ -6,7 +6,7 @@ import MailAiPlanning from './MailAiPlanning'
 import { notifyAiSettingsChanged } from '../lib/use-ai-assistant'
 import type { AiAssistantStatus } from '../ai-assistant-types'
 import type { MailMessageDetail } from '../mail-types'
-const status: AiAssistantStatus = { enabled: true, automaticPlanning: false, provider: 'anthropic', model: 'test', baseUrl: '', hasApiKey: true, secureStorage: true, includeSenderDetails: false, features: { summarize: true, compose: true, replies: true, rules: true, search: true, planning: true } }
+const status: AiAssistantStatus = { enabled: true, automaticPlanning: false, provider: 'anthropic', model: 'test', baseUrl: '', hasApiKey: true, secureStorage: true, includeSenderDetails: false, features: { summarize: true, compose: true, replies: true, rules: true, search: true, planning: true, conversation: true } }
 const message = { accountId: 'a', threadId: 't', id: 'm', subject: 'Plan', text: 'Review by Friday', fromEmail: 'you@example.test', to: [], cc: [], date: '2026-10-20T09:00:00Z', labelIds: ['INBOX'], attachments: [] } as unknown as MailMessageDetail
 const detect = vi.fn(), create = vi.fn(), cancel = vi.fn()
 beforeEach(() => {

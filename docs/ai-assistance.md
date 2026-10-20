@@ -15,6 +15,9 @@ suggestions allows displayed messages to be sent as described below.
 | Draft and rephrase | Composer toolbar ✨ button | Your instruction and the text currently in the composer. The email you are replying to is added only when you tick **Include the email I’m replying to**. |
 | Natural-language search | ✨ button in the Mail search box | Only the words you type into the Ask AI box. No email content is sent. |
 | Create mail rules | Mail rules › New rule › **Describe a rule with AI** | Your description and the supported rule format. No email content, account details, folder list, writing styles or saved rules. Names/addresses typed into the description are included. |
+| Conversational assistant | App rail › **AI assistant** | Conversation messages plus only the tools/accounts you explicitly allow. Bounded mail subjects/plain-text excerpts and optionally Brave public-web excerpts; sender details follow the existing switch. |
+
+The [conversational assistant (D01)](conversational-ai-assistant.md) supports follow-up questions, scoped mail search/reading, public web research with citations, and editable organization proposals. Mail changes require a separate reviewed Apply action. Web research requires an optional OS-encrypted Brave Search token, per-conversation opt-in and a visible user-entered public search query for each turn. The model cannot replace that query or add private mail text to it. History is transient and cleared on lock, settings save or restart.
 
 The same descriptions appear in Settings next to each feature switch and in
 every AI dialog (`src/ai-assistant-types.ts`, `AI_FEATURE_DETAILS`). Each

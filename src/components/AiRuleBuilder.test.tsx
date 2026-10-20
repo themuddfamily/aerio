@@ -6,7 +6,7 @@ import type { MailAccountSummary, MailRuleInput } from '../mail-types'
 import { notifyAiSettingsChanged } from '../lib/use-ai-assistant'
 import MailRulesModal from './MailRulesModal'
 
-const status: AiAssistantStatus = { enabled: true, provider: 'anthropic', model: 'test', baseUrl: '', hasApiKey: true, secureStorage: true, includeSenderDetails: false, features: { rules: true, planning: true, compose: true, replies: true, search: true, summarize: true } }
+const status: AiAssistantStatus = { enabled: true, provider: 'anthropic', model: 'test', baseUrl: '', hasApiKey: true, secureStorage: true, includeSenderDetails: false, features: { rules: true, planning: true, conversation: true, compose: true, replies: true, search: true, summarize: true } }
 const account: MailAccountSummary = { id: 'a', provider: 'imap', email: 'me@test', displayName: 'Me', color: '#123456', status: 'ready', archived: false, signature: '', notifications: true, syncEnabled: true }
 const generated: MailRuleInput = { accountId: 'a', name: 'AI invoices', enabled: false, execution: 'local', trigger: 'incoming', match: 'all', conditions: [{ field: 'subject', operator: 'contains', value: 'invoice' }], exceptions: [], actions: [{ action: 'label', labelId: 'receipts' }] }
 let ai: { status: ReturnType<typeof vi.fn>; generateRule: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn> }

@@ -353,6 +353,12 @@ const api: AerioDesktopApi = {
     return () => ipcRenderer.removeListener('command:compose', listener)
   },
   ai: {
+    conversation: {
+      state: () => ipcRenderer.invoke('ai:conversation:state'),
+      clear: () => ipcRenderer.invoke('ai:conversation:clear'),
+      turn: (requestId, input) => ipcRenderer.invoke('ai:conversation:turn', requestId, input),
+      apply: (input) => ipcRenderer.invoke('ai:conversation:apply', input)
+    },
     status: () => ipcRenderer.invoke('ai:status'),
     configure: (input) => ipcRenderer.invoke('ai:configure', input),
     summarize: (requestId, ref, scope) => ipcRenderer.invoke('ai:summarize', requestId, ref, scope),
