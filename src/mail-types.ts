@@ -669,8 +669,8 @@ export interface MailRuleCondition {
   headerName?: string
 }
 
-/** incoming: newly received mail; outgoing: newly synced Sent mail. */
-export type MailRuleTrigger = 'incoming' | 'outgoing'
+/** incoming: newly received mail; outgoing: newly synced Sent mail; archive: explicit Archive commands. */
+export type MailRuleTrigger = 'incoming' | 'outgoing' | 'archive'
 /** local: Aerio applies the rule; server: the provider runs its copy and Aerio skips it. */
 export type MailRuleExecution = 'local' | 'server'
 

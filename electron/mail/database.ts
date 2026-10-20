@@ -1481,7 +1481,7 @@ export class MailDatabase {
       conditions: json<MailRule['conditions']>(String(row.conditions_json), []),
       actions: json<MailRule['actions']>(String(row.actions_json), []),
       exceptions: json<MailRule['conditions']>(row.exceptions_json ? String(row.exceptions_json) : undefined, []),
-      trigger: row.trigger_mode === 'outgoing' ? 'outgoing' : 'incoming',
+      trigger: row.trigger_mode === 'outgoing' || row.trigger_mode === 'archive' ? row.trigger_mode : 'incoming',
       execution: row.execution === 'server' ? 'server' : 'local',
       ...(row.server_rule_id ? { serverRuleId: String(row.server_rule_id) } : {}),
       matchCount: Number(row.match_count),
@@ -1612,15 +1612,21 @@ export class MailDatabase {
     return this.listRules([accountId]).some((rule) => rule.enabled && rule.execution !== 'server' && mailRuleTrigger(rule) === trigger)
   }
 
-  /** Conversations whose newest message matches; incoming rules look in the Inbox, outgoing rules in Sent. */
-  matchingThreadIdsForRule(rule: MailRule) {
+  /** Match newest messages, optionally scoped to an explicit event's conversations. */
+  matchingThreadIdsForRule(rule: MailRule, selectedThreadIds?: string[]) {
+    if (selectedThreadIds && !selectedThreadIds.length) return []
     const folder = mailRuleTrigger(rule) === 'outgoing' ? 'SENT' : 'INBOX'
+    const scope = selectedThreadIds
+      ? 'm.thread_id IN (SELECT value FROM json_each(?))'
+      : mailRuleTrigger(rule) === 'archive'
+        ? `EXISTS(SELECT 1 FROM gmail_threads t WHERE t.account_id=m.account_id AND t.id=m.thread_id AND t.inbox=0 AND t.trashed=0 AND t.sent=0 AND t.draft=0 AND NOT EXISTS(SELECT 1 FROM json_each(t.label_ids_json) WHERE value='SPAM'))`
+        : `EXISTS(SELECT 1 FROM gmail_messages inbox,json_each(inbox.label_ids_json) WHERE inbox.account_id=m.account_id AND inbox.thread_id=m.thread_id AND value=?)`
+    const scopeParams = selectedThreadIds ? [JSON.stringify(selectedThreadIds)] : mailRuleTrigger(rule) === 'archive' ? [] : [folder]
     const rows = this.stmt(`SELECT m.*,(SELECT COUNT(*) FROM gmail_attachments a WHERE a.account_id=m.account_id AND a.message_id=m.id) attachment_count
       FROM gmail_messages m JOIN (
       SELECT account_id,thread_id,MAX(internal_date) internal_date FROM gmail_messages WHERE account_id=? GROUP BY account_id,thread_id
     ) newest ON newest.account_id=m.account_id AND newest.thread_id=m.thread_id AND newest.internal_date=m.internal_date
-      WHERE m.account_id=? AND EXISTS(SELECT 1 FROM gmail_messages inbox,json_each(inbox.label_ids_json)
-        WHERE inbox.account_id=m.account_id AND inbox.thread_id=m.thread_id AND value=?)`).all(rule.accountId, rule.accountId, folder) as DatabaseRow[]
+      WHERE m.account_id=? AND ${scope}`).all(rule.accountId, rule.accountId, ...scopeParams) as DatabaseRow[]
     const needsHeaders = mailRuleNeedsHeaders(rule)
     const needsCategory = mailRuleNeedsCategory(rule)
     const now = Date.now()
@@ -1639,6 +1645,14 @@ export class MailDatabase {
       headers: needsHeaders ? readRawHeaders(String(row.raw_path)) : undefined,
       category: needsCategory ? this.inboxCategories.tabFor(rule.accountId, String(row.thread_id), String(row.from_email)) : undefined
     }, now)).map((row) => String(row.thread_id)))]
+  }
+
+  /** Snapshot matches before an explicit archive changes the source folders/labels. */
+  matchingArchiveRules(accountId: string, threadIds: string[]) {
+    return this.listRules([accountId])
+      .filter((rule) => rule.enabled && rule.execution !== 'server' && mailRuleTrigger(rule) === 'archive')
+      .map((rule) => ({ rule, threadIds: this.matchingThreadIdsForRule(rule, threadIds) }))
+      .filter((match) => match.threadIds.length > 0)
   }
 
   recordRuleMatch(id: string, count = 1) {

@@ -1780,9 +1780,17 @@ async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {
   if (command.type === 'mail:action') {
     // Read-only shared folders and removed mailboxes are refused here with an explanation (E40).
     const plan = mailboxOwners().planAction(command.payload)
+    // Snapshot before archiving so conditions can inspect the source folder.
+    // Rule-generated actions bypass this command, preventing recursive archive rules.
+    const archiveRules = plan.input.action === 'archive' && plan.ownerId === PRIMARY_MAILBOX_OWNER
+      ? database.matchingArchiveRules(plan.input.accountId, plan.input.threadIds) : []
     const operation = database.applyLocalAction(plan.input)
     if (plan.ownerId !== PRIMARY_MAILBOX_OWNER) database.mailboxOwners.tagOperation(operation.id, plan.ownerId)
     emit({ type: 'operation', payload: operation })
+    for (const match of archiveRules) {
+      applyRuleActions(match.rule, match.threadIds)
+      database.recordRuleMatch(match.rule.id, match.threadIds.length)
+    }
     emit({ type: 'mail-changed', payload: { accountId: command.payload.accountId, threadIds: command.payload.threadIds } })
     return operation
   }

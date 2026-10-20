@@ -54,6 +54,7 @@ describe('mail rule IPC validation', () => {
       exceptions: [{ field: 'size', operator: 'greater-than', value: '10' }]
     })
     expect(validateMailRule(base)).toMatchObject({ trigger: 'incoming', exceptions: [] })
+    expect(validateMailRule({ ...base, trigger: 'archive' })).toMatchObject({ trigger: 'archive' })
   })
 
   it('accepts the inbox category condition and the set-category action', () => {

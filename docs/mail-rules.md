@@ -30,14 +30,17 @@ Conditions use **all** or **any**. The rule is skipped when **any** exception ma
 
 Rules saved before this release keep their stored format. They read as incoming, locally executed rules with no exceptions. The database adds the `exceptions_json`, `trigger_mode`, `execution` and `server_rule_id` columns with `PRAGMA table_info` checks.
 
-## Incoming and outgoing rules
+## Incoming, outgoing, and Archive rules
 
 **Apply to** chooses the trigger:
 
 - **New mail I receive** (incoming): newly synced messages that aren't drafts and aren't Sent-only. A Gmail message you send to yourself carries both Inbox and Sent, so it is processed once as incoming and once as outgoing.
 - **Mail I send** (outgoing): newly synced Sent copies. This covers mail sent from Aerio, which picks up its Sent copy on the sync after delivery, and mail sent from other clients. "Run on existing mail" for an outgoing rule looks at Sent conversations instead of the Inbox.
+- **Mail I archive** (archive): an explicit **Archive** action in Aerio for your own mailbox, including bulk selection and quick actions. Conditions and exceptions match each selected conversation's newest message before Archive changes its labels, so a source-folder condition still works. Matching actions run once per conversation after the archive operation is successfully queued. Archiving again is a new event and can run the rule again; it does not use the incoming/outgoing once-per-message ledger.
 
-Rule actions only add or remove labels, set the inbox category (**Set inbox category**, local classification that never replaces a manual move and queues nothing for the provider), or move, star, mark, or trash messages. They never send or forward mail, so a rule can't trigger itself or another rule.
+Archive rules are local. Snoozing, rule-generated Archive actions, automatic archiving policies, provider sync, and archiving in another client do not fire this trigger. Shared/delegated mailbox actions do not run rules belonging to your own mailbox. This prevents recursive rules and keeps the trigger independent of the automatic archiving policy. **Run on existing Archive** evaluates current archived conversations (excluding Inbox, Sent, Drafts, Trash and Spam) without requiring a new Archive action. Undoing the original archive does not undo separate rule actions.
+
+Rule actions only add or remove labels, set the inbox category (**Set inbox category**, local classification that never replaces a manual move and queues nothing for the provider), or move, star, mark, or trash messages. They never send or forward mail, and rule-generated Archive actions do not fire Archive rules, so a rule can't trigger itself or another rule.
 
 ### Each message is processed once
 
@@ -58,6 +61,7 @@ Entries are pruned after 180 days. **Run on existing mail** is an explicit, manu
 | Update | Filters are immutable. Aerio creates the replacement first, then deletes the old filter, and removes the new one again if that delete fails. | In place with PATCH. A rule deleted in Outlook is recreated. |
 | Turn off | Not possible. Delete the filter instead. | `isEnabled`, mirrored onto the linked Aerio rule |
 | Outgoing rules | Not supported | Not supported |
+| Archive trigger | Local only | Local only |
 | Unsupported | Starts/ends with (except an ends-with-`@domain` sender), Subject/body equals, headers other than `List-Id`, age, folder/label conditions, low or normal importance, Microsoft folders as targets, custom inbox tabs | Starts/ends with, "no attachments", age, folder conditions, inbox category conditions and actions, flagging (star), more than one move, mixing condition kinds in an "any" rule, repeating a condition kind in an "all" rule, mixing exception kinds |
 | Approximate (uploaded with a caveat) | Word-based matching, body words that also match the subject, `is:important`, inbox category → `category:` search and "Categorize as" | Display-name senders → `senderContains`, Cc → `recipientContains` (which also matches To), headers → `headerContains` (searches all headers) |
 

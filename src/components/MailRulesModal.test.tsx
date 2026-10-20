@@ -106,6 +106,22 @@ describe('MailRulesModal', () => {
     expect(await screen.findByText('Project mail')).toBeInTheDocument()
   })
 
+  it('saves an Archive trigger and offers manual evaluation of the Archive folder', async () => {
+    api.save.mockImplementation(async (input: any) => rule({ ...input, id: 'archive-rule' }))
+    render(<MailRulesModal accounts={[account()]} labels={labels} onToast={vi.fn()} onClose={vi.fn()} />)
+    await screen.findByText('No rules yet')
+    fireEvent.click(screen.getByRole('button', { name: /New rule/ }))
+    fireEvent.change(screen.getByLabelText('Apply to'), { target: { value: 'archive' } })
+    expect(screen.getByText(/Automatic archiving, snoozing/)).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('e.g. Project updates'), { target: { value: 'Archived projects' } })
+    fireEvent.change(screen.getByLabelText('Condition 1 value'), { target: { value: 'sender@example.test' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save rule/ }))
+    await waitFor(() => expect(api.save).toHaveBeenCalledWith(expect.objectContaining({ trigger: 'archive' })))
+    expect(await screen.findByText('Archived projects')).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle('Run on existing Archive'))
+    await waitFor(() => expect(api.run).toHaveBeenCalledWith('archive-rule'))
+  })
+
   it('offers the inbox category condition and the set-category action with the configured tabs', async () => {
     api.save.mockImplementation(async (input: any) => rule({ ...input, id: 'saved-rule' }))
     const tabs = vi.fn().mockResolvedValue({ tabs: [{ id: 'primary', name: 'Primary', enabled: true, builtIn: true }, { id: 'custom:receipts', name: 'Receipts', enabled: true, builtIn: false }] })

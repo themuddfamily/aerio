@@ -167,6 +167,7 @@ function gmailAction(action: MailRuleAction): { add: string[]; remove: string[] 
 export function gmailFilterForRule(rule: MailRuleInput): { filter?: GmailFilterResource; mapping: MailServerRuleMapping } {
   const issues: MailServerRuleIssue[] = []
   if (mailRuleTrigger(rule) === 'outgoing') issues.push(issue('rule', 'unsupported', 'Gmail filters only run on received mail; keep outgoing rules local'))
+  if (mailRuleTrigger(rule) === 'archive') issues.push(issue('rule', 'unsupported', 'Gmail filters cannot run when you archive mail; keep archive rules local'))
   const collect = (conditions: MailRuleCondition[], part: 'condition' | 'exception') => conditions.map((condition, index) => {
     const mapped = gmailConditionTerms(condition)
     if (mapped.issue) issues.push(issue(part, mapped.issue.level, mapped.issue.message, index))
@@ -284,6 +285,7 @@ function microsoftPredicates(conditions: MailRuleCondition[], mode: 'all' | 'any
 export function microsoftRuleForRule(rule: MailRuleInput): { messageRule?: MicrosoftMessageRuleResource; mapping: MailServerRuleMapping } {
   const issues: MailServerRuleIssue[] = []
   if (mailRuleTrigger(rule) === 'outgoing') issues.push(issue('rule', 'unsupported', 'Outlook rules only run on received mail; keep outgoing rules local'))
+  if (mailRuleTrigger(rule) === 'archive') issues.push(issue('rule', 'unsupported', 'Outlook rules cannot run when you archive mail; keep archive rules local'))
   const conditions = microsoftPredicates(rule.conditions, rule.match, 'condition', issues)
   const exceptions = microsoftPredicates(rule.exceptions ?? [], 'any', 'exception', issues)
   if (!Object.keys(conditions).length) issues.push(issue('rule', 'unsupported', 'At least one condition must be supported by Outlook'))

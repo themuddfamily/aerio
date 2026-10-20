@@ -20,6 +20,13 @@ const blocking = (mapping: { issues: { level: string; part: string; index?: numb
   mapping.issues.filter((issue) => issue.level === 'unsupported').map((issue) => `${issue.part}${issue.index ?? ''}`)
 
 describe('Gmail filter mapping', () => {
+  it('blocks archive triggers for both server providers', () => {
+    for (const provider of ['gmail', 'microsoft'] as const) {
+      const mapping = mapMailRuleToServer(rule({ trigger: 'archive' }), provider)
+      expect(mapping.supported).toBe(false)
+      expect(mapping.issues).toContainEqual(expect.objectContaining({ part: 'rule', level: 'unsupported', message: expect.stringContaining('archive') }))
+    }
+  })
   it('builds an AND query, a negated "any" exception query, and label actions', () => {
     const { filter, mapping } = gmailFilterForRule(rule({
       conditions: [

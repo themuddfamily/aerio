@@ -159,7 +159,7 @@ export const mailRuleNeedsHeaders = (rule: Pick<MailRuleInput, 'conditions' | 'e
 export const mailRuleNeedsCategory = (rule: Pick<MailRuleInput, 'conditions' | 'exceptions'>) =>
   [...rule.conditions, ...(rule.exceptions ?? [])].some((condition) => condition.field === 'category')
 
-export const mailRuleTrigger = (rule: Pick<MailRuleInput, 'trigger'>): MailRuleTrigger => rule.trigger === 'outgoing' ? 'outgoing' : 'incoming'
+export const mailRuleTrigger = (rule: Pick<MailRuleInput, 'trigger'>): MailRuleTrigger => rule.trigger === 'outgoing' || rule.trigger === 'archive' ? rule.trigger : 'incoming'
 
 /**
  * Which rule triggers a newly synced message belongs to. Drafts belong to

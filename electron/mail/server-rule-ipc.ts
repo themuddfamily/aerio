@@ -30,7 +30,7 @@ export function validateMailRule(input: MailRuleInput): MailRuleInput {
   if (typeof input.accountId !== 'string' || !input.accountId || input.accountId.length > 200) throw new Error('Choose an account for this rule')
   if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200) throw new Error('Give this rule a name')
   if (typeof input.enabled !== 'boolean' || !['all', 'any'].includes(input.match)) throw new Error('Choose how this rule should match')
-  if (input.trigger !== undefined && input.trigger !== 'incoming' && input.trigger !== 'outgoing') throw new Error('Choose when this rule runs')
+  if (input.trigger !== undefined && !['incoming', 'outgoing', 'archive'].includes(input.trigger)) throw new Error('Choose when this rule runs')
   const conditions = validateConditions(input.conditions, 'conditions', 1)
   const exceptions = input.exceptions === undefined ? [] : validateConditions(input.exceptions, 'exceptions', 0)
   if (!Array.isArray(input.actions) || input.actions.length < 1 || input.actions.length > 10) throw new Error('Add between one and ten actions')

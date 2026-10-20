@@ -72,6 +72,32 @@ describe('rule run ledger', () => {
 })
 
 describe('advanced rule persistence and matching', () => {
+  it('persists archive rules and matches selected conversations before archive, with exceptions and source labels', () => {
+    const { database, path, directory } = setup()
+    const records = [
+      message({ id: 'inbox', threadId: 'inbox', labelIds: ['INBOX'], messageIdHeader: '<inbox@test>' }),
+      message({ id: 'old', threadId: 'old', labelIds: [], messageIdHeader: '<old@test>' }),
+      message({ id: 'spam', threadId: 'spam', labelIds: ['SPAM'], messageIdHeader: '<spam@test>' })
+    ]
+    database.addInventory('account-1', records.map(({ id, threadId }) => ({ id, threadId })))
+    records.forEach((record) => database.upsertMessage(record))
+    const rule = database.saveRule({ accountId: 'account-1', name: 'Archive projects', enabled: true, match: 'all', trigger: 'archive', conditions: [{ field: 'subject', operator: 'contains', value: 'proposal' }], actions: [{ action: 'star' }] })
+    expect(database.matchingThreadIdsForRule(rule)).toEqual(['old'])
+    expect(database.matchingArchiveRules('account-1', ['inbox', 'inbox'])).toEqual([{ rule, threadIds: ['inbox'] }])
+    expect(database.matchingArchiveRules('account-1', [])).toEqual([])
+    expect(database.matchingArchiveRules('other', ['inbox'])).toEqual([])
+    expect(database.matchingRulesForMessage(records[0], 'incoming')).toEqual([])
+    const withSource = database.saveRule({ ...rule, conditions: [{ field: 'label', operator: 'is', value: 'INBOX' }] })
+    expect(database.matchingArchiveRules('account-1', ['inbox', 'old'])[0].threadIds).toEqual(['inbox'])
+    database.saveRule({ ...withSource, exceptions: [{ field: 'subject', operator: 'contains', value: 'proposal' }] })
+    expect(database.matchingArchiveRules('account-1', ['inbox'])).toEqual([])
+    database.saveRule({ ...withSource, enabled: false })
+    expect(database.matchingArchiveRules('account-1', ['inbox'])).toEqual([])
+    database.close()
+    const reopened = new MailDatabase(path, join(directory, 'mail'))
+    expect(reopened.getRule(rule.id)?.trigger).toBe('archive')
+    reopened.close()
+  })
   it('adds the advanced rule columns to an existing rules table and keeps old rules incoming and local', () => {
     const { database, directory, path } = setup()
     const legacyRule = database.saveRule({ accountId: 'account-1', name: 'Legacy', enabled: true, match: 'all', conditions: [{ field: 'subject', operator: 'contains', value: 'proposal' }], actions: [{ action: 'star' }] })

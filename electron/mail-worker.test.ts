@@ -73,6 +73,7 @@ const mocks = vi.hoisted(() => {
   method('queuedDrafts', () => [])
   method('getDueDraft')
   method('matchingRulesForMessage', () => [])
+  method('matchingArchiveRules', () => [])
   method('hasLocalRules', () => true)
   db.ruleLedger = { claim: vi.fn(() => true), processed: vi.fn(() => false) }
   method('rawPath', () => 'C:\\content\\raw.eml')
@@ -361,6 +362,28 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.db.undoOperation.mockReturnValueOnce(true).mockReturnValueOnce(false)
     await expect(request({ type: 'mail:undo', payload: { operationId: 'operation-1' } })).resolves.toMatchObject({ result: true })
     await expect(request({ type: 'mail:undo', payload: { operationId: 'operation-2' } })).resolves.toMatchObject({ result: false })
+  })
+
+  it('runs archive rules after a successful explicit archive, without recursion or snooze triggers', async () => {
+    mocks.db.applyLocalAction.mockClear()
+    mocks.db.recordRuleMatch.mockClear()
+    mocks.db.matchingArchiveRules.mockClear()
+    const rule = { id: 'archive-rule', accountId: 'account-1', name: 'File archived', enabled: true, trigger: 'archive', actions: [{ action: 'star' }, { action: 'archive' }] }
+    mocks.db.matchingArchiveRules.mockReturnValueOnce([{ rule, threadIds: ['thread-1'] }])
+    await request({ type: 'mail:action', payload: { accountId: 'account-1', threadIds: ['thread-1', 'thread-2'], action: 'archive' } })
+    expect(mocks.db.matchingArchiveRules).toHaveBeenCalledExactlyOnceWith('account-1', ['thread-1', 'thread-2'])
+    expect(mocks.db.matchingArchiveRules.mock.invocationCallOrder[0]).toBeLessThan(mocks.db.applyLocalAction.mock.invocationCallOrder[0])
+    expect(mocks.db.applyLocalAction).toHaveBeenCalledWith(expect.objectContaining({ action: 'star', threadIds: ['thread-1'] }), expect.any(String), 0)
+    expect(mocks.db.recordRuleMatch).toHaveBeenCalledWith('archive-rule', 1)
+    expect(mocks.db.applyLocalAction).toHaveBeenCalledTimes(3)
+    await request({ type: 'mail:action', payload: { accountId: 'account-1', threadIds: ['thread-1'], action: 'read' } })
+    await request({ type: 'mail:snooze', payload: { accountId: 'account-1', threadIds: ['thread-1'], until: '2026-10-21T12:00:00Z' } })
+    expect(mocks.db.matchingArchiveRules).toHaveBeenCalledTimes(1)
+    mocks.db.matchingArchiveRules.mockReturnValueOnce([{ rule, threadIds: ['thread-1'] }])
+    mocks.db.applyLocalAction.mockImplementationOnce(() => { throw new Error('Archive refused') })
+    mocks.db.recordRuleMatch.mockClear()
+    await expect(request({ type: 'mail:action', payload: { accountId: 'account-1', threadIds: ['thread-1'], action: 'archive' } })).resolves.toMatchObject({ error: { message: 'Archive refused' } })
+    expect(mocks.db.recordRuleMatch).not.toHaveBeenCalled()
   })
 
   it('routes snooze, account settings, drafts, and attachment staging', async () => {

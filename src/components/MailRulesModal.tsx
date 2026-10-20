@@ -197,7 +197,7 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
     try {
       const result = await window.aerio.mail.rules.run(rule.id)
       await load()
-      const folder = rule.trigger === 'outgoing' ? 'Sent' : 'Inbox'
+      const folder = rule.trigger === 'outgoing' ? 'Sent' : rule.trigger === 'archive' ? 'Archive' : 'Inbox'
       onToast(result.matched ? `Rule applied to ${result.matched.toLocaleString()} conversation${result.matched === 1 ? '' : 's'}` : `No existing ${folder} conversations matched`)
     } catch (error) {
       onToast(errorMessage(error, 'Rule could not be run'))
@@ -272,6 +272,7 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
     ...(rule.exceptions?.length ? [`${rule.exceptions.length} exception${rule.exceptions.length === 1 ? '' : 's'}`] : []),
     `${rule.actions.length} action${rule.actions.length === 1 ? '' : 's'}`,
     ...(rule.trigger === 'outgoing' ? ['Sent mail'] : []),
+    ...(rule.trigger === 'archive' ? ['When archiving'] : []),
     ...(rule.execution === 'server' ? ['Runs on server'] : [])
   ].join(' · ')
 
@@ -322,7 +323,7 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
         {rules.map((rule) => <article key={rule.id} className={!rule.enabled ? 'disabled' : ''}>
           <label className="rule-toggle"><input type="checkbox" checked={rule.enabled} onChange={() => void toggle(rule)} /><span /></label>
           <span className="rule-copy"><strong>{rule.name}</strong><small>{ruleSummary(rule)}</small><small>{rule.matchCount ? `Matched ${rule.matchCount.toLocaleString()} time${rule.matchCount === 1 ? '' : 's'}` : 'Not matched yet'}</small></span>
-          <button className="icon-button" title={rule.trigger === 'outgoing' ? 'Run on existing Sent mail' : 'Run on existing Inbox'} disabled={busy || !rule.enabled} onClick={() => void run(rule)}><Play size={15} /></button>
+          <button className="icon-button" title={rule.trigger === 'outgoing' ? 'Run on existing Sent mail' : rule.trigger === 'archive' ? 'Run on existing Archive' : 'Run on existing Inbox'} disabled={busy || !rule.enabled} onClick={() => void run(rule)}><Play size={15} /></button>
           {capabilities[rule.accountId]?.supported && <button className="icon-button" title={rule.execution === 'server' ? 'Update the server copy' : 'Run on the server'} disabled={busy} onClick={() => void upload(rule)}><Cloud size={15} /></button>}
           <button className="icon-button" title="Edit rule" onClick={() => { setPresetGuidance(undefined); setEditing({ ...rule }) }}><Pencil size={15} /></button>
           <button className="icon-button danger" title="Delete rule" onClick={() => void remove(rule)}><Trash2 size={15} /></button>
@@ -339,7 +340,8 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
           <label className="field"><span>Rule name</span><input autoFocus value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} placeholder="e.g. Project updates" /></label>
           <label className="field"><span>Account</span><select value={editing.accountId} disabled={Boolean(editing.id)} onChange={(event) => setEditing({ ...editing, accountId: event.target.value })}>{writableAccounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}</select></label>
         </div>
-        <label className="field"><span>Apply to</span><select aria-label="Apply to" value={editing.trigger ?? 'incoming'} disabled={editing.execution === 'server'} onChange={(event) => setEditing({ ...editing, trigger: event.target.value as MailRuleInput['trigger'] })}><option value="incoming">New mail I receive</option><option value="outgoing">Mail I send</option></select></label>
+        <label className="field"><span>Apply to</span><select aria-label="Apply to" value={editing.trigger ?? 'incoming'} disabled={editing.execution === 'server'} onChange={(event) => setEditing({ ...editing, trigger: event.target.value as MailRuleInput['trigger'] })}><option value="incoming">New mail I receive</option><option value="outgoing">Mail I send</option><option value="archive">Mail I archive</option></select></label>
+        {editing.trigger === 'archive' && <p role="note">Runs when you use Archive in Aerio. Matches the newest message before archiving. Automatic archiving, snoozing, other clients, and rule actions do not trigger it.</p>}
         <section><header><span><strong>When a message matches</strong><small>Use {editing.match === 'all' ? 'every' : 'at least one'} condition</small></span><select value={editing.match} onChange={(event) => setEditing({ ...editing, match: event.target.value as 'all' | 'any' })}><option value="all">All conditions</option><option value="any">Any condition</option></select></header>
           {editing.conditions.map((condition, index) => <ConditionRow key={index} kind="Condition" index={index} condition={condition} destinations={conditionLabels} categories={categories} removable={editing.conditions.length > 1}
             onChange={(next) => updateCondition(index, next)} onRemove={() => setEditing({ ...editing, conditions: editing.conditions.filter((_, itemIndex) => itemIndex !== index) })} />)}
