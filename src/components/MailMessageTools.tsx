@@ -46,7 +46,7 @@ export function useMailMessageTools({ accounts, onToast, collapseAll, expandAll,
       { label: 'Unsubscribe from list…', icon: MailX, action: open('unsubscribe') },
       { label: 'Watch for replies…', icon: Eye, disabled: !canWatchMessage(message, accounts), action: open('watch') },
       { label: 'Translate…', icon: Languages, separatorBefore: true, disabled: !message.text.trim(), action: open('translate') },
-      ...(aiFeatureAvailable(ai, 'summarize') ? [{ label: 'Summarize with AI…', icon: Sparkles, disabled: !message.text.trim(), action: open('ai-summary') }] : []),
+      ...(aiFeatureAvailable(ai, 'summarize') ? [{ label: 'Summarize with AI…', icon: Sparkles, action: open('ai-summary') }] : []),
       ...(aiFeatureAvailable(ai, 'replies') ? [{ label: 'Suggest replies with AI…', icon: Sparkles, disabled: !message.text.trim(), action: open('ai-replies') }] : []),
       { label: 'Message format…', icon: Type, action: open('format') },
       { label: 'Message properties', icon: Info, action: open('properties') }

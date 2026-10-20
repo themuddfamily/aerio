@@ -22,6 +22,15 @@ feature can be switched off independently.
 Translation (LibreTranslate) and the manual **Create meeting / task from email**
 tools are separate and unchanged.
 
+The summary dialog also offers **Whole conversation** (D06). It reads the cached
+thread and sends chronological subject/date/plain-text excerpts from up to its
+newest 100 messages, sharing a 48,000-character excerpt budget. Each message
+gets a fair share; omitted text is marked, and the prompt reports coverage
+limits. Sender details follow the existing setting; recipients, attachments,
+HTML and raw headers remain excluded. This does not download uncached mail.
+The wider scope is disclosed before the user presses Summarize. Switching
+scope clears the old preview, and cancellation and feature switches still apply.
+
 ## Providers
 
 - **Anthropic** — `POST https://api.anthropic.com/v1/messages` with the

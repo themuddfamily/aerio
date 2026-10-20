@@ -1,6 +1,7 @@
 import type { MailMessageRef } from './mail-types'
 
 export type AiProviderId = 'anthropic' | 'openai-compatible'
+export type AiSummaryScope = 'message' | 'conversation'
 export type AiFeature = 'summarize' | 'compose' | 'replies' | 'search'
 
 export const AI_FEATURES: AiFeature[] = ['summarize', 'compose', 'replies', 'search']
@@ -55,7 +56,7 @@ export interface AiComposeInput {
 export interface AiAssistantApi {
   status(): Promise<AiAssistantStatus>
   configure(input: AiAssistantSettingsInput): Promise<AiAssistantStatus>
-  summarize(requestId: string, ref: MailMessageRef): Promise<string>
+  summarize(requestId: string, ref: MailMessageRef, scope?: AiSummaryScope): Promise<string>
   suggestReplies(requestId: string, ref: MailMessageRef): Promise<string[]>
   compose(requestId: string, input: AiComposeInput): Promise<string>
   search(requestId: string, request: string): Promise<{ query: string }>

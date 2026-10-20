@@ -13,7 +13,7 @@ Reviewed: 2026-10-20. Aerio 0.5.0, commit `26d842d`.
 - [ ] **D03 — Saved AI writing style per account.** eM Client supports writing personalization from instructions and selected sent mail. Aerio accepts a prompt per draft but exposes no persistent style profile. **Add:** reusable account-specific writing preferences with optional style learning. Sources: [eM AI](https://www.emclient.com/ai), [Aerio AI contract](../src/ai-assistant-types.ts).
 - [ ] **D04 — Detect tasks and events in email with AI.** eM Client offers automatic suggestions. Aerio documents manual create-from-email tools. **Add:** suggestions that prefill dates and details for review. Sources: [eM AI](https://www.emclient.com/ai), [Aerio AI](ai-assistance.md).
 - [ ] **D05 — Show AI reply suggestions when opening mail.** eM Client can generate reply buttons on display; Aerio requires an explicit request. **Add:** an optional automatic suggestion setting. Sources: [eM AI](https://www.emclient.com/ai), [Aerio AI](ai-assistance.md).
-- [ ] **D06 — Summarize a whole conversation with AI.** eM Client documents conversation summaries; Aerio's summary handler selects one message. **Add:** a summary across the selected thread. Sources: [eM AI](https://www.emclient.com/ai), [Aerio handler](../electron/mail/ai-assistant.ts).
+- [x] **D06 — Summarize a whole conversation with AI.** eM Client documents conversation summaries; Aerio's summary handler selects one message. **Add:** a summary across the selected thread. Sources: [eM AI](https://www.emclient.com/ai), [Aerio handler](../electron/mail/ai-assistant.ts).
 
 ## Chat
 
@@ -70,3 +70,7 @@ The eM Client side of D21–D34 is documented in the [official version 11 announ
 - Expansion pass: reviewed the eM Client 11 announcement against Aerio contracts, UI, notification code, pinning scope, and platform integrations; added D21–D34. The no-new-items count restarts after this pass.
 - No-new-items pass 1: rechecked the 34 candidates against AI/task/event contracts, profile editing, local pin semantics, incoming/outgoing rule triggers, and reviewed mail UI. Confirmed 34 unique sequential IDs and resolved every local source link. No new candidate bullets identified within that scope.
 - No-new-items pass 2: reconciled the list with completed E31–E48, current AI/manual translation and create-from-email behavior, cloud-storage and meeting connector coverage, Calendar agenda, theme options, chat gate, and rule editor. Rechecked the already-read official feature/release inventory against the list and overlap notes. No additional supported candidate bullets identified. Final count: 34 candidates, none approved. These two consecutive passes establish convergence of this documented review scope, not exhaustive feature parity.
+
+## Implementation evidence
+
+- **D06:** Message/conversation scope selector, chronological cached excerpts, privacy disclosure, bounded context, cancellation and invalid-scope checks. Verified: 23 targeted AI tests and TypeScript checks. See [AI details](ai-assistance.md).

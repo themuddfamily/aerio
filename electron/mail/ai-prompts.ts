@@ -59,6 +59,24 @@ export function summarizePrompt(message: MailMessageDetail, includeSenderDetails
   }
 }
 
+export const AI_CONVERSATION_LIMIT = 48_000
+export const AI_CONVERSATION_MESSAGES = 100
+
+/** A bounded chronological excerpt; no recipients, HTML, headers or attachments. */
+export function conversationSummaryPrompt(messages: MailMessageDetail[], includeSenderDetails: boolean): AiPrompt {
+  if (!messages.length) throw new Error('This conversation has no messages to summarize')
+  const ordered = [...messages].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))
+  const selected = ordered.slice(-AI_CONVERSATION_MESSAGES)
+  // Divide the total budget fairly so one large message cannot hide later replies.
+  const budget = Math.floor(AI_CONVERSATION_LIMIT / selected.length)
+  const blocks = selected.map((message, index) => untrustedBlock(`email-${index + 1}`, truncate(emailForPrompt(message, includeSenderDetails), budget)))
+  return {
+    system: SYSTEM_RULES,
+    maxTokens: 1_200,
+    user: `Summarize this conversation chronologically: describe the main topic, decisions, changes of mind, unresolved questions, explicit requests and deadlines. Do not present an earlier proposal as the final decision when a later message changes it. Write in the conversation's language. The conversation contains ${messages.length} messages; the newest ${selected.length} are included, oldest first. Each excerpt has a ${budget}-character budget; […truncated] marks omitted text. Clearly mention any coverage limits in the summary.\n\n${blocks.join('\n\n')}`
+  }
+}
+
 export function repliesPrompt(message: MailMessageDetail, includeSenderDetails: boolean): AiPrompt {
   return {
     system: SYSTEM_RULES,

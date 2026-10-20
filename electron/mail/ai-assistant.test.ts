@@ -80,6 +80,20 @@ describe('AI assistant settings', () => {
 describe('AI assistant requests', () => {
   beforeEach(() => { store.configure({ ...settings, apiKey: 'sk-ant-secret' }) })
 
+  it('summarizes the entire cached thread only when conversation scope is requested', async () => {
+    request.mockResolvedValueOnce({ id: 'thread', messages: [message, { ...message, id: 'two', date: '2026-10-02T09:00:00Z', text: 'Updated decision: do not pay.' }] })
+    expect(await invoke('ai:summarize', 'conversation', ref, 'conversation')).toBe('A summary')
+    const prompt = JSON.parse(String((fetchMock.mock.calls[0] as any)[1].body)).messages[0].content
+    expect(prompt).toContain('Pay now.')
+    expect(prompt).toContain('Updated decision: do not pay.')
+    expect(prompt).toContain('contains 2 messages')
+    expect(request.mock.calls.map(([command]) => command.type)).toEqual(['mail:thread'])
+    await expect(invoke('ai:summarize', 'invalid', ref, 'all-accounts')).rejects.toThrow(/Choose message or conversation/)
+    request.mockResolvedValueOnce({ messages: [] })
+    await expect(invoke('ai:summarize', 'missing', ref, 'conversation')).rejects.toThrow(/Message not found/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('summarizes a hostile email as untrusted data and only ever reads mail', async () => {
     fetchMock.mockResolvedValueOnce(anthropicReply('‮Summary: <img src=x onerror=alert(1)>\u0000'))
     expect(await invoke('ai:summarize', 'r1', ref)).toBe('Summary: <img src=x onerror=alert(1)>')

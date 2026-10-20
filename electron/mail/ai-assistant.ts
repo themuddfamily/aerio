@@ -5,7 +5,7 @@ import type { MailMessageRef, MailThreadDetail } from '../../src/mail-types'
 import type { MailWorkerClient } from './worker-client'
 import { assertSecureCredentialStorage } from './secure-storage'
 import { AiRequestError, requestAiCompletion, validateAiBaseUrl, type AiPrompt } from './ai-provider'
-import { composePrompt, parseReplySuggestions, parseSearchSuggestion, repliesPrompt, sanitizeModelText, searchPrompt, summarizePrompt } from './ai-prompts'
+import { composePrompt, conversationSummaryPrompt, parseReplySuggestions, parseSearchSuggestion, repliesPrompt, sanitizeModelText, searchPrompt, summarizePrompt } from './ai-prompts'
 
 // The optional AI assistant is off by default. Non-secret settings live in a
 // small JSON file; the API key is encrypted with OS secure storage in its own
@@ -126,8 +126,15 @@ export function registerAiAssistant(options: { worker(): MailWorkerClient; store
     controller?.abort()
     return Boolean(controller)
   })
-  ipcMain.handle('ai:summarize', async (_event, requestId: unknown, ref: MailMessageRef) => {
-    const text = sanitizeModelText(await run(requestId, 'summarize', async (sender) => summarizePrompt(await messageFor(ref), sender)))
+  ipcMain.handle('ai:summarize', async (_event, requestId: unknown, ref: MailMessageRef, scope: unknown = 'message') => {
+    if (scope !== 'message' && scope !== 'conversation') throw new Error('Choose message or conversation summary')
+    const text = sanitizeModelText(await run(requestId, 'summarize', async (sender) => {
+      if (scope === 'message') return summarizePrompt(await messageFor(ref), sender)
+      if (!validRef(ref)) throw new Error('Invalid message reference')
+      const thread = await options.worker().request<MailThreadDetail>({ type: 'mail:thread', payload: { accountId: ref.accountId, threadId: ref.threadId } })
+      if (!thread.messages.some((message) => message.id === ref.messageId)) throw new Error('Message not found in this conversation')
+      return conversationSummaryPrompt(thread.messages, sender)
+    }))
     if (!text) throw new Error('The AI assistant returned an empty summary')
     return text
   })

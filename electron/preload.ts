@@ -306,7 +306,7 @@ const api: AerioDesktopApi = {
   ai: {
     status: () => ipcRenderer.invoke('ai:status'),
     configure: (input) => ipcRenderer.invoke('ai:configure', input),
-    summarize: (requestId, ref) => ipcRenderer.invoke('ai:summarize', requestId, ref),
+    summarize: (requestId, ref, scope) => ipcRenderer.invoke('ai:summarize', requestId, ref, scope),
     suggestReplies: (requestId, ref) => ipcRenderer.invoke('ai:replies', requestId, ref),
     compose: (requestId, input) => ipcRenderer.invoke('ai:compose', requestId, input),
     search: (requestId, request) => ipcRenderer.invoke('ai:search', requestId, request),

@@ -27,6 +27,19 @@ beforeEach(() => {
 })
 
 describe('AI message assistance', () => {
+  it('lets the user request a whole conversation and discloses its wider scope before sending', async () => {
+    const user = userEvent.setup()
+    ai.summarize.mockResolvedValue('The final decision changed.')
+    render(<MailAiAssistDialog mode="summarize" message={message} messageRef={ref} status={status} onToast={vi.fn()} onClose={vi.fn()} />)
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Summary scope' }), 'conversation')
+    expect(screen.getByText(/newest 100 cached messages/)).toBeTruthy()
+    expect(ai.summarize).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Summarize' }))
+    await screen.findByText('The final decision changed.')
+    expect(ai.summarize).toHaveBeenCalledWith(expect.any(String), ref, 'conversation')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Summary scope' }), 'message')
+    expect(screen.queryByText('The final decision changed.')).toBeNull()
+  })
   it('discloses what is sent and contacts the provider only after an explicit click', async () => {
     const user = userEvent.setup()
     ai.summarize.mockResolvedValue('<img src=x onerror="window.pwned=1">Pay by Friday')
