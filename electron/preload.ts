@@ -3,6 +3,15 @@ import type { AerioDesktopApi, AppPreferences } from '../src/types'
 import type { ApplyMailActionInput, MailDraftInput, MailWorkerEvent, ImapAccountInput, MailQuery } from '../src/mail-types'
 
 const api: AerioDesktopApi = {
+  messageToolbar: {
+    get: () => ipcRenderer.invoke('message-toolbar:get'),
+    set: (commands) => ipcRenderer.invoke('message-toolbar:set', commands),
+    onChange: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, commands: import('../src/lib/message-toolbar').MessageToolbarCommand[]) => callback(commands)
+      ipcRenderer.on('message-toolbar:changed', listener)
+      return () => ipcRenderer.removeListener('message-toolbar:changed', listener)
+    }
+  },
   calendarWeather: {
     settings: () => ipcRenderer.invoke('calendar:weather:settings'),
     configure: (settings) => ipcRenderer.invoke('calendar:weather:configure', settings),

@@ -197,6 +197,7 @@ export interface Note {
 
 export interface Settings {
   theme: ThemePreference
+  messageToolbar?: import('./lib/message-toolbar').MessageToolbarCommand[]
   /** Saved palettes, restricted to known color tokens; see docs/custom-themes.md. */
   customThemes?: import('./lib/themes').CustomTheme[]
   customThemeId?: string
@@ -269,6 +270,8 @@ export interface AppLockControls {
 }
 
 export interface AerioDesktopApi {
+  appProfiles?: import('./app-profile-types').AppProfilesApi
+  messageToolbar?: import('./lib/message-toolbar').MessageToolbarApi
   calendarWeather?: import('./calendar-weather-types').CalendarWeatherApi
   loadPreferences(): Promise<AppPreferences>
   savePreferences(preferences: AppPreferences): Promise<{ savedAt: string }>

@@ -529,3 +529,17 @@ describe('preload bridge', () => {
     expect(networkCalls.every((call) => typeof call[1] === 'boolean')).toBe(true)
   })
 })
+
+describe('message toolbar preload bridge', () => {
+  it('uses dedicated patch channels and disposes change listeners', async () => {
+    await api().messageToolbar.get()
+    await api().messageToolbar.set(['trash', 'reply'])
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('message-toolbar:get')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('message-toolbar:set', ['trash', 'reply'])
+    const callback = vi.fn(), unsubscribe = api().messageToolbar.onChange(callback)
+    mocks.listeners.get('message-toolbar:changed')?.[0]({}, ['reply'])
+    expect(callback).toHaveBeenCalledWith(['reply'])
+    unsubscribe()
+    expect(mocks.listeners.get('message-toolbar:changed')).toHaveLength(0)
+  })
+})

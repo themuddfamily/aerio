@@ -162,7 +162,8 @@ describe('MessageWindow', () => {
 
     api.mail.accounts.list.mockResolvedValueOnce([{ id: 'account', archived: true } as any])
     renderWindow(); await screen.findByRole('heading', { name: 'Launch discussion' })
-    for (const button of within(screen.getByRole('toolbar', { name: 'Conversation actions' })).getAllByRole('button')) expect(button).toBeDisabled()
+    for (const button of within(screen.getByRole('toolbar', { name: 'Conversation actions' })).getAllByRole('button').filter((button) => button.getAttribute('aria-label') !== 'Customize message toolbar')) expect(button).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Customize message toolbar' })).toBeEnabled()
   })
 
   it('handles attachment, remote-image, undo, and send-cancellation failures', async () => {
@@ -280,5 +281,20 @@ describe('MessageWindow', () => {
     await user.click(screen.getByRole('button', { name: 'Save as' }))
     expect(api.mail.attachments.save).toHaveBeenCalledOnce()
     expect(screen.queryByText('Saved report.pdf')).not.toBeInTheDocument()
+  })
+})
+
+
+describe('Detached message toolbar customization', () => {
+  it('renders the saved command order and retains the selected action behavior', async () => {
+    Object.defineProperty(api, 'messageToolbar', { configurable: true, value: { get: async () => ['trash', 'reply'], onChange: () => vi.fn() } })
+    try {
+      renderWindow(); await screen.findByRole('heading', { name: 'Launch discussion' })
+      await waitFor(() => expect(document.querySelectorAll('[data-toolbar-command]')).toHaveLength(2))
+      expect([...document.querySelectorAll('[data-toolbar-command]')].map((item) => item.getAttribute('data-toolbar-command'))).toEqual(['trash', 'reply'])
+      expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Move to trash' }))
+      await waitFor(() => expect(api.mail.mail.action).toHaveBeenCalledWith({ accountId: 'account', threadIds: ['thread'], action: 'trash' }))
+    } finally { delete (api as typeof api & { messageToolbar?: unknown }).messageToolbar }
   })
 })

@@ -1,3 +1,4 @@
+import MessageToolbar from '../components/MessageToolbar'
 import { applyTheme } from '../lib/themes'
 import { Archive, AtSign, Clock3, Copy, Download, FileText, FolderInput, Forward, Inbox, LoaderCircle, Mail, MailOpen, Reply, ReplyAll, Star, Tag, Tags, Trash2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -255,15 +256,15 @@ export default function MessageWindow() {
     <div className="message-window-shell">
       <TitleBar title={title} />
       {!loading && thread && <div className="message-window-toolbar" role="toolbar" aria-label="Conversation actions">
-        <button className="button ghost small" disabled={mailCannotReply} onClick={() => setMailCompose({ reply: thread })}><Reply size={15} /> Reply</button>
-        <button className="button ghost small" disabled={mailCannotReply} onClick={() => setMailCompose({ reply: thread, replyAll: true })}><ReplyAll size={15} /> Reply all</button>
-        <button className="button ghost small" disabled={mailCannotReply} onClick={() => setMailCompose({ reply: thread, forward: true })}><Forward size={15} /> Forward</button>
-        <span className="toolbar-divider" />
-        <button className="icon-button" disabled={mailReadOnly || Boolean(actionBusy)} aria-label={mailUnread ? 'Mark as read' : 'Mark as unread'} title={mailUnread ? 'Mark as read' : 'Mark as unread'} onClick={() => void applyMailAction(mailUnread ? 'read' : 'unread')}>{mailUnread ? <MailOpen size={17} /> : <Mail size={17} />}</button>
-        <button className={`icon-button ${mailStarred ? 'active' : ''}`} disabled={mailReadOnly || Boolean(actionBusy)} aria-label={mailStarred ? 'Remove star' : 'Add star'} title={mailStarred ? 'Remove star' : 'Add star'} onClick={() => void applyMailAction(mailStarred ? 'unstar' : 'star')}><Star size={17} fill={mailStarred ? 'currentColor' : 'none'} /></button>
-        <span className="spacer" />
-        <button className="icon-button" disabled={mailReadOnly || mailTrashed || Boolean(actionBusy)} aria-label={mailInInbox ? 'Archive' : 'Move to inbox'} title={mailInInbox ? 'Archive' : 'Move to inbox'} onClick={() => void applyMailAction(mailInInbox ? 'archive' : 'unarchive')}>{mailInInbox ? <Archive size={17} /> : <Inbox size={17} />}</button>
-        <button className="icon-button danger" disabled={mailReadOnly || Boolean(actionBusy)} aria-label={mailTrashed ? 'Restore from trash' : 'Move to trash'} title={mailTrashed ? 'Restore from trash' : 'Move to trash'} onClick={() => void applyMailAction(mailTrashed ? 'untrash' : 'trash')}>{mailTrashed ? <Undo2 size={17} /> : <Trash2 size={17} />}</button>
+        <MessageToolbar onToast={showToast} commands={{
+          reply: <button className="button ghost small" disabled={mailCannotReply} onClick={() => setMailCompose({ reply: thread })}><Reply size={15} /> Reply</button>,
+          replyAll: <button className="button ghost small" disabled={mailCannotReply} onClick={() => setMailCompose({ reply: thread, replyAll: true })}><ReplyAll size={15} /> Reply all</button>,
+          forward: <button className="button ghost small" disabled={mailCannotReply} onClick={() => setMailCompose({ reply: thread, forward: true })}><Forward size={15} /> Forward</button>,
+          read: <button className="icon-button" disabled={mailReadOnly || Boolean(actionBusy)} aria-label={mailUnread ? 'Mark as read' : 'Mark as unread'} title={mailUnread ? 'Mark as read' : 'Mark as unread'} onClick={() => void applyMailAction(mailUnread ? 'read' : 'unread')}>{mailUnread ? <MailOpen size={17} /> : <Mail size={17} />}</button>,
+          star: <button className={`icon-button ${mailStarred ? 'active' : ''}`} disabled={mailReadOnly || Boolean(actionBusy)} aria-label={mailStarred ? 'Remove star' : 'Add star'} title={mailStarred ? 'Remove star' : 'Add star'} onClick={() => void applyMailAction(mailStarred ? 'unstar' : 'star')}><Star size={17} fill={mailStarred ? 'currentColor' : 'none'} /></button>,
+          archive: <button className="icon-button" disabled={mailReadOnly || mailTrashed || Boolean(actionBusy)} aria-label={mailInInbox ? 'Archive' : 'Move to inbox'} title={mailInInbox ? 'Archive' : 'Move to inbox'} onClick={() => void applyMailAction(mailInInbox ? 'archive' : 'unarchive')}>{mailInInbox ? <Archive size={17} /> : <Inbox size={17} />}</button>,
+          trash: <button className="icon-button danger" disabled={mailReadOnly || Boolean(actionBusy)} aria-label={mailTrashed ? 'Restore from trash' : 'Move to trash'} title={mailTrashed ? 'Restore from trash' : 'Move to trash'} onClick={() => void applyMailAction(mailTrashed ? 'untrash' : 'trash')}>{mailTrashed ? <Undo2 size={17} /> : <Trash2 size={17} />}</button>,
+        }} />
       </div>}
       <main className="message-window-content">
         {loading && <div className="empty-state grow"><LoaderCircle className="spin" size={32} /><h3>Opening message…</h3></div>}

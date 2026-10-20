@@ -526,3 +526,17 @@ describe('Mail agenda integration', () => {
     if (descriptor) Object.defineProperty(window, 'localStorage', descriptor)
   })
 })
+
+
+describe('Shared message toolbar preferences', () => {
+  it('retains a detached-reader update when saving another setting', async () => {
+    let changed: ((commands: import('./lib/message-toolbar').MessageToolbarCommand[]) => void) | undefined
+    Object.defineProperty(api, 'messageToolbar', { configurable: true, value: { onChange: (callback: typeof changed) => { changed = callback; return vi.fn() } } })
+    try {
+      renderApp(); await screen.findByRole('region', { name: 'Mail mock' })
+      act(() => changed?.(['trash', 'reply']))
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle theme' }))
+      await waitFor(() => expect(api.savePreferences).toHaveBeenCalledWith(expect.objectContaining({ settings: expect.objectContaining({ messageToolbar: ['trash', 'reply'], theme: 'light' }) })))
+    } finally { delete (api as typeof api & { messageToolbar?: unknown }).messageToolbar }
+  })
+})

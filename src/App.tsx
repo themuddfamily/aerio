@@ -54,6 +54,10 @@ interface ComposeRequest {
 export default function App() {
   const { showContextMenu } = useContextMenu()
   const [preferences, setPreferences] = useState<AppPreferences | null>(null)
+  // Merge updates from detached readers before any later general-preference autosave.
+  useEffect(() => window.aerio.messageToolbar?.onChange((messageToolbar) => {
+    setPreferences((current) => current ? { ...current, settings: { ...current.settings, messageToolbar } } : current)
+  }), [])
   const [appLock, setAppLock] = useState<AppLockStatus>()
   const [appLockError, setAppLockError] = useState('')
   const [activeModule, setActiveModule] = useState<ModuleId>('mail')

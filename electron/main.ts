@@ -1,3 +1,5 @@
+import { registerMessageToolbar } from './message-toolbar'
+import { normalizeMessageToolbar } from '../src/lib/message-toolbar'
 import { CalendarWeatherService, registerCalendarWeather } from './productivity/calendar-weather'
 import { startEventReminders } from './productivity/event-reminders'
 import { normalizeThemeSettings } from '../src/lib/themes'
@@ -263,6 +265,7 @@ function preferencesFromUnknown(value: unknown): AppPreferences | undefined {
       ...defaultSettings,
       theme: candidate.theme as Settings['theme'],
       ...normalizeThemeSettings(candidate),
+      messageToolbar: normalizeMessageToolbar(candidate.messageToolbar),
       density: candidate.density as Settings['density'],
       closeToTray: candidate.closeToTray,
       launchAtLogin: typeof candidate.launchAtLogin === 'boolean' ? candidate.launchAtLogin : defaultSettings.launchAtLogin,
@@ -1679,6 +1682,8 @@ function registerIpc() {
     linked: linkedCloudStorage
   })
   registerCloudAttachments(ipcMain, () => cloudAttachments)
+  registerMessageToolbar({ ipcMain, load: loadPreferences, save: savePreferences,
+    broadcast: (commands) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('message-toolbar:changed', commands)) })
   ipcMain.handle('preferences:load', () => loadPreferences())
   ipcMain.handle('preferences:save', (_event, preferences: AppPreferences) => savePreferences(preferences))
   ipcMain.handle('app-lock:status', () => appLockStatus())
