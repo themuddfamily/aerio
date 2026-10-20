@@ -1,0 +1,39 @@
+name: macOS native integrations
+on:
+  push:
+    branches: [main, 'codex/native-validation-*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Compile real macOS SDK integrations
+        run: npm run build:mac-native
+      - name: Build the application independently of unrelated test suites
+        run: npm run build:main && npm run build:preload && npm run build:chat-service && npm run build:mcp-bridge && npm run build:renderer && npm run icons
+      - name: Package actual app bundle with native resources and scripting dictionary
+        run: npx electron-builder --mac dir --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Audit inbound AppleScript on the packaged app
+        run: npx tsx scripts/mac-native-integrations-audit.mjs --applescript-only
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: native-integrations-${{ matrix.runner }}-diagnostics
+          path: release/builder-debug.yml
+          if-no-files-found: ignore
