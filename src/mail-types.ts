@@ -917,7 +917,7 @@ export type MailWorkerEvent =
   | { type: 'mail-changed'; payload: { accountId: string; threadIds?: string[] } }
   | { type: 'operation'; payload: PendingOperation }
   | { type: 'connectivity'; payload: { online: boolean } }
-  | { type: 'new-mail'; payload: { accountId: string; count: number; threadId?: string; subject?: string; sender?: string } }
+  | { type: 'new-mail'; payload: import('./mail-notification-types').MailNotificationPayload }
   | { type: 'draft-delivery'; payload: MailDraftResult }
   | { type: 'mail-merge'; payload: import('./mail-merge-types').MailMergeJobSummary }
   | { type: 'archive-progress'; payload: import('./mail-archive-types').MailArchiveJob }

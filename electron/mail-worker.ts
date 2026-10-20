@@ -1639,8 +1639,19 @@ function emitNewMail(accountId: string, records: ParsedMailMessage[]) {
   const silenced = applyRulesToNewMail(records)
   if (records.length) processReplyWatches(true)
   if (!database?.getAccount(accountId)?.notifications) return
-  const payload = buildNewMailNotification(accountId, records.filter((record) => !silenced.has(record.id)))
-  if (payload) emit({ type: 'new-mail', payload })
+  const categoryGroups = new Map<string, ParsedMailMessage[]>()
+  // Physical copies can have different folder/category metadata; deduplicate
+  // across the whole batch before splitting it, not once per category.
+  const candidates = [...new Map(records.filter((record) => !silenced.has(record.id)).map((record) => [record.messageIdHeader?.trim().toLowerCase() || record.id, record])).values()]
+  for (const record of candidates) {
+    const category = database.inboxCategories?.tabFor?.(accountId, record.threadId, record.fromEmail) ?? 'primary'
+    const group = categoryGroups.get(category) ?? []
+    group.push(record); categoryGroups.set(category, group)
+  }
+  for (const [category, group] of categoryGroups) {
+    const payload = buildNewMailNotification(accountId, group)
+    if (payload) emit({ type: 'new-mail', payload: { ...payload, category } })
+  }
 }
 
 async function handle(command: MailWorkerCommand): Promise<MailWorkerResult> {

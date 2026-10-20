@@ -512,6 +512,7 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.db.hasMessage.mockReturnValue(false)
     mocks.db.matchingRulesForMessage.mockReturnValue([{ id: 'incoming-rule', accountId: 'account-1', enabled: true, name: 'Archive notices', conditions: {}, actions: [{ action: 'archive' }] }])
     mocks.notification.mockReturnValue({ accountId: 'account-1', title: 'New mail', body: 'A new message arrived' })
+    mocks.notification.mockClear()
     mocks.gmail.listMessages.mockResolvedValueOnce({ messages: [{ id: 'gmail-message', threadId: 'gmail-thread' }], nextPageToken: undefined })
     mocks.gmail.getRawMessage.mockImplementation(async (id: string) => ({
       id, threadId: id === 'gmail-message' ? 'gmail-thread' : 'new-thread', historyId: '2',
@@ -538,10 +539,33 @@ describe.sequential('mail worker protocol routing', () => {
     expect(mocks.db.recordRuleMatch).toHaveBeenCalledWith('incoming-rule', 1)
     expect(mocks.db.ruleLedger.claim).toHaveBeenCalledWith('account-1', expect.objectContaining({ id: 'new-message' }), 'incoming')
     expect(mocks.db.matchingRulesForMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 'new-message' }), 'incoming')
-    expect(mocks.notification).toHaveBeenCalled()
+    expect(mocks.notification).not.toHaveBeenCalled() // The archive rule silenced every new message.
     expect(mocks.posted).toContainEqual(expect.objectContaining({ kind: 'event', event: expect.objectContaining({ type: 'sync-progress', payload: expect.objectContaining({ phase: 'complete' }) }) }))
     mocks.db.matchingRulesForMessage.mockReturnValue([])
     mocks.notification.mockReturnValue(undefined)
+  })
+
+  it('groups new mail by its effective inbox category before notifying', async () => {
+    const previousCategories = mocks.db.inboxCategories
+    mocks.db.inboxCategories = { tabFor: vi.fn((_accountId: string, threadId: string) => threadId.startsWith('promotion') ? 'promotions' : 'primary') }
+    mocks.db.getAccount.mockReturnValue(mocks.account)
+    mocks.db.getAccountHistory.mockReturnValue('categories-1')
+    mocks.db.hasMessage.mockReturnValue(false)
+    mocks.db.matchingRulesForMessage.mockReturnValue([])
+    mocks.notification.mockClear()
+    mocks.notification.mockImplementation(((accountId: string, records: any[]) => ({ accountId, count: records.length, threadId: records[0]?.threadId })) as any)
+    mocks.gmail.listHistory.mockResolvedValueOnce({ historyId: 'categories-2', history: [{ id: 'categories-2', messagesAdded: ['promotion-copy', 'primary-message', 'promotion-message'].map((id) => ({ message: { id, threadId: id.replace('message', 'thread') } })) }] })
+    mocks.gmail.getRawMessage.mockImplementation(async (id: string) => ({ id, threadId: id.replace('message', 'thread'), historyId: 'categories-2', raw: Buffer.from(id).toString('base64url'), labelIds: ['INBOX'], internalDate: '1786183200000' }))
+    mocks.postalParse.mockImplementation(async (raw: unknown) => ({ messageId: String(raw).includes('promotion-message') ? '<promotion@test>' : '<primary@test>', from: { address: 'sender@test' }, subject: 'Category message', attachments: [] }))
+    await request({ type: 'sync:start', payload: { accountId: 'account-1' } })
+    await vi.waitFor(() => expect(mocks.db.setAccountHistory).toHaveBeenCalledWith('account-1', 'categories-2', true))
+    expect(mocks.notification).toHaveBeenCalledWith('account-1', [expect.objectContaining({ threadId: 'primary-thread' })])
+    expect(mocks.notification).toHaveBeenCalledWith('account-1', [expect.objectContaining({ threadId: 'promotion-thread' })])
+    expect(mocks.notification).toHaveBeenCalledTimes(2) // A physical copy in another category adds no third notification.
+    for (const category of ['primary', 'promotions']) expect(mocks.posted).toContainEqual(expect.objectContaining({ kind: 'event', event: expect.objectContaining({ type: 'new-mail', payload: expect.objectContaining({ category }) }) }))
+    mocks.db.inboxCategories = previousCategories
+    mocks.db.getAccountHistory.mockReturnValue(undefined)
+    mocks.notification.mockImplementation(() => undefined)
   })
 
   it('runs outgoing rules on new Sent copies and never reprocesses a message the rule ledger already claimed', async () => {

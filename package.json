@@ -141,6 +141,7 @@
       "category": "public.app-category.productivity",
       "darkModeSupport": true,
       "hardenedRuntime": true,
+      "extendInfo": { "NSUserNotificationAlertStyle": "alert" },
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
       "target": [
         "dmg",

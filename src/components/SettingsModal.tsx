@@ -8,6 +8,7 @@ import Modal from './Modal'
 import ThemeEditor from './ThemeEditor'
 import AiAssistantSettings from './AiAssistantSettings'
 import ProxySettings from './ProxySettings'
+import MailNotificationSettings from './MailNotificationSettings'
 import InboxCategorySettings from './InboxCategorySettings'
 import OpenPgpKeyManager from './OpenPgpKeyManager'
 import SmimeCertificateManager from './SmimeCertificateManager'
@@ -335,6 +336,7 @@ export default function SettingsModal({ preferences, onChange, onClose, onLocalD
               <span><strong>Desktop notifications</strong><small>Use native desktop notifications for new mail, including while Aerio is open.</small></span>
               <input type="checkbox" checked={preferences.settings.notifications} onChange={(event) => setSettings({ notifications: event.target.checked })} />
             </label>
+            <MailNotificationSettings value={preferences.settings.mailNotifications} onChange={(mailNotifications) => setSettings({ mailNotifications })} />
           </div>
         </section>
         <AiAssistantSettings />

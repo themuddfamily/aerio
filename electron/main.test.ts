@@ -244,8 +244,8 @@ vi.mock('./tray-availability', () => ({ linuxTrayHostAvailable: mocks.linuxTrayH
 vi.mock('./mail/oauth-vault', () => ({ OAuthVault: vi.fn(function () { return mocks.vault }) }))
 vi.mock('./mail/worker-client', () => ({ MailWorkerClient: mocks.MailWorkerClient }))
 vi.mock('./mail/ai-assistant', () => ({ AiAssistantStore: vi.fn(), registerAiAssistant: vi.fn() }))
-vi.mock('./mail/openpgp-keyring', () => ({ OpenPgpKeyring: vi.fn(function () { return mocks.openPgp }) }))
 vi.mock('./network-proxy', () => ({ initializeNetworkProxy: vi.fn(async () => ({ mode: 'system', server: '', bypass: '' })), fetchWithNetworkProxy: (...args: any[]) => (mocks.net.fetch as any)(...args) }))
+vi.mock('./mail/openpgp-keyring', () => ({ OpenPgpKeyring: vi.fn(function () { return mocks.openPgp }) }))
 vi.mock('./mail/openpgp-ipc', () => ({ registerOpenPgp: vi.fn(), assertOpenPgpSendable: mocks.assertOpenPgpSendable }))
 vi.mock('./mail/smime-store', () => ({ SmimeStore: vi.fn(function () { return mocks.smime }) }))
 vi.mock('./mail/smime-ipc', () => ({ registerSmime: vi.fn(), assertSmimeSendable: mocks.assertSmimeSendable, protectOutgoingMessage: vi.fn() }))
@@ -1520,6 +1520,27 @@ describe.sequential('Electron main process', () => {
       mocks.Notification.isSupported.mockReturnValue(true)
       invoke('preferences:save', previous)
     }
+  })
+
+  it('persists safe notification controls and routes native buttons once through the mail worker', async () => {
+    const previous = invoke('preferences:load')
+    try {
+      invoke('preferences:save', { ...previous, settings: { ...previous.settings, notifications: true, mailNotifications: { actions: ['archive', 'untrusted command'], preview: 'hidden', silent: true, accounts: {}, categories: ['primary'] } } })
+      expect(invoke('preferences:load').settings.mailNotifications).toMatchObject({ actions: ['archive'], preview: 'hidden', silent: true })
+      mocks.emitWorker({ type: 'new-mail', payload: { accountId: 'a1b2', threadId: 'action-fixture', count: 1, sender: 'Private sender', subject: 'Private subject', category: 'primary' } })
+      const notice = mocks.notifications.at(-1)
+      expect(notice.options).toMatchObject({ title: 'New message', body: 'Open Aerio to view your inbox', silent: true })
+      if (process.platform === 'win32' || process.platform === 'darwin') {
+        expect(notice.options.actions).toEqual([{ type: 'button', text: 'Archive' }])
+        notice.handlers.get('action')({ actionIndex: 0 })
+        notice.handlers.get('action')({ actionIndex: 0 })
+        await vi.waitFor(() => expect(mocks.worker.request).toHaveBeenCalledWith({ type: 'mail:action', payload: { accountId: 'a1b2', threadIds: ['action-fixture'], action: 'archive' } }))
+        expect(mocks.worker.request.mock.calls.filter(([command]: any[]) => command.type === 'mail:action' && command.payload.threadIds.includes('action-fixture'))).toHaveLength(1)
+      }
+      const count = mocks.notifications.length
+      mocks.emitWorker({ type: 'new-mail', payload: { accountId: 'a1b2', count: 1, category: 'promotions' } })
+      expect(mocks.notifications).toHaveLength(count)
+    } finally { invoke('preferences:save', previous) }
   })
 
   it('validates reply watch requests and notifies replies and expired deadlines while hidden in the tray', async () => {

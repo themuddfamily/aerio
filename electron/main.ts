@@ -1,8 +1,10 @@
-import { fetchWithNetworkProxy, initializeNetworkProxy } from './network-proxy'
-import type { ProxyRuntimeConfig } from './network-proxy-store'
 import { AppProfileRegistry, configureProfilePaths, registerAppProfiles, selectedProfileDirectory } from './app-profiles'
 import { MailUnifiedViewsStore, registerMailUnifiedViews } from './mail/unified-views'
 import { registerMessageToolbar } from './message-toolbar'
+import { MailNotificationService } from './mail-notifications'
+import { normalizeMailNotifications } from '../src/lib/mail-notifications'
+import { fetchWithNetworkProxy, initializeNetworkProxy } from './network-proxy'
+import type { ProxyRuntimeConfig } from './network-proxy-store'
 import { normalizeMessageToolbar } from '../src/lib/message-toolbar'
 import { CalendarWeatherService, registerCalendarWeather } from './productivity/calendar-weather'
 import { startEventReminders } from './productivity/event-reminders'
@@ -294,6 +296,7 @@ function preferencesFromUnknown(value: unknown): AppPreferences | undefined {
       closeToTray: candidate.closeToTray,
       launchAtLogin: typeof candidate.launchAtLogin === 'boolean' ? candidate.launchAtLogin : defaultSettings.launchAtLogin,
       notifications: candidate.notifications,
+      mailNotifications: normalizeMailNotifications(candidate.mailNotifications),
       startModule: candidate.startModule as ModuleId,
       readReceiptPolicy: normalizeReadReceiptPolicy(candidate.readReceiptPolicy),
       ...(profile && !isUntouchedSampleProfile ? { profile: {
@@ -1015,15 +1018,24 @@ function isPrivateAddress(address: string) {
   return true
 }
 
+let mailNotificationService: MailNotificationService | undefined
 function showNewMailNotification(payload: Extract<import('../src/mail-types').MailWorkerEvent, { type: 'new-mail' }>['payload']) {
-  if (hideTestWindows || !Notification.isSupported() || !loadPreferences().settings.notifications) return
-  const title = payload.count === 1 ? payload.sender || 'New message' : `${payload.count.toLocaleString()} new messages`
-  const notification = new Notification({ title, body: payload.count === 1 ? payload.subject || 'Open Aerio to read it' : 'Open Aerio to view your inbox', icon: iconPath() })
-  notification.on('click', () => {
-    openMainWindow()
-    if (payload.threadId && !appLockStatus().locked) createMessageWindow({ source: 'connected', accountId: payload.accountId, threadId: payload.threadId, title: payload.subject || 'New message' })
+  mailNotificationService ??= new MailNotificationService({
+    platform: process.platform, create: (options) => new Notification(options),
+    supported: () => !hideTestWindows && Notification.isSupported(), enabled: () => loadPreferences().settings.notifications,
+    preferences: () => normalizeMailNotifications(loadPreferences().settings.mailNotifications),
+    locked: () => appLockStatus().locked, focused: () => BrowserWindow.getAllWindows().some((window) => !window.isDestroyed() && window.isFocused?.()),
+    icon: iconPath(), open: (reference) => {
+      openMainWindow()
+      if (reference.threadId && !appLockStatus().locked) createMessageWindow({ source: 'connected', accountId: reference.accountId, threadId: reference.threadId, title: reference.subject || 'New message' })
+    },
+    perform: async (action, reference) => {
+      if (appLockStatus().locked || !reference.threadId) return
+      await requireMailWorker().request({ type: 'mail:action', payload: { accountId: reference.accountId, threadIds: [reference.threadId], action } })
+    },
+    failed: () => diagnostic({ level: 'warn', component: 'ui', event: 'mail-notification-action-failed', message: 'The notification action could not be applied' })
   })
-  notification.show()
+  mailNotificationService.show(payload)
 }
 
 function showReplyWatchNotification(payload: Extract<import('../src/mail-types').MailWorkerEvent, { type: 'reply-watch' }>['payload']) {
@@ -1293,6 +1305,7 @@ function verifyAppLockPassphrase(passphrase: unknown, record = loadAppLockRecord
 
 function publishAppLockStatus() {
   const status = appLockStatus()
+  if (status.locked) mailNotificationService?.clear()
   BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('app-lock:status-changed', status))
   // Locking clears Chat's decrypted renderer state and transient verification emoji; unlocking opens a pending notification route.
   chatRuntime?.lockChanged(status.locked)
@@ -2677,6 +2690,7 @@ if (hasSingleInstanceLock && !profileStartupFailed) app.whenReady().then(async (
 })
 
 app.on('before-quit', () => {
+  mailNotificationService?.clear()
   quitting = true
   stopTrayMonitor()
   if (taskPolling) clearInterval(taskPolling)

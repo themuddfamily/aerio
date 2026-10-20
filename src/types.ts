@@ -205,6 +205,7 @@ export interface Settings {
   closeToTray: boolean
   launchAtLogin?: boolean
   notifications: boolean
+  mailNotifications?: import('./mail-notification-types').MailNotificationPreferences
   startModule: ModuleId
   readReceiptPolicy?: import('./mail-types').MailReadReceiptPolicy
   profile?: UserProfile
