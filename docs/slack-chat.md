@@ -1,0 +1,20 @@
+# Slack chat
+
+Open **Chat**, choose **Slack**, and add a workspace API token. Aerio uses Slack's official Web API for channel/conversation discovery, text history, threads, text sending and user read markers. The account is independent of the Matrix release gate.
+
+Use a Slack app installed in the workspace with a user token (`xoxp-…`) or bot token (`xoxb-…`). Rotated `xoxe.xoxp-…` / `xoxe.xoxb-…` tokens are also accepted while valid. Aerio does not register a Slack app for you or refresh expiring tokens: reconnect with a replacement token when Slack expires/revokes it. Workspace administrators may need to approve the app/scopes. A bot acts as that bot, not as your personal Slack account.
+
+- Conversation discovery requests public/private channels, direct messages and group messages. Grant `channels:read`, `groups:read`, `im:read` and `mpim:read` to expose those types. Missing permissions are reported explicitly.
+- History needs the corresponding `channels:history`, `groups:history`, `im:history` and `mpim:history` scopes. Send needs `chat:write` (user tokens may expose the user-specific equivalent). Sending requires membership; join channels in Slack first.
+- User read markers need `channels:write`, `groups:write`, `im:write` and/or `mpim:write` for the relevant conversation types. The **Mark read** control is an explicit server operation. Bot tokens have no personal read-marker control.
+- User tokens support channel threads with appropriate history scopes. Slack bot tokens can read direct/group-message threads, but cannot read public/private channel threads through `conversations.replies`; Aerio hides that capability there.
+
+Tokens are sent only in authorization headers to `https://slack.com/api/`; redirects are refused. The shared Chat runtime stores credentials using OS encryption and seals cached conversations/messages and delivery records. Separate workspace/user identities prevent one workspace from replacing another. Removing an account forgets its local credentials and cached data; it does not revoke the Slack token remotely.
+
+History is paged at 15 messages. Refresh and pagination are bounded and obey rate-limit errors; Slack can impose substantially lower limits on some distributed apps than on internal apps. There is no realtime Events/Socket Mode subscription. Discovery responses do not always contain unread counts or activity timestamps, so those badges and desktop activity notices are best effort. Names fall back to Slack user IDs when Slack omits profile details. Existing direct conversations are listed; creating/joining conversations, file uploads/downloads, reactions, presence and message editing/deletion are not implemented. File messages show filenames only.
+
+Sending preserves literal text, disables link/media unfurl requests and includes the runtime's persisted request UUID as `client_msg_id`. A network loss, invalid response or ambiguous server failure produces **Review delivery** rather than an automatic resend. Inspect the Slack conversation before sending again; this does not claim unconditional server-side deduplication. Failed/review delivery state survives a restart.
+
+Verification covers fixed-host authorization, reconnect/workspace isolation, discovery pagination, malformed/repeated cursors, chronological history/thread mapping, bot limitations, explicit read marking, text payloads, request identifiers and ambiguous delivery/rate-limit handling. These are controlled API fixtures and shared-runtime tests. A live Slack workspace has not been used on this host.
+
+API references: [authentication](https://docs.slack.dev/reference/methods/auth.test/), [discovery](https://docs.slack.dev/reference/methods/conversations.list/), [history](https://docs.slack.dev/reference/methods/conversations.history/), [threads](https://docs.slack.dev/reference/methods/conversations.replies/), [sending](https://docs.slack.dev/reference/methods/chat.postMessage/), [read markers](https://docs.slack.dev/reference/methods/conversations.mark/).
