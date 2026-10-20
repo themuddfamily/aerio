@@ -33,7 +33,10 @@ const waitFor = async (check, message, timeout = 60_000) => {
   throw new Error(message)
 }
 try {
-  application = await electron.launch({ executablePath: join(bundle, 'Contents/MacOS/Aerio'), args: [`--user-data-dir=${directory}`], env: desktopAuditEnvironment(), timeout: 30_000 })
+  application = await electron.launch({ executablePath: join(bundle, 'Contents/MacOS/Aerio'), args: [`--user-data-dir=${directory}`], env: { ...desktopAuditEnvironment(), AERIO_NATIVE_AUDIT: '1' }, timeout: 30_000 })
+  application.process().stderr?.on('data', (chunk) => {
+    for (const line of chunk.toString().split('\n')) if (line.startsWith('[Aerio AppleScript] ')) console.log(line)
+  })
   // The crypto persistence probe creates and destroys a sandboxed service view
   // during startup. Wait for the actual application window, including when a
   // just-created blank service view was the first Playwright page.

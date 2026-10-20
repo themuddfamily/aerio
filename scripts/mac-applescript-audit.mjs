@@ -23,7 +23,7 @@ export async function auditMacAppleScript(application, page) {
       return JSON.parse(result.stdout.trim())
     } catch (error) {
       if (/1743|not authorized|not permitted/i.test(String(error.stderr))) throw new Error('macOS denied the native osascript Apple event. Grant the test runner Automation access to Aerio; no runtime success is claimed.')
-      throw new Error(`Native AppleScript command failed: ${String(error.stderr || error.message).replaceAll(issued.token, '[token]')}`)
+      throw new Error(`Native AppleScript command failed (killed=${Boolean(error.killed)}, signal=${error.signal ?? 'none'}, code=${error.code ?? 'none'}): ${String(error.stderr || error.message).replaceAll(issued.token, '[token]')}`)
     }
   }
   try {
