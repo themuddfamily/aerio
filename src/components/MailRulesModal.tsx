@@ -4,6 +4,7 @@ import type { MailAccountSummary, MailLabel, MailRule, MailRuleAction, MailRuleC
 import type { MailServerRule, MailServerRuleCapabilities } from '../mail-server-rule-types'
 import { MAIL_RULE_FIELDS, defaultMailRuleCondition, mailRuleField } from '../lib/mail-rules'
 import { mapMailRuleToServer } from '../lib/mail-server-rules'
+import { MAIL_RULE_PRESETS, createMailRuleFromPreset } from '../lib/mail-rule-library'
 import { defaultInboxTabs } from '../lib/mail-categories'
 import type { MailInboxTab } from '../mail-category-types'
 import Modal from './Modal'
@@ -75,6 +76,8 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
   const [editing, setEditing] = useState<MailRuleInput | undefined>(initialRule)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [libraryOpen, setLibraryOpen] = useState(false)
+  const [presetGuidance, setPresetGuidance] = useState<string>()
   const [capabilities, setCapabilities] = useState<Record<string, MailServerRuleCapabilities>>({})
   const [serverView, setServerView] = useState<{ accountId: string; rules?: MailServerRule[]; error?: string } | undefined>()
   const [categories, setCategories] = useState<MailInboxTab[]>(() => defaultInboxTabs().tabs)
@@ -111,7 +114,10 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
   const accountFor = (accountId?: string) => accounts.find((account) => account.id === accountId)
   const destinations = useMemo(() => labels.filter((label) => label.accountId === editing?.accountId && !/draft|sent|outbox/i.test(label.name)), [editing?.accountId, labels])
   const conditionLabels = useMemo(() => labels.filter((label) => label.accountId === editing?.accountId), [editing?.accountId, labels])
-  const beginNew = () => setEditing({ accountId: writableAccounts[0]?.id ?? '', name: '', enabled: true, match: 'all', trigger: 'incoming', conditions: [newCondition()], exceptions: [], actions: [newAction()] })
+  const beginNew = () => {
+    setPresetGuidance(undefined)
+    setEditing({ accountId: writableAccounts[0]?.id ?? '', name: '', enabled: true, match: 'all', trigger: 'incoming', conditions: [newCondition()], exceptions: [], actions: [newAction()] })
+  }
   const updateCondition = (index: number, condition: MailRuleCondition) => setEditing((current) => current && ({ ...current, conditions: current.conditions.map((item, itemIndex) => itemIndex === index ? condition : item) }))
   const updateException = (index: number, condition: MailRuleCondition) => setEditing((current) => current && ({ ...current, exceptions: (current.exceptions ?? []).map((item, itemIndex) => itemIndex === index ? condition : item) }))
   const updateAction = (index: number, updates: Partial<MailRuleAction>) => setEditing((current) => current && ({ ...current, actions: current.actions.map((action, itemIndex) => itemIndex === index ? { ...action, ...updates } : action) }))
@@ -269,6 +275,23 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
     ...(rule.execution === 'server' ? ['Runs on server'] : [])
   ].join(' · ')
 
+  if (libraryOpen) return <Modal title="Rule library" subtitle="Choose a starter, then edit it before saving" width="large" onClose={onClose}>
+    <div className="mail-rules-list">
+      <p>Starters open as disabled drafts. Review the conditions and actions, choose any destinations, and enable the rule when ready.</p>
+      {MAIL_RULE_PRESETS.map((preset) => <article key={preset.id}>
+        <span className="rule-copy"><strong>{preset.name}</strong><small>{preset.description}</small></span>
+        <button className="button ghost" disabled={!writableAccounts.length} aria-label={`Use ${preset.name}`} onClick={() => {
+          const accountId = writableAccounts[0]?.id
+          if (!accountId) return
+          setEditing(createMailRuleFromPreset(preset.id, accountId))
+          setPresetGuidance(preset.guidance)
+          setLibraryOpen(false)
+        }}>Use starter</button>
+      </article>)}
+    </div>
+    <footer className="modal-footer"><button className="button ghost" onClick={() => setLibraryOpen(false)}><ArrowLeft size={15} /> Back to rules</button></footer>
+  </Modal>
+
   if (serverView) {
     const capability = capabilities[serverView.accountId]
     return <Modal title="Server rules" subtitle="Rules stored with your provider run even when Aerio is closed" width="large" onClose={onClose}>
@@ -301,15 +324,17 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
           <span className="rule-copy"><strong>{rule.name}</strong><small>{ruleSummary(rule)}</small><small>{rule.matchCount ? `Matched ${rule.matchCount.toLocaleString()} time${rule.matchCount === 1 ? '' : 's'}` : 'Not matched yet'}</small></span>
           <button className="icon-button" title={rule.trigger === 'outgoing' ? 'Run on existing Sent mail' : 'Run on existing Inbox'} disabled={busy || !rule.enabled} onClick={() => void run(rule)}><Play size={15} /></button>
           {capabilities[rule.accountId]?.supported && <button className="icon-button" title={rule.execution === 'server' ? 'Update the server copy' : 'Run on the server'} disabled={busy} onClick={() => void upload(rule)}><Cloud size={15} /></button>}
-          <button className="icon-button" title="Edit rule" onClick={() => setEditing({ ...rule })}><Pencil size={15} /></button>
+          <button className="icon-button" title="Edit rule" onClick={() => { setPresetGuidance(undefined); setEditing({ ...rule }) }}><Pencil size={15} /></button>
           <button className="icon-button danger" title="Delete rule" onClick={() => void remove(rule)}><Trash2 size={15} /></button>
         </article>)}
       </div>
       <footer className="modal-footer"><button className="button ghost" onClick={onClose}>Close</button><span className="spacer" />
         {serverApi && serverAccounts.length > 0 && <button className="button ghost" onClick={() => void openServerRules(serverAccounts[0].id)}><Server size={15} /> Server rules</button>}
+        <button className="button ghost" disabled={!writableAccounts.length} onClick={() => setLibraryOpen(true)}>Rule library</button>
         <button className="button primary" disabled={!writableAccounts.length} onClick={beginNew}><Plus size={15} /> New rule</button></footer>
     </> : <>
       <div className="mail-rule-editor">
+        {presetGuidance && <p role="note">{presetGuidance}</p>}
         <div className="rule-grid">
           <label className="field"><span>Rule name</span><input autoFocus value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} placeholder="e.g. Project updates" /></label>
           <label className="field"><span>Account</span><select value={editing.accountId} disabled={Boolean(editing.id)} onChange={(event) => setEditing({ ...editing, accountId: event.target.value })}>{writableAccounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}</select></label>

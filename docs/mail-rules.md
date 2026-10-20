@@ -7,6 +7,14 @@ Open **Mail rules** from a message’s **Create rule from email…** command. Ev
 
 ## Conditions and exceptions
 
+### Ready-made rule library
+
+Choose **Rule library** in the Mail rules window to start with highlighting a sender, filing newsletters, organizing receipts and invoices, collecting attachments, archiving older mail, flagging large messages, filing sent project mail, or reading routine notifications.
+
+Each starter opens in the normal editor as a disabled draft for the first available account. You can change the account, name, incoming/outgoing trigger, every condition, exceptions, and every action. Guidance explains the values to fill in; sender/project starters require your own text, and filing starters require a destination from the chosen account. Selecting a starter does not save or run anything. Enable and save it when ready. Archiving older mail includes an exception for important messages and is intended for **Run on existing Inbox**.
+
+Starters create independent local rules. Server compatibility and uploading work as usual after saving; the library does not bypass provider limitations.
+
 | Field | Comparisons | Notes |
 | --- | --- | --- |
 | From, To or Cc, Cc, Subject, Message body | contains, equals, starts with, ends with | Case-insensitive. "Equals" on From/To/Cc matches the address, the display name, or the full recipient. |
@@ -76,6 +84,7 @@ IMAP providers report server rules as unsupported. ManageSieve is not implemente
 - `electron/mail/mail-settings-scopes.test.ts`, `electron/mail/oauth-vault.test.ts`: scope detection and refresh behavior.
 - `electron/mail-worker.test.ts`: outgoing processing and ledger skips during sync.
 - `src/components/MailRulesModal.test.tsx`: editor and server-rule UI.
+- `src/lib/mail-rule-library.test.ts`, `src/components/MailRuleLibrary.test.tsx`: independent starter drafts, real matcher behavior, editable starter save flow, account destination filtering, and unavailable accounts.
 
 Not yet validated against live accounts:
 
