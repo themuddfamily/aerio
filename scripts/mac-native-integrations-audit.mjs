@@ -13,6 +13,8 @@ import { auditMacAppleScript } from './mac-applescript-audit.mjs'
 if (process.platform !== 'darwin') throw new Error('Native AppleScript/Spotlight audit requires macOS')
 const run = promisify(execFile), root = resolve(import.meta.dirname, '..')
 const onlyAppleScript = process.argv.includes('--applescript-only')
+const onlySpotlight = process.argv.includes('--spotlight-only')
+if (onlyAppleScript && onlySpotlight) throw new Error('Choose one native integration or run both without a mode flag')
 const bundle = resolve(process.argv.slice(2).find((value) => !value.startsWith('--')) ?? `release/${process.arch === 'x64' ? 'mac' : `mac-${process.arch}`}/Aerio.app`)
 const directory = mkdtempSync(join(tmpdir(), 'aerio-mac-native-')), title = `Aerio Spotlight fixture ${randomUUID()}`
 if (!onlyAppleScript) {
@@ -46,7 +48,7 @@ try {
     catch (error) { if (!page.isClosed() || attempt === 7) throw error }
   }
   await page.context().setOffline(true)
-  await auditMacAppleScript(application, page)
+  if (!onlySpotlight) await auditMacAppleScript(application, page)
   if (onlyAppleScript) console.log('PASS: packaged native inbound AppleScript automation. Spotlight was not requested by this audit mode.')
   else {
   const profile = await application.evaluate(({ app }) => app.getPath('userData'))
@@ -77,8 +79,12 @@ try {
   await page.evaluate(() => window.aerio.appLock.disable('spotlight-native-fixture'))
   await page.evaluate(() => window.aerio.spotlight.save({ enabled: false, accountIds: [], includePreview: false }))
   await waitFor(async () => (await query(title)).length === 0, 'Core Spotlight did not remove metadata after disabling')
-  console.log('PASS: packaged native AppleScript + Core Spotlight donation/query/removal, selected-account exclusion, real LaunchServices URL routing through app lock and conversation restoration.')
+  console.log(`PASS: packaged native ${onlySpotlight ? '' : 'AppleScript + '}Core Spotlight donation/query/removal, selected-account exclusion, real LaunchServices URL routing through app lock and conversation restoration.`)
   }
+} catch (error) {
+  const mode = onlySpotlight ? 'spotlight' : onlyAppleScript ? 'applescript' : 'combined'
+  try { await run('screencapture', ['-x', join(root, `release/native-${mode}-desktop.png`)], { timeout: 10_000 }) } catch { /* Optional runner diagnostics; never substitute for acceptance. */ }
+  throw error
 } finally {
   if (page && !page.isClosed()) {
     const lock = await page.evaluate(() => window.aerio.appLock.status()).catch(() => undefined)

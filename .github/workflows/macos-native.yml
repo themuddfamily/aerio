@@ -29,14 +29,27 @@ jobs:
       - name: Build the application independently of unrelated test suites
         run: npm run build:main && npm run build:preload && npm run build:chat-service && npm run build:mcp-bridge && npm run build:renderer && npm run icons
       - name: Package actual app bundle with native resources and scripting dictionary
+        id: package
         run: npx electron-builder --mac dir --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      - name: Audit native AppleScript and Spotlight on the packaged app
-        run: npx tsx scripts/mac-native-integrations-audit.mjs
+      - name: Audit native AppleScript on the packaged app
+        id: applescript
+        continue-on-error: true
+        run: npx tsx scripts/mac-native-integrations-audit.mjs --applescript-only
+      - name: Audit native Spotlight on the packaged app
+        id: spotlight
+        if: always() && steps.package.outcome == 'success'
+        continue-on-error: true
+        run: npx tsx scripts/mac-native-integrations-audit.mjs --spotlight-only
+      - name: Require both native integrations to pass
+        if: always() && steps.package.outcome == 'success'
+        run: test '${{ steps.applescript.outcome }}' = success && test '${{ steps.spotlight.outcome }}' = success
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: native-integrations-${{ matrix.runner }}-diagnostics
-          path: release/builder-debug.yml
+          path: |
+            release/builder-debug.yml
+            release/native-*-desktop.png
           if-no-files-found: ignore
