@@ -1,11 +1,12 @@
 import { ipcMain, safeStorage } from 'electron'
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { AI_DEFAULT_ANTHROPIC_MODEL, AI_DEFAULT_OPENAI_BASE_URL, AI_FEATURES, type AiAssistantSettingsInput, type AiAssistantStatus, type AiComposeInput, type AiFeature, type AiProviderId } from '../../src/ai-assistant-types'
-import type { MailMessageRef, MailThreadDetail } from '../../src/mail-types'
+import type { MailAccountSummary, MailLabel, MailMessageRef, MailThreadDetail } from '../../src/mail-types'
 import type { MailWorkerClient } from './worker-client'
 import { assertSecureCredentialStorage } from './secure-storage'
 import { AiRequestError, requestAiCompletion, validateAiBaseUrl, type AiPrompt } from './ai-provider'
 import { composePrompt, conversationSummaryPrompt, learnWritingStylePrompt, parseReplySuggestions, parseSearchSuggestion, repliesPrompt, sanitizeModelText, searchPrompt, summarizePrompt } from './ai-prompts'
+import { aiRulePrompt, parseAiRulePreview } from './ai-rule-preview'
 
 // The optional AI assistant is off by default. Non-secret settings live in a
 // small JSON file; the API key is encrypted with OS secure storage in its own
@@ -21,7 +22,7 @@ export interface AiKeyStorage {
   decryptString(value: Buffer): string
 }
 
-const defaultFeatures = (): Record<AiFeature, boolean> => ({ summarize: true, compose: true, replies: true, search: true })
+const defaultFeatures = (): Record<AiFeature, boolean> => ({ summarize: true, compose: true, replies: true, search: true, rules: true })
 export const defaultAiSettings = (): StoredSettings => ({ enabled: false, automaticReplies: false, provider: 'anthropic', model: AI_DEFAULT_ANTHROPIC_MODEL, baseUrl: AI_DEFAULT_OPENAI_BASE_URL, features: defaultFeatures(), includeSenderDetails: false })
 const providers: AiProviderId[] = ['anthropic', 'openai-compatible']
 
@@ -168,5 +169,16 @@ export function registerAiAssistant(options: { worker(): MailWorkerClient; store
   ipcMain.handle('ai:search', async (_event, requestId: unknown, request: unknown) => {
     if (typeof request !== 'string' || !request.trim()) throw new Error('Describe the mail you are looking for')
     return { query: parseSearchSuggestion(await run(requestId, 'search', async () => searchPrompt(request))) }
+  })
+  ipcMain.handle('ai:generate-rule', async (_event, requestId: unknown, input: { accountId: string; description: string }) => {
+    if (!input || !validId(input.accountId) || typeof input.description !== 'string' || !input.description.trim() || input.description.length > 4_000) throw new Error('Choose an account and describe a rule in up to 4,000 characters')
+    const response = await run(requestId, 'rules', async () => {
+      const accounts = await options.worker().request<MailAccountSummary[]>({ type: 'accounts:list' })
+      if (!accounts.some((account) => account.id === input.accountId && !account.archived)) throw new Error('Choose a connected account for this rule')
+      return aiRulePrompt(input.description)
+    })
+    // Names are resolved locally after generation; no mailbox context goes to AI.
+    const labels = await options.worker().request<MailLabel[]>({ type: 'labels:list', payload: { accountIds: [input.accountId] } })
+    return parseAiRulePreview(response, input.accountId, labels)
   })
 }

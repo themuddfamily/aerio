@@ -8,6 +8,7 @@ import { MAIL_RULE_PRESETS, createMailRuleFromPreset } from '../lib/mail-rule-li
 import { defaultInboxTabs } from '../lib/mail-categories'
 import type { MailInboxTab } from '../mail-category-types'
 import Modal from './Modal'
+import AiRuleBuilder from './AiRuleBuilder'
 
 interface MailRulesModalProps {
   accounts: MailAccountSummary[]
@@ -344,6 +345,11 @@ export default function MailRulesModal({ accounts, labels, onToast, onClose, ini
           <label className="field"><span>Rule name</span><input autoFocus value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} placeholder="e.g. Project updates" /></label>
           <label className="field"><span>Account</span><select value={editing.accountId} disabled={Boolean(editing.id)} onChange={(event) => setEditing({ ...editing, accountId: event.target.value })}>{writableAccounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}</select></label>
         </div>
+        {!editing.id && <AiRuleBuilder accountId={editing.accountId} labels={labels} onUse={(draft) => {
+          if (draft.accountId !== editing.accountId) return onToast('The account changed. Generate a new rule preview.')
+          setEditing(draft)
+          setPresetGuidance('AI-generated draft: review every condition and action, then enable and save it when ready.')
+        }} />}
         <label className="field"><span>Apply to</span><select aria-label="Apply to" value={editing.trigger ?? 'incoming'} disabled={editing.execution === 'server'} onChange={(event) => setEditing({ ...editing, trigger: event.target.value as MailRuleInput['trigger'], schedule: event.target.value === 'periodic' ? editing.schedule ?? { intervalMinutes: 60, folder: 'inbox' } : undefined })}><option value="incoming">New mail I receive</option><option value="outgoing">Mail I send</option><option value="archive">Mail I archive</option><option value="periodic">Periodically</option></select></label>
         {editing.trigger === 'archive' && <p role="note">Runs when you use Archive in Aerio. Matches the newest message before archiving. Automatic archiving, snoozing, other clients, and rule actions do not trigger it.</p>}
         {editing.trigger === 'periodic' && <section aria-label="Rule schedule">

@@ -348,12 +348,16 @@ describe('preload bridge', () => {
     await ai.summarize('r1', ref)
     await ai.suggestReplies('r2', ref)
     await ai.compose('r3', { instruction: 'Shorter', draft: 'Hi' })
+    await ai.learnStyle('style', 'A writing sample')
+    await ai.generateRule('rule', { accountId: 'account-1', description: 'Star invoices' })
     await ai.search('r4', 'invoices')
     await ai.cancel('r4')
-    for (const [channel, ...args] of [['ai:status'], ['ai:configure', { enabled: true }], ['ai:summarize', 'r1', ref], ['ai:replies', 'r2', ref], ['ai:compose', 'r3', { instruction: 'Shorter', draft: 'Hi' }], ['ai:search', 'r4', 'invoices'], ['ai:cancel', 'r4']] as const) {
+    for (const [channel, ...args] of [['ai:status'], ['ai:configure', { enabled: true }], ['ai:summarize', 'r1', ref, undefined], ['ai:replies', 'r2', ref, undefined], ['ai:compose', 'r3', { instruction: 'Shorter', draft: 'Hi' }], ['ai:search', 'r4', 'invoices'], ['ai:cancel', 'r4']] as const) {
       expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(channel, ...args)
     }
-    expect(Object.keys(ai).sort()).toEqual(['cancel', 'compose', 'configure', 'search', 'status', 'suggestReplies', 'summarize'])
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('ai:learn-style', 'style', 'A writing sample')
+    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith('ai:generate-rule', 'rule', { accountId: 'account-1', description: 'Star invoices' })
+    expect(Object.keys(ai).sort()).toEqual(['cancel', 'compose', 'configure', 'generateRule', 'learnStyle', 'search', 'status', 'suggestReplies', 'summarize'])
   })
 
   it('exposes OpenPGP key management and message crypto with exact IPC channels', async () => {
@@ -529,6 +533,7 @@ describe('preload bridge', () => {
     expect(networkCalls.every((call) => typeof call[1] === 'boolean')).toBe(true)
   })
 })
+
 
 describe('message toolbar preload bridge', () => {
   it('uses dedicated patch channels and disposes change listeners', async () => {

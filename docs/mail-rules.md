@@ -15,6 +15,14 @@ Each starter opens in the normal editor as a disabled draft for the first availa
 
 Starters create independent local rules. Server compatibility and uploading work as usual after saving; the library does not bypass provider limitations.
 
+### Create a rule from plain English
+
+Enable AI assistance and **Create mail rules** in AI settings, then choose **New rule**, select the target account, and describe the behavior in **Describe a rule with AI**. For example: “Label messages whose subject contains invoice with Receipts, except mail from vip@example.com.” **Generate rule preview** uses your configured provider and model and displays the conditions, exceptions and ordered actions without changing the editor or saving anything.
+
+The provider receives only your description (up to 4,000 characters) and the supported rule format. No messages, account details, folder list, writing styles or existing rules are sent. Names and addresses you type are part of the description. Folder names are resolved locally to existing, unambiguous folders in the selected account; missing or duplicate names produce an error. The generator supports the editor's local incoming, outgoing, Archive and periodic triggers and built-in inbox categories. Sending, forwarding and creating folders are unsupported; malformed or unsupported output is rejected.
+
+Choose **Use this draft** to load the disabled local preview into the editor. Review and edit it, enable it when ready, then explicitly **Save rule**. **Discard preview** leaves the editor unchanged. Cancelling, changing the target account, closing the editor, or turning off the AI feature cancels pending generation and discards late results. AI never saves, uploads, runs or activates a rule. The saved rule's server compatibility is checked normally if you later choose to upload it.
+
 | Field | Comparisons | Notes |
 | --- | --- | --- |
 | From, To or Cc, Cc, Subject, Message body | contains, equals, starts with, ends with | Case-insensitive. "Equals" on From/To/Cc matches the address, the display name, or the full recipient. |
@@ -101,6 +109,7 @@ IMAP providers report server rules as unsupported. ManageSieve is not implemente
 - `electron/mail/mail-settings-scopes.test.ts`, `electron/mail/oauth-vault.test.ts`: scope detection and refresh behavior.
 - `electron/mail-worker.test.ts`: outgoing processing and ledger skips during sync.
 - `electron/mail/periodic-rules.test.ts`: real SQLite deadline persistence, restart catch-up, durable operation queue, transaction rollback/retry, folder scopes, exceptions and account/rule eligibility.
+- `electron/mail/ai-rule-preview.test.ts`, `electron/mail/ai-assistant.test.ts`, `src/components/AiRuleBuilder.test.tsx`: strict untrusted output validation, local destination resolution, feature/account checks, data minimization, inert preview/edit/save flow, discard and cancellation.
 - `src/components/MailRulesModal.test.tsx`: editor and server-rule UI.
 - `src/lib/mail-rule-library.test.ts`, `src/components/MailRuleLibrary.test.tsx`: independent starter drafts, real matcher behavior, editable starter save flow, account destination filtering, and unavailable accounts.
 

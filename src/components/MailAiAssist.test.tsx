@@ -12,7 +12,7 @@ import { MailAiComposeAssist, plainTextToEditorHtml } from './MailAiComposeAssis
 
 vi.mock('./Modal', () => ({ default: ({ title, children, onClose }: any) => <div role="dialog" aria-label={title}>{children}<button onClick={onClose}>Close dialog</button></div> }))
 
-const status: AiAssistantStatus = { enabled: true, provider: 'anthropic', model: 'claude-sonnet-5-5', baseUrl: '', hasApiKey: true, features: { summarize: true, compose: true, replies: true, search: true }, includeSenderDetails: false, secureStorage: true }
+const status: AiAssistantStatus = { enabled: true, provider: 'anthropic', model: 'claude-sonnet-5-5', baseUrl: '', hasApiKey: true, features: { summarize: true, compose: true, replies: true, search: true, rules: true }, includeSenderDetails: false, secureStorage: true }
 const message = { accountId: 'a', threadId: 't', id: 'm', subject: 'Invoice', fromName: 'Ada', fromEmail: 'ada@example.test', to: [], cc: [], date: '2026-10-01T09:00:00Z', text: 'Please pay', html: '', sanitizedHtml: '', labelIds: [], attachments: [] } as MailMessageDetail
 const ref = { accountId: 'a', threadId: 't', messageId: 'm' }
 const ai = { status: vi.fn(), configure: vi.fn(), summarize: vi.fn(), suggestReplies: vi.fn(), compose: vi.fn(), search: vi.fn(), cancel: vi.fn() }

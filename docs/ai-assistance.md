@@ -14,10 +14,13 @@ suggestions allows displayed messages to be sent as described below.
 | Suggested replies | Message menu › **Suggest replies with AI…** | The same as Summarize. |
 | Draft and rephrase | Composer toolbar ✨ button | Your instruction and the text currently in the composer. The email you are replying to is added only when you tick **Include the email I’m replying to**. |
 | Natural-language search | ✨ button in the Mail search box | Only the words you type into the Ask AI box. No email content is sent. |
+| Create mail rules | Mail rules › New rule › **Describe a rule with AI** | Your description and the supported rule format. No email content, account details, folder list, writing styles or saved rules. Names/addresses typed into the description are included. |
 
 The same descriptions appear in Settings next to each feature switch and in
 every AI dialog (`src/ai-assistant-types.ts`, `AI_FEATURE_DETAILS`). Each
 feature can be switched off independently.
+
+**Create mail rules (D02)** returns a validated, disabled local draft. A structured preview lists every condition, exception and action. **Use this draft** loads it into the editable rule form; enabling and **Save rule** are separate actions. AI cannot execute, activate, save or upload a rule. Unsupported actions, invalid comparisons/schedules, injected identities and unknown or ambiguous destination names are rejected. Folder names resolve locally within the selected account after generation. Cancel, close or change accounts to discard a pending generation. See [mail rules](mail-rules.md).
 
 Translation (LibreTranslate) and the manual **Create meeting / task from email**
 tools are separate and unchanged.
