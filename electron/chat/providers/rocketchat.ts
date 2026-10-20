@@ -46,6 +46,7 @@ export class RocketChatAdapter implements ProviderChatAdapter {
   }
   async connect(input: Record<string, string | boolean>, existing?: ProviderChatSession): Promise<ProviderChatConnection> {
     const secret = { server: rocketChatServer(input.server || existing?.secret.server), userId: typeof input.userId === 'string' && input.userId.trim() || existing?.secret.userId || '', token: typeof input.token === 'string' && input.token.trim() || existing?.secret.token || '' }
+    if (existing && (secret.server !== existing.secret.server || secret.userId !== existing.secret.userId)) throw new ProviderChatError('Reconnect the same Rocket.Chat workspace and user, or add another account.', 'auth')
     const result = await this.request(secret, 'me')
     if (!id(result._id) || result._id !== secret.userId) throw new ProviderChatError('Rocket.Chat returned a different account identity.', 'auth')
     const remoteUserId = `${secret.server}|${result._id}`

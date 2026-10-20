@@ -36,6 +36,12 @@ describe('Rocket.Chat connector', () => {
     expect(result[1]).toMatchObject({ canSend: false, threaded: false, resource: { encrypted: 'true' } })
     expect(result[2]).toMatchObject({ kind: 'group', name: 'Sam, Jo, Al' })
   })
+  it('never reuses saved credentials against a changed server or user during reconnect', async () => {
+    const { adapter, fetcher } = fixture()
+    await expect(adapter.connect({ server: 'https://other.test' }, session())).rejects.toMatchObject({ kind: 'auth' })
+    await expect(adapter.connect({ userId: 'another-user' }, session())).rejects.toMatchObject({ kind: 'auth' })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
   it('maps safe text, file placeholders, own sender and threads in chronological order', async () => {
     const { adapter } = fixture({ success: true, messages: [{ ...message, _id: 'new', ts: '2026-10-20T10:02:00Z', msg: 'Text\u202e', tmid: 'message-1' }, { ...message, msg: '', attachments: [{ title: 'plan.pdf' }] }, { ...message, _id: 'encrypted', ts: '2026-10-20T10:01:00Z', t: 'e2e', msg: 'ciphertext' }] })
     const result = await adapter.messages(session(), room(), {})
