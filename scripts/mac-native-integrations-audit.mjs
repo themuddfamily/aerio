@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join, resolve, relative, isAbsolute } from 'node:path'
@@ -15,13 +15,17 @@ const run = promisify(execFile), root = resolve(import.meta.dirname, '..')
 const onlyAppleScript = process.argv.includes('--applescript-only')
 const bundle = resolve(process.argv.slice(2).find((value) => !value.startsWith('--')) ?? `release/${process.arch === 'x64' ? 'mac' : `mac-${process.arch}`}/Aerio.app`)
 const directory = mkdtempSync(join(tmpdir(), 'aerio-mac-native-')), title = `Aerio Spotlight fixture ${randomUUID()}`
+if (!onlyAppleScript) {
 const database = new MailDatabase(join(directory, 'aerio.sqlite'), join(directory, 'mail'))
 for (const accountId of ['allowed', 'omitted']) {
   database.upsertAccount({ id: accountId, provider: 'gmail', email: `${accountId}@example.test`, displayName: accountId, color: '#123456', status: 'needs-auth', archived: false, signature: '', notifications: false, syncEnabled: false })
   database.addInventory(accountId, [{ id: 'fixture-message', threadId: 'fixture-thread' }])
-  database.upsertMessage({ accountId, id: 'fixture-message', threadId: 'fixture-thread', historyId: '1', internalDate: new Date().toISOString(), fromName: 'Native fixture', fromEmail: 'sender@example.test', to: [`${accountId}@example.test`], cc: [], subject: accountId === 'allowed' ? title : `${title} omitted`, snippet: 'Disposable preview', text: 'Disposable native Spotlight fixture body', html: '', labelIds: ['INBOX'], sizeEstimate: 100, attachments: [] })
+  const rawPath = join(directory, `${accountId}.eml`)
+  writeFileSync(rawPath, 'From: sender@example.test\r\nSubject: Native fixture\r\n\r\nDisposable native Spotlight fixture body\r\n')
+  database.upsertMessage({ accountId, id: 'fixture-message', threadId: 'fixture-thread', historyId: '1', internalDate: new Date().toISOString(), fromName: 'Native fixture', fromEmail: 'sender@example.test', to: [`${accountId}@example.test`], cc: [], subject: accountId === 'allowed' ? title : `${title} omitted`, messageIdHeader: '<fixture@example.test>', references: [], snippet: 'Disposable preview', text: 'Disposable native Spotlight fixture body', html: '', labelIds: ['INBOX'], sizeEstimate: 100, rawPath, attachments: [] })
 }
 database.close()
+}
 let application, page
 const waitFor = async (check, message, timeout = 60_000) => {
   const deadline = Date.now() + timeout
