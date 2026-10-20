@@ -63,13 +63,27 @@ describe('CalDAV tasks in the Tasks view', () => {
     await user.selectOptions(within(dialog).getByLabelText('Priority'), 'high')
     fireEvent.change(within(dialog).getByLabelText('Percent complete'), { target: { value: '60' } })
     fireEvent.change(within(dialog).getByLabelText('Due time'), { target: { value: '17:30' } })
+    await user.selectOptions(within(dialog).getByLabelText('Due time zone'), 'UTC')
     await user.click(within(dialog).getByRole('button', { name: 'Save task' }))
     await waitFor(() => expect(api.update).toHaveBeenCalled())
     const [id, patch] = api.update.mock.calls[0] as unknown as [string, Record<string, any>]
     expect(id).toBe('entity-1')
-    expect(patch.due).toBe('2026-10-20T17:30:00')
+    expect(patch.due).toBe('2026-10-20T17:30:00Z')
+    expect(patch.native.dueTimeZone).toBeUndefined()
     expect(patch.native).toMatchObject({ status: 'inProgress', priority: 'high', percentComplete: 60 })
     expect(patch.native.caldav).toBeUndefined()
+  })
+  it('preserves an explicitly selected wall-clock time and time zone for a timed CalDAV due date', async () => {
+    const user = userEvent.setup()
+    renderView()
+    await user.click(await screen.findByRole('button', { name: /Reminders/ }))
+    await user.click(screen.getByRole('button', { name: 'Open task Water plants' }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Due time'), { target: { value: '17:30' } })
+    await user.selectOptions(within(dialog).getByLabelText('Due time zone'), 'Europe/London')
+    await user.click(within(dialog).getByRole('button', { name: 'Save task' }))
+    await waitFor(() => expect(api.update).toHaveBeenCalled())
+    expect(api.update.mock.calls[0]).toEqual(['entity-1', expect.objectContaining({ due: '2026-10-20T17:30:00', native: expect.objectContaining({ dueTimeZone: 'Europe/London' }) })])
   })
 
   it('previews an .ics file and imports into a local list with duplicates replaced', async () => {

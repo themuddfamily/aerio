@@ -58,12 +58,21 @@ const getBody = (url: string, agent?: HttpsAgent) => new Promise<string>((resolv
 
 describe('real authenticated proxy routing', () => {
   it('routes Node fetch and default HTTP requests with auth without changing environment variables', async () => {
+    // Node 24 fetch tunnels even plaintext HTTP; newer Node versions may use an
+    // absolute-form request. Give CONNECT a real local origin, never port 80.
+    const origin = createServer((_request, response) => response.end('proxied over HTTP'))
+    const port = await listen(origin)
     const fixture = await proxy()
     const envBefore = { HTTP_PROXY: process.env.HTTP_PROXY, HTTPS_PROXY: process.env.HTTPS_PROXY }
     cleanup.push(installNodeProxy({ mode: 'manual', server: fixture.server, bypass: '', credentials: { username: 'user', password: 'p@ss:word' } }))
-    expect(await (await fetch('http://target.test/fetch')).text()).toBe('proxied over HTTP')
-    expect(await getBody('http://target.test/http')).toBe('proxied over HTTP')
-    expect(fixture.seen.map((entry) => entry.url)).toEqual(['http://target.test/fetch', 'http://target.test/http'])
+    expect(await (await fetch(`http://target.test:${port}/fetch`, { signal: AbortSignal.timeout(5000) })).text()).toBe('proxied over HTTP')
+    expect(await getBody(`http://target.test:${port}/http`)).toBe('proxied over HTTP')
+    expect(fixture.seen).toHaveLength(2)
+    const authorization = `Basic ${Buffer.from('user:p@ss:word').toString('base64')}`
+    expect(fixture.seen[0]).toEqual(fixture.seen[0].method === 'CONNECT'
+      ? { method: 'CONNECT', url: `target.test:${port}`, authorization }
+      : { method: 'GET', url: `http://target.test:${port}/fetch`, authorization })
+    expect(fixture.seen[1]).toEqual({ method: 'GET', url: `http://target.test:${port}/http`, authorization })
     expect({ HTTP_PROXY: process.env.HTTP_PROXY, HTTPS_PROXY: process.env.HTTPS_PROXY }).toEqual(envBefore)
   })
 

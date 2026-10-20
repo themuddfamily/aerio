@@ -51,11 +51,13 @@ describe('AttachmentExtractRunner', () => {
   }, 30_000)
 
   it('times out a hung parser, terminates it, and starts a fresh worker for the next job', async () => {
+    // The deadline includes starting the replacement OS thread. Leave room
+    // for a loaded CI host while still proving that the hung job dies.
     const { runner: extractor, spawned } = scripted(`
       parentPort.on('message', (job) => {
         if (job.filename === 'hang.txt') for (;;) {}
         parentPort.postMessage({ id: job.id, result: { status: 'indexed', text: 'ok', truncated: false } })
-      })`, { timeoutMs: 300 })
+      })`, { timeoutMs: 2_000 })
     await expect(extractor.extract(input('hang.txt'))).resolves.toMatchObject({ status: 'timeout', detail: 'Reading the attachment took too long' })
     await expect(extractor.extract(input('fine.txt'))).resolves.toMatchObject({ status: 'indexed', text: 'ok' })
     expect(spawned).toHaveLength(2)

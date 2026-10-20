@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
 
 const mocks = vi.hoisted(() => {
   const posted: any[] = []
@@ -1712,6 +1713,7 @@ describe.sequential('mail worker protocol routing', () => {
   })
 
   it('runs a mail merge as single-recipient Gmail sends, recovering in-flight rows on initialize', async () => {
+    const mergeAttachment = join('C:\\content', 'drafts', 'd', '0-0123456789-report.pdf')
     const { DatabaseSync } = await import('node:sqlite')
     const { MailMergeStore } = await import('./mail/mail-merge-store')
     const sqlite = new DatabaseSync(':memory:')
@@ -1735,12 +1737,12 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.fs.existsSync.mockImplementation((path?: unknown) => String(path).includes('mail-merge'))
     const created = await request({ type: 'merge:create', payload: {
       accountId: 'account-1', subject: 'Hi {{firstName|there}}', text: 'Hello {{firstName|there}}', html: '<p>{{company|}}</p>',
-      attachmentPaths: ['C:\\content\\drafts\\d\\0-0123456789-report.pdf'],
+      attachmentPaths: [mergeAttachment],
       recipients: [{ email: 'ada@example.test', firstName: 'Ada', company: '<b>A&B</b>' }, { email: 'grace@example.test' }, { email: 'ADA@example.test' }, { email: 'bad' }],
       limits: { perMinute: 60, dailyCap: 100_000 }
     } })
     expect(created.result).toMatchObject({ status: 'running', total: 2, limits: { perMinute: 60, dailyCap: 2_000 } })
-    expect(mocks.fs.copyFileSync).toHaveBeenCalledWith('C:\\content\\drafts\\d\\0-0123456789-report.pdf', expect.stringMatching(/mail-merge.+0-report\.pdf$/))
+    expect(mocks.fs.copyFileSync).toHaveBeenCalledWith(mergeAttachment, join('C:\\content', 'mail-merge', created.result.id, '0-report.pdf'))
     await vi.waitFor(() => expect(mocks.gmail.sendMessage).toHaveBeenCalledTimes(2), { timeout: 5_000 })
     const deliveries = vi.mocked(createMime).mock.calls.map(([input]) => input)
     expect(deliveries.map((input) => [input.to, input.cc, input.bcc, input.subject])).toEqual([
