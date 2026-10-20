@@ -1,3 +1,5 @@
+import { EventRemindersField } from '../components/EventRemindersField'
+import { eventReminders, validEventReminders } from '../lib/event-reminders'
 import {
   CalendarDays, CalendarPlus2, Check, ChevronLeft, ChevronRight, Clock3, Copy, Eye, EyeOff,
   MapPin, Pencil, Plus, RefreshCw, Repeat2, Trash2, Users
@@ -491,7 +493,9 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
   const [description, setDescription] = useState(event?.description ?? '')
   const [attendees, setAttendees] = useState(() => attendeeFieldValues(event))
   const [rule, setRule] = useState<string | undefined>(initialRule)
-  const [reminderMinutes, setReminderMinutes] = useState(event?.reminderMinutes ?? 15)
+  const [reminders, setReminders] = useState(() => event ? eventReminders(event) : [15])
+  const reminderProvider = state.accounts.find((account) => account.id === calendarId)?.provider
+  const reminderLimit = reminderProvider === 'microsoft' || reminderProvider === 'outlook' || reminderProvider === 'exchange' ? 1 : 5
   const [conference, setConference] = useState(event?.conference)
   const conferenceCalendar = conferenceCalendars?.find((item) => item.id === calendarId)
   const meetingHosts = useMeetingHosts()
@@ -503,7 +507,7 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
   const providerName = state.accounts.find((account) => account.id === event?.calendarId)?.provider === 'microsoft' ? 'Microsoft' : 'Google'
   const startTime = allDay ? (DATE_INPUT.test(start) ? Date.parse(start) : Number.NaN) : parseWallInput(start, zone)
   const endTime = allDay ? (DATE_INPUT.test(end) ? Date.parse(end) : Number.NaN) : parseWallInput(end, zone)
-  const canSave = Boolean(title.trim()) && Number.isFinite(startTime) && Number.isFinite(endTime) && (allDay ? endTime >= startTime : endTime > startTime)
+  const canSave = validEventReminders(reminders) && reminders.length <= reminderLimit && Boolean(title.trim()) && Number.isFinite(startTime) && Number.isFinite(endTime) && (allDay ? endTime >= startTime : endTime > startTime)
   const zones = useMemo(() => timeZoneOptions(zone, localZone), [zone, localZone])
 
   const toggleAllDay = (checked: boolean) => {
@@ -524,7 +528,7 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
       start: allDay ? start : new Date(startTime).toISOString(),
       end: allDay ? addDaysIso(end, 1) : new Date(endTime).toISOString(),
       location, description, color,
-      attendees: [], reminderMinutes,
+      attendees: [], reminderMinutes: reminders[0] ?? 0, reminders,
       allDay: allDay || undefined,
       timeZone: allDay ? undefined : zone,
       recurrence: 'none',
@@ -565,8 +569,10 @@ function EventEditor({ event, date, defaultCalendarId, state, readOnly = false, 
         {localHint && <p className="recurrence-note event-zone-hint">{localHint}</p>}
         <div className="form-grid-2">
           <label className="field-label">Calendar<select value={calendarId} disabled={readOnly || Boolean(event)} onChange={(e) => { setCalendarId(e.target.value); if (conference?.status === 'pending') setConference(undefined) }}>{state.accounts.filter((account) => writableCalendarIds.has(account.id) || account.id === event?.calendarId).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
-          <label className="field-label">Reminder<select value={reminderMinutes} disabled={readOnly} onChange={(e) => setReminderMinutes(Number(e.target.value))}><option value={0}>At event time</option><option value={5}>5 minutes before</option><option value={10}>10 minutes before</option><option value={15}>15 minutes before</option><option value={30}>30 minutes before</option><option value={60}>1 hour before</option><option value={1440}>1 day before</option></select></label>
+
         </div>
+        <EventRemindersField value={reminders} onChange={setReminders} disabled={readOnly} limit={reminderLimit} />
+        {!validEventReminders(reminders) && <p role="alert">Use different whole minute offsets between 0 and 40320.</p>}
         <RepeatField
           value={rule}
           startDate={start.slice(0, 10)}

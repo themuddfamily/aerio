@@ -1,3 +1,4 @@
+import { eventReminders } from './event-reminders'
 // Dependency-free RFC 5545 iCalendar parser and serializer for calendar import, export, and
 // read-only internet subscriptions. Parsing is bounded by ContentLimits; serialization folds lines.
 import type { CalendarEvent, EventAttendee, EventParticipant } from '../types'
@@ -36,6 +37,7 @@ export interface IcsEvent {
   recurrenceExceptions: string[]
   attendees: string[]
   reminderMinutes?: number
+  reminders?: number[]
   // Scheduling properties (RFC 5546). Only present when the source carries them.
   organizer?: EventParticipant
   attendeeDetails?: EventAttendee[]
@@ -250,15 +252,19 @@ const text = (component: Component, name: string) => {
   return value === undefined ? undefined : unescapeText(value).slice(0, MAX_TEXT)
 }
 
-function reminderFor(component: Component) {
+function remindersFor(component: Component) {
+  const reminders: number[] = []
   for (const alarm of component.children.filter((child) => child.name === 'VALARM')) {
     const trigger = firstProperty(alarm, 'TRIGGER')
     if (!trigger || paramValue(trigger, 'VALUE')?.toUpperCase() === 'DATE-TIME') continue
     if (paramValue(trigger, 'RELATED')?.toUpperCase() === 'END') continue
     const duration = parseDuration(trigger.value)
-    if (duration !== undefined && duration <= 0) return Math.min(40_320, Math.round(-duration / 60_000))
+    if (duration !== undefined && duration <= 0 && -duration <= 40_320 * 60_000 && duration % 60_000 === 0) {
+      const minutes = -duration / 60_000
+      if (!reminders.includes(minutes) && reminders.length < 5) reminders.push(minutes)
+    }
   }
-  return undefined
+  return reminders
 }
 
 function parseEvent(component: Component, context: ZoneContext): IcsEvent | undefined {
@@ -333,7 +339,8 @@ function parseEvent(component: Component, context: ZoneContext): IcsEvent | unde
     ...(recurrenceRule ? { recurrenceRule } : {}),
     recurrenceExceptions: exceptions,
     attendees,
-    ...(reminderFor(component) !== undefined ? { reminderMinutes: reminderFor(component) } : {}),
+    reminders: remindersFor(component),
+    ...(remindersFor(component).length ? { reminderMinutes: remindersFor(component)[0] } : {}),
     ...(organizerEmail && organizerEmail.length <= 500 ? { organizer: { email: organizerEmail, ...(organizerName ? { name: organizerName } : {}) } } : {}),
     ...(details.some((detail) => Object.keys(detail).length > 1) ? { attendeeDetails: details } : {}),
     ...(Number.isInteger(sequence) && sequence >= 0 && sequence <= 2_147_483_647 ? { sequence } : {}),
@@ -400,7 +407,7 @@ export function icsEventToCalendarEvent(event: IcsEvent, calendarId: string, col
     id, calendarId, title: event.title, start: event.start, end: event.end,
     ...(event.location ? { location: event.location } : {}),
     ...(event.description ? { description: event.description } : {}),
-    color, attendees: event.attendees, reminderMinutes: event.reminderMinutes ?? 0,
+    color, attendees: event.attendees, reminderMinutes: event.reminderMinutes ?? 0, reminders: event.reminders ?? [],
     recurrence: simpleRecurrence(event.recurrenceRule),
     ...(event.allDay ? { allDay: true } : {}),
     ...(event.timeZone ? { timeZone: event.timeZone } : {}),
@@ -522,8 +529,8 @@ export function serializeIcs(events: CalendarEvent[], options: IcsSerializeOptio
     if (event.organizer) lines.push(organizerLine(event.organizer))
     if (event.sequence !== undefined) lines.push(`SEQUENCE:${event.sequence}`)
     for (const attendee of eventAttendees(event)) lines.push(attendeeLine(attendee))
-    if (event.reminderMinutes > 0) {
-      lines.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${escapeText(event.title)}`, `TRIGGER:-PT${event.reminderMinutes}M`, 'END:VALARM')
+    for (const minutes of eventReminders(event)) {
+      lines.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${escapeText(event.title)}`, `TRIGGER:-PT${minutes}M`, 'END:VALARM')
     }
     lines.push('END:VEVENT')
   }

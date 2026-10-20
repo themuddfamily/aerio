@@ -71,7 +71,7 @@ describe('CalendarView', () => {
     fireEvent.change(screen.getByLabelText('Ends'), { target: { value: '2026-08-10T10:30' } })
     await user.selectOptions(screen.getByLabelText('Calendar'), 'google')
     await user.selectOptions(screen.getByLabelText('Repeat'), 'monthly')
-    await user.selectOptions(screen.getByLabelText('Reminder'), '60')
+    fireEvent.change(screen.getByLabelText('Reminder 1 (minutes before start)'), { target: { value: '60' } })
     await user.type(screen.getByLabelText(/Location/), 'Meeting room')
     await user.type(screen.getByLabelText(/Attendees/), 'ada@example.test, bob@example.test')
     await user.type(screen.getByLabelText('Notes'), 'Discuss the launch')

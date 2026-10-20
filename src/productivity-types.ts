@@ -15,6 +15,8 @@ export interface SyncedCalendar {
   color: string
   primary: boolean
   canWrite: boolean
+  /** Google Calendar defaults, resolved when an event uses the calendar defaults. */
+  defaultEventReminders?: number[]
   // Online meeting capability reported by the provider (E25); absent on calendars synced before E25.
   conferences?: CalendarConferenceSupport
 }

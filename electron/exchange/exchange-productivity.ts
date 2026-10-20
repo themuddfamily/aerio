@@ -692,7 +692,7 @@ export class ExchangeProductivityService {
     const endShift = Date.parse(input.end) - Date.parse(current.end)
     const shift = (value: string, offset: number) => /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(Date.parse(`${value}T00:00:00Z`) + offset).toISOString().slice(0, 10) : new Date(Date.parse(value) + offset).toISOString()
     return this.updateEvent(master, {
-      ...master, title: input.title, location: input.location, description: input.description, reminderMinutes: input.reminderMinutes,
+      ...master, title: input.title, location: input.location, description: input.description, reminderMinutes: input.reminderMinutes, reminders: input.reminders,
       attendees: input.attendees, ...(input.attendeeDetails ? { attendeeDetails: input.attendeeDetails } : {}),
       start: shift(master.start, startShift), end: shift(master.end, endShift)
     })

@@ -1,3 +1,4 @@
+import { singleProviderReminder } from '../../src/lib/event-reminders'
 import type { CalendarEvent, Contact } from '../../src/types'
 import type { ProviderProductivityData, ProviderProductivitySyncResult, SyncedCalendar, SyncedCalendarEvent, SyncedContact } from '../../src/productivity-types'
 import { ProductivityApiError, retryingJson, type ProductivityConnector } from './connector'
@@ -38,6 +39,7 @@ interface GraphEvent extends GraphOnlineMeetingFields {
   iCalUId?: string
   uid?: string
   recurrence?: GraphRecurrence | null
+  isReminderOn?: boolean
   reminderMinutesBeforeStart?: number
   isCancelled?: boolean
   isOrganizer?: boolean
@@ -114,6 +116,7 @@ function graphTimes(event: CalendarEvent) {
 // `instance` writes a single occurrence (or a master without touching its pattern): `recurrence` is omitted.
 // Rules Graph cannot express throw UnsupportedRecurrenceError rather than being simplified silently.
 export const microsoftEventBody = (event: CalendarEvent, options: { instance?: boolean } = {}) => {
+  const reminder = singleProviderReminder(event, 'Microsoft')
   const times = graphTimes(event)
   const rule = eventRecurrenceRule(event)
   const body = {
@@ -123,8 +126,8 @@ export const microsoftEventBody = (event: CalendarEvent, options: { instance?: b
     end: times.end,
     location: { displayName: event.location ?? '' },
     attendees: eventAttendees(event).map(toGraphAttendee),
-    isReminderOn: true,
-    reminderMinutesBeforeStart: event.reminderMinutes,
+    isReminderOn: reminder !== undefined,
+    reminderMinutesBeforeStart: reminder ?? 0,
     ...(isAllDayEvent(event) ? { isAllDay: true } : {})
   }
   if (options.instance || event.seriesId) return body
@@ -164,6 +167,7 @@ export function mapMicrosoftEvent(accountId: string, calendar: SyncedCalendar, e
     color: calendar.color,
     attendees: (event.attendees ?? []).flatMap((attendee) => attendee.emailAddress?.address ? [attendee.emailAddress.address] : []),
     reminderMinutes: event.reminderMinutesBeforeStart ?? 30,
+    reminders: event.isReminderOn === false ? [] : [event.reminderMinutesBeforeStart ?? 30],
     recurrence: recurrence(event.recurrence?.pattern?.type),
     readOnly: !calendar.canWrite || event.isOrganizer === false,
     ...allDay,

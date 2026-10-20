@@ -1,3 +1,4 @@
+import { eventReminders } from '../../src/lib/event-reminders'
 import { createHash } from 'node:crypto'
 import type { CalendarEvent, Contact } from '../../src/types'
 import type { SyncedCalendarEvent, SyncedContact } from '../../src/productivity-types'
@@ -115,7 +116,7 @@ export function mergeEventResource(original: string, previous: CalendarEvent, ev
     calendar.children.push(generated)
   } else {
     const keepAttendees = attendeeEmails(target).join('\n') === attendeeEmails(generated).join('\n')
-    const keepAlarms = previous.reminderMinutes === event.reminderMinutes
+    const keepAlarms = JSON.stringify(eventReminders(previous)) === JSON.stringify(eventReminders(event))
     const timingChanged = previous.start !== event.start || previous.end !== event.end || (previous.recurrenceRule ?? previous.recurrence) !== (event.recurrenceRule ?? event.recurrence)
     const properties: ContentLine[] = [
       ...generated.properties.filter((line) => !(keepAttendees && line.name === 'ATTENDEE')),

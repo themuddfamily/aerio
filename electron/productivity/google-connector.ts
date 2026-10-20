@@ -1,3 +1,4 @@
+import { eventReminders } from '../../src/lib/event-reminders'
 import type { CalendarEvent, Contact } from '../../src/types'
 import type { ProviderProductivityData, ProviderProductivitySyncResult, SyncedCalendar, SyncedCalendarEvent, SyncedContact, SyncedContactGroup } from '../../src/productivity-types'
 import { ProductivityApiError, retryingJson, type ProductivityConnector } from './connector'
@@ -18,7 +19,7 @@ import {
 } from './online-meetings'
 
 interface GooglePage<T> { items?: T[]; connections?: T[]; nextPageToken?: string; nextSyncToken?: string }
-interface GoogleCalendar { id: string; summary?: string; backgroundColor?: string; primary?: boolean; accessRole?: string; conferenceProperties?: { allowedConferenceSolutionTypes?: string[] } }
+interface GoogleCalendar { defaultReminders?: { minutes?: number }[]; id: string; summary?: string; backgroundColor?: string; primary?: boolean; accessRole?: string; conferenceProperties?: { allowedConferenceSolutionTypes?: string[] } }
 interface GoogleEvent {
   id: string
   status?: string
@@ -110,7 +111,7 @@ export const googleEventBody = (event: CalendarEvent, options: { instance?: bool
     attendees: eventAttendees(event).map(toGoogleAttendee),
     reminders: {
       useDefault: false,
-      overrides: [{ method: 'popup', minutes: event.reminderMinutes }]
+      overrides: eventReminders(event).map((minutes) => ({ method: 'popup', minutes }))
     },
     recurrence
   }
@@ -136,7 +137,8 @@ export function mapGoogleEvent(accountId: string, calendar: SyncedCalendar, even
     description: event.description,
     color: calendar.color,
     attendees: (event.attendees ?? []).flatMap((attendee) => attendee.email ? [attendee.email] : []),
-    reminderMinutes: event.reminders?.overrides?.[0]?.minutes ?? 30,
+    reminderMinutes: event.reminders?.overrides?.[0]?.minutes ?? calendar.defaultEventReminders?.[0] ?? 30,
+    reminders: event.reminders?.useDefault === false ? [...new Set((event.reminders.overrides ?? []).flatMap((item) => Number.isInteger(item.minutes) && item.minutes! >= 0 && item.minutes! <= 40_320 ? [item.minutes!] : []))].slice(0, 5) : calendar.defaultEventReminders,
     recurrence: recurrence(event.recurrence),
     readOnly: !calendar.canWrite,
     ...(event.start?.date ? { allDay: true } : {}),
@@ -207,6 +209,7 @@ export class GoogleProductivityConnector implements ProductivityConnector {
       name: calendar.summary?.trim() || 'Calendar',
       color: calendar.backgroundColor ?? '#6558e8',
       primary: Boolean(calendar.primary),
+      defaultEventReminders: [...new Set((calendar.defaultReminders ?? []).flatMap((item) => Number.isInteger(item.minutes) && item.minutes! >= 0 && item.minutes! <= 40_320 ? [item.minutes!] : []))].slice(0, 5),
       canWrite: this.calendarWriteAuthorized && (calendar.accessRole === 'owner' || calendar.accessRole === 'writer'),
       conferences: googleConferenceSupport(calendar.conferenceProperties?.allowedConferenceSolutionTypes, this.calendarWriteAuthorized && (calendar.accessRole === 'owner' || calendar.accessRole === 'writer'))
     }))

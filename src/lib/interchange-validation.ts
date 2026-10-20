@@ -1,3 +1,4 @@
+import { validEventReminders } from './event-reminders'
 // Bounds checks for interchange data crossing the IPC boundary into the main process.
 import type { CalendarEvent, Contact, ContactField, ContactList, EventAttendee, EventParticipant } from '../types'
 import { CONTACT_GROUP_LIMIT, isContactPhoto } from './contact-fields'
@@ -86,6 +87,7 @@ export function validInterchangeEvent(value: unknown): value is CalendarEvent {
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return false
   if (!optionalText(event.location, 2_000) || !optionalText(event.description, 100_000)) return false
   if (!text(event.color, 100) || !Array.isArray(event.attendees) || event.attendees.length > 1_000 || !event.attendees.every((item) => text(item, 500))) return false
+  if (!validEventReminders(event.reminders)) return false
   if (!Number.isInteger(event.reminderMinutes) || Number(event.reminderMinutes) < 0 || Number(event.reminderMinutes) > 40_320) return false
   if (event.recurrence !== undefined && !['none', 'daily', 'weekly', 'monthly'].includes(event.recurrence)) return false
   return validEventInterchangeFields(event)

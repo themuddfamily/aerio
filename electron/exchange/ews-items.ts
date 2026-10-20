@@ -1,3 +1,4 @@
+import { eventReminders, singleProviderReminder } from '../../src/lib/event-reminders'
 import { createHash } from 'node:crypto'
 import type { AttendeeResponse, CalendarEvent, Contact, ContactField, EventAttendee } from '../../src/types'
 import type { SyncedCalendarEvent, SyncedContact } from '../../src/productivity-types'
@@ -173,6 +174,7 @@ export function mapCalendarItem(folder: ExchangeFolderRef, item: XmlElement, mas
     color: folder.color,
     attendees: [],
     reminderMinutes: reminderSet === false ? 0 : tNumber(item, 'ReminderMinutesBeforeStart') ?? 15,
+    reminders: reminderSet === false ? [] : [tNumber(item, 'ReminderMinutesBeforeStart') ?? 15],
     recurrence: recurrenceRule ? (/FREQ=DAILY/.test(recurrenceRule) ? 'daily' : /FREQ=WEEKLY/.test(recurrenceRule) ? 'weekly' : /FREQ=MONTHLY/.test(recurrenceRule) ? 'monthly' : 'none') : 'none',
     readOnly: !folder.canWrite || attendeeCopy,
     ...(allDay ? { allDay: true } : {}),
@@ -221,6 +223,7 @@ const bodyXml = (text: string) => `<t:Body BodyType="Text">${xmlText(text)}</t:B
 
 /** A new CalendarItem element; returns the Windows zone to put in TimeZoneContext. */
 export function calendarItemXml(event: CalendarEvent) {
+  const reminder = singleProviderReminder(event, 'Exchange')
   const zone = eventWindowsZone(event)
   const times = timesXml(event)
   const lists = attendeeLists(event)
@@ -229,7 +232,7 @@ export function calendarItemXml(event: CalendarEvent) {
     : rule ? ruleToEwsRecurrence(`FREQ=${event.recurrence!.toUpperCase()}`, times.start.slice(0, 10)) : ''
   const xml = '<t:CalendarItem>' +
     element('Subject', event.title) + bodyXml(event.description ?? '') +
-    element('ReminderIsSet', event.reminderMinutes > 0) + element('ReminderMinutesBeforeStart', Math.max(0, event.reminderMinutes)) +
+    element('ReminderIsSet', reminder !== undefined) + element('ReminderMinutesBeforeStart', reminder ?? 0) +
     element('Start', times.start) + element('End', times.end) + element('IsAllDayEvent', times.allDay) + element('Location', event.location ?? '') +
     listXml('RequiredAttendees', lists.required) + listXml('OptionalAttendees', lists.optional) + listXml('Resources', lists.resources) +
     recurrence + `<t:StartTimeZone Id="${attr(zone)}"/><t:EndTimeZone Id="${attr(zone)}"/>` +
@@ -241,14 +244,15 @@ const sameList = (a: string[], b: string[]) => a.length === b.length && a.every(
 
 /** SetItemField updates for the fields that changed between the synchronized copy and the edit. */
 export function calendarItemUpdates(current: CalendarEvent, next: CalendarEvent) {
+  const reminder = singleProviderReminder(next, 'Exchange')
   const zone = eventWindowsZone(next)
   const field = (uri: string, value: string) => setItemField(uri, 'CalendarItem', value)
   const updates: string[] = []
   if (next.title !== current.title) updates.push(field('item:Subject', element('Subject', next.title)))
   if ((next.description ?? '') !== (current.description ?? '')) updates.push(field('item:Body', bodyXml(next.description ?? '')))
-  if (next.reminderMinutes !== current.reminderMinutes) {
-    updates.push(field('item:ReminderIsSet', element('ReminderIsSet', next.reminderMinutes > 0)))
-    if (next.reminderMinutes > 0) updates.push(field('item:ReminderMinutesBeforeStart', element('ReminderMinutesBeforeStart', next.reminderMinutes)))
+  if (JSON.stringify(eventReminders(next)) !== JSON.stringify(eventReminders(current))) {
+    updates.push(field('item:ReminderIsSet', element('ReminderIsSet', reminder !== undefined)))
+    if (reminder !== undefined) updates.push(field('item:ReminderMinutesBeforeStart', element('ReminderMinutesBeforeStart', reminder)))
   }
   const timing = next.start !== current.start || next.end !== current.end || Boolean(next.allDay) !== Boolean(current.allDay) || (next.timeZone ?? '') !== (current.timeZone ?? '')
   if (timing) {

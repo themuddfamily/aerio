@@ -190,6 +190,12 @@ export const PROFILE_BACKUP_LAYOUT: ProfileBackupLayout = {
       summarize: (db) => [{ label: 'External automation settings', count: countRows(db, 'mcp_settings') }]
     },
     {
+      file: 'calendar-reminders.sqlite',
+      label: 'Calendar reminder delivery state',
+      prepareRestore: (path) => withDatabase(path, (db) => db.exec(TASK_REMINDER_SCHEMA)),
+      summarize: (db) => [{ label: 'Delivered calendar reminders', count: countRows(db, 'task_reminder_state') }]
+    },
+    {
       // Delivered, snoozed, and dismissed reminders, so a restored profile does not refire them (E44).
       file: 'task-reminders.sqlite',
       label: 'Task reminder delivery state',

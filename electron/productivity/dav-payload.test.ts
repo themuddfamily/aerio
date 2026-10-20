@@ -40,7 +40,7 @@ describe('DAV payload mapping', () => {
     const mapped = eventsFromResource(collection, href, editedOverride)
     expect(mapped.map((event) => event.title)).toEqual(['Master', 'Override edited'])
 
-    const editedMaster = mergeEventResource(original, master, { ...master, title: 'Master edited', attendees: ['new@example.com'], reminderMinutes: 15 })
+    const editedMaster = mergeEventResource(original, master, { ...master, title: 'Master edited', attendees: ['new@example.com'], reminderMinutes: 15, reminders: [15] })
     const titles = eventsFromResource(collection, href, editedMaster)
     expect(titles.map((event) => event.title)).toEqual(['Master edited', 'Override'])
     expect(titles[0]).toMatchObject({ attendees: ['new@example.com'], reminderMinutes: 15, sourceUid: 'a' })

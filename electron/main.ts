@@ -1,4 +1,6 @@
+import { startEventReminders } from './productivity/event-reminders'
 import { normalizeThemeSettings } from '../src/lib/themes'
+import { validEventReminders } from '../src/lib/event-reminders'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, safeStorage, shell, Tray } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
@@ -218,6 +220,7 @@ let directoryIpc: ReturnType<typeof registerDirectory> | null = null
 let serverNotes: ReturnType<typeof setupServerNotes> | null = null
 let taskService: TaskService | null = null
 let taskPolling: NodeJS.Timeout | undefined
+let calendarReminders: ReturnType<typeof startEventReminders> | null = null
 let taskExtras: ReturnType<typeof registerTaskExtras> | null = null
 let taskNetworkOnline = true
 let messageLocalStore: MessageLocalStore | null = null
@@ -639,6 +642,7 @@ function validCalendarEvent(value: unknown): value is CalendarEvent {
   if (event.location !== undefined && !validText(event.location, 2_000)) return false
   if (event.description !== undefined && !validText(event.description, 100_000)) return false
   if (!validText(event.color, 100) || !Array.isArray(event.attendees) || event.attendees.length > 1_000 || !event.attendees.every((item) => validText(item, 500))) return false
+  if (!validEventReminders(event.reminders)) return false
   if (!Number.isInteger(event.reminderMinutes) || Number(event.reminderMinutes) < 0 || Number(event.reminderMinutes) > 40_320) return false
   if (!(event.recurrence === undefined || event.recurrence === 'none' || event.recurrence === 'daily' || event.recurrence === 'weekly' || event.recurrence === 'monthly')) return false
   return validEventInterchangeFields(event) && validEventConference(event.conference)
@@ -2342,6 +2346,18 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     },
     broadcast: (channel, payload) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send(channel, payload))
   })
+  calendarReminders = startEventReminders({
+    userData: app.getPath('userData'),
+    events: () => [...requireProductivityStore().snapshot().events, ...(interchangeStore?.snapshot().events ?? [])],
+    enabled: () => Boolean(loadPreferences().settings.notifications) && !hideTestWindows,
+    locked: () => appLockStatus().locked,
+    notify: (title, body) => {
+      if (!Notification.isSupported()) return
+      const notification = new Notification({ title, body: body.slice(0, 240), icon: iconPath() })
+      notification.on('click', () => openMainWindow())
+      notification.show()
+    }
+  })
   // .ics task import/export for local and connected lists (E45).
   registerTaskIcs({
     ipcMain,
@@ -2609,6 +2625,7 @@ app.on('before-quit', () => {
   quitting = true
   stopTrayMonitor()
   if (taskPolling) clearInterval(taskPolling)
+  calendarReminders?.close()
   taskExtras?.dispose()
   profileBackups?.stop()
   void chatRuntime?.dispose().catch(() => {})

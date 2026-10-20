@@ -38,6 +38,8 @@ export interface CalendarEvent {
   color: string
   attendees: string[]
   reminderMinutes: number
+  /** Reminder offsets before start in minutes. Empty disables; absent reads the legacy value. */
+  reminders?: number[]
   recurrence?: 'none' | 'daily' | 'weekly' | 'monthly'
   // Interchange fields preserved from ICS imports and written back on export.
   allDay?: boolean
