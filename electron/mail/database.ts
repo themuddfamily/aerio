@@ -1,3 +1,4 @@
+import { MailPinSyncStore } from './mail-pin-sync'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -49,7 +50,7 @@ import { MailDraftSmimeStore } from './smime-draft-store'
 import { LocalMailStore } from './local-mail-store'
 import { MailDuplicateStore } from './mail-duplicates'
 import { MAIL_PIN_JOIN, MAIL_THREAD_CURSOR_CLAUSE, MAIL_THREAD_CURSOR_PARAMS, MAIL_THREAD_ORDER, MailPinStore, decodeMailThreadCursor, encodeMailThreadCursor, mailThreadCursorParams } from './mail-pins'
-import { isLocalOnlyMailAction } from '../../src/lib/mail-pins'
+import { isPinMailAction } from '../../src/lib/mail-pins'
 import { MailFolderPreferenceStore } from './folder-preferences'
 import { Pop3Store } from './pop3-store'
 import { MailArchiveStore } from './mail-archive-store'
@@ -128,6 +129,7 @@ export class MailDatabase {
   readonly ruleLedger: RuleRunLedger
   readonly attachmentText: AttachmentTextStore
   readonly mailMerge: MailMergeStore
+  readonly pinSync: MailPinSyncStore
   readonly pins: MailPinStore
   readonly folderPreferences: MailFolderPreferenceStore
   readonly pop3: Pop3Store
@@ -157,6 +159,7 @@ export class MailDatabase {
     this.attachmentText = new AttachmentTextStore(this.db)
     this.mailMerge = new MailMergeStore(this.db)
     this.pins = new MailPinStore(this.db)
+    this.pinSync = new MailPinSyncStore(this.db, this.pins)
     this.folderPreferences = new MailFolderPreferenceStore(this.db)
     this.pop3 = new Pop3Store(this.db)
     this.archive = new MailArchiveStore(this.db, this)
@@ -1097,6 +1100,7 @@ export class MailDatabase {
       messageCount: Number(row.message_count),
       labelIds: json<string[]>(String(row.label_ids_json), []),
       snoozedUntil: row.snoozed_until ? String(row.snoozed_until) : undefined,
+      pinSync: this.pinSync.capability(String(row.account_id), String(row.id)),
       pinned: Boolean(row.pinned_at),
       pinnedAt: row.pinned_at ? String(row.pinned_at) : undefined,
       ...this.inboxCategoryOf(String(row.account_id), String(row.id), String(row.sender_email))
@@ -1170,7 +1174,7 @@ export class MailDatabase {
     if (!this.getAccount(input.accountId)) throw new Error('Account not found')
     if (!input.threadIds.length) throw new Error('Select at least one conversation')
     if ((input.action === 'label' || input.action === 'unlabel' || input.action === 'move') && !input.labelId) throw new Error(input.action === 'move' ? 'Choose a destination' : 'Choose a label')
-    if (isLocalOnlyMailAction(input.action)) return this.applyPinAction(input, operationId, delayMs)
+    if (isPinMailAction(input.action)) return this.applyPinAction(input, operationId, delayMs)
     const provider = this.getAccount(input.accountId)!.provider
     const destinationLabel = input.labelId ? this.stmt('SELECT name FROM gmail_labels WHERE account_id=? AND id=?').get(input.accountId, input.labelId) as DatabaseRow | undefined : undefined
     const created = nowIso()
@@ -1221,7 +1225,7 @@ export class MailDatabase {
     const row = this.stmt('SELECT * FROM gmail_operations WHERE id=?').get(operationId) as DatabaseRow | undefined
     if (!row || row.status === 'cancelled' || row.status === 'failed') return false
     const inverse = String(row.inverse_kind) as MailActionKind
-    if (isLocalOnlyMailAction(String(row.kind))) return this.undoPinOperation(operationId, row, inverse)
+    if (isPinMailAction(String(row.kind))) return this.undoPinOperation(operationId, row, inverse)
     const input: ApplyMailActionInput = {
       accountId: String(row.account_id),
       threadIds: json<string[]>(String(row.thread_ids_json), []),
@@ -1236,10 +1240,12 @@ export class MailDatabase {
     return true
   }
 
-  /** Pins are local-only: applied immediately, recorded as succeeded, and never dispatched to a provider. */
+  /** Apply the local view immediately; only verified IMAP-capable conversations enter the durable queue. */
   private applyPinAction(input: ApplyMailActionInput, operationId: string, delayMs: number): PendingOperation {
     const created = nowIso()
     const undoUntil = new Date(Date.now() + delayMs).toISOString()
+    const remoteThreads = input.threadIds.filter((threadId) => this.pinSync.capability(input.accountId, threadId).mode === 'imap-keyword')
+    const status = remoteThreads.length ? 'queued' : 'succeeded'
     this.transaction(() => {
       for (const threadId of input.threadIds) {
         if (!this.stmt('SELECT 1 FROM gmail_threads WHERE account_id=? AND id=?').get(input.accountId, threadId)) throw new Error(`Conversation ${threadId} was not found`)
@@ -1247,20 +1253,31 @@ export class MailDatabase {
       const before = this.pins.set(input.accountId, input.threadIds, input.action === 'pin', created)
       this.stmt(`
         INSERT INTO gmail_operations(id,account_id,thread_ids_json,kind,label_id,inverse_kind,status,execute_after,undo_until,created_at,updated_at)
-        VALUES(?,?,?,?,NULL,?,'succeeded',?,?,?,?)
-      `).run(operationId, input.accountId, JSON.stringify(input.threadIds), input.action, this.inverseAction(input.action), created, undoUntil, created, created)
+        VALUES(?,?,?,?,NULL,?,?,?,?,?,?)
+      `).run(operationId, input.accountId, JSON.stringify(remoteThreads.length ? remoteThreads : input.threadIds), input.action, this.inverseAction(input.action), status, undoUntil, undoUntil, created, created)
       this.pins.recordUndo(operationId, input.accountId, before)
     })
-    return { id: operationId, accountId: input.accountId, kind: input.action, status: 'succeeded', undoUntil }
+    return { id: operationId, accountId: input.accountId, kind: input.action, status, undoUntil }
+  }
+
+  reconcileImapPins(accountId: string) {
+    for (const threadId of this.pinSync.reconcile(accountId)) this.applyPinAction({ accountId, threadIds: [threadId], action: 'pin' }, crypto.randomUUID(), 0)
   }
 
   private undoPinOperation(operationId: string, row: DatabaseRow, inverse: MailActionKind) {
+    const remote = this.getAccount(String(row.account_id))?.provider === 'imap' && row.status !== 'queued'
+    const before = this.pins.undoSnapshot(operationId)
     const restored = this.transaction(() => {
       if (!this.pins.restore(operationId)) return false
       this.stmt('UPDATE gmail_operations SET status=?,updated_at=? WHERE id=?').run('cancelled', nowIso(), operationId)
       return true
     })
-    if (restored) return true
+    if (restored) {
+      if (remote && before) for (const [threadId, at] of Object.entries(before)) {
+        if (this.stmt('SELECT 1 FROM gmail_threads WHERE account_id=? AND id=?').get(String(row.account_id), threadId)) this.applyPinAction({ accountId: String(row.account_id), threadIds: [threadId], action: at ? 'pin' : 'unpin' }, crypto.randomUUID(), 0)
+      }
+      return true
+    }
     // The exact snapshot has expired; fall back to the inverse change like provider actions do.
     const threadIds = json<string[]>(String(row.thread_ids_json), []).filter((threadId) => this.stmt('SELECT 1 FROM gmail_threads WHERE account_id=? AND id=?').get(String(row.account_id), threadId))
     if (!threadIds.length) return false
@@ -1288,6 +1305,15 @@ export class MailDatabase {
     const row = this.stmt('SELECT * FROM gmail_operations WHERE id=?').get(id) as DatabaseRow | undefined
     if (!row) return false
     const accountId = String(row.account_id)
+    if (isPinMailAction(String(row.kind))) {
+      this.transaction(() => {
+        const newer = this.stmt(`SELECT DISTINCT ids.value thread_id FROM gmail_operations o,json_each(o.thread_ids_json) ids WHERE o.account_id=? AND o.kind IN ('pin','unpin') AND o.status IN ('queued','running','succeeded') AND o.rowid>(SELECT rowid FROM gmail_operations WHERE id=?)`).all(accountId, id) as DatabaseRow[]
+        const current = this.pins.snapshot(accountId, newer.map((item) => String(item.thread_id)))
+        this.pins.restore(id)
+        this.pins.restoreSnapshot(accountId, current)
+        this.stmt('UPDATE gmail_operations SET status=?,error=?,updated_at=? WHERE id=?').run(status, error ?? null, nowIso(), id)
+      }); return true
+    }
     const threads = json<string[]>(String(row.thread_ids_json), [])
     const snapshot = json<Record<string, string[]>>(String(row.before_labels_json), {})
     this.transaction(() => {

@@ -1,4 +1,3 @@
-import { proxyUrlForHost } from '../network-proxy-runtime'
 import { createHash } from 'node:crypto'
 import { ImapFlow, type ListResponse } from 'imapflow'
 import nodemailer from 'nodemailer'
@@ -6,6 +5,8 @@ import PostalMime from 'postal-mime'
 import type { ImapAccountInput, MailActionKind, MailSendOptions } from '../../src/mail-types'
 import { FolderConflictError, FolderNotEmptyError } from './folder-errors'
 import { decodeImapBody, imapStructureParts } from './offline-parts'
+import { proxyUrlForHost } from '../network-proxy-runtime'
+import { AERIO_PIN_KEYWORD, imapPinSupport, type ImapPinTarget } from '../../src/mail-pin-sync-types'
 
 export interface ImapFolder {
   path: string
@@ -182,16 +183,17 @@ export class ImapSmtpClient {
     try {
       if (!client.mailbox) throw new Error(`Could not open ${folder.path}`)
       const uidValidity = client.mailbox.uidValidity.toString()
+      const pinSync = client.mailbox.permanentFlags || client.mailbox.readOnly ? imapPinSupport(client.mailbox) : undefined
       const uids = await client.search({ all: true }, { uid: true }) || []
       const windowUids = since ? new Set(uids.length ? await client.search({ since }, { uid: true }) || [] : []) : undefined
       const refs: ImapMessageRef[] = []
-      if (!uids.length) return { refs, uidValidity, highestModseq: client.mailbox.highestModseq?.toString(), uidNext: client.mailbox.uidNext, windowUids }
+      if (!uids.length) return { refs, uidValidity, highestModseq: client.mailbox.highestModseq?.toString(), uidNext: client.mailbox.uidNext, windowUids, ...(pinSync ? { pinSync } : {}) }
       for await (const message of client.fetch(uids, { uid: true, envelope: true, threadId: true, flags: true }, { uid: true })) {
         const headerThread = message.envelope?.inReplyTo ?? message.envelope?.messageId
         const threadId = message.threadId ?? createHash('sha256').update(headerThread || `${folder.path}:${message.uid}`).digest('base64url').slice(0, 32)
         refs.push({ id: localId(folder.path, uidValidity, message.uid), threadId, folder: folder.path, uid: message.uid, uidValidity, labels: imapMessageLabels(folder, message.flags ?? new Set()) })
       }
-      return { refs, uidValidity, highestModseq: client.mailbox.highestModseq?.toString(), uidNext: client.mailbox.uidNext, windowUids }
+      return { refs, uidValidity, highestModseq: client.mailbox.highestModseq?.toString(), uidNext: client.mailbox.uidNext, windowUids, ...(pinSync ? { pinSync } : {}) }
     } finally {
       lock.release()
     }
@@ -272,6 +274,35 @@ export class ImapSmtpClient {
         const result = await client.messageCopy(uid, destination, { uid: true })
         if (!result) throw new Error('The mail server could not copy the message')
       } finally { lock.release() }
+    })
+  }
+
+  /** Dedicated pin state, verified against live mailbox capability, UIDVALIDITY and FETCH readback. */
+  async setPinned(messages: ImapPinTarget[], pinned: boolean) {
+    if (!messages.length) throw new Error('No verified IMAP messages are available to synchronize this pin')
+    return this.withConnection(async (client) => {
+      const results: { folder: string; uid: number; pinned: boolean }[] = []
+      for (const folder of new Set(messages.map((message) => message.folder))) {
+        const rows = messages.filter((message) => message.folder === folder)
+        const lock = await client.getMailboxLock(folder)
+        try {
+          const support = imapPinSupport(client.mailbox)
+          if (support.mode !== 'imap-keyword') throw new Error(support.reason)
+          const uidValidity = client.mailbox ? client.mailbox.uidValidity.toString() : undefined
+          if (!uidValidity || rows.some((message) => message.uidValidity !== uidValidity)) throw new Error('The IMAP folder identity changed. Synchronize the folder before retrying pins.')
+          const uids = [...new Set(rows.map((message) => message.uid))]
+          const written = pinned ? await client.messageFlagsAdd(uids, [AERIO_PIN_KEYWORD], { uid: true }) : await client.messageFlagsRemove(uids, [AERIO_PIN_KEYWORD], { uid: true })
+          if (written === false) throw new Error('The IMAP server refused the pin keyword')
+          for (const uid of uids) {
+            const actual = await client.fetchOne(String(uid), { uid: true, flags: true }, { uid: true })
+            if (!actual || !actual.flags) throw new Error('The IMAP server did not return pin readback')
+            const remotePinned = [...actual.flags].some((flag) => flag.toLowerCase() === AERIO_PIN_KEYWORD.toLowerCase())
+            if (remotePinned !== pinned) throw new Error('The IMAP server did not retain the requested pin state. The change will retry.')
+            results.push({ folder, uid, pinned: remotePinned })
+          }
+        } finally { lock.release() }
+      }
+      return results
     })
   }
 

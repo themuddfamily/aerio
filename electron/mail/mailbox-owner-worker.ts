@@ -16,7 +16,7 @@ import {
   type SaveDelegateInput,
   type UpdateMailboxOwnerInput
 } from '../../src/mailbox-owner-types'
-import { isLocalOnlyMailAction } from '../../src/lib/mail-pins'
+import { isPinMailAction } from '../../src/lib/mail-pins'
 import { addDelegate, delegationErrorMessage, getDelegates, removeDelegate, updateDelegate } from '../exchange/ews-delegation'
 import { EwsClient, EwsError } from '../exchange/ews-client'
 import {
@@ -482,7 +482,7 @@ export class MailboxOwnerService {
       if (destination && (input.action === 'move' || input.action === 'label')) throw new Error('Messages cannot be moved between your mailbox and a shared mailbox or public folder')
       return { input, ownerId }
     }
-    if (isLocalOnlyMailAction(input.action)) return { input, ownerId }
+    if (isPinMailAction(input.action)) return { input, ownerId }
     const owner = this.requireOwner(input.accountId, ownerId)
     const folders = this.owners.folders(input.accountId, ownerId)
     this.assertWritable(owner, this.sourceFolders(input.accountId, owner, folders, input.threadIds))

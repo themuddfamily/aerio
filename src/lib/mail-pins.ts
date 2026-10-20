@@ -1,9 +1,9 @@
 import type { MailActionKind, MailThreadSummary, PendingOperation } from '../mail-types'
 
-/** Mail actions that only change Aerio's local state and are never sent to a provider. */
-export const LOCAL_ONLY_MAIL_ACTIONS: readonly MailActionKind[] = ['pin', 'unpin']
+/** Pin actions use a separate state path; verified IMAP conversations also queue a dedicated keyword. */
+export const PIN_MAIL_ACTIONS: readonly MailActionKind[] = ['pin', 'unpin']
 
-export const isLocalOnlyMailAction = (kind: string): kind is 'pin' | 'unpin' => kind === 'pin' || kind === 'unpin'
+export const isPinMailAction = (kind: string): kind is 'pin' | 'unpin' => kind === 'pin' || kind === 'unpin'
 
 /** Pin when any target is unpinned; unpin only when every target is already pinned. */
 export function pinActionFor(items: Pick<MailThreadSummary, 'pinned'>[]): 'pin' | 'unpin' {
@@ -35,9 +35,10 @@ export function mailListGroupStart(
   return dateKey(previous.lastDate) !== dateKey(item.lastDate) ? 'date' : undefined
 }
 
-/** Text for the undo toast; pin changes are already applied, not queued for a provider. */
-export function pendingOperationsMessage(operations: Pick<PendingOperation, 'kind'>[]) {
-  if (operations.length > 0 && operations.every((operation) => operation.kind === 'pin')) return 'Pinned to the top of the list'
-  if (operations.length > 0 && operations.every((operation) => operation.kind === 'unpin')) return 'Unpinned'
+/** Pin ordering is applied immediately; capable IMAP conversations additionally queue server synchronization. */
+export function pendingOperationsMessage(operations: (Pick<PendingOperation, 'kind'> & Partial<Pick<PendingOperation, 'status'>>)[]) {
+  const queued = operations.some((operation) => operation.status === 'queued' || operation.status === 'running') ? ' · IMAP pin sync queued' : ''
+  if (operations.length > 0 && operations.every((operation) => operation.kind === 'pin')) return `Pinned to the top of the list${queued}`
+  if (operations.length > 0 && operations.every((operation) => operation.kind === 'unpin')) return `Unpinned${queued}`
   return operations.length > 1 ? `${operations.length} mail changes queued` : 'Mail change queued'
 }

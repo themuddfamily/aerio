@@ -70,7 +70,7 @@ import { formatFileSize } from '../lib/domain'
 import { decodeHtmlEntities } from '../lib/html-entities'
 import { formatMailArrivalTooltip, formatMailDateHeading, formatMailListTime, mailDateGroupKey } from '../lib/mail-date'
 import { visibleMailLabels } from '../lib/mail-labels'
-import { isLocalOnlyMailAction, mailListGroupStart, pendingOperationsMessage, pinActionFor, threadIdsByAccount } from '../lib/mail-pins'
+import { isPinMailAction, mailListGroupStart, pendingOperationsMessage, pinActionFor, threadIdsByAccount } from '../lib/mail-pins'
 import { isMailboxRefreshing, shouldShowDetailedSync } from '../lib/mail-sync'
 import { copyText, useContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { MailFolderOfflineModal, MailOfflineContentNotice, MailOfflineListFooter, MailSearchCoverageNotice, mailboxOfflineTarget, offlineFolderMenuItems, type OfflineFolderTarget } from '../components/MailOfflineSync'
@@ -373,8 +373,8 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
         void loadAccountUnreadCounts()
       }
       if (event.type === 'operation' && event.payload.status === 'failed') onToast(event.payload.error ?? 'The mail provider rejected the change')
-      // Pins are applied locally and succeed at once; their undo stays offered until it expires.
-      if (event.type === 'operation' && event.payload.status === 'succeeded' && !isLocalOnlyMailAction(event.payload.kind)) setPending((items) => items.filter((item) => item.id !== event.payload.id))
+      // Pin ordering applies immediately; its exact Undo remains available while native keyword writes settle.
+      if (event.type === 'operation' && event.payload.status === 'succeeded' && !isPinMailAction(event.payload.kind)) setPending((items) => items.filter((item) => item.id !== event.payload.id))
       if (event.type === 'draft-delivery') {
         setPendingSend((current) => current?.id === event.payload.id ? undefined : current)
         if (event.payload.status === 'sent') onToast('Message sent')
@@ -662,7 +662,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
       ? [[quickActionCommandId(quickAction.shortcut), () => void runQuickAction(quickAction)]] : []))
   }, { blockInTextEntry: true, ignoreDialogs: true })
 
-  // Pin state is local-only, so archived (read-only) accounts can still be pinned.
+  // Archived/unsupported accounts retain local pins; verified IMAP conversations queue their dedicated keyword.
   const togglePin = async (items: MailThreadSummary[], action = pinActionFor(items)) => {
     if (!items.length) {
       onToast(`Select a conversation to ${action}`)
@@ -1265,6 +1265,7 @@ export default function ConnectedMailView({ onToast, composeRequest = { id: 0 },
           </div>
           <article className="message-reader mail-thread" onContextMenu={(event) => showSummaryMenu(event, selected)}>
             <header><div className="reader-labels">{selectedLabels.slice(0, 5).map((label) => <span key={label.id}>{label.name}</span>)}</div><h2>{thread.subject}</h2></header>
+            {(selected.pinned || selected.pinSync?.mode === 'imap-keyword') && <p className="provider-source-note" role="status">{selected.pinSync?.reason ?? 'Pins stay on this computer; this provider has no verified dedicated pin mapping in Aerio.'}</p>}
             {thread.messages.map((message) => <ThreadMessageAccordion
               key={message.id}
               message={message}

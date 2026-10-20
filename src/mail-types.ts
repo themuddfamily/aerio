@@ -103,7 +103,8 @@ export interface MailThreadSummary {
   messageCount: number
   labelIds: string[]
   snoozedUntil?: string
-  /** Local-only pin (never synced to the provider); pinned conversations list first. */
+  /** Dedicated IMAP keyword synchronization where verified; other providers keep pins local. */
+  pinSync?: import('./mail-pin-sync-types').MailPinSyncSupport
   pinned?: boolean
   pinnedAt?: string
   /** Inbox tab this conversation appears in (E33), and why. */

@@ -1,5 +1,6 @@
-import { installNodeProxy } from './network-proxy-runtime'
+import { imapPinSupport } from '../src/mail-pin-sync-types'
 import { parentPort } from 'node:worker_threads'
+import { installNodeProxy } from './network-proxy-runtime'
 import { createHash } from 'node:crypto'
 import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statfsSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
@@ -61,7 +62,7 @@ import { createReceiptService } from './mail/receipts'
 import { AttachmentContentIndexer } from './mail/attachment-text-indexer'
 import { AttachmentExtractRunner } from './mail/attachment-extract-runner'
 import { supportedSendOptions } from '../src/lib/mail-send-options'
-import { isLocalOnlyMailAction } from '../src/lib/mail-pins'
+import { isPinMailAction } from '../src/lib/mail-pins'
 import { handleMailFolderPreferenceCommand, type MailFolderPreferenceCommand } from './mail/folder-preferences'
 import { categoryHintFromHeaders, handleInboxCategoryCommand, isInboxCategoryCommand } from './mail/inbox-category-worker'
 import { isMailboxOwnerCommand, MailboxOwnerService } from './mail/mailbox-owner-worker'
@@ -730,6 +731,7 @@ async function syncImapAccount(accountId: string) {
       // SEARCH SINCE marks the UIDs inside this folder's sync window (E36).
       const since = scope ? startForLocations(scope, messageLocations(imapMessageLabels(folder, new Set(['\\Seen'])))) : undefined
       const inventory = since ? await client.inventoryFolder(connection, folder, since) : await client.inventoryFolder(connection, folder)
+      database!.pinSync.recordFolder(accountId, folder.path, inventory.pinSync ?? imapPinSupport(undefined))
       if (previous.folders[folder.path]?.uidValidity && previous.folders[folder.path].uidValidity !== inventory.uidValidity) {
         database!.reconcileRemoteFolder(accountId, folder.path, new Set())
       }
@@ -772,6 +774,7 @@ async function syncImapAccount(accountId: string) {
       }
     }
     database!.setProviderState(accountId, next)
+    database!.reconcileImapPins(accountId)
   })
   database.setAccountHistory(accountId, `imap:${Date.now()}`, true)
   progress(accountId, 'complete', 'Up to date')
@@ -1019,8 +1022,8 @@ async function runOperations() {
     const labelId = row.label_id ? String(row.label_id) : undefined
     // Duplicate cleanup trashes single messages; every other operation covers whole conversations.
     const messageIds = row.message_ids_json ? JSON.parse(String(row.message_ids_json)) as string[] : undefined
-    // Local Folders, POP3 folders, and local-only actions (pins) never reach a provider.
-    if (mailProviderKeepsFoldersLocally(database.getAccount(accountId)?.provider) || isLocalOnlyMailAction(kind)) {
+    // Unsupported providers retain local-only pins; verified IMAP keyword pins use the durable queue.
+    if (mailProviderKeepsFoldersLocally(database.getAccount(accountId)?.provider) || (isPinMailAction(kind) && database.getAccount(accountId)?.provider !== 'imap')) {
       database.updateOperation(id, 'succeeded')
       emit({ type: 'operation', payload: { id, accountId, kind, status: 'succeeded' } })
       continue
@@ -1048,6 +1051,12 @@ async function runOperations() {
           imap: () => imapClientFor(accountId),
           microsoftDeletedItems: database.getProviderState<MicrosoftProviderState>(accountId, { deltaLinks: {} }).specialFolders?.deleteditems
         }, archiveRemoval)
+      } else if (isPinMailAction(kind)) {
+        if (provider !== 'imap') throw new Error('This provider has no verified dedicated pin synchronization')
+        const activeThreads = database.pinSync.activeThreadIds(accountId, id, threadIds)
+        if (!activeThreads.length) { database.updateOperation(id, 'cancelled'); emit({ type: 'operation', payload: { id, accountId, kind, status: 'cancelled' } }); continue }
+        const results = await (await imapClientFor(accountId)).setPinned(database.pinSync.targets(accountId, activeThreads), kind === 'pin')
+        database.pinSync.acknowledge(accountId, results)
       } else if (provider === 'gmail') {
         const client = clientFor(accountId)
         if (messageIds && kind === 'trash') await client.trashMessages(messageIds)
@@ -1077,6 +1086,7 @@ async function runOperations() {
         }
       }
       database.updateOperation(id, 'succeeded')
+      if (isPinMailAction(kind)) { database.reconcileImapPins(accountId); emit({ type: 'mail-changed', payload: { accountId, threadIds } }) }
       emit({ type: 'operation', payload: { id, accountId, kind, status: 'succeeded' } })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

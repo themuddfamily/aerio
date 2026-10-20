@@ -68,6 +68,8 @@ const mocks = vi.hoisted(() => {
   method('diagnosticHealth', () => ({ integrity: 'ok' }))
   method('releaseDueSnoozes', () => [])
   method('dueOperations', () => [])
+  method('reconcileImapPins')
+  db.pinSync = { recordFolder: vi.fn(), activeThreadIds: vi.fn((_account: string, _operation: string, ids: string[]) => ids), targets: vi.fn(() => [{ folder: 'INBOX', uid: 7, uidValidity: '1' }]), acknowledge: vi.fn() }
   method('draftsToDiscard', () => [])
   method('draftsToSync', () => [])
   method('queuedDrafts', () => [])
@@ -164,7 +166,7 @@ const mocks = vi.hoisted(() => {
   }
   const imap = {
     copyMessage: vi.fn().mockResolvedValue(undefined),
-    verify: vi.fn().mockResolvedValue(undefined), listFolders: vi.fn().mockResolvedValue([]), applyAction: vi.fn().mockResolvedValue(undefined),
+    verify: vi.fn().mockResolvedValue(undefined), listFolders: vi.fn().mockResolvedValue([]), applyAction: vi.fn().mockResolvedValue(undefined), setPinned: vi.fn().mockResolvedValue([{ folder: 'INBOX', uid: 7, pinned: true }]),
     saveDraft: vi.fn().mockResolvedValue('remote-draft'), deleteDraft: vi.fn().mockResolvedValue(undefined), send: vi.fn().mockResolvedValue(undefined),
     withConnection: vi.fn(async (callback: (connection: any) => Promise<void>) => callback({})),
     inventoryFolder: vi.fn().mockResolvedValue({ refs: [], uidValidity: '1', uidNext: 1 }),
@@ -1770,6 +1772,23 @@ describe.sequential('mail worker protocol routing', () => {
     mocks.setCredential({ type: 'oauth', accessToken: 'token' })
   })
 
+  it('dispatches supported IMAP pin keywords with readback and retries provider failures', async () => {
+    mocks.setCredential({ type: 'imap', config: { email: 'imap@example.test' } })
+    mocks.db.getAccount.mockReturnValue({ ...mocks.account, provider: 'imap' })
+    mocks.db.dueOperations.mockReturnValueOnce([{ id: 'native-pin', account_id: 'account-1', kind: 'pin', thread_ids_json: '["thread"]', label_id: null }]).mockReturnValue([])
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(mocks.db.updateOperation).toHaveBeenCalledWith('native-pin', 'succeeded'))
+    expect(mocks.imap.setPinned).toHaveBeenCalledWith([{ folder: 'INBOX', uid: 7, uidValidity: '1' }], true)
+    expect(mocks.db.pinSync.acknowledge).toHaveBeenCalledWith('account-1', [{ folder: 'INBOX', uid: 7, pinned: true }])
+    expect(mocks.db.reconcileImapPins).toHaveBeenCalledWith('account-1')
+    mocks.imap.setPinned.mockRejectedValueOnce(new Error('Pin keyword readback mismatch'))
+    mocks.db.operationAttempts.mockReturnValueOnce(2)
+    mocks.db.dueOperations.mockReturnValueOnce([{ id: 'native-retry', account_id: 'account-1', kind: 'unpin', thread_ids_json: '["thread"]', label_id: null }]).mockReturnValue([])
+    await request({ type: 'network', payload: { online: true } })
+    await vi.waitFor(() => expect(mocks.db.rescheduleOperation).toHaveBeenCalledWith('native-retry', 'Pin keyword readback mismatch', 8000))
+    mocks.db.getAccount.mockReturnValue(mocks.account); mocks.setCredential({ type: 'oauth', accessToken: 'token' })
+  })
+
   it('shuts down cleanly', async () => {
     // Touch the import service so shutdown has a running service to halt.
     await request({ type: 'import:list' })
@@ -1780,4 +1799,6 @@ describe.sequential('mail worker protocol routing', () => {
     expect(mocks.db.close).toHaveBeenCalledOnce()
     await expect(request({ type: 'accounts:list' })).resolves.toMatchObject({ error: { message: 'Database is not initialized' } })
   })
+
+
 })

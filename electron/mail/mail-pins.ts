@@ -2,7 +2,7 @@ import type { DatabaseSync, StatementSync } from 'node:sqlite'
 
 /**
  * Local conversation pins (E34). A pin belongs to one account's conversation,
- * keyed by (account_id, thread_id). Pins are never sent to a provider, are not
+ * keyed by (account_id, thread_id). Verified IMAP pins also synchronize through a dedicated keyword (mail-pin-sync.ts). Pins are not
  * tied to the cached thread row (so a resync that drops and re-creates the
  * thread keeps the pin), and are removed with the account when its local data
  * is deleted. They live in the mail database, so profile backups include them.
@@ -116,6 +116,19 @@ export class MailPinStore {
     this.stmt('INSERT INTO mail_pin_operations(operation_id,account_id,snapshot_json,created_at) VALUES(?,?,?,?)').run(operationId, accountId, JSON.stringify(snapshot), at.toISOString())
   }
 
+  undoSnapshot(operationId: string): MailPinSnapshot | undefined {
+    const row = this.stmt('SELECT snapshot_json FROM mail_pin_operations WHERE operation_id=?').get(operationId) as DatabaseRow | undefined
+    if (!row) return undefined
+    try { return JSON.parse(String(row.snapshot_json)) as MailPinSnapshot } catch { return undefined }
+  }
+
+  restoreSnapshot(accountId: string, snapshot: MailPinSnapshot) {
+    for (const [threadId, pinnedAt] of Object.entries(snapshot)) {
+      if (typeof pinnedAt === 'string') this.stmt('INSERT INTO mail_pins(account_id,thread_id,pinned_at) VALUES(?,?,?) ON CONFLICT(account_id,thread_id) DO UPDATE SET pinned_at=excluded.pinned_at').run(accountId, threadId, pinnedAt)
+      else this.stmt('DELETE FROM mail_pins WHERE account_id=? AND thread_id=?').run(accountId, threadId)
+    }
+  }
+
   /** Restores the exact pin state captured before an operation; false when no snapshot remains. */
   restore(operationId: string) {
     const row = this.stmt('SELECT account_id,snapshot_json FROM mail_pin_operations WHERE operation_id=?').get(operationId) as DatabaseRow | undefined
@@ -123,10 +136,7 @@ export class MailPinStore {
     const accountId = String(row.account_id)
     let snapshot: MailPinSnapshot = {}
     try { snapshot = JSON.parse(String(row.snapshot_json)) as MailPinSnapshot } catch { snapshot = {} }
-    for (const [threadId, pinnedAt] of Object.entries(snapshot)) {
-      if (typeof pinnedAt === 'string') this.stmt('INSERT INTO mail_pins(account_id,thread_id,pinned_at) VALUES(?,?,?) ON CONFLICT(account_id,thread_id) DO UPDATE SET pinned_at=excluded.pinned_at').run(accountId, threadId, pinnedAt)
-      else this.stmt('DELETE FROM mail_pins WHERE account_id=? AND thread_id=?').run(accountId, threadId)
-    }
+    this.restoreSnapshot(accountId, snapshot)
     this.stmt('DELETE FROM mail_pin_operations WHERE operation_id=?').run(operationId)
     return true
   }

@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { isLocalOnlyMailAction, mailListGroupStart, pendingOperationsMessage, pinActionFor, threadIdsByAccount } from './mail-pins'
+import { isPinMailAction, mailListGroupStart, pendingOperationsMessage, pinActionFor, threadIdsByAccount } from './mail-pins'
 import { QUICK_ACTION_STEP_LABELS } from './mail-quick-actions'
 
 const dateKey = (date: string) => date.slice(0, 10)
 
 describe('mail pin helpers', () => {
   it('treats only pin and unpin as local-only actions', () => {
-    expect(isLocalOnlyMailAction('pin')).toBe(true)
-    expect(isLocalOnlyMailAction('unpin')).toBe(true)
-    for (const kind of ['star', 'important', 'archive', 'move']) expect(isLocalOnlyMailAction(kind)).toBe(false)
+    expect(isPinMailAction('pin')).toBe(true)
+    expect(isPinMailAction('unpin')).toBe(true)
+    for (const kind of ['star', 'important', 'archive', 'move']) expect(isPinMailAction(kind)).toBe(false)
     expect(QUICK_ACTION_STEP_LABELS.pin).toBe('Pin to top')
   })
 
@@ -42,4 +42,9 @@ describe('mail pin helpers', () => {
     expect(pendingOperationsMessage([{ kind: 'pin' }, { kind: 'archive' }])).toBe('2 mail changes queued')
     expect(pendingOperationsMessage([{ kind: 'archive' }])).toBe('Mail change queued')
   })
+  it('distinguishes queued IMAP synchronization in the immediate pin feedback', () => {
+    expect(pendingOperationsMessage([{ kind: 'pin', status: 'queued' }])).toBe('Pinned to the top of the list · IMAP pin sync queued')
+    expect(pendingOperationsMessage([{ kind: 'unpin', status: 'queued' }])).toBe('Unpinned · IMAP pin sync queued')
+  })
+
 })

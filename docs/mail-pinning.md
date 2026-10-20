@@ -1,9 +1,10 @@
 # Pinned mail conversations
 
 Pinning keeps a conversation at the top of the conversation list until it is
-unpinned. It is an Aerio-only organizing aid: pins are stored on this computer
-and are never sent to Gmail, Microsoft 365, IMAP servers, or Local Folders
-providers.
+unpinned. Pins remain distinct from stars and importance. Verified writable IMAP
+folders can synchronize a dedicated `$AerioPinned` keyword between Aerio
+installations. Other providers and unsupported folders retain local pins.
+This is Aerio-specific server storage, not a claim of native Outlook or eM Client pin interoperability.
 
 ## Pinning and unpinning
 
@@ -26,8 +27,9 @@ pinned conversation and then undoing leaves that conversation pinned in its
 original position. After the toast is gone the change is reversed by pinning
 or unpinning again.
 
-Pins are local, so conversations in a disconnected, read-only account archive
-can still be pinned and unpinned.
+Disconnected/read-only account archives can still be pinned locally. The reader
+shows the pin synchronization scope for pinned conversations and for supported
+IMAP conversations, including when a change is queued.
 
 ## Ordering
 
@@ -71,7 +73,9 @@ keeping it as a read-only archive keeps them.
 
 Providers that assign a new thread id when a conversation moves (for example,
 an IMAP server whose thread identity follows the folder) produce a different
-conversation as far as Aerio is concerned; that conversation is not pinned.
+conversation as far as local pins are concerned. On supported IMAP folders,
+the dedicated keyword reads back onto the new cached identity when the server
+preserves keywords through the move.
 
 ## Relationship to stars and importance
 
@@ -81,10 +85,9 @@ Pins, stars, and importance are independent:
   unstarring, or changing importance never pins or unpins it.
 - Stars and importance are provider state: they are synchronized (Gmail
   `STARRED`/`IMPORTANT`, Outlook flags, IMAP `\Flagged`) and appear in the
-  **Starred** and **Important** folders. Pins are local and only affect the
-  order of the list.
-- Mail rules cannot pin, because rules can run on the server where pins do
-  not exist.
+  **Starred** and **Important** folders. Pins only affect list ordering and use
+  a separate dedicated IMAP keyword where supported.
+- Mail rules currently do not expose a Pin action.
 
 ## Storage, backup, and restore
 
@@ -95,7 +98,61 @@ restore brings them back with the rest of the mail database. The undo
 snapshots for recent pin changes (`mail_pin_operations`) are kept for seven
 days.
 
-Pin and unpin changes are recorded in the mail operation log as `pin` and
-`unpin` operations that are already complete. They are never placed in the
-provider queue, and the mail worker refuses to send them to a provider even if
-one were queued.
+Pin and unpin changes apply to the local ordering immediately. Unsupported
+providers/folders record completed local operations. Supported IMAP conversations
+also queue `pin`/`unpin` writes in the durable mail operation queue, preserving
+its existing retry/backoff and interrupted-work recovery. Provider failure is
+reported through the usual operation error. Final failure restores the prior
+local snapshot without overwriting a newer local pin change.
+
+## Verified IMAP keyword synchronization (D22)
+
+- A folder must advertise either permanent custom keywords (`PERMANENTFLAGS \*`)
+  or the dedicated `$AerioPinned` keyword and be writable. Unknown capability,
+  read-only folders, missing UID identity, archived accounts and non-IMAP
+  providers explicitly report local-only capability. Support is reported per
+  conversation because its messages may span folders with different rights.
+- Pin writes set only `$AerioPinned`; unpin removes only that keyword. The worker
+  checks live folder capability and UIDVALIDITY before `UID STORE`, and verifies
+  each affected UID with a flags fetch. A rejected STORE, missing readback or
+  mismatched pin state remains a retryable operation failure.
+- A conversation reads as pinned when any of its cached messages carries the
+  dedicated keyword. Pin/unpin writes cover every currently cached message in
+  the selected conversation. IMAP has no universal conversation-wide pin
+  primitive; uncached copies may retain a keyword until synchronized and edited.
+- Sync imports server pins and external unpins. Pending local pin operations
+  take precedence until they settle; afterward server readback is authoritative.
+  On first capability discovery, existing local pins queue a one-time upload
+  instead of disappearing. Re-pinning preserves the local ordering timestamp;
+  another installation establishes its own ordering timestamp on first readback.
+- Undo cancels an unsent native write. After dispatch, Undo restores the exact
+  local snapshot and queues compensating keyword writes, including mixed
+  selections whose conversations had different prior pin states. Multi-message
+  IMAP updates are not atomic; an exhausted failure may leave partial remote
+  writes, which the next sync reads back explicitly.
+- Gmail, Microsoft Graph, Exchange EWS, POP3 and Local Folders keep local pins.
+  Fastmail's documented native Pin maps to starring, so Aerio does not pretend
+  that mapping is an independent pin. No verified documented dedicated Graph/EWS
+  native pin mapping was established during this change. Generic categories,
+  follow-up flags and guessed Outlook extended-property IDs are not used.
+
+Protocol sources reviewed on 20 October 2026:
+
+- [IMAP4rev2, RFC 9051](https://www.rfc-editor.org/rfc/rfc9051.html): permanent
+  keywords, mailbox read-only state, UIDVALIDITY, STORE and FETCH.
+- [IMAP keyword registry, RFC 5788](https://www.rfc-editor.org/rfc/rfc5788): keyword
+  registration and semantics. `$AerioPinned` is an Aerio-specific keyword, not a
+  registered universal pin convention.
+- [Fastmail native pins](https://www.fastmail.help/hc/en-us/articles/1500000280341-Pin-important-messages):
+  native pins may appear as stars in other clients; Aerio keeps these separate.
+- [Graph message resource](https://learn.microsoft.com/en-us/graph/api/resources/message?view=graph-rest-1.0)
+  and [EWS Message schema](https://learn.microsoft.com/en-us/exchange/client-developer/web-service-reference/message-ex15websvcsotherref):
+  no dedicated verified native pin mapping was identified. Exchange pin metadata
+  remains a future evidence requirement rather than an inferred implementation.
+
+Controlled tests cover capability checks, durable restart, external readback,
+local-pending conflicts, exact Undo, failure recovery and newer-intent protection.
+`npx tsx scripts/imap-pin-sync-audit.mjs` exercises a real disposable TLS IMAP
+server: permanent-keyword detection, STORE/FETCH, queue restart, a second local
+installation reading the pin, external unpin and star independence. This fixture
+is protocol evidence; no customer-provider account was used.

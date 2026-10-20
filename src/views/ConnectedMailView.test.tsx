@@ -1051,4 +1051,12 @@ describe('ConnectedMailView', () => {
     await waitFor(() => expect(api.mail.mail.list).toHaveBeenCalledWith(expect.objectContaining({ accountIds: undefined })))
   })
 
+  it('shows the verified provider pin scope without conflating it with stars', async () => {
+    const reason = 'Pins sync between Aerio installations using the IMAP $AerioPinned keyword. Other mail clients may not recognize it.'
+    pageResult = { items: [summary({ pinned: true, starred: false, pinSync: { mode: 'imap-keyword', reason } })], total: 1 }
+    renderMail()
+    expect(await screen.findByText(reason)).toBeInTheDocument()
+    expect(screen.getByTitle('Unpin conversation')).toBeInTheDocument()
+  })
+
 })

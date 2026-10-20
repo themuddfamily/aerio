@@ -382,3 +382,40 @@ describe('IMAP and SMTP connections', () => {
     expect(transport.sendMail).toHaveBeenLastCalledWith({ envelope: { from: config.email, to: ['one@example.test'] }, raw })
   })
 })
+
+
+describe('dedicated IMAP pin keyword writes', () => {
+  it('checks permanent keyword support, writes the dedicated flag only, and verifies readback', async () => {
+    const subject = new ImapSmtpClient(config), mailboxLock = lock()
+    const client = { ...connectedClient(), mailbox: { uidValidity: 1n, permanentFlags: new Set(['\\*']) }, getMailboxLock: vi.fn(async () => mailboxLock), messageFlagsAdd: vi.fn(async () => true), messageFlagsRemove: vi.fn(async () => true), fetchOne: vi.fn().mockResolvedValueOnce({ flags: new Set(['$aeriopinned', '\\Flagged']) }).mockResolvedValueOnce({ flags: new Set(['\\Flagged']) }) }
+    useConnection(subject, client)
+    const targets = [{ folder: 'INBOX', uid: 7, uidValidity: '1' }]
+    expect(await subject.setPinned(targets, true)).toEqual([{ folder: 'INBOX', uid: 7, pinned: true }])
+    expect(client.messageFlagsAdd).toHaveBeenCalledExactlyOnceWith([7], ['$AerioPinned'], { uid: true })
+    expect(await subject.setPinned(targets, false)).toEqual([{ folder: 'INBOX', uid: 7, pinned: false }])
+    expect(client.messageFlagsRemove).toHaveBeenCalledExactlyOnceWith([7], ['$AerioPinned'], { uid: true })
+    expect(mailboxLock.release).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses unsupported folders and stale UID identities before writing', async () => {
+    const subject = new ImapSmtpClient(config), mailboxLock = lock(), write = vi.fn()
+    const client = { ...connectedClient(), mailbox: { uidValidity: 2n, permanentFlags: new Set(['\\Flagged']) }, getMailboxLock: vi.fn(async () => mailboxLock), messageFlagsAdd: write }
+    useConnection(subject, client)
+    const targets = [{ folder: 'INBOX', uid: 7, uidValidity: '1' }]
+    await expect(subject.setPinned(targets, true)).rejects.toThrow(/permanent custom keyword/)
+    client.mailbox = { uidValidity: 2n, permanentFlags: new Set(['\\*']) }
+    await expect(subject.setPinned(targets, true)).rejects.toThrow(/identity changed/)
+    expect(write).not.toHaveBeenCalled(); expect(mailboxLock.release).toHaveBeenCalledTimes(2)
+  })
+
+  it('treats STORE rejection and conflicting or missing readback as retryable errors', async () => {
+    const subject = new ImapSmtpClient(config), mailboxLock = lock()
+    const client = { ...connectedClient(), mailbox: { uidValidity: 1n, permanentFlags: new Set(['\\*']) }, getMailboxLock: vi.fn(async () => mailboxLock), messageFlagsAdd: vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true), fetchOne: vi.fn().mockResolvedValueOnce({ flags: new Set(['\\Flagged']) }).mockResolvedValueOnce(false) }
+    useConnection(subject, client)
+    const targets = [{ folder: 'INBOX', uid: 7, uidValidity: '1' }]
+    await expect(subject.setPinned(targets, true)).rejects.toThrow(/refused/)
+    await expect(subject.setPinned(targets, true)).rejects.toThrow(/did not retain/)
+    await expect(subject.setPinned(targets, true)).rejects.toThrow(/readback/)
+    expect(mailboxLock.release).toHaveBeenCalledTimes(3)
+  })
+})
